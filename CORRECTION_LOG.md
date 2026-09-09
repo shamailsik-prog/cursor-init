@@ -135,6 +135,7 @@ Erratum Set No. 1 enumerates **ten** static guards. Layer 18 §9.2 and this work
 ### Other
 - `CORRECTION_LOG.md` (this file)
 - `.gitignore` (`__pycache__`, firebase emulator logs)
+- `next.config.ts` — `allowedDevOrigins` includes `127.0.0.1` so HMR is not blocked on the IP URL (console verification).
 
 ## Not done
 
