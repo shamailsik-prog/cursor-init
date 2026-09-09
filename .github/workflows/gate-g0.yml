@@ -1,0 +1,39 @@
+name: Gate G-0
+
+on:
+  pull_request:
+  push:
+    branches: [main, correction-pack-10sep2026]
+
+jobs:
+  g0-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: npm ci
+      - name: Gate G-0 static
+        run: bash ci_gates/gate_g0.sh
+      - name: Unit tests
+        run: npm test
+      - name: G-1 must fail until tests/gate_g1.test.ts exists
+        run: |
+          set +e
+          python3 ci_gates/gate_g1.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "FAIL: G-1 passed while forensic tests are not supposed to exist yet"
+            exit 1
+          fi
+          echo "G-1 correctly red (exit $status)"

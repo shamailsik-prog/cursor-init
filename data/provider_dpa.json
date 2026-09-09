@@ -1,0 +1,4 @@
+{
+  "comment": "TODO(firm): DPA status per provider is a firm decision. Until a row is recorded as executed, P1 blocks confidential and above (conservative). Do not invent DPA status.",
+  "providers": {}
+}
