@@ -41,15 +41,16 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /matters/{matterId} {
-      allow read: if sameFirm() && memberOrPartner(matterId);
+      // Layer 18 §5.3 + Job E: membership is the access source. No role exempt (including partner).
+      allow read: if sameFirm() && isMember(matterId);
       allow create: if sameFirmNew() && role() in ['partner', 'associate'];
-      allow update: if sameFirm() && memberOrPartner(matterId) && firmIdUnchanged() && role() in ['partner', 'associate'];
+      allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate'];
       allow delete: if false;
     }
     match /documents/{docId} {
       allow read: if sameFirm() && cleared(resource.data.classification)
-        && (resource.data.matterId != null ? memberOrPartner(resource.data.matterId)
-            : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2);   // loose vault (L4.5)
+        && (resource.data.matterId != null ? isMember(resource.data.matterId)
+            : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2);   // loose vault (L4.5); intern denied
       allow create: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'];
       allow update: if sameFirm() && firmIdUnchanged() && monotonic()
         && (resource.data.matterId == null || memberOrPartner(resource.data.matterId))
