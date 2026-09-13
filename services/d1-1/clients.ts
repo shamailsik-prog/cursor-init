@@ -56,7 +56,7 @@ export function conflictCheck(
 ): { status: "CLEAR" | "POSSIBLE_CANDIDATE_REVIEW"; identityBasis?: "cnic" } {
   const named = store.entities.get(namedEntityId)
   if (!named || named.firmId !== firmId) {
-    return { status: "CLEAR" }
+    throw new Error("unknown entity")
   }
   const linked = store.links.find(
     (l) => l.leftId === namedEntityId || l.rightId === namedEntityId

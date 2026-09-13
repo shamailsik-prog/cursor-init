@@ -88,10 +88,13 @@ export async function callCommitteeBrain(
 
   try {
     const result = await transport.send(outbound)
+    const inbound = maskOutboundPII(result.text, {
+      partyNames: input.partyNames,
+    })
     return {
       blocked: false,
       provider: input.provider,
-      text: result.text,
+      text: inbound.masked,
       outbound,
     }
   } catch (err) {

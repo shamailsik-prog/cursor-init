@@ -16,6 +16,10 @@ export function checkPermission(
   const user = store.users.get(userId)
   if (!user) return { allow: false, reason: "no-user" }
 
+  if (user.role === "intern" && (action === "research" || action === "draft")) {
+    return { allow: false, reason: "intern-channel-denied" }
+  }
+
   if (extra?.scope === "own_matters" || user.role === "client") {
     if (action === "research" || action === "draft") {
       return { allow: false, reason: "client-channel-denied" }
@@ -36,6 +40,9 @@ export function checkPermission(
     }
     if (!store.members.has(store.memberKey(matterId, userId))) {
       return { allow: false, reason: "not-member" }
+    }
+    if (!requireClearance(user, matter.classification)) {
+      return { allow: false, reason: "clearance" }
     }
   }
 

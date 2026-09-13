@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { newStore } from "@/platform/spine/store"
-import { seedUser } from "@/platform/p5/checkPermission"
+import { seedUser, checkPermission } from "@/platform/p5/checkPermission"
+import { handleWhatsApp } from "@/services/d2-1/whatsapp"
+import { IdempotencyError, IdempotencyCache, requireIdempotencyKey } from "@/platform/http/idempotency"
 import { uploadDocument, ocrJobsFor } from "@/services/d1-6/uploadDocument"
 import {
   addMember,
@@ -8,7 +10,7 @@ import {
   createMatter,
 } from "@/services/d1-2/matters"
 import { escalateSilence } from "@/platform/p4/intimation"
-import { createClient } from "@/services/d1-1/clients"
+import { createClient, conflictCheck } from "@/services/d1-1/clients"
 import { searchCorpus } from "@/services/d5-1/research"
 import {
   checkTemporalConsistency,
@@ -18,7 +20,6 @@ import {
   verifyCitations,
 } from "@/services/d4-2/draftingIntelligence"
 import { declassify, setClassification } from "@/platform/classification/declassify"
-import { IdempotencyError, requireIdempotencyKey } from "@/platform/http/idempotency"
 
 describe("G-1 spine hardening", () => {
   it("same-hash reuse inherits the higher classification and does not add a second OCR job", () => {
@@ -168,6 +169,13 @@ describe("G-1 spine hardening", () => {
         new Request("http://local", { headers: { "Idempotency-Key": key } })
       )
     ).toBe(key)
+    const cache = new IdempotencyCache<string>(50, 2)
+    cache.set("a", "one")
+    cache.set("b", "two")
+    cache.set("c", "three")
+    expect(cache.size).toBe(2)
+    expect(cache.get("a")).toBeUndefined()
+    expect(cache.get("c")).toBe("three")
   })
 
   it("refuses cross-firm matter membership and does not list the other firm's matter", () => {
@@ -244,5 +252,37 @@ describe("G-1 spine hardening", () => {
         classification: "nope" as never,
       })
     ).toThrow(/classification/)
+  })
+
+  it("intern cannot /research; clerk below clearance cannot research a privileged matter", () => {
+    const store = newStore()
+    seedUser(store, {
+      id: "intern1",
+      firmId: "firmA",
+      role: "intern",
+      clearanceLevel: "internal",
+    })
+    seedUser(store, {
+      id: "clerk1",
+      firmId: "firmA",
+      role: "clerk",
+      clearanceLevel: "internal",
+    })
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "c1",
+      title: "secret",
+      courtId: "SHC",
+      classification: "privileged",
+    })
+    addMember(store, matter.id, "clerk1", "firmA")
+    expect(handleWhatsApp(store, "intern1", "/research PPC 302").denied).toBe(true)
+    expect(checkPermission(store, "clerk1", "research", matter.id).allow).toBe(false)
+    expect(checkPermission(store, "clerk1", "research", matter.id).reason).toBe("clearance")
+  })
+
+  it("conflictCheck does not report CLEAR for an unknown or cross-firm id", () => {
+    const store = newStore()
+    expect(() => conflictCheck(store, "firmA", "missing")).toThrow(/unknown entity/)
   })
 })

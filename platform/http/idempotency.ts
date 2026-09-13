@@ -21,3 +21,51 @@ export function requireIdempotencyKey(request: Request): string {
   }
   return key
 }
+
+/** Process-local replay cache. Bounded. Not a durable store. */
+export class IdempotencyCache<T> {
+  private readonly entries = new Map<string, { at: number; body: T }>()
+
+  constructor(
+    private readonly ttlMs: number,
+    private readonly maxEntries: number
+  ) {}
+
+  get size(): number {
+    return this.entries.size
+  }
+
+  get(key: string): T | undefined {
+    this.prune()
+    const hit = this.entries.get(key)
+    if (!hit) return undefined
+    if (Date.now() - hit.at >= this.ttlMs) {
+      this.entries.delete(key)
+      return undefined
+    }
+    return hit.body
+  }
+
+  set(key: string, body: T): void {
+    this.prune()
+    this.entries.set(key, { at: Date.now(), body })
+    this.evictOldest()
+  }
+
+  prune(): void {
+    const now = Date.now()
+    for (const [key, row] of this.entries) {
+      if (now - row.at >= this.ttlMs) this.entries.delete(key)
+    }
+  }
+
+  private evictOldest(): void {
+    if (this.entries.size <= this.maxEntries) return
+    const ordered = [...this.entries.entries()].sort((a, b) => a[1].at - b[1].at)
+    const drop = this.entries.size - this.maxEntries
+    for (let i = 0; i < drop; i++) {
+      const key = ordered[i]?.[0]
+      if (key) this.entries.delete(key)
+    }
+  }
+}

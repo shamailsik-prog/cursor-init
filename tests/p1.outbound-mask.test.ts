@@ -31,7 +31,7 @@ describe("Job F — P1 outbound mask", () => {
     try {
       const result = await callCommitteeBrain({
         body: raw,
-        classification: "internal",
+        classification: "public",
         provider: "openai",
         purpose: "test-mask",
         partyNames: [party],
@@ -39,6 +39,9 @@ describe("Job F — P1 outbound mask", () => {
 
       expect(result.blocked).toBe(false)
       const outbound = result.outbound
+      expect(outbound.body).toBe(
+        maskOutboundPII(raw, { partyNames: [party] }).masked
+      )
       expect(outbound.body).not.toContain(cnic)
       expect(outbound.body).not.toContain("4210112345671")
       expect(outbound.body).not.toContain(phone)
@@ -46,9 +49,8 @@ describe("Job F — P1 outbound mask", () => {
       expect(outbound.body).toContain("[CNIC]")
       expect(outbound.body).toContain("[PHONE]")
       expect(outbound.body).toContain("[PARTY]")
-      expect(outbound.body.toLowerCase()).not.toContain("privileged")
-      expect(outbound.body.toLowerCase()).not.toContain("internal")
-      expect(outbound.metadata.classification).toBe("internal")
+      expect(outbound.metadata.classification).toBe("public")
+      expect(JSON.stringify(outbound.body)).not.toMatch(/"classification"/)
       expect(captured).not.toBeNull()
       expect(captured!.body).toBe(outbound.body)
       expect(JSON.stringify(captured!.body)).not.toContain(cnic)
@@ -103,6 +105,10 @@ describe("Job F — P1 outbound mask", () => {
       ["mobile +92 300 1234567", "+92 300 1234567"],
       ["mobile (0300) 1234567", "(0300) 1234567"],
       ["CNIC dotted 42101.1234567.1", "42101.1234567.1"],
+      ["email counsel@nhslegal.pk", "counsel@nhslegal.pk"],
+      ["IBAN PK36SCBL0000001123456702", "PK36SCBL0000001123456702"],
+      ["NTN NTN 1234567-8", "1234567-8"],
+      ["passport Passport AB1234567", "AB1234567"],
     ]
     for (const [raw, leak] of samples) {
       const masked = maskOutboundPII(raw).masked
@@ -115,7 +121,7 @@ describe("Job F — P1 outbound mask", () => {
     const cnic = "42101-1234567-1"
     const result = await callCommitteeBrain({
       body: `Note ${cnic}`,
-      classification: "internal",
+      classification: "public",
       provider: "openai",
       purpose: "research",
     })
@@ -162,7 +168,7 @@ describe("Job F — P1 outbound mask", () => {
     })
     const result = await callCommitteeBrain({
       body: "summarise the filing",
-      classification: "internal",
+      classification: "public",
       provider: "openai",
       purpose: `translate ${cnic} for ${party}`,
       partyNames: [party],
@@ -172,5 +178,65 @@ describe("Job F — P1 outbound mask", () => {
     expect(captured!.metadata.purpose).not.toContain(party)
     expect(captured!.metadata.purpose).toContain("[CNIC]")
     expect(captured!.metadata.purpose).toContain("[PARTY]")
+  })
+
+  it("does not interpolate classification into the prompt even when the body uses those words", async () => {
+    const body = "This privileged internal memo is for the public digest."
+    let captured: OutboundRequest | null = null
+    setTransportForTests({
+      async send(request) {
+        captured = request
+        return { text: "ok" }
+      },
+    })
+    const result = await callCommitteeBrain({
+      body,
+      classification: "public",
+      provider: "openai",
+      purpose: "summarise",
+    })
+    expect(result.blocked).toBe(false)
+    expect(captured!.body).toBe(body)
+    expect(captured!.body).toContain("privileged")
+    expect(captured!.body).toContain("internal")
+    expect(captured!.metadata.classification).toBe("public")
+    expect(captured!.body.startsWith("public")).toBe(false)
+  })
+
+  it("blocks internal content without DPA — internal opinions are client-identifying", async () => {
+    let sent = false
+    setTransportForTests({
+      async send() {
+        sent = true
+        return { text: "no" }
+      },
+    })
+    const result = await callCommitteeBrain({
+      body: "Internal opinion for the client",
+      classification: "internal",
+      provider: "openai",
+      purpose: "summarise",
+    })
+    expect(result.blocked).toBe(true)
+    expect(sent).toBe(false)
+    expect(result.reason).toMatch(/internal\+/)
+  })
+
+  it("masks CNIC in the provider response before returning it", async () => {
+    const cnic = "42101-1234567-1"
+    setTransportForTests({
+      async send() {
+        return { text: `Found ${cnic}` }
+      },
+    })
+    const result = await callCommitteeBrain({
+      body: "summarise",
+      classification: "public",
+      provider: "openai",
+      purpose: "summarise",
+    })
+    expect(result.blocked).toBe(false)
+    expect(result.text).not.toContain(cnic)
+    expect(result.text).toContain("[CNIC]")
   })
 })

@@ -206,11 +206,21 @@ Closed in this pass:
 - **Test hook** — `setTransportForTests` throws in `NODE_ENV=production`.
 - **Firestore document update** — matter-bound docs used `memberOrPartner` (partner exempt). Update now requires `isMember`, matching matter read.
 
-Left open (not invented around):
-- Mask still does not cover email, IBAN, NTN, passport, or unsourced party names (Job F specified CNIC, PK mobile, supplied names).
+Left open (honest limits, not unfixed holes):
+- Unsourced party names are not auto-detected. Job F requires the caller to pass `partyNames`; masking "Ali"/"Khan" would destroy legal prose.
 - G-1 is an in-process store. It is not Firebase, WhatsApp, or a live provider.
 - `reembedCorpus(confirmed)` relabels vectors; it does not compute embeddings.
-- `checkPermission` does not apply clearance to firm-level `/research`.
-- Idempotency map on `/api/g0/normalise` is process-local and unbounded.
-- DPA table empty; public/internal still policy-allowed to a provider once credentials exist.
+- DPA table empty; only **public** may leave to a provider once credentials exist.
+
+## Critic faults closed (follow-up)
+
+- **Mask** — email, Pakistani IBAN, NTN (`NTN 1234567-8`), passport (`Passport AB1234567`).
+- **DPA** — internal+ blocked without executed DPA (internal opinions are client-identifying). Public remains the only rank that may leave.
+- **Permissions** — intern cannot `/research` or draft; matter-scoped actions require clearance ≥ the matter rank.
+- **Idempotency cache** — `IdempotencyCache` with 24h TTL and 1000-entry cap. Still process-local (no Postgres in this slice).
+- **Classification in the prompt** — test now proves the body is the masked user text even when it contains the words "privileged"/"internal"; rank stays in metadata.
+- **Inbound mask** — provider response text is run through `maskOutboundPII` before return.
+- **conflictCheck** — unknown / cross-firm id throws; it does not report CLEAR.
+- **Firestore tests** — non-member partner cannot update a matter-bound document; member can upgrade classification monotonically.
+
 
