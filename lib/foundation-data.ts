@@ -4,19 +4,16 @@ import type { CourtRecord } from "@/core/case-number-normaliser"
 import { loadCourts } from "@/core/case-number-normaliser"
 
 export const G0_GUARDS = [
-  { id: 1, name: "fee-guard", detail: "No court-fee identifiers in the app tree (E-15). L17.9 REMOVED by E-15 (8 Sep 2026)." },
-  { id: 2, name: "scraper-guard", detail: "No Playwright/Puppeteer. No HTTP fetch off the L4.9 legislation allowlist (empty until the firm lists hosts)." },
+  { id: 1, name: "fee-guard", detail: "No court-fee identifiers in the app tree (E-15)." },
+  { id: 2, name: "scraper-guard", detail: "No Playwright or Puppeteer in this repository. Corpus harvest is a separate repo." },
   { id: 3, name: "provider-guard", detail: "AI / OCR / STT / TTS SDKs only under platform/committeeBrain or platform/p1." },
   { id: 4, name: "duplicate-route", detail: "One owner per namespaced /api/{domain}/{service}/{function} route." },
   { id: 5, name: "phase-0 files", detail: "firestore.rules, courts.json, documentTypes.json, corpus and platform DDL." },
   { id: 6, name: "prefix-fixture-guard", detail: "Every courts.json fixture normalises as expected. SC bare C.P. stays CP + AMBIGUOUS." },
   { id: 7, name: "seed-clone-guard", detail: "159 VERIFIED types, posture present, arrays as arrays, no cloned checklists." },
   { id: 8, name: "embedding-lock", detail: "text-embedding-3-small, 1536 dims, HNSW. Search must refuse on mismatch." },
-  { id: 9, name: "classification-guard", detail: "Ranks 0–4. Compare ranks, never label strings. P1 calls carry classification in metadata." },
+  { id: 9, name: "classification-rank", detail: "Ranks 0–4. Compare ranks, never label strings." },
   { id: 10, name: "firestore coverage", detail: "Every Phase 0 collection has a block. Default deny. No other-firm grant." },
-  { id: 11, name: "master-write-guard", detail: "No writes to master tables or master_versions except P6." },
-  { id: 12, name: "idempotency-guard", detail: "Every POST/PUT requires Idempotency-Key." },
-  { id: 13, name: "pagination-guard", detail: "Every list GET accepts limit and cursor." },
 ] as const
 
 export const FEATURE_FLAGS = [

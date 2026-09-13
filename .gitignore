@@ -44,13 +44,3 @@ next-env.d.ts
 # local agent scratch
 /agent-tools
 
-# python
-__pycache__/
-*.pyc
-
-# firebase emulator
-firebase-debug.log
-firestore-debug.log
-ui-debug.log
-.emulator/
-
