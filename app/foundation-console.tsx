@@ -55,7 +55,7 @@ const TABS = [
 
 export function FoundationConsole({ courts, fixtures, types }: Props) {
   const [tab, setTab] = useState("gate")
-  const [courtId, setCourtId] = useState(courts[0]?.id ?? "SHC")
+  const [courtId, setCourtId] = useState("SHC")
   const [raw, setRaw] = useState("C.P. No. D-1234 of 2025")
   const [result, setResult] = useState<NormaliseResult | null>(null)
   const [busy, setBusy] = useState(false)

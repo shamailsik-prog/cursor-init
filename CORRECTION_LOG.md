@@ -188,6 +188,7 @@ Existing G-0 / G-1 tests were green but the Committee Brain and spine leaked on 
 - **Idempotency-Key** — comment said UUID v4 but any string was accepted. Invalid JSON on `/api/g0/normalise` threw. Both now 400.
 - **Tests** — `tests/p1.outbound-mask.test.ts` extended; added `tests/spine.hardening.test.ts` and `tests/api.normalise.test.ts`.
 - **Console copy** — header no longer says Layer 3–16 waits on a missing G-1 file. Live providers remain blocked.
+- **Console default court** — Courts tab opened on `SC_PK` while the sample string is the SHC fixture `C.P. No. D-1234 of 2025`, so the first Normalise click rejected (`SC_PK has no bench letters`). Default court is now `SHC`.
 
 Live OpenAI/Anthropic/Gemini/Groq calls: still blocked. DPA table still empty (`TODO(firm)`). No provider SDK added.
 
