@@ -16,9 +16,10 @@ if grep -R -n -E "calculateCourtFee|getFeeRule|insertFeeMemo|courtFeeBasis" --in
 echo "[2] scraper-guard (app repository: no Playwright/Puppeteer anywhere; no exemption for D3-3 or L4.9)"
 if [ -n "$existing_dirs" ] && grep -R -n -i -E "playwright|puppeteer" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' --include='package.json' --include='requirements.txt' $existing_dirs 2>/dev/null | grep -v node_modules; then
   echo "FAIL: scraper library in the app repository (N1 / L17.12 — corpus harvest is a separate repo)"; fail=1; else echo "PASS"; fi
+python3 ci_gates/check_fetch_allowlist.py || fail=1
 
 echo "[3] provider-guard (AI/OCR/STT/TTS SDK imports only under platform/committeeBrain or platform/p1)"
-if [ -n "$existing_dirs" ] && grep -R -n -E "from ['\"](openai|@anthropic-ai/sdk|@google/generative-ai|groq-sdk|elevenlabs|@google-cloud/vision)['\"]|import (openai|anthropic|google\.generativeai|groq|elevenlabs)" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' $existing_dirs 2>/dev/null | grep -v node_modules | grep -v -E "platform/(committeeBrain|p1)"; then
+if [ -n "$existing_dirs" ] && grep -R -n -E "from ['\"](openai|@anthropic-ai/sdk|@google/generative-ai|groq-sdk|elevenlabs|@google-cloud/vision|@google-cloud/translate|@google-cloud/speech|@ai-sdk/openai|@ai-sdk/anthropic|@ai-sdk/google|deepl-node)['\"]|import (openai|anthropic|google\.generativeai|groq|elevenlabs)|from ['\"](whisper|@perplexity-ai/sdk|together-ai)['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' $existing_dirs 2>/dev/null | grep -v node_modules | grep -v -E "platform/(committeeBrain|p1)"; then
   echo "FAIL: provider SDK imported outside P1"; fail=1; else echo "PASS"; fi
 
 echo "[4] duplicate-route guard"
@@ -42,9 +43,10 @@ if [ -f postgres/ddl/001_corpus_contract.sql ]; then
   grep -q "USING hnsw" postgres/ddl/001_corpus_contract.sql || { echo "FAIL: HNSW index missing"; fail=1; }
 fi
 
-echo "[9] classification-rank-guard (no string comparison of classification labels)"
+echo "[9] classification-guard (ranks, not labels; P1 calls carry classification)"
 if grep -R -n -E "classification\s*[<>]=?\s*(OLD|NEW)\.classification|NEW\.classification\s*<\s*OLD\.classification" --include='*.sql' --include='*.ts' --include='*.py' . 2>/dev/null | grep -v ci_gates; then
-  echo "FAIL: classification compared as text — use classification_rank"; fail=1; else echo "PASS"; fi
+  echo "FAIL: classification compared as text — use classification_rank"; fail=1; else echo "PASS rank-compare"; fi
+python3 ci_gates/check_classification_calls.py || fail=1
 
 echo "[10] firestore rules cover every Phase 0 collection"
 if [ -f firestore.rules ]; then
@@ -52,6 +54,15 @@ if [ -f firestore.rules ]; then
     grep -q "match /$c/" firestore.rules || { echo "FAIL: no rule for $c"; fail=1; }; done
   grep -q "allow read, write: if false" firestore.rules || { echo "FAIL: no default deny"; fail=1; }
 fi
+
+echo "[11] master-write-guard (P6 only)"
+python3 ci_gates/check_master_writes.py || fail=1
+
+echo "[12] idempotency-guard"
+python3 ci_gates/check_idempotency.py || fail=1
+
+echo "[13] pagination-guard"
+python3 ci_gates/check_pagination.py || fail=1
 
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
