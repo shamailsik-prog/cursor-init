@@ -126,8 +126,8 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
               SIKANDER AI
             </h1>
             <p className="mt-2 max-w-xl text-sm text-[color:var(--paper)]/75">
-              Litigation operating system — foundations only. Gate G-0 is green.
-              Layer 3–16 work waits until Gate G-1.
+              Litigation operating system — foundations. Gate G-0 is green.
+              G-1 forensic spine passes in-process. Live providers remain blocked.
             </p>
           </div>
           <div className="flex items-center gap-3">

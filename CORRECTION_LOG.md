@@ -174,3 +174,20 @@ In-process spine so the ten Layer 18 §10.1 tests pass without inventing firm va
 - `tests/gate_g1.test.ts` — labels G1-1..G1-10
 - CI now requires `python3 ci_gates/gate_g1.py` to pass
 
+## Debug pass — P1 Committee Brain + G-1 hardening (13 Sep 2026)
+
+Existing G-0 / G-1 tests were green but the Committee Brain and spine leaked on paths the original fixtures never hit.
+
+- **P1 mask** — spaced CNIC (`42101 1234567 1`) and dashed/spaced mobiles (`0300-1234567`, `+92 300 1234567`) were leaving in the outbound body. `maskOutboundPII` now redacts those forms.
+- **P1 credentials** — `callCommitteeBrain` threw `blocked: no live provider credentials in Phase 0` for allowed ranks (public/internal). That would 500 any live caller. It now returns `{ blocked: true, reason }` with the masked outbound still attached.
+- **Unknown classification** — labels outside ranks 0–4 were treated as allowed (undefined rank compared as public). `isClassification()` refuses the call; `providerAllowedFor` returns blocked.
+- **Hash reuse** — second upload of the same firm+bytes kept the first classification, so internal then privileged stayed internal (OCR job stayed internal too). Reuse now inherits the higher rank monotonically and never downgrades.
+- **declassify bypass** — `setClassification(..., intern, fakeReason)` downgraded privileged → internal. Downgrade now requires a partner actor plus a recorded reason.
+- **L4.10** — repeated `escalateSilence` after 24h created duplicate follow-ups. One row per matter.
+- **Temporal gate** — unknown section id returned `OK`. Now `TEMPORAL-MISMATCH`.
+- **Idempotency-Key** — comment said UUID v4 but any string was accepted. Invalid JSON on `/api/g0/normalise` threw. Both now 400.
+- **Tests** — `tests/p1.outbound-mask.test.ts` extended; added `tests/spine.hardening.test.ts` and `tests/api.normalise.test.ts`.
+- **Console copy** — header no longer says Layer 3–16 waits on a missing G-1 file. Live providers remain blocked.
+
+Live OpenAI/Anthropic/Gemini/Groq calls: still blocked. DPA table still empty (`TODO(firm)`). No provider SDK added.
+

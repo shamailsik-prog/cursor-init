@@ -1,5 +1,5 @@
 import type { Classification } from "@/platform/p1/types"
-import type { SpineStore } from "@/platform/spine/store"
+import { rankOf, type SpineStore } from "@/platform/spine/store"
 
 export function uploadDocument(
   store: SpineStore,
@@ -16,6 +16,18 @@ export function uploadDocument(
   const hash = store.hashKey(input.firmId, input.bytes)
   const existingId = store.docsByHash.get(hash)
   if (existingId) {
+    const existing = store.documents.get(existingId)
+    if (
+      existing &&
+      rankOf(input.classification) > rankOf(existing.classification)
+    ) {
+      existing.classification = input.classification
+      for (const job of store.jobs) {
+        if (job.documentId === existingId) {
+          job.classification = input.classification
+        }
+      }
+    }
     return { docId: existingId, reused: true }
   }
   const id = store.id("doc")

@@ -1,6 +1,7 @@
 import dpaSeed from "@/data/provider_dpa.json"
 import {
   classificationRank,
+  isClassification,
   type Classification,
 } from "@/platform/p1/types"
 
@@ -29,8 +30,14 @@ const dpa = dpaSeed as DpaFile
  */
 export function providerAllowedFor(
   provider: ProviderId,
-  classification: Classification
+  classification: Classification | string
 ): { allowed: true } | { allowed: false; reason: string } {
+  if (!isClassification(classification)) {
+    return {
+      allowed: false,
+      reason: "unknown classification — P1 refuses the call",
+    }
+  }
   const rank = classificationRank(classification)
   const row = dpa.providers[provider]
   if (rank >= 4) {

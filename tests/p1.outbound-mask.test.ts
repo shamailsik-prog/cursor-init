@@ -1,9 +1,17 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import {
   callCommitteeBrain,
+  PHASE0_NO_CREDENTIALS,
   setTransportForTests,
 } from "@/platform/p1/internalAICaller"
 import type { OutboundRequest } from "@/platform/p1/internalAICaller"
+import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { providerAllowedFor } from "@/platform/p1/providerPolicy"
+
+afterEach(() => {
+  setTransportForTests(null)
+})
+
 
 describe("Job F — P1 outbound mask", () => {
   it("sends only the masked body; CNIC, phone and party name never leave", async () => {
@@ -84,5 +92,59 @@ describe("Job F — P1 outbound mask", () => {
     } finally {
       setTransportForTests(null)
     }
+  })
+
+  it("masks spaced CNIC and dashed / spaced Pakistani mobiles", () => {
+    const samples: [string, string][] = [
+      ["CNIC 42101 1234567 1 on file", "42101 1234567 1"],
+      ["mobile 0300-1234567", "0300-1234567"],
+      ["mobile 0300 1234567", "0300 1234567"],
+      ["mobile +92-300-1234567", "+92-300-1234567"],
+      ["mobile +92 300 1234567", "+92 300 1234567"],
+    ]
+    for (const [raw, leak] of samples) {
+      const masked = maskOutboundPII(raw).masked
+      expect(masked, raw).not.toContain(leak)
+      expect(masked === raw, `expected a redaction in: ${raw}`).toBe(false)
+    }
+  })
+
+  it("returns blocked (does not throw) when Phase 0 has no provider credentials", async () => {
+    const cnic = "42101-1234567-1"
+    const result = await callCommitteeBrain({
+      body: `Note ${cnic}`,
+      classification: "internal",
+      provider: "openai",
+      purpose: "research",
+    })
+    expect(result.blocked).toBe(true)
+    expect(result.reason).toBe(PHASE0_NO_CREDENTIALS)
+    expect(result.outbound.body).not.toContain(cnic)
+    expect(result.outbound.body).toContain("[CNIC]")
+    expect(result.text).toBeUndefined()
+  })
+
+  it("refuses unknown classification labels instead of treating them as public", async () => {
+    expect(providerAllowedFor("openai", "super-secret")).toEqual({
+      allowed: false,
+      reason: "unknown classification — P1 refuses the call",
+    })
+
+    let sent = false
+    setTransportForTests({
+      async send() {
+        sent = true
+        return { text: "should-not-run" }
+      },
+    })
+    await expect(
+      callCommitteeBrain({
+        body: "secret memo",
+        classification: "super-secret" as never,
+        provider: "openai",
+        purpose: "exfil",
+      })
+    ).rejects.toThrow(/omitted classification/)
+    expect(sent).toBe(false)
   })
 })

@@ -88,8 +88,7 @@ export function checkTemporalConsistency(
   usedText: string
 ): GateResult {
   const asAt = getSectionAsAt(store, sectionId, offenceDate)
-  if (!asAt) return { status: "OK" }
-  if (asAt.text !== usedText) {
+  if (!asAt || asAt.text !== usedText) {
     return { status: "TEMPORAL-MISMATCH", blocked: true }
   }
   return { status: "OK" }

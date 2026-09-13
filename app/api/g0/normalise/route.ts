@@ -20,7 +20,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ result: cached.body, idempotencyKey: key, reused: true })
   }
 
-  const body = (await request.json()) as { raw?: string; courtId?: string }
+  let body: { raw?: string; courtId?: string }
+  try {
+    body = (await request.json()) as { raw?: string; courtId?: string }
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
+  }
   if (!body.raw || !body.courtId) {
     return NextResponse.json(
       { error: "raw and courtId are required" },
