@@ -12,8 +12,7 @@ Precedence: Erratum Set No. 1 > Layer 18 > Layer 17 > specification body. Anythi
 | `data/documentTypes.json` | 159 VERIFIED types, keyed on `id` (Job C). |
 | `firestore.rules` | Every Phase 0 collection + default deny. |
 | `postgres/ddl/` | Annex A corpus contract + platform flags. Embedding lock: `text-embedding-3-small`, 1536, HNSW. |
-| `ci_gates/gate_g0.sh` | Static guards (fee, scraper, provider, master-write, idempotency, pagination, classification, embedding). Fail the build; no warn-only checks. |
-| `platform/p1/` | Committee Brain. Masked body is the only text sent to a provider. |
+| `ci_gates/gate_g0.sh` | Ten static guards. Fail the build; no warn-only checks. |
 | `core/case-number-normaliser.ts` | Same rules as `ci_gates/case_number_normaliser.py`. |
 | Foundation console (this app) | Inspect G-0 artefacts. Not the L4 Command Dashboard. |
 
@@ -33,19 +32,13 @@ Open http://127.0.0.1:43127
 bash ci_gates/gate_g0.sh
 ```
 
-Must pass before any Layer 3–16 work.
-
-```bash
-npm test                 # P1 mask + G-1 forensic
-npm run test:rules       # Firestore emulator rules
-python3 ci_gates/gate_g1.py
-```
+Must pass before any Layer 3–16 work. Gate G-1 (`python3 ci_gates/gate_g1.py`) is supposed to fail until `tests/gate_g1.test.ts` exists — do not skip it.
 
 Live Firestore/Postgres checks: `SIKANDER_LIVE=1 bash ci_gates/gate_g0.sh` (needs `ci_gates/gate_g0_live.sh`, not in this slice).
 
 ## Non-negotiables
 
-- Court fee and stamp duty are MANUAL checklist items only. L17.9 REMOVED by E-15 (8 Sep 2026). The four banned identifiers fail CI.
+- Court fee and stamp duty are MANUAL checklist items only. The four banned identifiers in `CURSOR_START_PROMPT.md` fail CI.
 - No Playwright / Puppeteer in this repository. Corpus harvest is a separate repo (`05_Corpus_Service` in the handover pack).
 - Provider SDKs only under `platform/committeeBrain` or `platform/p1`.
 - Tenant and matter scoping at the data layer. No role exempt.

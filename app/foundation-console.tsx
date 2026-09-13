@@ -162,11 +162,10 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
             <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
               <Card className="rounded-none ring-[color:var(--ink)]/10">
                 <CardHeader>
-                  <CardTitle>G-0 static guards</CardTitle>
+                  <CardTitle>Ten static guards</CardTitle>
                   <CardDescription>
                     `bash ci_gates/gate_g0.sh` — every check fails the build. No
-                    warn-only checks. Fee, scraper, provider, master-write,
-                    idempotency, pagination, classification, embedding lock.
+                    warn-only checks.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -193,9 +192,7 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
                     <CardDescription>CI enforces these. Do not invent around them.</CardDescription>
                   </CardHeader>
                   <CardContent className="text-muted-foreground space-y-2 text-sm">
-                    <p>Court fee: MANUAL — do not compute</p>
-                    <p>Stamp duty: MANUAL — do not compute</p>
-                    <p>L17.9 REMOVED by E-15 (8 Sep 2026)</p>
+                    <p>Court fee and stamp duty are MANUAL checklist items only.</p>
                     <p>Every AI / OCR / STT / TTS / translation call goes through P1 with a classification.</p>
                     <p>No scraper in this repository. Corpus service is a separate tree.</p>
                     <p>Tenant and matter scoping at the data layer. No role exempt.</p>
