@@ -6,7 +6,6 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     exclude: [
-      "tests/gate_g1.test.ts",
       ...(process.env.FIRESTORE_EMULATOR_HOST
         ? []
         : ["tests/firestore.rules.test.ts"]),

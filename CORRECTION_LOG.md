@@ -157,4 +157,20 @@ Erratum Set No. 1 enumerates **ten** static guards. Layer 18 §9.2 and this work
 
 ## G-0 static
 
-PASS (after this pack). G-1 remains FAIL (required).
+PASS (after this pack). G-1 forensic tests G1-1..G1-10 now exist and pass in-process (live Firebase/WhatsApp/provider keys still mocked).
+
+## G-1 spine (13 Sep 2026)
+
+In-process spine so the ten Layer 18 §10.1 tests pass without inventing firm values or calling live providers:
+- `services/d1-6/uploadDocument.ts` — content-hash + firmId dedup, one OCR job
+- `services/d2-1/whatsapp.ts` + `platform/p5/checkPermission.ts` — membership list; client `/research` denied
+- `services/d1-1/clients.ts` — CNIC exact match → confirmed-candidate; conflict never CLEAR
+- `services/d4-2/draftingIntelligence.ts` — OVERRULED / getSectionAsAt / TEMPORAL-MISMATCH
+- `platform/p4/intimation.ts` — engagement gate + 24h L4.10 silence
+- `platform/p1/translate.ts` — privileged → `ai.call.blocked`
+- `platform/classification/declassify.ts` — partner reason required
+- `services/d6-1/caseNumber.ts` — SHC CP D-1234/2025; reject opens follow-up
+- `services/d5-1/research.ts` — embedding lock; reembed keeps old vectors until confirmed
+- `tests/gate_g1.test.ts` — labels G1-1..G1-10
+- CI now requires `python3 ci_gates/gate_g1.py` to pass
+

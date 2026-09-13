@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start --port 43127",
     "lint": "eslint",
-    "test": "npm run test:unit && npm run test:rules",
+    "test": "vitest run",
     "test:unit": "vitest run",
+    "test:all": "npm run test:unit && npm run test:rules",
     "test:rules": "firebase emulators:exec --only firestore --project demo-sikander \"npx vitest run tests/firestore.rules.test.ts\"",
     "gate:g0": "bash ci_gates/gate_g0.sh",
     "gate:g1": "python3 ci_gates/gate_g1.py"

@@ -33,11 +33,12 @@ Open http://127.0.0.1:43127
 bash ci_gates/gate_g0.sh
 ```
 
-Must pass before any Layer 3–16 work. Gate G-1 (`python3 ci_gates/gate_g1.py`) is supposed to fail until `tests/gate_g1.test.ts` exists — do not skip it.
+Must pass before any Layer 3–16 work.
 
 ```bash
-npm test                 # P1 mask + Firestore emulator rules
-python3 ci_gates/gate_g1.py   # must FAIL until G1-1..G1-10 exist
+npm test                 # P1 mask + G-1 forensic
+npm run test:rules       # Firestore emulator rules
+python3 ci_gates/gate_g1.py
 ```
 
 Live Firestore/Postgres checks: `SIKANDER_LIVE=1 bash ci_gates/gate_g0.sh` (needs `ci_gates/gate_g0_live.sh`, not in this slice).
