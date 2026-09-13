@@ -15,9 +15,9 @@ const serif = Source_Serif_4({
 })
 
 export const metadata: Metadata = {
-  title: "SIKANDER AI — Phase 0 foundations",
+  title: "SIKANDER AI — NHS Legal, Karachi",
   description:
-    "NHS Legal, Karachi. Gate G-0 foundations: courts prefix table, 159 document types, feature flags, Firestore rules.",
+    "Litigation operating system for NHS Legal. Matters, files, parties, WhatsApp, citation gates.",
 }
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

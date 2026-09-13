@@ -25,7 +25,7 @@ npm run gate:g0
 npm run dev -- --port 43127
 ```
 
-Open http://127.0.0.1:43127
+Open http://127.0.0.1:43127 — that is the working desk (matters, upload, parties, WhatsApp, gates).
 
 ## Gate G-0
 

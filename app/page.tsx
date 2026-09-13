@@ -1,12 +1,5 @@
-import { FoundationConsole } from "@/app/foundation-console"
-import { getCourts, getDocumentTypes, getFixtures } from "@/lib/foundation-data"
+import { CommandDesk } from "@/app/command-desk"
 
 export default function Page() {
-  return (
-    <FoundationConsole
-      courts={getCourts()}
-      fixtures={getFixtures()}
-      types={getDocumentTypes()}
-    />
-  )
+  return <CommandDesk />
 }

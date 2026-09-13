@@ -17,7 +17,11 @@ for p in pathlib.Path(".").rglob("*"):
         continue
     for method in METHODS:
         if f"export async function {method}" in text or f"export function {method}" in text:
-            if "Idempotency-Key" not in text and "requireIdempotencyKey" not in text:
+            if (
+                "Idempotency-Key" not in text
+                and "requireIdempotencyKey" not in text
+                and "withIdempotency" not in text
+            ):
                 failed.append(f"{p}: {method} without Idempotency-Key")
 
 if failed:
