@@ -8,9 +8,14 @@ import {
   createMatter,
 } from "@/services/d1-2/matters"
 import { escalateSilence } from "@/platform/p4/intimation"
+import { createClient } from "@/services/d1-1/clients"
+import { searchCorpus } from "@/services/d5-1/research"
 import {
   checkTemporalConsistency,
   seedSection,
+  seedJudgment,
+  seedTreatment,
+  verifyCitations,
 } from "@/services/d4-2/draftingIntelligence"
 import { declassify, setClassification } from "@/platform/classification/declassify"
 import { IdempotencyError, requireIdempotencyKey } from "@/platform/http/idempotency"
@@ -163,5 +168,81 @@ describe("G-1 spine hardening", () => {
         new Request("http://local", { headers: { "Idempotency-Key": key } })
       )
     ).toBe(key)
+  })
+
+  it("refuses cross-firm matter membership and does not list the other firm's matter", () => {
+    const store = newStore()
+    seedUser(store, {
+      id: "partnerB",
+      firmId: "firmB",
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+    })
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "c1",
+      title: "secret",
+      courtId: "SHC",
+      classification: "privileged",
+    })
+    expect(() => addMember(store, matter.id, "partnerB", "firmB")).toThrow(
+      /cross-firm/
+    )
+    expect(store.members.size).toBe(0)
+  })
+
+  it("refuses unknown classification on upload instead of storing it", () => {
+    const store = newStore()
+    expect(() =>
+      uploadDocument(store, {
+        firmId: "firmA",
+        matterId: null,
+        bytes: Buffer.from("x"),
+        sourceChannel: "web",
+        classification: "super-secret" as never,
+        idempotencyKey: "11111111-1111-4111-8111-111111111111",
+      })
+    ).toThrow(/classification/)
+  })
+
+  it("search refuses embeddings whose vector length is not 1536", () => {
+    const store = newStore()
+    store.embeddings.push({
+      entityId: "j1",
+      model: "text-embedding-3-small",
+      vector: [0, 1, 2],
+    })
+    expect(() => searchCorpus(store, "text-embedding-3-small")).toThrow(/refuses/)
+  })
+
+  it("citation OVERRULED override is partner-only", () => {
+    const store = newStore()
+    seedUser(store, {
+      id: "intern1",
+      firmId: "firmA",
+      role: "intern",
+      clearanceLevel: "internal",
+    })
+    seedJudgment(store, "j-old", "Cited authority", "single")
+    seedJudgment(store, "j-later", "Larger bench", "larger")
+    seedTreatment(store, "j-later", "j-old", "overruled", "larger")
+    const blocked = verifyCitations(store, ["j-old"], {
+      partnerId: "intern1",
+      reason: "because I said so",
+    })
+    expect(blocked.status).toBe("OVERRULED")
+  })
+
+  it("createClient refuses a write without a known classification", () => {
+    const store = newStore()
+    expect(() =>
+      createClient(store, {
+        firmId: "firmA",
+        canonicalName: "A",
+        cnic: "4210112345671",
+        phone: "03001111111",
+        classification: "nope" as never,
+      })
+    ).toThrow(/classification/)
   })
 })

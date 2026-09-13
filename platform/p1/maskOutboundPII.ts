@@ -13,10 +13,11 @@ export type MaskResult = {
   redactions: { kind: "cnic" | "phone" | "party"; count: number }[]
 }
 
-const CNIC_SEPARATED = /\b\d{5}[-\s]+\d{7}[-\s]+\d\b/g
+const CNIC_SEPARATED = /\b\d{5}[.\-\s]+\d{7}[.\-\s]+\d\b/g
 const CNIC_PLAIN = /\b\d{13}\b/g
-// Pakistani mobile: 03XXXXXXXXX / 0300-1234567 / +92 300 1234567 / 923001234567
+// Pakistani mobile: 03XXXXXXXXX / 0300-1234567 / +92 300 1234567 / (0300) 1234567
 const PK_MOBILE = /(?:\+92|92|0)[\s-]?3\d{2}[\s-]?\d{7}\b/g
+const PK_MOBILE_PAREN = /\(0?3\d{2}\)[\s-]?\d{7}\b/g
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -35,6 +36,10 @@ export function maskOutboundPII(text: string, options: MaskOptions = {}): MaskRe
   masked = masked.replace(CNIC_PLAIN, () => {
     cnic += 1
     return "[CNIC]"
+  })
+  masked = masked.replace(PK_MOBILE_PAREN, () => {
+    phone += 1
+    return "[PHONE]"
   })
   masked = masked.replace(PK_MOBILE, () => {
     phone += 1

@@ -101,6 +101,8 @@ describe("Job F — P1 outbound mask", () => {
       ["mobile 0300 1234567", "0300 1234567"],
       ["mobile +92-300-1234567", "+92-300-1234567"],
       ["mobile +92 300 1234567", "+92 300 1234567"],
+      ["mobile (0300) 1234567", "(0300) 1234567"],
+      ["CNIC dotted 42101.1234567.1", "42101.1234567.1"],
     ]
     for (const [raw, leak] of samples) {
       const masked = maskOutboundPII(raw).masked
@@ -146,5 +148,29 @@ describe("Job F — P1 outbound mask", () => {
       })
     ).rejects.toThrow(/omitted classification/)
     expect(sent).toBe(false)
+  })
+
+  it("masks CNIC and party names in purpose metadata, not only the body", async () => {
+    const cnic = "42101-1234567-1"
+    const party = "Muhammad Ali Khan"
+    let captured: OutboundRequest | null = null
+    setTransportForTests({
+      async send(request) {
+        captured = request
+        return { text: "mock" }
+      },
+    })
+    const result = await callCommitteeBrain({
+      body: "summarise the filing",
+      classification: "internal",
+      provider: "openai",
+      purpose: `translate ${cnic} for ${party}`,
+      partyNames: [party],
+    })
+    expect(result.blocked).toBe(false)
+    expect(captured!.metadata.purpose).not.toContain(cnic)
+    expect(captured!.metadata.purpose).not.toContain(party)
+    expect(captured!.metadata.purpose).toContain("[CNIC]")
+    expect(captured!.metadata.purpose).toContain("[PARTY]")
   })
 })

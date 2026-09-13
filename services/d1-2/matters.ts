@@ -33,7 +33,20 @@ export function addMember(
   userId: string,
   firmId: string
 ) {
-  store.members.set(store.memberKey(matterId, userId), { matterId, userId, firmId })
+  const matter = store.matters.get(matterId)
+  if (!matter) throw new Error("unknown matter")
+  if (firmId !== matter.firmId) {
+    throw new Error("cross-firm membership rejected")
+  }
+  const user = store.users.get(userId)
+  if (user && user.firmId !== matter.firmId) {
+    throw new Error("cross-firm membership rejected")
+  }
+  store.members.set(store.memberKey(matterId, userId), {
+    matterId,
+    userId,
+    firmId: matter.firmId,
+  })
 }
 
 export function confirmEngagement(store: SpineStore, matterId: string, now = Date.now()) {
@@ -51,7 +64,8 @@ export function listMattersForUser(store: SpineStore, userId: string) {
       (m) => m.firmId === user.firmId && m.clientId === userId
     )
   }
-  return [...store.matters.values()].filter((m) =>
-    store.members.has(store.memberKey(m.id, userId))
+  return [...store.matters.values()].filter(
+    (m) =>
+      m.firmId === user.firmId && store.members.has(store.memberKey(m.id, userId))
   )
 }

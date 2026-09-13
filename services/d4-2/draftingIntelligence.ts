@@ -27,7 +27,7 @@ export function seedTreatment(
 export function verifyCitations(
   store: SpineStore,
   citedJudgmentIds: string[],
-  partnerOverrideReason?: string
+  partnerOverride?: { partnerId: string; reason: string }
 ): GateResult {
   for (const cited of citedJudgmentIds) {
     const hit = store.treatments.find(
@@ -41,7 +41,13 @@ export function verifyCitations(
       treated &&
       benchRank(treating.benchType) > benchRank(treated.benchType)
     if (hit.treatment === "overruled" && (larger || hit.treatingBenchType === "larger")) {
-      if (partnerOverrideReason?.trim()) return { status: "OK" }
+      if (partnerOverride?.reason.trim()) {
+        const partner = store.users.get(partnerOverride.partnerId)
+        if (!partner || partner.role !== "partner") {
+          return { status: "OVERRULED", blocked: true }
+        }
+        return { status: "OK" }
+      }
       return { status: "OVERRULED", blocked: true }
     }
   }

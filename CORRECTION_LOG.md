@@ -192,3 +192,25 @@ Existing G-0 / G-1 tests were green but the Committee Brain and spine leaked on 
 
 Live OpenAI/Anthropic/Gemini/Groq calls: still blocked. DPA table still empty (`TODO(firm)`). No provider SDK added.
 
+## Critic pass (13 Sep 2026)
+
+The G-0 / G-1 / hardening suites were still green while the spine was not tenant-safe and P1 still leaked identifier variants and purpose metadata.
+
+Closed in this pass:
+- **Cross-firm membership** — `addMember(firmB partner onto firmA matter)` succeeded; `listMattersForUser` then returned the other firm's privileged matter. Membership now requires the matter's firmId; list is firm-scoped.
+- **Citation override** — any non-empty string cleared OVERRULED. Override now requires a seeded partner. G1-4 updated.
+- **Artefact classification** — `uploadDocument("super-secret")` and `createClient` without a rank-0–4 label stored/accepted. Both refuse. Client rows now persist classification.
+- **P1 purpose metadata** — body was masked; `metadata.purpose` still carried CNIC and party names to the transport. Purpose is masked with the same function.
+- **Embedding lock** — `searchCorpus` checked the metadata string, not vector length, so a 3-float row labelled `text-embedding-3-small` searched. Length must be 1536.
+- **Mask variants** — dotted CNIC and `(0300) 1234567` now redact.
+- **Test hook** — `setTransportForTests` throws in `NODE_ENV=production`.
+- **Firestore document update** — matter-bound docs used `memberOrPartner` (partner exempt). Update now requires `isMember`, matching matter read.
+
+Left open (not invented around):
+- Mask still does not cover email, IBAN, NTN, passport, or unsourced party names (Job F specified CNIC, PK mobile, supplied names).
+- G-1 is an in-process store. It is not Firebase, WhatsApp, or a live provider.
+- `reembedCorpus(confirmed)` relabels vectors; it does not compute embeddings.
+- `checkPermission` does not apply clearance to firm-level `/research`.
+- Idempotency map on `/api/g0/normalise` is process-local and unbounded.
+- DPA table empty; public/internal still policy-allowed to a provider once credentials exist.
+

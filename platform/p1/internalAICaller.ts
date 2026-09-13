@@ -44,6 +44,9 @@ let transport: Transport = blockedTransport
 
 /** Test-only. Production never injects a transport that sees raw text. */
 export function setTransportForTests(next: Transport | null): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("setTransportForTests is test-only")
+  }
   transport = next ?? blockedTransport
 }
 
@@ -63,12 +66,15 @@ export async function callCommitteeBrain(
   }
 
   const mask = maskOutboundPII(input.body, { partyNames: input.partyNames })
+  const purpose = maskOutboundPII(input.purpose, {
+    partyNames: input.partyNames,
+  }).masked
   const outbound: OutboundRequest = {
     body: mask.masked,
     metadata: {
       classification: input.classification,
       provider: input.provider,
-      purpose: input.purpose,
+      purpose,
       redactionCounts: Object.fromEntries(
         mask.redactions.map((r) => [r.kind, r.count])
       ),
