@@ -174,3 +174,53 @@ In-process spine so the ten Layer 18 §10.1 tests pass without inventing firm va
 - `tests/gate_g1.test.ts` — labels G1-1..G1-10
 - CI now requires `python3 ci_gates/gate_g1.py` to pass
 
+## Debug pass — P1 Committee Brain + G-1 hardening (13 Sep 2026)
+
+Existing G-0 / G-1 tests were green but the Committee Brain and spine leaked on paths the original fixtures never hit.
+
+- **P1 mask** — spaced CNIC (`42101 1234567 1`) and dashed/spaced mobiles (`0300-1234567`, `+92 300 1234567`) were leaving in the outbound body. `maskOutboundPII` now redacts those forms.
+- **P1 credentials** — `callCommitteeBrain` threw `blocked: no live provider credentials in Phase 0` for allowed ranks (public/internal). That would 500 any live caller. It now returns `{ blocked: true, reason }` with the masked outbound still attached.
+- **Unknown classification** — labels outside ranks 0–4 were treated as allowed (undefined rank compared as public). `isClassification()` refuses the call; `providerAllowedFor` returns blocked.
+- **Hash reuse** — second upload of the same firm+bytes kept the first classification, so internal then privileged stayed internal (OCR job stayed internal too). Reuse now inherits the higher rank monotonically and never downgrades.
+- **declassify bypass** — `setClassification(..., intern, fakeReason)` downgraded privileged → internal. Downgrade now requires a partner actor plus a recorded reason.
+- **L4.10** — repeated `escalateSilence` after 24h created duplicate follow-ups. One row per matter.
+- **Temporal gate** — unknown section id returned `OK`. Now `TEMPORAL-MISMATCH`.
+- **Idempotency-Key** — comment said UUID v4 but any string was accepted. Invalid JSON on `/api/g0/normalise` threw. Both now 400.
+- **Tests** — `tests/p1.outbound-mask.test.ts` extended; added `tests/spine.hardening.test.ts` and `tests/api.normalise.test.ts`.
+- **Console copy** — header no longer says Layer 3–16 waits on a missing G-1 file. Live providers remain blocked.
+- **Console default court** — Courts tab opened on `SC_PK` while the sample string is the SHC fixture `C.P. No. D-1234 of 2025`, so the first Normalise click rejected (`SC_PK has no bench letters`). Default court is now `SHC`.
+
+Live OpenAI/Anthropic/Gemini/Groq calls: still blocked. DPA table still empty (`TODO(firm)`). No provider SDK added.
+
+## Critic pass (13 Sep 2026)
+
+The G-0 / G-1 / hardening suites were still green while the spine was not tenant-safe and P1 still leaked identifier variants and purpose metadata.
+
+Closed in this pass:
+- **Cross-firm membership** — `addMember(firmB partner onto firmA matter)` succeeded; `listMattersForUser` then returned the other firm's privileged matter. Membership now requires the matter's firmId; list is firm-scoped.
+- **Citation override** — any non-empty string cleared OVERRULED. Override now requires a seeded partner. G1-4 updated.
+- **Artefact classification** — `uploadDocument("super-secret")` and `createClient` without a rank-0–4 label stored/accepted. Both refuse. Client rows now persist classification.
+- **P1 purpose metadata** — body was masked; `metadata.purpose` still carried CNIC and party names to the transport. Purpose is masked with the same function.
+- **Embedding lock** — `searchCorpus` checked the metadata string, not vector length, so a 3-float row labelled `text-embedding-3-small` searched. Length must be 1536.
+- **Mask variants** — dotted CNIC and `(0300) 1234567` now redact.
+- **Test hook** — `setTransportForTests` throws in `NODE_ENV=production`.
+- **Firestore document update** — matter-bound docs used `memberOrPartner` (partner exempt). Update now requires `isMember`, matching matter read.
+
+Left open (honest limits, not unfixed holes):
+- Unsourced party names are not auto-detected. Job F requires the caller to pass `partyNames`; masking "Ali"/"Khan" would destroy legal prose.
+- G-1 is an in-process store. It is not Firebase, WhatsApp, or a live provider.
+- `reembedCorpus(confirmed)` relabels vectors; it does not compute embeddings.
+- DPA table empty; only **public** may leave to a provider once credentials exist.
+
+## Critic faults closed (follow-up)
+
+- **Mask** — email, Pakistani IBAN, NTN (`NTN 1234567-8`), passport (`Passport AB1234567`).
+- **DPA** — internal+ blocked without executed DPA (internal opinions are client-identifying). Public remains the only rank that may leave.
+- **Permissions** — intern cannot `/research` or draft; matter-scoped actions require clearance ≥ the matter rank.
+- **Idempotency cache** — `IdempotencyCache` with 24h TTL and 1000-entry cap. Still process-local (no Postgres in this slice).
+- **Classification in the prompt** — test now proves the body is the masked user text even when it contains the words "privileged"/"internal"; rank stays in metadata.
+- **Inbound mask** — provider response text is run through `maskOutboundPII` before return.
+- **conflictCheck** — unknown / cross-firm id throws; it does not report CLEAR.
+- **Firestore tests** — non-member partner cannot update a matter-bound document; member can upgrade classification monotonically.
+
+

@@ -24,6 +24,11 @@ export function escalateSilence(
   now: number,
   windowMs = 24 * 60 * 60 * 1000
 ) {
+  if (
+    store.followUps.some((f) => f.matterId === matterId && f.kind === "l4_10_silence")
+  ) {
+    return
+  }
   const rows = intimationsFor(store, matterId)
   for (const row of rows) {
     if (row.confirmedAt) continue
@@ -37,6 +42,7 @@ export function escalateSilence(
         raw: "accounts-silence-24h",
         kind: "l4_10_silence",
       })
+      return
     }
   }
 }

@@ -53,6 +53,7 @@ export type Entity = {
   canonicalName: string
   cnic: string
   phone: string
+  classification: Classification
 }
 
 export type EntityLink = {

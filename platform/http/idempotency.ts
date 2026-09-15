@@ -8,10 +8,64 @@ export class IdempotencyError extends Error {
   }
 }
 
+const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 export function requireIdempotencyKey(request: Request): string {
   const key = request.headers.get("Idempotency-Key")
   if (!key) {
     throw new IdempotencyError()
   }
+  if (!UUID_V4.test(key)) {
+    throw new IdempotencyError("Idempotency-Key must be UUID v4")
+  }
   return key
+}
+
+/** Process-local replay cache. Bounded. Not a durable store. */
+export class IdempotencyCache<T> {
+  private readonly entries = new Map<string, { at: number; body: T }>()
+
+  constructor(
+    private readonly ttlMs: number,
+    private readonly maxEntries: number
+  ) {}
+
+  get size(): number {
+    return this.entries.size
+  }
+
+  get(key: string): T | undefined {
+    this.prune()
+    const hit = this.entries.get(key)
+    if (!hit) return undefined
+    if (Date.now() - hit.at >= this.ttlMs) {
+      this.entries.delete(key)
+      return undefined
+    }
+    return hit.body
+  }
+
+  set(key: string, body: T): void {
+    this.prune()
+    this.entries.set(key, { at: Date.now(), body })
+    this.evictOldest()
+  }
+
+  prune(): void {
+    const now = Date.now()
+    for (const [key, row] of this.entries) {
+      if (now - row.at >= this.ttlMs) this.entries.delete(key)
+    }
+  }
+
+  private evictOldest(): void {
+    if (this.entries.size <= this.maxEntries) return
+    const ordered = [...this.entries.entries()].sort((a, b) => a[1].at - b[1].at)
+    const drop = this.entries.size - this.maxEntries
+    for (let i = 0; i < drop; i++) {
+      const key = ordered[i]?.[0]
+      if (key) this.entries.delete(key)
+    }
+  }
 }

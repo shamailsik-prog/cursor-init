@@ -1,5 +1,5 @@
 export { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
-export { callCommitteeBrain, internalAICaller, safePrompt, setTransportForTests } from "@/platform/p1/internalAICaller"
+export { callCommitteeBrain, internalAICaller, safePrompt, setTransportForTests, PHASE0_NO_CREDENTIALS } from "@/platform/p1/internalAICaller"
 export { providerAllowedFor } from "@/platform/p1/providerPolicy"
-export { CLASSIFICATION_RANKS, classificationRank } from "@/platform/p1/types"
+export { CLASSIFICATION_RANKS, classificationRank, isClassification } from "@/platform/p1/types"
 export type { Classification } from "@/platform/p1/types"
