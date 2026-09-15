@@ -53,7 +53,13 @@ service cloud.firestore {
             : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2);   // loose vault (L4.5); intern denied
       allow create: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'];
       allow update: if sameFirm() && firmIdUnchanged() && monotonic()
-        && (resource.data.matterId == null || memberOrPartner(resource.data.matterId))
+        && (resource.data.matterId != null
+            ? isMember(resource.data.matterId)
+            : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2)
+        && (request.resource.data.matterId == resource.data.matterId
+            || (request.resource.data.matterId != null
+                ? isMember(request.resource.data.matterId)
+                : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2))
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['storagePath', 'contentHash', 'isImmutable']);
       allow delete: if false; // originals are immutable; loose vault never deletes (E-18)
     }

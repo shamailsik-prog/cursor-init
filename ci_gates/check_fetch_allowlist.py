@@ -3,6 +3,7 @@
 Playwright/Puppeteer remains in gate_g0.sh. P1 provider egress is excluded (not a scraper).
 """
 import json, re, pathlib, sys
+from urllib.parse import urlparse
 
 allow = json.loads(pathlib.Path("data/l49_allowlist.json").read_text())
 allowed = {h.lower() for h in allow.get("hosts", [])}
@@ -14,6 +15,21 @@ FETCH = re.compile(
     r"""(?:fetch|axios\.(?:get|post|put|patch|delete)|got(?:\.get)?)\s*\(\s*(['"`])(https?://[^'"`]+)\1""",
     re.I,
 )
+
+
+def host_of(url: str) -> str:
+    parsed = urlparse(url)
+    return (parsed.hostname or "").lower()
+
+
+def _selftest() -> None:
+    assert host_of("https://pakistancode.gov.pk/act") == "pakistancode.gov.pk"
+    assert host_of("http://127.0.0.1:8080/x") == "127.0.0.1"
+    assert host_of("https://example.com/path") != "https"
+    assert host_of("http://localhost/foo") == "localhost"
+
+
+_selftest()
 
 failed = []
 for p in pathlib.Path(".").rglob("*"):
@@ -30,9 +46,9 @@ for p in pathlib.Path(".").rglob("*"):
         continue
     for m in FETCH.finditer(text):
         url = m.group(2)
-        host = url.split("/")[0].split(":")[0].lower()
-        if host not in allowed:
-            failed.append(f"{rel}: fetch to {host} (not on L4.9 allowlist)")
+        host = host_of(url)
+        if not host or host not in allowed:
+            failed.append(f"{rel}: fetch to {host or url} (not on L4.9 allowlist)")
 
 if failed:
     print("FAIL: non-allowlist fetch:")

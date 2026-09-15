@@ -136,6 +136,7 @@ Erratum Set No. 1 enumerates **ten** static guards. Layer 18 §9.2 and this work
 - `CORRECTION_LOG.md` (this file)
 - `.gitignore` (`__pycache__`, firebase emulator logs)
 - `next.config.ts` — `allowedDevOrigins` includes `127.0.0.1` so HMR is not blocked on the IP URL (console verification).
+- Bugbot PR #1: `check_fetch_allowlist.py` now parses host via urlparse (scheme is not the host). Document **update** requires `isMember` (same as read); non-member partner cannot write a matter document.
 
 ## Not done
 

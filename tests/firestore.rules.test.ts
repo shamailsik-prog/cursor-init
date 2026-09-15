@@ -10,6 +10,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
 } from "firebase/firestore"
 
 let testEnv: RulesTestEnvironment
@@ -37,6 +38,14 @@ beforeAll(async () => {
       firmId: "firmA",
       matterId: null,
       classification: "confidential",
+    })
+    await setDoc(doc(db, "documents", "m1doc"), {
+      firmId: "firmA",
+      matterId: "m1",
+      classification: "internal",
+      storagePath: "r2/m1doc",
+      contentHash: "abc",
+      isImmutable: false,
     })
     await setDoc(doc(db, "master_versions", "v1"), {
       firmId: "firmA",
@@ -110,5 +119,31 @@ describe("Job E — Firestore rules", () => {
       clearanceLevel: "internal",
     })
     await assertSucceeds(getDoc(doc(db, "matters", "m1")))
+  })
+
+  it("non-member partner cannot update a matter document", async () => {
+    const partner = authed("partner1", {
+      firmId: "firmA",
+      role: "partner",
+      clearanceLevel: "privileged",
+    })
+    await assertFails(
+      updateDoc(doc(partner, "documents", "m1doc"), {
+        classification: "confidential",
+      })
+    )
+  })
+
+  it("member can update a matter document classification upward", async () => {
+    const db = authed("member1", {
+      firmId: "firmA",
+      role: "associate",
+      clearanceLevel: "privileged",
+    })
+    await assertSucceeds(
+      updateDoc(doc(db, "documents", "m1doc"), {
+        classification: "confidential",
+      })
+    )
   })
 })
