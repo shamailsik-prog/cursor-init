@@ -223,4 +223,13 @@ Left open (honest limits, not unfixed holes):
 - **conflictCheck** — unknown / cross-firm id throws; it does not report CLEAR.
 - **Firestore tests** — non-member partner cannot update a matter-bound document; member can upgrade classification monotonically.
 
+## Project hooks (15 Sep 2026)
+
+Cursor project hooks so future agent sessions cannot silently break G-0 non-negotiables. Command hooks, python3, no invented DPA/prefixes/fee schedules.
+
+- **Added** `.cursor/hooks.json` — `beforeShellExecution` (failClosed), `afterFileEdit` (fail open), lightweight `beforeSubmitPrompt`.
+- **Added** `.cursor/hooks/before-shell-execution.py` — deny Playwright/Puppeteer installs and court-fee identifier scripts; ask on provider SDK installs outside `platform/p1` / `platform/committeeBrain`.
+- **Added** `.cursor/hooks/after-file-edit.py` — injects `additional_context` if an edit adds `calculateCourtFee` / `getFeeRule` / `insertFeeMemo` / `courtFeeBasis`, a Playwright/Puppeteer reference, or a provider SDK import outside P1.
+- **Added** `.cursor/hooks/before-submit-prompt.py` — never blocks; reminds on fee/scraper/provider prompts.
+
 
