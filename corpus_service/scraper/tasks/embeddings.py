@@ -1,4 +1,5 @@
 import logging, time, asyncio
+from celery import shared_task
 from scraper.database import SessionLocal
 from sqlalchemy import select
 from scraper.models import EmbeddingQueue, CaseLawMaster, StatutesMaster
@@ -31,7 +32,7 @@ async def process_embedding_queue():
                     emb = await client.embeddings.create(model="text-embedding-3-small", input=embed_text)
                     vector = emb.data[0].embedding
                     rec.embedding = vector
-                    item.status="done"
+                    item.status = "completed"
                     await db.commit()
                     count+=1
                     await asyncio.sleep(0.6)  # 100 RPM limit
@@ -47,3 +48,8 @@ async def process_embedding_queue():
 
 def process_embedding_queue_sync():
     return asyncio.run(process_embedding_queue())
+
+
+@shared_task(name="scraper.tasks.embeddings.process_embedding_queue")
+def process_embedding_queue_task():
+    return process_embedding_queue_sync()

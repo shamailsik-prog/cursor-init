@@ -13,7 +13,8 @@ Tables:
 - scraper_jobs
 - quarantine_queue
 - embedding_queue
-- limitation_periods
+
+FINAL_2: no limitation_periods table (legal rules are not held here).
 
 Designed for:
 - FastAPI asyncpg
@@ -52,13 +53,12 @@ from sqlalchemy import (
     text,
     JSON,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from pgvector.sqlalchemy import Vector
 
-
-class Base(DeclarativeBase):
-    pass
+# Share the single DeclarativeBase used by init_db.create_all
+from scraper.database import Base
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +666,7 @@ class EmbeddingQueue(Base):
     )
 
     record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    table_name: Mapped[str] = mapped_column(String(80), nullable=False, comment="case_law_master, statutes_master, limitation_periods")
+    table_name: Mapped[str] = mapped_column(String(80), nullable=False, comment="case_law_master, statutes_master")
 
     status: Mapped[str] = mapped_column(String(30), default="pending", server_default=text("'pending'"), nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), nullable=False)
@@ -696,72 +696,8 @@ class EmbeddingQueue(Base):
 
 
 # ---------------------------------------------------------------------------
-# 10. LimitationPeriod - Pakistani Limitation Act 1908 & special laws
-# ---------------------------------------------------------------------------
-class LimitationPeriod(Base):
-    __tablename__ = "limitation_periods"
-    __table_args__ = (
-        UniqueConstraint("act_name", "article_number", name="uq_limitation_act_article"),
-        Index("ix_limitation_act_name", "act_name"),
-        Index("ix_limitation_article_number", "article_number"),
-        Index("ix_limitation_category", "category"),
-        Index("ix_limitation_source_statute_id", "source_statute_id"),
-        Index("ix_limitation_is_active", "is_active"),
-        Index("ix_limitation_period_days", "period_days"),
-        Index("ix_limitation_applicable_court", "applicable_court_type"),
-        Index("ix_limitation_description_trgm", "description", postgresql_using="gin", postgresql_ops={"description": "gin_trgm_ops"}),
-        Index(
-            "ix_limitation_embedding_hnsw_cosine",
-            "embedding",
-            postgresql_using="hnsw",
-            postgresql_with={"m": 16, "ef_construction": 64},
-            postgresql_ops={"embedding": "vector_cosine_ops"},
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
-    )
-
-    act_name: Mapped[str] = mapped_column(String(500), nullable=False, default="Limitation Act, 1908", server_default=text("'Limitation Act, 1908'"))
-    article_number: Mapped[str] = mapped_column(String(100), nullable=False, comment="Article 1, 120, 150 etc, or Sec 5, etc")
-    schedule_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="First Schedule, etc")
-
-    description: Mapped[str] = mapped_column(Text, nullable=False, comment="Suit description e.g., Suit for compensation for false imprisonment")
-    period_text: Mapped[str] = mapped_column(String(255), nullable=False, comment="e.g., '3 years', '30 days', '90 days'")
-    period_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Normalized total days")
-    period_months: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    period_years: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-
-    category: Mapped[str] = mapped_column(String(100), nullable=False, comment="suit, appeal, application, execution")
-    applicable_court_type: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
-    limitation_start_event: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True, comment="When time begins to run, e.g., date of decree")
-    exceptions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    is_excluded_period_allowed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
-    is_condonable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False, comment="Section 5 condonation applies")
-
-    source_statute_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("statutes_master.id", ondelete="SET NULL"), nullable=True
-    )
-    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(1536), nullable=True)
-
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), nullable=False)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-    source_statute: Mapped[Optional["StatutesMaster"]] = relationship("StatutesMaster", backref="limitation_periods")
-
-    def __repr__(self) -> str:
-        return f"<LimitationPeriod id={self.id} act={self.act_name} article={self.article_number} period={self.period_text}>"
-
-
+# FINAL_2: LimitationPeriod intentionally omitted — this service holds no
+# legal rules / limitation_periods table (see FINAL_CORPUS_SERVICE_PROMPT_2).
 # ---------------------------------------------------------------------------
 # Helper: ensure pgvector + pg_trgm extensions via Alembic / init.sql
 # Note: CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm;
