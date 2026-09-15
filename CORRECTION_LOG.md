@@ -223,4 +223,14 @@ Left open (honest limits, not unfixed holes):
 - **conflictCheck** — unknown / cross-firm id throws; it does not report CLEAR.
 - **Firestore tests** — non-member partner cannot update a matter-bound document; member can upgrade classification monotonically.
 
+## Follow-up validation (15 Sep 2026)
+
+PR #4 landed. Remaining write/mask holes the critic pass did not cover:
+
+- **createMatter / setClassification / seedUser / proposeChange** accepted unknown rank labels (`super-secret`). Rank compares then became `undefined` and looked like a no-op or a silent store. All four now refuse via `isClassification()`.
+- **P1 mask** — dotted mobiles (`0300.1234567`) and spaced Pakistani IBANs (`PK36 SCBL 0000 0011 2345 6702`).
+- **requestTranslation** now forwards `partyNames` into Committee Brain.
+
+Live providers still blocked. DPA table still empty (`TODO(firm)`).
+
 

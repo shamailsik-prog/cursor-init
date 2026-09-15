@@ -107,6 +107,8 @@ describe("Job F — P1 outbound mask", () => {
       ["CNIC dotted 42101.1234567.1", "42101.1234567.1"],
       ["email counsel@nhslegal.pk", "counsel@nhslegal.pk"],
       ["IBAN PK36SCBL0000001123456702", "PK36SCBL0000001123456702"],
+      ["IBAN spaced PK36 SCBL 0000 0011 2345 6702", "PK36 SCBL 0000 0011 2345 6702"],
+      ["mobile dotted 0300.1234567", "0300.1234567"],
       ["NTN NTN 1234567-8", "1234567-8"],
       ["passport Passport AB1234567", "AB1234567"],
     ]

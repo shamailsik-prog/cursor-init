@@ -28,10 +28,10 @@ export type MaskResult = {
 const CNIC_SEPARATED = /\b\d{5}[.\-\s]+\d{7}[.\-\s]+\d\b/g
 const CNIC_PLAIN = /\b\d{13}\b/g
 // Pakistani mobile: 03XXXXXXXXX / 0300-1234567 / +92 300 1234567 / (0300) 1234567
-const PK_MOBILE = /(?:\+92|92|0)[\s-]?3\d{2}[\s-]?\d{7}\b/g
-const PK_MOBILE_PAREN = /\(0?3\d{2}\)[\s-]?\d{7}\b/g
+const PK_MOBILE = /(?:\+92|92|0)[.\s-]?3\d{2}[.\s-]?\d{7}\b/g
+const PK_MOBILE_PAREN = /\(0?3\d{2}\)[.\s-]?\d{7}\b/g
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
-const PK_IBAN = /\bPK\d{2}[A-Z]{4}\d{16}\b/gi
+const PK_IBAN = /\bPK\s*\d{2}\s*[A-Z]{4}\s*\d{4}\s*\d{4}\s*\d{4}\s*\d{4}\b/gi
 const NTN = /\bNTN[:\s-]*\d{7}-\d\b/gi
 const PASSPORT = /\b(?:passport|ppt\.?)[:\s-]*[A-Z]{2}\d{7}\b/gi
 

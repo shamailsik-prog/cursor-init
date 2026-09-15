@@ -4,12 +4,14 @@ import type { Classification } from "@/platform/p1/types"
 export async function requestTranslation(input: {
   text: string
   classification: Classification
+  partyNames?: string[]
 }) {
   const result = await callCommitteeBrain({
     body: input.text,
     classification: input.classification,
     provider: "openai",
     purpose: "translate",
+    partyNames: input.partyNames,
   })
   if (result.blocked) {
     return {

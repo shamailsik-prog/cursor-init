@@ -20,6 +20,9 @@ import {
   verifyCitations,
 } from "@/services/d4-2/draftingIntelligence"
 import { declassify, setClassification } from "@/platform/classification/declassify"
+import { proposeChange } from "@/platform/p6/proposeChange"
+import { requestTranslation } from "@/platform/p1/translate"
+import { setTransportForTests } from "@/platform/p1/internalAICaller"
 
 describe("G-1 spine hardening", () => {
   it("same-hash reuse inherits the higher classification and does not add a second OCR job", () => {
@@ -284,5 +287,84 @@ describe("G-1 spine hardening", () => {
   it("conflictCheck does not report CLEAR for an unknown or cross-firm id", () => {
     const store = newStore()
     expect(() => conflictCheck(store, "firmA", "missing")).toThrow(/unknown entity/)
+  })
+
+  it("createMatter refuses an unknown classification label", () => {
+    const store = newStore()
+    expect(() =>
+      createMatter(store, {
+        firmId: "firmA",
+        clientId: "c1",
+        title: "secret",
+        courtId: "SHC",
+        classification: "super-secret" as never,
+      })
+    ).toThrow(/classification/)
+  })
+
+  it("setClassification refuses an unknown next rank instead of storing it", () => {
+    const store = newStore()
+    seedUser(store, {
+      id: "partner1",
+      firmId: "firmA",
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+    })
+    const up = uploadDocument(store, {
+      firmId: "firmA",
+      matterId: null,
+      bytes: Buffer.from("memo"),
+      sourceChannel: "web",
+      classification: "internal",
+      idempotencyKey: "66666666-6666-4666-8666-666666666666",
+    })
+    expect(() =>
+      setClassification(store, up.docId, "super-secret" as never, "partner1")
+    ).toThrow(/classification/)
+    expect(store.documents.get(up.docId)?.classification).toBe("internal")
+  })
+
+  it("proposeChange and seedUser refuse unknown classification", () => {
+    const store = newStore()
+    expect(() =>
+      seedUser(store, {
+        id: "u1",
+        firmId: "firmA",
+        role: "clerk",
+        clearanceLevel: "nope" as never,
+      })
+    ).toThrow(/classification/)
+    expect(() =>
+      proposeChange({
+        firmId: "firmA",
+        sourceModule: "d4-2",
+        classification: "nope" as never,
+        payload: {},
+        proposedBy: "partner1",
+      })
+    ).toThrow(/classification/)
+  })
+
+  it("requestTranslation forwards partyNames into P1 so they never leave", async () => {
+    const party = "Ayesha Siddiqui"
+    setTransportForTests({
+      async send(request) {
+        expect(request.body).not.toContain(party)
+        expect(request.body).toContain("[PARTY]")
+        return { text: `Translated for ${party}` }
+      },
+    })
+    try {
+      const result = await requestTranslation({
+        text: `Opinion for ${party}`,
+        classification: "public",
+        partyNames: [party],
+      })
+      expect(result.blocked).toBe(false)
+      expect(result.text).not.toContain(party)
+      expect(result.text).toContain("[PARTY]")
+    } finally {
+      setTransportForTests(null)
+    }
   })
 })

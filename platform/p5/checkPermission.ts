@@ -1,4 +1,4 @@
-import type { Classification } from "@/platform/p1/types"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { rankOf, type Role, type SpineStore, type User } from "@/platform/spine/store"
 
 export type PermissionDecision = {
@@ -57,6 +57,9 @@ export function seedUser(
   store: SpineStore,
   user: User
 ): User {
+  if (!isClassification(user.clearanceLevel)) {
+    throw new Error("artefact write omitted classification")
+  }
   store.users.set(user.id, user)
   return user
 }
