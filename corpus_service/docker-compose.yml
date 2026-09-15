@@ -45,7 +45,7 @@ services:
       - ./live:/app/live
       - ./blackletter_state:/app/state
     depends_on: [postgres, redis]
-    command: celery -A scraper.tasks.celery_app worker -Q embeddings --loglevel=INFO
+    command: celery -A scraper.tasks.celery_app worker -Q celery,embeddings --loglevel=INFO
     restart: unless-stopped
 
   celery-beat:
