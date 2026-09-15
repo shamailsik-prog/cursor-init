@@ -1,4 +1,4 @@
-import type { Classification } from "@/platform/p1/types"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { rankOf, type SpineStore } from "@/platform/spine/store"
 
 export function setClassification(
@@ -8,6 +8,9 @@ export function setClassification(
   actorId: string,
   declassifyReason?: string
 ): void {
+  if (!isClassification(next)) {
+    throw new Error("artefact write omitted classification")
+  }
   const doc = store.documents.get(artefactId)
   const matter = store.matters.get(artefactId)
   const current = doc?.classification ?? matter?.classification

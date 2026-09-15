@@ -1,4 +1,4 @@
-import type { Classification } from "@/platform/p1/types"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import type { SpineStore } from "@/platform/spine/store"
 import { notifyAccounts } from "@/platform/p4/intimation"
 
@@ -12,6 +12,9 @@ export function createMatter(
     classification: Classification
   }
 ) {
+  if (!isClassification(input.classification)) {
+    throw new Error("artefact write omitted classification")
+  }
   const id = store.id("mat")
   store.matters.set(id, {
     id,
