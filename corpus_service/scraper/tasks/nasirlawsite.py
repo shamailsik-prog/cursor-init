@@ -14,6 +14,18 @@ REPORTER_URLS = [
     "https://www.nasirlawsite.com/case/mld.htm",
 ]
 
+def _citation_to_str(citation) -> str | None:
+    """Persist a string into ScraperStaging.extracted_citation (VARCHAR)."""
+    if citation is None:
+        return None
+    if isinstance(citation, str):
+        return citation[:500]
+    if isinstance(citation, dict):
+        text = citation.get("normalized") or citation.get("raw") or ""
+        return (text[:500] if text else None)
+    return str(citation)[:500]
+
+
 async def scrape_nasirlawsite(source, db):
     async with httpx.AsyncClient(timeout=30, headers={"User-Agent":"Mozilla/5.0"}) as client:
         for url in REPORTER_URLS:
@@ -29,8 +41,17 @@ async def scrape_nasirlawsite(source, db):
                         raw_html = cr.text
                         cleaned = clean_html(raw_html)
                         cits = extract_citations(cleaned)
-                        citation = cits[0] if cits else None
-                        staging = ScraperStaging(source_site="NasirLawSite", source_url=full, raw_html=raw_html[:50000], raw_text=cleaned[:50000], extracted_citation=citation, extracted_title=soup.title.string if soup.title else None, confidence_score=score_confidence({"citation": citation, "full_text": cleaned}))
+                        citation_obj = cits[0] if cits else None
+                        citation = _citation_to_str(citation_obj)
+                        staging = ScraperStaging(
+                            source_site="NasirLawSite",
+                            source_url=full,
+                            raw_html=raw_html[:50000],
+                            raw_text=cleaned[:50000],
+                            extracted_citation=citation,
+                            extracted_title=soup.title.string if soup.title else None,
+                            confidence_score=score_confidence({"citation": citation, "full_text": cleaned}),
+                        )
                         db.add(staging)
                         await db.commit()
                         await asyncio.sleep(1)

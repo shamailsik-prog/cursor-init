@@ -4,8 +4,19 @@ from fastapi.middleware.cors import CORSMiddleware
 import pathlib
 from scraper.routers import sources, jobs, quarantine, search, export
 from scraper.database import init_db
+from scraper.config import settings
+
 app = FastAPI(title="Blackletter Legal Scraper")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Restrict CORS: wildcard origins are unsafe next to admin write routes.
+_cors_origins = [o.strip() for o in getattr(settings, "CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
+if not _cors_origins:
+    _cors_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 app.include_router(sources.router)
 app.include_router(jobs.router)
 app.include_router(quarantine.router)

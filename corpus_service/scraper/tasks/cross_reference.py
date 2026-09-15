@@ -1,4 +1,5 @@
 import logging
+from celery import shared_task
 from sqlalchemy import select, func
 from scraper.database import SessionLocal
 from scraper.models import CaseLawMaster
@@ -27,3 +28,8 @@ async def cross_reference_citations():
 def cross_reference_citations_sync():
     import asyncio
     return asyncio.run(cross_reference_citations())
+
+
+@shared_task(name="scraper.tasks.cross_reference.cross_reference_citations")
+def cross_reference_citations_task():
+    return cross_reference_citations_sync()

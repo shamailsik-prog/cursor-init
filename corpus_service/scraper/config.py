@@ -16,6 +16,7 @@ import logging
 import os
 import re
 from functools import lru_cache
+from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -79,15 +80,19 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------------
     # Security / Secrets - Fernet + Admin API Key
     # ---------------------------------------------------------------------
+    # No hardcoded production secrets. Set via env / .env (see .env.example).
     ENCRYPTION_KEY: str = Field(
-        default="GCgd5SyyArrS3Uy40yMYuAUN5OkZ11rbQwIu-2Ulf-U=",
-        description="Base64 urlsafe 32-byte Fernet key. Must be valid Fernet key."
+        default="",
+        description="Base64 urlsafe 32-byte Fernet key. Required in production; auto-generated in development if unset.",
     )
     ADMIN_API_KEY: str = Field(
-        default="prod-admin-2024-secure-key-32bytes-minimum!",
-        description="X-API-Key required for admin routes"
+        default="",
+        description="X-API-Key required for admin routes. Required in production.",
     )
-    SECRET_KEY: str = Field(default="auto-generated-jwt-secret-change-me-in-env-64chars-long", description="FastAPI JWT secret if needed")
+    SECRET_KEY: str = Field(
+        default="",
+        description="FastAPI JWT secret if needed. Required in production.",
+    )
 
     # ---------------------------------------------------------------------
     # OpenAI
@@ -117,8 +122,12 @@ class Settings(BaseSettings):
     PLAYWRIGHT_TIMEOUT_MS: int = Field(default=30000, ge=5000, le=120000)
 
     # FINAL_2 — login scraping permanently disabled in production
-    ENVIRONMENT: Literal["development", "staging", "production"] = Field(default="production")
+    ENVIRONMENT: Literal["development", "staging", "production"] = Field(default="development")
     ALLOW_LOGIN_SCRAPING: bool = Field(default=False, description="FINAL_2: must remain false in production")
+    CORS_ALLOW_ORIGINS: str = Field(
+        default="",
+        description="Comma-separated allowed CORS origins. Defaults to localhost only when empty.",
+    )
 
     # ---------------------------------------------------------------------
     # Blackletter / Pakistan Law Site - Dual Credential Failover
@@ -181,16 +190,50 @@ class Settings(BaseSettings):
     @field_validator("ENCRYPTION_KEY")
     @classmethod
     def validate_fernet_key(cls, v: str) -> str:
-        """Ensure ENCRYPTION_KEY is a valid Fernet key, 44 urlsafe base64 chars decoding to 32 bytes."""
-        if not v:
-            raise ValueError("ENCRYPTION_KEY cannot be empty")
+        """Validate ENCRYPTION_KEY when provided; empty allowed until post-validators fill/dev-generate."""
+        if not v or not str(v).strip():
+            return ""
         v = v.strip()
         try:
-            # Will raise if invalid
             Fernet(v.encode() if isinstance(v, str) else v)
         except Exception as e:
-            raise ValueError(f"ENCRYPTION_KEY must be a valid Fernet key generated via Fernet.generate_key(). Error: {e}")
+            raise ValueError(
+                f"ENCRYPTION_KEY must be a valid Fernet key generated via Fernet.generate_key(). Error: {e}"
+            )
         return v
+
+    @model_validator(mode="after")
+    def require_or_generate_secrets(self):
+        """
+        Production/staging: require ENCRYPTION_KEY, ADMIN_API_KEY, SECRET_KEY from env.
+        Development: auto-generate ephemeral Fernet / placeholder secrets so local boots
+        never ship a known shared credential from source.
+        """
+        env = str(getattr(self, "ENVIRONMENT", None) or getattr(self, "APP_ENV", "development")).lower()
+        is_prodish = env in ("production", "staging")
+
+        if not self.ENCRYPTION_KEY:
+            if is_prodish:
+                raise ValueError("ENCRYPTION_KEY must be set via environment in production/staging")
+            object.__setattr__(self, "ENCRYPTION_KEY", Fernet.generate_key().decode())
+            logging.getLogger(__name__).warning(
+                "ENCRYPTION_KEY unset — generated ephemeral Fernet key for development only"
+            )
+
+        if not self.ADMIN_API_KEY:
+            if is_prodish:
+                raise ValueError("ADMIN_API_KEY must be set via environment in production/staging")
+            object.__setattr__(self, "ADMIN_API_KEY", "dev-only-admin-api-key-not-for-production")
+            logging.getLogger(__name__).warning(
+                "ADMIN_API_KEY unset — using development placeholder"
+            )
+
+        if not self.SECRET_KEY:
+            if is_prodish:
+                raise ValueError("SECRET_KEY must be set via environment in production/staging")
+            object.__setattr__(self, "SECRET_KEY", "dev-only-jwt-secret-not-for-production-64chars-xxxx")
+
+        return self
 
     @field_validator("TIMEZONE")
     @classmethod
