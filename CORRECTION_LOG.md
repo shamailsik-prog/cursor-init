@@ -233,6 +233,59 @@ PR #4 landed. Remaining write/mask holes the critic pass did not cover:
 
 Live providers still blocked. DPA table still empty (`TODO(firm)`).
 
+## eve Committee Brain / P1 path (15 Sep 2026)
+
+PR #6 (rank/mask follow-up) is on `main`. This pass adds the eve agent without replacing the Next.js tree.
+
+- **Scaffold** — `npx eve@latest init . --model anthropic/claude-sonnet-4.6` (no `--channel-web-nextjs`; that overlay is for greenfield apps). Created `agent/agent.ts`, `agent/instructions.md`, `agent/channels/eve.ts`. Did not touch `app/`, `firestore.rules`, seeds, or `ci_gates/` except to scan `agent/` in G-0 APP_DIRS.
+- **Did not wrap** `next.config.ts` with `withEve()`. Mounting `/eve/v1` would boot a second server beside the foundation console and let eve call a Gateway string without SIKANDER classification. Phase 0 HTTP path is `POST /api/p1/committee-brain`.
+- **Dropped `@vercel/connect`** — eve init added it; Slack/OAuth is not in this slice and it conflicted with existing vitest/vite peers.
+- **Model** — `agent/agent.ts` uses `committeeBrainLanguageModel` (`platform/p1/committeeBrainModel.ts`), an AI SDK LanguageModelV3 whose `doGenerate`/`doStream` only call `callCommitteeBrain`. Classification is `providerOptions.sikander.classification`. Missing classification is refused (not treated as public). Gateway model id `anthropic/claude-sonnet-4.6` is the intended upstream, not a direct eve string.
+- **Transport** — `platform/p1/gatewayTransport.ts` uses AI SDK `createGateway` + `generateText` only when `AI_GATEWAY_API_KEY` or `VERCEL_AI_GATEWAY_API_KEY` is already set. No provider SDK. No invented secrets. Phase 0 without a key still returns `{ blocked: true, reason: PHASE0_NO_CREDENTIALS }` after masking.
+- **Default eve tools off** — `defaultTools: false` plus `disableTool()` for `web_fetch`, `web_search`, `bash`, `write_file`. Sandbox `networkPolicy: "deny-all"`.
+- **Authored tools** — `mask_preview`, `classification_policy`, `normalise_case_number` execute in-process via `platform/p1/eveTools.ts`. No provider calls. Case-number tool uses the seeded prefix table; does not invent prefixes or fees.
+- **Channel** — `localDev()` + `vercelOidc()`. Removed `placeholderAuth()` (would be a public demo). Production eve HTTP stays fail-closed. TODO(firm): app session authenticator.
+- **Console** — Committee Brain tab on the foundation inspector.
+- **CI** — `agent/` added to G-0 `APP_DIRS` so provider/scraper guards scan it. `.eve/` gitignored.
+
+### Files touched
+
+- `package.json` / `package-lock.json` — `eve`, `ai`, `zod`; scripts `eve:dev` / `eve:info`
+- `.gitignore` — `.eve/`
+- `.env.example` — optional Gateway key names, no values
+- `agent/agent.ts`
+- `agent/instructions.md`
+- `agent/sandbox.ts`
+- `agent/channels/eve.ts`
+- `agent/tools/web_fetch.ts` `web_search.ts` `bash.ts` `write_file.ts` (disableTool)
+- `agent/tools/mask_preview.ts` `classification_policy.ts` `normalise_case_number.ts`
+- `agent/skills/p1-outbound.md`
+- `platform/p1/constants.ts`
+- `platform/p1/gatewayTransport.ts`
+- `platform/p1/promptText.ts`
+- `platform/p1/committeeBrainModel.ts`
+- `platform/p1/eveTools.ts`
+- `platform/p1/internalAICaller.ts`
+- `platform/p1/providerPolicy.ts` — ProviderId `ai-gateway`
+- `platform/p1/index.ts`
+- `app/api/p1/committee-brain/route.ts`
+- `app/foundation-console.tsx`
+- `tests/p1.eve-committee-brain.test.ts`
+- `tests/api.committee-brain.test.ts`
+- `ci_gates/gate_g0.sh`
+- `README.md`
+- `docs/REPO_AUDIT_blueprint.md`
+- `CORRECTION_LOG.md`
+
+### Not done
+
+- Live Gateway / OpenAI / Anthropic calls — no key in this environment.
+- DPA rows — table still empty (`TODO(firm)`).
+- `withEve()` Next.js mount — deferred so Phase 0 `next dev` does not spawn eve (Node 24 CLI; would skip classified P1 HTTP).
+- Firm session auth for eve channels — TODO(firm).
+- O-2 / O-8 / O-9 / O-10 / O-11 / O-12 — still not invented.
+
+
 
 
 
@@ -246,3 +299,13 @@ Live providers still blocked. DPA table still empty (`TODO(firm)`).
 - **Added** `bootstrap_harvest.py` and ran a public-source harvest: Pakistan Code (40 statutes + PDFs), Nasir Law Site (30 pages), National Assembly (19 Act PDFs). Provenance under `corpus_service/live/` (gitignored).
 - **Sanitized** `.env.example` and dashboard — removed placeholder PLS seat credentials.
 - Gate G-0 still **PASS** (static).
+
+## Merge main into eve Committee Brain (16 Sep 2026)
+
+PR #10 was behind `main` by corpus harvest #5 (`d6859d0`). Merged `origin/main` into `cursor/eve-committee-brain-a410`.
+
+G-0 then **failed locally** on fee-guard (E-15): gitignored `.eve/compile/` and `.eve/discovery/` JSON copy `agent/instructions.md`, which names the four banned identifiers as the statement of the ban (same as `CURSOR_START_PROMPT.md`, which fee-guard does not scan because it is `.md`). Not an implementation.
+
+- **fee-guard / classification-guard** — `grep -v '/\.eve/'` and `grep -v 'corpus_service/'` so compiled eve cache and the harvest tree are not treated as app code.
+- **SKIP_PARTS** — `.eve` and `corpus_service` on fetch-allowlist, master-write, classification-calls, pagination, idempotency, duplicate-route. App scanners stay on `agent/` and `platform/`.
+- `.eve/` remains gitignored. Live providers still blocked. DPA still empty (`TODO(firm)`).

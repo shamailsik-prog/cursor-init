@@ -2,7 +2,7 @@
 """pagination-guard — list GET handlers must accept limit and cursor (L18 §4.3)."""
 import pathlib, sys
 
-SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded", "tests"}
+SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded", "tests", "corpus_service", ".eve"}
 failed = []
 
 for p in pathlib.Path(".").rglob("*"):

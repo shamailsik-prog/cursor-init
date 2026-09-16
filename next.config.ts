@@ -6,4 +6,7 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "localhost"],
 };
 
+// Not wrapped with withEve(): Phase 0 keeps `next dev` as the foundation
+// inspector. The eve agent is invoked through POST /api/p1/committee-brain
+// so classification + mask always run. See agent/ and platform/p1/.
 export default nextConfig;
