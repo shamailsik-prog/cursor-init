@@ -74,7 +74,7 @@ async def stop_h(_: None = Depends(require_admin_api_key)):
     (STATE_DIR/"harvest.stopped").write_text("stopped")
     return {"status":"stopped"}
 @app.get("/api/vault")
-async def vault():
+async def vault(_: None = Depends(require_admin_api_key)):
     import pathlib
     LIVE_DIR = pathlib.Path("/app/live" if pathlib.Path("/app/live").exists() else "./live")
     files=[]
