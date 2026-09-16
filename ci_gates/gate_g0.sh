@@ -4,7 +4,7 @@
 #        SIKANDER_LIVE=1 ./ci_gates/gate_g0.sh   (also runs the live Firestore/Postgres checks if present)
 set -u
 fail=0
-APP_DIRS="services platform core layers web mobile src"
+APP_DIRS="services platform core layers web mobile src agent"
 existing_dirs=""; for d in $APP_DIRS; do [ -d "$d" ] && existing_dirs="$existing_dirs $d"; done
 
 echo "=== Gate G-0: Foundations (static) ==="

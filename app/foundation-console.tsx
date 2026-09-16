@@ -47,11 +47,27 @@ type Props = {
 
 const TABS = [
   { value: "gate", label: "Gate G-0" },
+  { value: "brain", label: "Committee Brain" },
   { value: "courts", label: "Courts" },
   { value: "types", label: "159 types" },
   { value: "flags", label: "Flags" },
   { value: "open", label: "Open items" },
 ] as const
+
+type CommitteeBrainResult = {
+  blocked: boolean
+  reason?: string
+  text?: string
+  outbound: {
+    body: string
+    metadata: {
+      classification: string
+      purpose: string
+      redactionCounts: Record<string, number>
+    }
+  }
+  agent?: string
+}
 
 export function FoundationConsole({ courts, fixtures, types }: Props) {
   const [tab, setTab] = useState("gate")
@@ -63,6 +79,15 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
   const [query, setQuery] = useState("")
   const [category, setCategory] = useState("all")
   const [selectedId, setSelectedId] = useState(types[0]?.id ?? "")
+  const [p1Body, setP1Body] = useState(
+    "Counsel for Muhammad Ali Khan, CNIC 42101-1234567-1, mobile 03001234567, files today."
+  )
+  const [p1Classification, setP1Classification] = useState("public")
+  const [p1Purpose, setP1Purpose] = useState("summarise")
+  const [p1Parties, setP1Parties] = useState("Muhammad Ali Khan")
+  const [p1Result, setP1Result] = useState<CommitteeBrainResult | null>(null)
+  const [p1Busy, setP1Busy] = useState(false)
+  const [p1Error, setP1Error] = useState<string | null>(null)
 
   const categories = useMemo(() => {
     return Array.from(new Set(types.map((t) => t.category))).sort()
@@ -114,6 +139,45 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
     }
   }
 
+  async function runCommitteeBrain() {
+    setP1Busy(true)
+    setP1Error(null)
+    try {
+      const partyNames = p1Parties
+        .split(",")
+        .map((n) => n.trim())
+        .filter(Boolean)
+      const res = await fetch("/api/p1/committee-brain", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          body: p1Body,
+          classification: p1Classification,
+          purpose: p1Purpose,
+          partyNames,
+        }),
+      })
+      const json = (await res.json()) as {
+        result?: CommitteeBrainResult
+        error?: string
+      }
+      if (!res.ok) {
+        setP1Result(null)
+        setP1Error(json.error ?? "Committee Brain request failed.")
+        return
+      }
+      setP1Result(json.result ?? null)
+    } catch {
+      setP1Result(null)
+      setP1Error("Could not reach P1 Committee Brain.")
+    } finally {
+      setP1Busy(false)
+    }
+  }
+
   return (
     <div className="flex min-h-full flex-col">
       <header className="border-b border-[color:var(--brass)]/35 bg-[color:var(--ink)] text-[color:var(--paper)]">
@@ -127,7 +191,9 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
             </h1>
             <p className="mt-2 max-w-xl text-sm text-[color:var(--paper)]/75">
               Litigation operating system — foundations. Gate G-0 is green.
-              G-1 forensic spine passes in-process. Live providers remain blocked.
+              G-1 forensic spine passes in-process. The eve Committee Brain
+              agent is wired through P1. Live providers remain blocked without a
+              Gateway key.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -219,6 +285,111 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
                 </Card>
               </div>
             </div>
+          </TabsContent>
+
+          <TabsContent value="brain" className="mt-4 space-y-4">
+            <Card className="rounded-none">
+              <CardHeader>
+                <CardTitle>eve Committee Brain (P1)</CardTitle>
+                <CardDescription>
+                  Agent files live under `agent/`. The only outbound path is
+                  `callCommitteeBrain`. Masked body is what would be sent.
+                  Classification stays in metadata. Internal+ is blocked while
+                  the DPA table is empty. Live Gateway calls stay blocked
+                  unless `AI_GATEWAY_API_KEY` already exists — do not invent
+                  secrets.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-3">
+                  <label className="text-xs tracking-wide uppercase">
+                    Classification
+                  </label>
+                  <Select
+                    value={p1Classification}
+                    onValueChange={(value) => {
+                      if (value) setP1Classification(value)
+                    }}
+                  >
+                    <SelectTrigger className="w-full rounded-none">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CLASSIFICATION_RANKS.map((c) => (
+                        <SelectItem key={c.label} value={c.label}>
+                          {c.rank} {c.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <label className="text-xs tracking-wide uppercase">
+                    Purpose
+                  </label>
+                  <Input
+                    className="rounded-none"
+                    value={p1Purpose}
+                    onChange={(e) => setP1Purpose(e.target.value)}
+                  />
+                  <label className="text-xs tracking-wide uppercase">
+                    Party names (optional, comma-separated)
+                  </label>
+                  <Input
+                    className="rounded-none"
+                    value={p1Parties}
+                    onChange={(e) => setP1Parties(e.target.value)}
+                  />
+                  <label className="text-xs tracking-wide uppercase">
+                    Text
+                  </label>
+                  <textarea
+                    className="border-input bg-background min-h-32 w-full rounded-none border px-3 py-2 text-sm"
+                    value={p1Body}
+                    onChange={(e) => setP1Body(e.target.value)}
+                  />
+                  <Button
+                    className="rounded-none"
+                    onClick={runCommitteeBrain}
+                    disabled={p1Busy || !p1Body.trim()}
+                  >
+                    {p1Busy ? "Calling P1…" : "Call Committee Brain"}
+                  </Button>
+                  {p1Error ? (
+                    <p className="text-destructive text-sm">{p1Error}</p>
+                  ) : null}
+                </div>
+                <div className="space-y-3">
+                  {p1Result ? (
+                    <>
+                      <p className="text-sm">
+                        {p1Result.blocked ? "Blocked" : "Accepted"} · agent{" "}
+                        {p1Result.agent ?? "sikander-ai"}
+                      </p>
+                      {p1Result.reason ? (
+                        <p className="text-muted-foreground text-sm">
+                          {p1Result.reason}
+                        </p>
+                      ) : null}
+                      <label className="text-xs tracking-wide uppercase">
+                        Outbound body (masked)
+                      </label>
+                      <pre className="bg-muted overflow-auto p-3 text-xs whitespace-pre-wrap">
+                        {p1Result.outbound.body}
+                      </pre>
+                      <p className="text-muted-foreground text-xs">
+                        Rank in metadata:{" "}
+                        {p1Result.outbound.metadata.classification}. Purpose:{" "}
+                        {p1Result.outbound.metadata.purpose}.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-muted-foreground text-sm">
+                      Submit public text to see the mask. Privileged/internal
+                      stays blocked (TODO(firm) DPA).
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="courts" className="mt-4 space-y-4">

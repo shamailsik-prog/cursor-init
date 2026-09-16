@@ -16,6 +16,7 @@ export type ProviderId =
   | "elevenlabs"
   | "google-vision"
   | "translation"
+  | "ai-gateway"
 
 type DpaFile = {
   providers: Record<string, { dpaExecuted?: boolean; inRegion?: boolean }>

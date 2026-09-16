@@ -44,6 +44,9 @@ next-env.d.ts
 # local agent scratch
 /agent-tools
 
+# eve runtime cache (model catalog, sandbox, logs)
+/.eve/
+
 # python
 __pycache__/
 *.pyc
