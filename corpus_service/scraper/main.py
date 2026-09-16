@@ -1,7 +1,8 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pathlib
+from scraper.auth import require_admin_api_key
 from scraper.routers import sources, jobs, quarantine, search, export
 from scraper.database import init_db
 from scraper.config import settings
@@ -60,14 +61,14 @@ async def live_feed():
             logs.extend(lp.read_text().splitlines()[-20:])
     return {"feed": logs[-40:]}
 @app.post("/api/start")
-async def start_h():
+async def start_h(_: None = Depends(require_admin_api_key)):
     import pathlib
     STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
     sf=STATE_DIR/"harvest.stopped"
     if sf.exists(): sf.unlink()
     return {"status":"started"}
 @app.post("/api/stop")
-async def stop_h():
+async def stop_h(_: None = Depends(require_admin_api_key)):
     import pathlib
     STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
     (STATE_DIR/"harvest.stopped").write_text("stopped")
