@@ -37,10 +37,10 @@ async def seed_data():
             # licensed_api / import_folder only — never login scraping.
             sources = [
                 ScraperSource(source_name="PakistanLawSite", source_url="https://www.pakistanlawsite.com", scrape_case_law=True, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=6),
-                ScraperSource(source_name="NasirLawSite", source_url="https://www.nasirlawsite.com", scrape_case_law=True, scrape_statutes=True, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=6),
+                ScraperSource(source_name="NasirLawSite", source_url="https://www.nasirlawsite.com", scrape_case_law=True, scrape_statutes=True, trust_level="review", requires_login=False, scrape_frequency_hours=6),
                 ScraperSource(source_name="PakistanCode", source_url="https://pakistancode.gov.pk", scrape_case_law=False, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=48),
-                ScraperSource(source_name="SindhHighCourt", source_url="https://www.shc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
-                ScraperSource(source_name="SupremeCourt", source_url="https://www.supremecourt.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
+                ScraperSource(source_name="SindhHighCourt", source_url="https://www.shc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="review", requires_login=False, scrape_frequency_hours=12),
+                ScraperSource(source_name="SupremeCourt", source_url="https://www.supremecourt.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="review", requires_login=False, scrape_frequency_hours=12),
                 ScraperSource(source_name="NationalAssembly", source_url="https://na.gov.pk/en/acts-tenure.php", scrape_case_law=False, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=168),
             ]
             for s in sources:

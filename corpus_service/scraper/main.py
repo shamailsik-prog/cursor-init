@@ -1,10 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pathlib
 from scraper.routers import sources, jobs, quarantine, search, export
 from scraper.database import init_db
 from scraper.config import settings
+from scraper.auth.admin import require_admin_key
 
 app = FastAPI(title="Blackletter Legal Scraper")
 # Restrict CORS: wildcard origins are unsafe next to admin write routes.
@@ -60,20 +61,20 @@ async def live_feed():
             logs.extend(lp.read_text().splitlines()[-20:])
     return {"feed": logs[-40:]}
 @app.post("/api/start")
-async def start_h():
+async def start_h(_key: str = Depends(require_admin_key)):
     import pathlib
     STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
     sf=STATE_DIR/"harvest.stopped"
     if sf.exists(): sf.unlink()
     return {"status":"started"}
 @app.post("/api/stop")
-async def stop_h():
+async def stop_h(_key: str = Depends(require_admin_key)):
     import pathlib
     STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
     (STATE_DIR/"harvest.stopped").write_text("stopped")
     return {"status":"stopped"}
 @app.get("/api/vault")
-async def vault():
+async def vault(_key: str = Depends(require_admin_key)):
     import pathlib
     LIVE_DIR = pathlib.Path("/app/live" if pathlib.Path("/app/live").exists() else "./live")
     files=[]

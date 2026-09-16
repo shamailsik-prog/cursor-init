@@ -233,8 +233,16 @@ PR #4 landed. Remaining write/mask holes the critic pass did not cover:
 
 Live providers still blocked. DPA table still empty (`TODO(firm)`).
 
+## Corpus Bugbot close-out (16 Sep 2026)
 
+PR #5 Bugbot findings were still on `main` (follow-up PR #7 was open and unmerged). Landed those fixes and closed holes PR #7 would have introduced:
 
+- Shared ORM `Base`, no shipped Fernet/admin secrets, embedding status `completed`, Celery beat registration, idle harvester, Nasir citation stringify, quarantine `X-API-Key`.
+- **Trust levels stay FINAL_2** (`trusted` | `review` | `blocked`). Seeds keep `review` so `promotion.py` still quarantines Nasir/SHC/SC. PR #7's `semi_trusted` mapping would have skipped that path.
+- Removed `LimitationPeriod`.
+- Harvest start/stop, vault listing, and `/export/cases` now require the admin key. Dashboard Start/Stop send `X-API-Key`.
+- `core/case-number-normaliser.ts` `prefer-const` (`head`).
+- `corpus_service/tests/test_bugbot_fixes.py` — stdlib regressions (no Postgres).
 
 ## Corpus service bootstrap (13 Sep 2026)
 
