@@ -5,7 +5,7 @@ import { defineSandbox } from "eve/sandbox"
  * Default tools are off; this is belt-and-suspenders if bash is ever re-enabled.
  */
 export default defineSandbox({
-  async onSession({ use }) {
-    await use({ networkPolicy: "deny-all" })
+  async onSession({ use: applySession }) {
+    await applySession({ networkPolicy: "deny-all" })
   },
 })
