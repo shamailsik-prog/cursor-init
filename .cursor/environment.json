@@ -1,0 +1,17 @@
+{
+  "name": "SIKANDER AI — Phase 0",
+  "install": "npm ci",
+  "terminals": [
+    {
+      "name": "dev",
+      "command": "npm run dev",
+      "description": "Next.js dev server for the Phase 0 Foundation Console on http://localhost:43127 (case-number normaliser API + G-0 artefact viewer)."
+    }
+  ],
+  "ports": [
+    {
+      "name": "web",
+      "port": 43127
+    }
+  ]
+}
