@@ -9,7 +9,7 @@ allowed = {h.lower() for h in allow.get("hosts", [])}
 allowed |= {"localhost", "127.0.0.1"}
 
 # corpus_service is the separate harvest tree (FINAL_2 / L17.12). Not scanned.
-SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded", "tests", "corpus_service"}
+SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded", "tests", "corpus_service", ".eve"}
 P1_PREFIXES = ("platform/p1/", "platform/committeeBrain/")
 FETCH = re.compile(
     r"""(?:fetch|axios\.(?:get|post|put|patch|delete)|got(?:\.get)?)\s*\(\s*(['"`])(https?://[^'"`]+)\1""",

@@ -299,3 +299,13 @@ PR #6 (rank/mask follow-up) is on `main`. This pass adds the eve agent without r
 - **Added** `bootstrap_harvest.py` and ran a public-source harvest: Pakistan Code (40 statutes + PDFs), Nasir Law Site (30 pages), National Assembly (19 Act PDFs). Provenance under `corpus_service/live/` (gitignored).
 - **Sanitized** `.env.example` and dashboard — removed placeholder PLS seat credentials.
 - Gate G-0 still **PASS** (static).
+
+## Merge main into eve Committee Brain (16 Sep 2026)
+
+PR #10 was behind `main` by corpus harvest #5 (`d6859d0`). Merged `origin/main` into `cursor/eve-committee-brain-a410`.
+
+G-0 then **failed locally** on fee-guard (E-15): gitignored `.eve/compile/` and `.eve/discovery/` JSON copy `agent/instructions.md`, which names the four banned identifiers as the statement of the ban (same as `CURSOR_START_PROMPT.md`, which fee-guard does not scan because it is `.md`). Not an implementation.
+
+- **fee-guard / classification-guard** — `grep -v '/\.eve/'` and `grep -v 'corpus_service/'` so compiled eve cache and the harvest tree are not treated as app code.
+- **SKIP_PARTS** — `.eve` and `corpus_service` on fetch-allowlist, master-write, classification-calls, pagination, idempotency, duplicate-route. App scanners stay on `agent/` and `platform/`.
+- `.eve/` remains gitignored. Live providers still blocked. DPA still empty (`TODO(firm)`).

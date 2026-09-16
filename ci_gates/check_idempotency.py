@@ -2,7 +2,7 @@
 """idempotency-guard — every POST/PUT/PATCH handler requires Idempotency-Key."""
 import pathlib, sys
 
-SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded"}
+SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded", "corpus_service", ".eve"}
 METHODS = ("POST", "PUT", "PATCH")
 failed = []
 
