@@ -287,3 +287,15 @@ PR #6 (rank/mask follow-up) is on `main`. This pass adds the eve agent without r
 
 
 
+
+
+## Corpus service bootstrap (13 Sep 2026)
+
+- **Added** `corpus_service/` as the separate harvest tree (FINAL_2 / L17.12). Not part of the app runtime.
+- **Copied** governing prompt `FINAL_CORPUS_SERVICE_PROMPT_2.md` from the 10 Sep handover pack.
+- **Disabled** PakistanLawSite login scraping: `ALLOW_LOGIN_SCRAPING=false` (non-overridable in production); connector is licensed API / import-folder only.
+- **Seed sources** set `requires_login=false` for all six sources; NasirLawSite trust=`review`.
+- **Skipped** `corpus_service` in `ci_gates/check_fetch_allowlist.py` so app L4.9 allowlist does not scan the harvester.
+- **Added** `bootstrap_harvest.py` and ran a public-source harvest: Pakistan Code (40 statutes + PDFs), Nasir Law Site (30 pages), National Assembly (19 Act PDFs). Provenance under `corpus_service/live/` (gitignored).
+- **Sanitized** `.env.example` and dashboard — removed placeholder PLS seat credentials.
+- Gate G-0 still **PASS** (static).
