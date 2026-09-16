@@ -6,7 +6,7 @@ import {
 } from "@/platform/p1/internalAICaller"
 import type { OutboundRequest } from "@/platform/p1/internalAICaller"
 import { readGatewayApiKey } from "@/platform/p1/gatewayTransport"
-import committeeAgent from "../../agent/agent"
+import committeeAgent from "@/agent/agent"
 import { classificationPolicy, maskPreview, normaliseCaseNumber } from "@/platform/p1/eveTools"
 
 afterEach(() => {
