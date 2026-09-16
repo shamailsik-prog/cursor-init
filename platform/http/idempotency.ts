@@ -8,6 +8,14 @@ export class IdempotencyError extends Error {
   }
 }
 
+export class IdempotencyConflictError extends Error {
+  status = 409
+  constructor(message = "Idempotency-Key reused with a different request payload") {
+    super(message)
+    this.name = "IdempotencyConflictError"
+  }
+}
+
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -24,7 +32,10 @@ export function requireIdempotencyKey(request: Request): string {
 
 /** Process-local replay cache. Bounded. Not a durable store. */
 export class IdempotencyCache<T> {
-  private readonly entries = new Map<string, { at: number; body: T }>()
+  private readonly entries = new Map<
+    string,
+    { at: number; body: T; requestFingerprint?: string }
+  >()
 
   constructor(
     private readonly ttlMs: number,
@@ -46,9 +57,29 @@ export class IdempotencyCache<T> {
     return hit.body
   }
 
-  set(key: string, body: T): void {
+  getReplay(
+    key: string,
+    requestFingerprint: string
+  ): { body?: T; conflict: boolean } {
     this.prune()
-    this.entries.set(key, { at: Date.now(), body })
+    const hit = this.entries.get(key)
+    if (!hit) return { conflict: false }
+    if (Date.now() - hit.at >= this.ttlMs) {
+      this.entries.delete(key)
+      return { conflict: false }
+    }
+    if (
+      hit.requestFingerprint &&
+      hit.requestFingerprint !== requestFingerprint
+    ) {
+      return { conflict: true }
+    }
+    return { body: hit.body, conflict: false }
+  }
+
+  set(key: string, body: T, requestFingerprint?: string): void {
+    this.prune()
+    this.entries.set(key, { at: Date.now(), body, requestFingerprint })
     this.evictOldest()
   }
 

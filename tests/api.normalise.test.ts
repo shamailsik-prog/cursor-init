@@ -30,10 +30,10 @@ describe("POST /api/g0/normalise", () => {
     expect(json.reused).toBe(false)
   })
 
-  it("reuses the cached body for the same UUID v4 key", async () => {
+  it("reuses the cached body for the same UUID v4 key and payload", async () => {
     const key = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     const first = await post({ raw: "C.P. No. D-1234 of 2025", courtId: "SHC" }, key)
-    const second = await post({ raw: "ignored on reuse", courtId: "SHC" }, key)
+    const second = await post({ raw: "C.P. No. D-1234 of 2025", courtId: "SHC" }, key)
     expect(first.status).toBe(200)
     expect(second.status).toBe(200)
     const a = await first.json()
@@ -41,6 +41,16 @@ describe("POST /api/g0/normalise", () => {
     expect(a.reused).toBe(false)
     expect(b.reused).toBe(true)
     expect(b.result.canonical).toBe("CP D-1234/2025")
+  })
+
+  it("rejects reusing the same key for a different payload", async () => {
+    const key = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    const first = await post({ raw: "C.P. No. D-1234 of 2025", courtId: "SHC" }, key)
+    const second = await post({ raw: "Cr. Bail Appln. No. 456 of 2026", courtId: "SHC" }, key)
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(409)
+    const json = (await second.json()) as { error: string }
+    expect(json.error).toMatch(/different request payload/i)
   })
 
   it("rejects invalid JSON with 400 instead of throwing", async () => {

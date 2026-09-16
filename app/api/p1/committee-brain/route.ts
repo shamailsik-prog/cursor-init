@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { callCommitteeBrain } from "@/platform/p1/internalAICaller"
-import { IdempotencyError, IdempotencyCache, requireIdempotencyKey } from "@/platform/http/idempotency"
+import {
+  IdempotencyError,
+  IdempotencyCache,
+  requireIdempotencyKey,
+} from "@/platform/http/idempotency"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
@@ -21,11 +25,6 @@ export async function POST(request: Request) {
       err instanceof IdempotencyError ? err.message : "Idempotency-Key header required"
     return NextResponse.json({ error: message }, { status: 400 })
   }
-  const cached = idempotency.get(key)
-  if (cached !== undefined) {
-    return NextResponse.json({ result: cached, idempotencyKey: key, reused: true })
-  }
-
   let parsed: Body
   try {
     parsed = (await request.json()) as Body
@@ -45,12 +44,31 @@ export async function POST(request: Request) {
   const partyNames = Array.isArray(parsed.partyNames)
     ? parsed.partyNames.filter((n) => typeof n === "string" && n.length > 0)
     : undefined
+  const purpose =
+    typeof parsed.purpose === "string" ? parsed.purpose : "committee-brain"
+  const fingerprint = JSON.stringify({
+    route: "/api/p1/committee-brain",
+    body: parsed.body,
+    classification,
+    purpose,
+    partyNames: partyNames ?? [],
+  })
+  const replay = idempotency.getReplay(key, fingerprint)
+  if (replay.conflict) {
+    return NextResponse.json(
+      { error: "Idempotency-Key reused with a different request payload" },
+      { status: 409 }
+    )
+  }
+  if (replay.body !== undefined) {
+    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
+  }
 
   const result = await callCommitteeBrain({
     body: parsed.body,
     classification,
     provider: "ai-gateway",
-    purpose: typeof parsed.purpose === "string" ? parsed.purpose : "committee-brain",
+    purpose,
     partyNames,
   })
 
@@ -61,6 +79,6 @@ export async function POST(request: Request) {
     outbound: result.outbound,
     agent: "sikander-ai",
   }
-  idempotency.set(key, payload)
+  idempotency.set(key, payload, fingerprint)
   return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
 }

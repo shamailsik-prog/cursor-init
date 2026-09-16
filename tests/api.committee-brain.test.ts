@@ -34,6 +34,47 @@ describe("POST /api/p1/committee-brain", () => {
     expect(res.status).toBe(400)
   })
 
+  it("reuses response only when key and payload match", async () => {
+    const key = "11111111-1111-4111-8111-111111111111"
+    const payload = {
+      body: "hello",
+      classification: "public",
+      purpose: "summarise",
+    }
+    const first = await post(payload, key)
+    const second = await post(payload, key)
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    const a = (await first.json()) as { reused: boolean }
+    const b = (await second.json()) as { reused: boolean }
+    expect(a.reused).toBe(false)
+    expect(b.reused).toBe(true)
+  })
+
+  it("rejects reusing a key with a different payload", async () => {
+    const key = "22222222-2222-4222-8222-222222222222"
+    const first = await post(
+      {
+        body: "hello",
+        classification: "public",
+        purpose: "summarise",
+      },
+      key
+    )
+    const second = await post(
+      {
+        body: "hello again",
+        classification: "public",
+        purpose: "summarise",
+      },
+      key
+    )
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(409)
+    const json = (await second.json()) as { error: string }
+    expect(json.error).toMatch(/different request payload/i)
+  })
+
   it("refuses unknown classification", async () => {
     const res = await post({
       body: "hello",
