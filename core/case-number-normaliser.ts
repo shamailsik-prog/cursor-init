@@ -97,7 +97,7 @@ export function normalise(
     return { status: "REJECT", reason: "year out of range", input: raw }
   }
   const bench = bench1 || bench2 || null
-  let head = s.slice(0, m.index).trim().replace(/[-\s]+$/, "")
+  const head = s.slice(0, m.index).trim().replace(/[-\s]+$/, "")
   const syn: Record<string, string> = {}
   for (const [k, v] of Object.entries(court.synonyms ?? {})) {
     syn[k.toUpperCase()] = v
