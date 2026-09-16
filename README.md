@@ -15,7 +15,7 @@ Precedence: Erratum Set No. 1 > Layer 18 > Layer 17 > specification body. Anythi
 | `ci_gates/gate_g0.sh` | Static guards (fee, scraper, provider, master-write, idempotency, pagination, classification, embedding). Fail the build; no warn-only checks. |
 | `platform/p1/` | Committee Brain. Masked body is the only text sent to a provider. |
 | `core/case-number-normaliser.ts` | Same rules as `ci_gates/case_number_normaliser.py`. |
-| Foundation console (this app) | Inspect G-0 artefacts. Not the L4 Command Dashboard. |
+| Foundation console (this app) | Inspect G-0 artefacts. Monitor tab is the live status board (Update button). Not the L4 Command Dashboard. |
 
 ## Run locally
 

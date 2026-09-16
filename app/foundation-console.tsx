@@ -31,6 +31,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { CourtRecord, NormaliseResult } from "@/core/case-number-normaliser"
 import type { DocumentType } from "@/lib/foundation-data"
+import { SystemMonitor } from "@/app/system-monitor"
 import {
   CLASSIFICATION_RANKS,
   FEATURE_FLAGS,
@@ -46,6 +47,7 @@ type Props = {
 }
 
 const TABS = [
+  { value: "monitor", label: "Monitor" },
   { value: "gate", label: "Gate G-0" },
   { value: "courts", label: "Courts" },
   { value: "types", label: "159 types" },
@@ -54,7 +56,7 @@ const TABS = [
 ] as const
 
 export function FoundationConsole({ courts, fixtures, types }: Props) {
-  const [tab, setTab] = useState("gate")
+  const [tab, setTab] = useState("monitor")
   const [courtId, setCourtId] = useState(courts[0]?.id ?? "SHC")
   const [raw, setRaw] = useState("C.P. No. D-1234 of 2025")
   const [result, setResult] = useState<NormaliseResult | null>(null)
@@ -126,8 +128,8 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
               SIKANDER AI
             </h1>
             <p className="mt-2 max-w-xl text-sm text-[color:var(--paper)]/75">
-              Litigation operating system — foundations only. Gate G-0 is green.
-              Layer 3–16 work waits until Gate G-1.
+              Litigation operating system — foundations only. Gate G-0 and the
+              G-1 spine are green. Layer 3–16 work has not started.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -157,6 +159,10 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
               </TabsTrigger>
             ))}
           </TabsList>
+
+          <TabsContent value="monitor" className="mt-4">
+            <SystemMonitor />
+          </TabsContent>
 
           <TabsContent value="gate" className="mt-4">
             <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
