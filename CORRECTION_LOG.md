@@ -321,3 +321,10 @@ G-0 then **failed locally** on fee-guard (E-15): gitignored `.eve/compile/` and 
 - **fee-guard / classification-guard** — `grep -v '/\.eve/'` and `grep -v 'corpus_service/'` so compiled eve cache and the harvest tree are not treated as app code.
 - **SKIP_PARTS** — `.eve` and `corpus_service` on fetch-allowlist, master-write, classification-calls, pagination, idempotency, duplicate-route. App scanners stay on `agent/` and `platform/`.
 - `.eve/` remains gitignored. Live providers still blocked. DPA still empty (`TODO(firm)`).
+
+## Mainline hardening — system monitor lint fix (17 Sep 2026)
+
+Main was green on gates/tests but `npm run lint` failed on `react-hooks/set-state-in-effect` in `app/system-monitor.tsx` (`useEffect` called `refresh()` directly and `refresh` synchronously set state).
+
+- **Updated** `app/system-monitor.tsx` — initial refresh is now scheduled via `setTimeout(..., 0)` in `useEffect`, with cleanup, so mount does not trigger a synchronous setState in the effect body.
+- No behavior change to API payloads or monitor rendering; only mount scheduling changed.
