@@ -6,7 +6,7 @@ routes = defaultdict(list)
 pat_ts = re.compile(r'(?:app|router)\.(?:post|get|put|delete|patch)\s*\(\s*["\'](/api/[^"\']+)')
 pat_py = re.compile(r'@(?:app|router)\.(?:post|get|put|delete|patch)\s*\(\s*["\'](/api/[^"\']+)')
 for p in pathlib.Path(".").rglob("*"):
-    if p.suffix not in (".ts", ".js", ".py") or "node_modules" in p.parts or ".git" in p.parts or p.parts[0] == "ci_gates": continue
+    if p.suffix not in (".ts", ".js", ".py") or "node_modules" in p.parts or ".git" in p.parts or p.parts[0] == "ci_gates" or "corpus_service" in p.parts or ".eve" in p.parts: continue
     try: text = p.read_text(encoding="utf-8", errors="ignore")
     except Exception: continue
     for m in (pat_ts.finditer(text) if p.suffix != ".py" else pat_py.finditer(text)):

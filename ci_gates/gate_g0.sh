@@ -4,13 +4,13 @@
 #        SIKANDER_LIVE=1 ./ci_gates/gate_g0.sh   (also runs the live Firestore/Postgres checks if present)
 set -u
 fail=0
-APP_DIRS="services platform core layers web mobile src"
+APP_DIRS="services platform core layers web mobile src agent"
 existing_dirs=""; for d in $APP_DIRS; do [ -d "$d" ] && existing_dirs="$existing_dirs $d"; done
 
 echo "=== Gate G-0: Foundations (static) ==="
 
 echo "[1] fee-guard"
-if grep -R -n -E "calculateCourtFee|getFeeRule|insertFeeMemo|courtFeeBasis" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' --include='*.sql' --include='*.json' --include='*.rules' . 2>/dev/null | grep -v node_modules | grep -v '\.git/' | grep -v 'ci_gates/' | grep -v 'CORRECTION_LOG.md'; then
+if grep -R -n -E "calculateCourtFee|getFeeRule|insertFeeMemo|courtFeeBasis" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' --include='*.sql' --include='*.json' --include='*.rules' . 2>/dev/null | grep -v node_modules | grep -v '\.git/' | grep -v '/\.eve/' | grep -v 'ci_gates/' | grep -v 'CORRECTION_LOG.md' | grep -v 'corpus_service/'; then
   echo "FAIL: court-fee identifiers found (E-15)"; fail=1; else echo "PASS"; fi
 
 echo "[2] scraper-guard (app repository: no Playwright/Puppeteer anywhere; no exemption for D3-3 or L4.9)"
@@ -44,7 +44,7 @@ if [ -f postgres/ddl/001_corpus_contract.sql ]; then
 fi
 
 echo "[9] classification-guard (ranks, not labels; P1 calls carry classification)"
-if grep -R -n -E "classification\s*[<>]=?\s*(OLD|NEW)\.classification|NEW\.classification\s*<\s*OLD\.classification" --include='*.sql' --include='*.ts' --include='*.py' . 2>/dev/null | grep -v ci_gates; then
+if grep -R -n -E "classification\s*[<>]=?\s*(OLD|NEW)\.classification|NEW\.classification\s*<\s*OLD\.classification" --include='*.sql' --include='*.ts' --include='*.py' . 2>/dev/null | grep -v ci_gates | grep -v '/\.eve/' | grep -v 'corpus_service/'; then
   echo "FAIL: classification compared as text — use classification_rank"; fail=1; else echo "PASS rank-compare"; fi
 python3 ci_gates/check_classification_calls.py || fail=1
 

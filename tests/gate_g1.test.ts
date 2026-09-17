@@ -117,12 +117,14 @@ describe("Gate G-1 forensic spine", () => {
       canonicalName: "Muhammad Ali",
       cnic: "4210112345671",
       phone: "03001111111",
+      classification: "internal",
     })
     const b = createClient(store, {
       firmId: "firmA",
       canonicalName: "Muhammad Ali",
       cnic: "4210112345671",
       phone: "03002222222",
+      classification: "internal",
     })
     expect(store.links).toHaveLength(1)
     expect(store.links[0]?.identityBasis).toBe("cnic")
@@ -136,13 +138,27 @@ describe("Gate G-1 forensic spine", () => {
 
   it("G1-4 authority overruled by larger bench (treatment seeded) -> OVERRULED block; partner reason to override", () => {
     const store = newStore()
+    seedUser(store, {
+      id: "partner1",
+      firmId: "firmA",
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+    })
     seedJudgment(store, "j-old", "Cited authority", "single")
     seedJudgment(store, "j-later", "Larger bench", "larger")
     seedTreatment(store, "j-later", "j-old", "overruled", "larger")
     const blocked = verifyCitations(store, ["j-old"])
     expect(blocked.status).toBe("OVERRULED")
     if (blocked.status === "OVERRULED") expect(blocked.blocked).toBe(true)
-    const overridden = verifyCitations(store, ["j-old"], "Partner recorded reason")
+    const internAttempt = verifyCitations(store, ["j-old"], {
+      partnerId: "intern1",
+      reason: "because I said so",
+    })
+    expect(internAttempt.status).toBe("OVERRULED")
+    const overridden = verifyCitations(store, ["j-old"], {
+      partnerId: "partner1",
+      reason: "Partner recorded reason",
+    })
     expect(overridden.status).toBe("OK")
   })
 

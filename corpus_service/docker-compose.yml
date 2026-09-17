@@ -1,0 +1,84 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./live:/app/live
+      - ./blackletter_state:/app/state
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn scraper.main:app --host 0.0.0.0 --port 8000
+
+  worker-a:
+    build: .
+    env_file: .env
+    volumes:
+      - ./live:/app/live
+      - ./blackletter_state:/app/state
+    depends_on: [postgres, redis]
+    command: python -m scraper.workers.harvester
+    environment:
+      - PLS_SEAT=A
+    restart: unless-stopped
+
+  worker-b:
+    build: .
+    env_file: .env
+    volumes:
+      - ./live:/app/live
+      - ./blackletter_state:/app/state
+    depends_on: [postgres, redis]
+    command: python -m scraper.workers.harvester
+    environment:
+      - PLS_SEAT=B
+    restart: unless-stopped
+
+  worker-embed:
+    build: .
+    env_file: .env
+    volumes:
+      - ./live:/app/live
+      - ./blackletter_state:/app/state
+    depends_on: [postgres, redis]
+    command: celery -A scraper.tasks.celery_app worker -Q celery,embeddings --loglevel=INFO
+    restart: unless-stopped
+
+  celery-beat:
+    build: .
+    env_file: .env
+    depends_on: [postgres, redis]
+    command: celery -A scraper.tasks.celery_app beat --loglevel=INFO
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: legal
+      POSTGRES_PASSWORD: legal
+      POSTGRES_DB: legal_scraper
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legal"]
+      interval: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:

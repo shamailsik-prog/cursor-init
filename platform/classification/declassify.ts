@@ -1,4 +1,4 @@
-import type { Classification } from "@/platform/p1/types"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { rankOf, type SpineStore } from "@/platform/spine/store"
 
 export function setClassification(
@@ -8,13 +8,19 @@ export function setClassification(
   actorId: string,
   declassifyReason?: string
 ): void {
+  if (!isClassification(next)) {
+    throw new Error("artefact write omitted classification")
+  }
   const doc = store.documents.get(artefactId)
   const matter = store.matters.get(artefactId)
   const current = doc?.classification ?? matter?.classification
   if (!current) throw new Error("unknown artefact")
 
-  if (rankOf(next) < rankOf(current) && !declassifyReason) {
-    throw new Error("Classification downgrade rejected: use declassify() with a partner reason")
+  if (rankOf(next) < rankOf(current)) {
+    const actor = store.users.get(actorId)
+    if (!actor || actor.role !== "partner" || !declassifyReason?.trim()) {
+      throw new Error("Classification downgrade rejected: use declassify() with a partner reason")
+    }
   }
 
   if (doc) doc.classification = next

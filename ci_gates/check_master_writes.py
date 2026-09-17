@@ -8,7 +8,7 @@ ALLOWED_PREFIXES = (
     "postgres/ddl/",
     "tests/",
 )
-SKIP_PARTS = {"node_modules", ".git", ".next", "_superseded"}
+SKIP_PARTS = {"node_modules", ".git", ".next", "_superseded", "corpus_service", ".eve"}
 PAT = re.compile(
     r"applyChange\s*\("
     r"|INSERT\s+INTO\s+(master_|templates\b)"

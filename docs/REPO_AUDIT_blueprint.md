@@ -19,7 +19,8 @@ Classification: **real** = in use for G-0; **shell** = directory exists or is re
 | `docs/` | real | Handover copies, seed xlsx, this audit. Not architecture authority. |
 | `lib/` | real | Foundation seed loaders for the inspector. |
 | `platform/` | real | P1 Committee Brain (Job F); P6 proposeChange stub (master writes only here). |
-| `platform/p1/` | real | Outbound mask + `callCommitteeBrain`. Only place provider SDKs may be imported. |
+| `platform/p1/` | real | Outbound mask + `callCommitteeBrain`. Only place provider SDKs may be imported. Gateway transport (AI SDK `createGateway`) lives here. |
+| `agent/` | real | eve Committee Brain. Instructions, P1 LanguageModel, local tools, sandbox deny-all. Not a provider path. |
 | `platform/p6/` | real | Sole writer of master tables / `master_versions`. Stub `proposeChange`. |
 | `platform/http/` | real | Idempotency helper for POST/PUT. |
 | `postgres/ddl/` | real | Annex A corpus contract + platform flags. |

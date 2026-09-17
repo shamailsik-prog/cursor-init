@@ -44,9 +44,18 @@ next-env.d.ts
 # local agent scratch
 /agent-tools
 
+# eve runtime cache (model catalog, sandbox, logs)
+/.eve/
+
 # python
 __pycache__/
 *.pyc
+
+# corpus harvest outputs (FINAL_2 separate service tree)
+corpus_service/live/
+corpus_service/imports/
+corpus_service/blackletter_state/
+corpus_service/.env
 
 # firebase emulator
 firebase-debug.log

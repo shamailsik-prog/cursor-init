@@ -3,9 +3,13 @@
  * The masked body is the ONLY text sent. Classification travels in metadata, never in the prompt.
  */
 
+import { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
+import { gatewayTransport, readGatewayApiKey } from "@/platform/p1/gatewayTransport"
 import { maskOutboundPII, type MaskOptions } from "@/platform/p1/maskOutboundPII"
 import { providerAllowedFor, type ProviderId } from "@/platform/p1/providerPolicy"
-import type { Classification } from "@/platform/p1/types"
+import { isClassification, type Classification } from "@/platform/p1/types"
+
+export { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
 
 export type OutboundRequest = {
   /** Masked prompt/transcript/document text. Never includes classification. */
@@ -33,15 +37,24 @@ export type Transport = {
 
 const blockedTransport: Transport = {
   async send() {
-    throw new Error("blocked: no live provider credentials in Phase 0")
+    throw new Error(PHASE0_NO_CREDENTIALS)
   },
 }
 
-let transport: Transport = blockedTransport
+let testTransport: Transport | null = null
+
+function activeTransport(): Transport {
+  if (testTransport) return testTransport
+  if (readGatewayApiKey()) return gatewayTransport
+  return blockedTransport
+}
 
 /** Test-only. Production never injects a transport that sees raw text. */
 export function setTransportForTests(next: Transport | null): void {
-  transport = next ?? blockedTransport
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("setTransportForTests is test-only")
+  }
+  testTransport = next
 }
 
 export type CallCommitteeBrainInput = {
@@ -55,17 +68,20 @@ export type CallCommitteeBrainInput = {
 export async function callCommitteeBrain(
   input: CallCommitteeBrainInput
 ): Promise<OutboundResponse> {
-  if (!input.classification) {
+  if (!isClassification(input.classification)) {
     throw new Error("P1 call omitted classification")
   }
 
   const mask = maskOutboundPII(input.body, { partyNames: input.partyNames })
+  const purpose = maskOutboundPII(input.purpose, {
+    partyNames: input.partyNames,
+  }).masked
   const outbound: OutboundRequest = {
     body: mask.masked,
     metadata: {
       classification: input.classification,
       provider: input.provider,
-      purpose: input.purpose,
+      purpose,
       redactionCounts: Object.fromEntries(
         mask.redactions.map((r) => [r.kind, r.count])
       ),
@@ -77,12 +93,21 @@ export async function callCommitteeBrain(
     return { blocked: true, reason: policy.reason, outbound }
   }
 
-  const result = await transport.send(outbound)
-  return {
-    blocked: false,
-    provider: input.provider,
-    text: result.text,
-    outbound,
+  try {
+    const result = await activeTransport().send(outbound)
+    const inbound = maskOutboundPII(result.text, {
+      partyNames: input.partyNames,
+    })
+    return {
+      blocked: false,
+      provider: input.provider,
+      text: inbound.masked,
+      outbound,
+    }
+  } catch (err) {
+    const reason =
+      err instanceof Error ? err.message : PHASE0_NO_CREDENTIALS
+    return { blocked: true, reason, outbound }
   }
 }
 

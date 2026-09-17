@@ -2,7 +2,7 @@
 """classification-guard — P1 calls and artefact writes must carry classification."""
 import re, pathlib, sys
 
-SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded", "platform/p1", "tests"}
+SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded", "platform/p1", "tests", "corpus_service", ".eve"}
 CALL = re.compile(r"callCommitteeBrain\s*\(")
 failed = []
 

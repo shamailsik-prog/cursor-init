@@ -1,4 +1,4 @@
-import type { Classification } from "@/platform/p1/types"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { rankOf, type Role, type SpineStore, type User } from "@/platform/spine/store"
 
 export type PermissionDecision = {
@@ -15,6 +15,10 @@ export function checkPermission(
 ): PermissionDecision {
   const user = store.users.get(userId)
   if (!user) return { allow: false, reason: "no-user" }
+
+  if (user.role === "intern" && (action === "research" || action === "draft")) {
+    return { allow: false, reason: "intern-channel-denied" }
+  }
 
   if (extra?.scope === "own_matters" || user.role === "client") {
     if (action === "research" || action === "draft") {
@@ -37,6 +41,9 @@ export function checkPermission(
     if (!store.members.has(store.memberKey(matterId, userId))) {
       return { allow: false, reason: "not-member" }
     }
+    if (!requireClearance(user, matter.classification)) {
+      return { allow: false, reason: "clearance" }
+    }
   }
 
   if (action === "research" && user.role === "client") {
@@ -50,6 +57,9 @@ export function seedUser(
   store: SpineStore,
   user: User
 ): User {
+  if (!isClassification(user.clearanceLevel)) {
+    throw new Error("artefact write omitted classification")
+  }
   store.users.set(user.id, user)
   return user
 }

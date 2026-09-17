@@ -3,6 +3,8 @@
  * Every other service calls proposeChange. CI master-write-guard fails any other writer.
  */
 
+import { isClassification } from "@/platform/p1/types"
+
 export type ChangeProposal = {
   firmId: string
   sourceModule: string
@@ -21,7 +23,7 @@ export type ProposalRecord = ChangeProposal & {
  * applyChange (below) is the only master writer and lives in this module.
  */
 export function proposeChange(proposal: ChangeProposal): ProposalRecord {
-  if (!proposal.classification) {
+  if (!isClassification(proposal.classification)) {
     throw new Error("artefact write omitted classification")
   }
   return {

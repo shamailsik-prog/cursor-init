@@ -9,6 +9,10 @@ export const CLASSIFICATION_RANKS = {
 
 export type Classification = keyof typeof CLASSIFICATION_RANKS
 
+export function isClassification(value: unknown): value is Classification {
+  return typeof value === "string" && value in CLASSIFICATION_RANKS
+}
+
 export function classificationRank(label: Classification): number {
   return CLASSIFICATION_RANKS[label]
 }

@@ -14,6 +14,7 @@ Precedence: Erratum Set No. 1 > Layer 18 > Layer 17 > specification body. Anythi
 | `postgres/ddl/` | Annex A corpus contract + platform flags. Embedding lock: `text-embedding-3-small`, 1536, HNSW. |
 | `ci_gates/gate_g0.sh` | Static guards (fee, scraper, provider, master-write, idempotency, pagination, classification, embedding). Fail the build; no warn-only checks. |
 | `platform/p1/` | Committee Brain. Masked body is the only text sent to a provider. |
+| `agent/` | eve Committee Brain project. Model is a P1 LanguageModel, not a direct Gateway call. |
 | `core/case-number-normaliser.ts` | Same rules as `ci_gates/case_number_normaliser.py`. |
 | Foundation console (this app) | Inspect G-0 artefacts. Monitor tab is the live status board (Update button). Not the L4 Command Dashboard. |
 
@@ -42,6 +43,18 @@ python3 ci_gates/gate_g1.py
 ```
 
 Live Firestore/Postgres checks: `SIKANDER_LIVE=1 bash ci_gates/gate_g0.sh` (needs `ci_gates/gate_g0_live.sh`, not in this slice).
+
+## Committee Brain (eve)
+
+The eve agent lives at `agent/` (`sikander-ai`). It is not a second provider path. `agent/agent.ts` uses `committeeBrainLanguageModel` from `platform/p1`, which only calls `callCommitteeBrain`. Default eve tools (`web_fetch`, `web_search`, `bash`) are off.
+
+The foundation console **Committee Brain** tab posts to `POST /api/p1/committee-brain` (Idempotency-Key required). `next.config.ts` is not wrapped with `withEve()` so `npm run dev` stays the Phase 0 inspector. The eve CLI (`npm run eve:dev`) needs Node 24; the Next.js app and CI stay on Node 20+.
+
+Do not set provider API keys. If a Gateway key already exists as `AI_GATEWAY_API_KEY` or `VERCEL_AI_GATEWAY_API_KEY`, public-rank calls may leave. Internal+ stays blocked while `data/provider_dpa.json` is empty (`TODO(firm)`).
+
+```bash
+npm run eve:info   # Node 24 — discovered agent surface
+```
 
 ## Non-negotiables
 
