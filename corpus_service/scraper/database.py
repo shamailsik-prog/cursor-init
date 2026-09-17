@@ -44,6 +44,8 @@ async def seed_data():
         dict(source_name="LahoreHighCourt", source_url="https://lhc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="PeshawarHighCourt", source_url="https://peshawarhighcourt.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="PeshawarHighCourtPublic", source_url="https://peshawarhighcourt.gov.pk/app/site/", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
+        dict(source_name="BalochistanHighCourt", source_url="https://bhc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
+        dict(source_name="BalochistanHighCourtPublic", source_url="https://bhc.gov.pk/resources/judgments", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="NationalAssembly", source_url="https://na.gov.pk/en/acts-tenure.php", scrape_case_law=False, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=168),
     ]
 
@@ -76,6 +78,14 @@ async def seed_data():
                         existing.source_url = "https://peshawarhighcourt.gov.pk"
                     else:
                         existing.source_url = "https://peshawarhighcourt.gov.pk/app/site/"
+                    updated += 1
+            if existing.source_name in {"BalochistanHighCourt", "BalochistanHighCourtPublic"}:
+                current_url = (existing.source_url or "").lower()
+                if "portal.bhc.gov.pk/judgments" in current_url or "bhc.gov.pk/judgments" in current_url:
+                    if existing.source_name == "BalochistanHighCourt":
+                        existing.source_url = "https://bhc.gov.pk"
+                    else:
+                        existing.source_url = "https://bhc.gov.pk/resources/judgments"
                     updated += 1
 
         if inserted or updated:
