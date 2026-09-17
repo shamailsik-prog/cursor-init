@@ -42,7 +42,8 @@ Dashboard / API come from the FastAPI app in `scraper/`.
 Celery beat includes Lahore High Court public judgment harvesting
 (`LahoreHighCourt`) and a broadened Sindh High Court public stream
 (`SindhHighCourtPublic`), plus a Supreme Court public stream
-(`SupremeCourtPublic`).
+(`SupremeCourtPublic`) and a Peshawar High Court public stream
+(`PeshawarHighCourtPublic`).
 
 Sindh High Court harvesting now discovers judgment/order PDFs from public SHC
 listing pages (`sindhhighcourt.gov.pk`), keeps allowlisted domains only, and
@@ -53,6 +54,12 @@ public listing endpoints (`latest-judgements`, `judgement-search`,
 `online-case-status`, `downloads_judgements`, and sitemap links) and only
 stages files that pass a `%PDF` signature check, with review-first quarantine
 and listing-page provenance metadata.
+
+Peshawar High Court harvesting now uses allowlisted, multi-page discovery on
+official PHC listing pages (`app/site` case-law sections plus
+`PHCCMS/reportedJudgments.php`), extracts PDF URLs from anchors and inline
+script markup, and stages only `%PDF`-signature documents as quarantined
+review-first records with listing-page provenance metadata.
 
 ## App-repo boundary
 
