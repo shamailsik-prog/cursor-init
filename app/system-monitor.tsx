@@ -68,7 +68,10 @@ export function SystemMonitor() {
   }, [])
 
   useEffect(() => {
-    void refresh()
+    const timer = setTimeout(() => {
+      void refresh()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [refresh])
 
   return (
