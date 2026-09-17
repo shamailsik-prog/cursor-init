@@ -19,6 +19,7 @@ app.conf.update(
         "scrape-pakistancode": {"task": "scraper.tasks.dispatcher.run_source_job", "schedule": 48 * 3600, "args": ("PakistanCode",)},
         "scrape-shc": {"task": "scraper.tasks.dispatcher.run_source_job", "schedule": 12 * 3600, "args": ("SindhHighCourt",)},
         "scrape-supremecourt": {"task": "scraper.tasks.dispatcher.run_source_job", "schedule": 12 * 3600, "args": ("SupremeCourt",)},
+        "scrape-lahorehighcourt": {"task": "scraper.tasks.dispatcher.run_source_job", "schedule": 12 * 3600, "args": ("LahoreHighCourt",)},
         "scrape-na": {"task": "scraper.tasks.dispatcher.run_source_job", "schedule": 168 * 3600, "args": ("NationalAssembly",)},
         "process-embeddings": {"task": "scraper.tasks.embeddings.process_embedding_queue", "schedule": 300},
         "cross-ref": {"task": "scraper.tasks.cross_reference.cross_reference_citations", "schedule": 86400},
