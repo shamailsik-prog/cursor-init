@@ -40,6 +40,7 @@ async def seed_data():
         dict(source_name="SindhHighCourt", source_url="https://sindhhighcourt.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="SindhHighCourtPublic", source_url="https://sindhhighcourt.gov.pk/Imp_Judgement_Orders.php", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="SupremeCourt", source_url="https://www.supremecourt.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
+        dict(source_name="SupremeCourtPublic", source_url="https://www.supremecourt.gov.pk/latest-judgements/", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="LahoreHighCourt", source_url="https://lhc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="NationalAssembly", source_url="https://na.gov.pk/en/acts-tenure.php", scrape_case_law=False, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=168),
     ]
@@ -61,6 +62,11 @@ async def seed_data():
             if existing.source_name == "SindhHighCourt" and "shc.gov.pk" in (existing.source_url or ""):
                 existing.source_url = "https://sindhhighcourt.gov.pk"
                 updated += 1
+            if existing.source_name in {"SupremeCourt", "SupremeCourtPublic"}:
+                current_url = (existing.source_url or "").lower()
+                if "supremecourt.gov.pk/judgements" in current_url:
+                    existing.source_url = "https://www.supremecourt.gov.pk/latest-judgements/"
+                    updated += 1
 
         if inserted or updated:
             await db.commit()
