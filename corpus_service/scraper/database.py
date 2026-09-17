@@ -46,6 +46,8 @@ async def seed_data():
         dict(source_name="PeshawarHighCourtPublic", source_url="https://peshawarhighcourt.gov.pk/app/site/", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="BalochistanHighCourt", source_url="https://bhc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="BalochistanHighCourtPublic", source_url="https://bhc.gov.pk/resources/judgments", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
+        dict(source_name="IslamabadHighCourt", source_url="https://ihc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
+        dict(source_name="IslamabadHighCourtPublic", source_url="https://mis.ihc.gov.pk/frmJgmnt.aspx?jgs=1", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="NationalAssembly", source_url="https://na.gov.pk/en/acts-tenure.php", scrape_case_law=False, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=168),
     ]
 
@@ -86,6 +88,18 @@ async def seed_data():
                         existing.source_url = "https://bhc.gov.pk"
                     else:
                         existing.source_url = "https://bhc.gov.pk/resources/judgments"
+                    updated += 1
+            if existing.source_name in {"IslamabadHighCourt", "IslamabadHighCourtPublic"}:
+                current_url = (existing.source_url or "").lower()
+                if (
+                    "islamabadhighcourt.gov.pk" in current_url
+                    or ("ihc.gov.pk" in current_url and "mis.ihc.gov.pk" not in current_url and existing.source_name == "IslamabadHighCourtPublic")
+                    or ("mis.ihc.gov.pk" in current_url and existing.source_name == "IslamabadHighCourt")
+                ):
+                    if existing.source_name == "IslamabadHighCourt":
+                        existing.source_url = "https://ihc.gov.pk"
+                    else:
+                        existing.source_url = "https://mis.ihc.gov.pk/frmJgmnt.aspx?jgs=1"
                     updated += 1
 
         if inserted or updated:
