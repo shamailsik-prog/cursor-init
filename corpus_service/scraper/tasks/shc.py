@@ -36,6 +36,17 @@ SHC_CASE_PDF_KEYWORDS = (
     "c.p.",
 )
 
+NON_LISTING_SUFFIXES = (
+    ".pdf",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".zip",
+    ".doc",
+    ".docx",
+)
+
 INLINE_PDF_URL_PATTERN = re.compile(
     r"(https?://[^\s\"'<>]+\.pdf(?:\?[^\s\"'<>]*)?|/[^\s\"'<>]+\.pdf(?:\?[^\s\"'<>]*)?)",
     flags=re.IGNORECASE,
@@ -62,6 +73,9 @@ def _normalize_public_shc_url(base_url: str, href: str) -> str | None:
         return None
     if not _is_public_shc_url(candidate):
         return None
+    if parsed.hostname and parsed.hostname.endswith("caselaw.shc.gov.pk") and "/public/public/" in parsed.path:
+        parsed = parsed._replace(path=parsed.path.replace("/public/public/", "/public/", 1))
+        candidate = parsed.geturl()
     return candidate.split("#", 1)[0]
 
 
@@ -71,6 +85,10 @@ def _looks_like_pdf_url(url: str) -> bool:
 
 
 def _looks_like_listing_url(url: str, link_text: str) -> bool:
+    if _looks_like_pdf_url(url):
+        return False
+    if urlparse(url).path.lower().endswith(NON_LISTING_SUFFIXES):
+        return False
     haystack = f"{url.lower()} {link_text.lower()}"
     return any(keyword in haystack for keyword in SHC_LISTING_KEYWORDS)
 
@@ -96,10 +114,11 @@ def _extract_listing_and_pdf_links(html: str, base_url: str) -> tuple[list[str],
         if _looks_like_listing_url(normalized, link_text):
             listing_urls.append(normalized)
 
-    unescaped_html = html.replace("\\/", "/")
-    for raw_match in INLINE_PDF_URL_PATTERN.findall(unescaped_html):
+    script_bodies = "\n".join(script.get_text(" ", strip=False) for script in soup.find_all("script"))
+    unescaped_scripts = script_bodies.replace("\\/", "/")
+    for raw_match in INLINE_PDF_URL_PATTERN.findall(unescaped_scripts):
         normalized = _normalize_public_shc_url(base_url, raw_match)
-        if normalized and _looks_like_pdf_url(normalized) and _looks_like_case_pdf(normalized, raw_match):
+        if normalized and _looks_like_pdf_url(normalized):
             pdf_urls.append(normalized)
 
     return _dedupe_preserve_order(listing_urls), _dedupe_preserve_order(pdf_urls)
