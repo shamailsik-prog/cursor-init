@@ -61,6 +61,13 @@ official PHC listing pages (`app/site` case-law sections plus
 script markup, and stages only `%PDF`-signature documents as quarantined
 review-first records with listing-page provenance metadata.
 
+Balochistan High Court harvesting now uses allowlisted, multi-page discovery
+across `bhc.gov.pk` judgment listings (including justice/year subpages on
+`resources/judgments`) and the official portal judgment host, extracts PDF URLs
+from anchors, anchor `data-*` attributes, and inline markup/script URLs, and
+stages only `%PDF`-signature documents as quarantined review-first records with
+listing-page provenance metadata.
+
 ## App-repo boundary
 
 - `corpus_service/` is skipped by `ci_gates/check_fetch_allowlist.py`.
