@@ -43,6 +43,9 @@ async def _run_async(source_name: str):
         elif source_name=="SupremeCourt":
             from scraper.tasks.supremecourt import scrape_supremecourt
             await scrape_supremecourt(source, db)
+        elif source_name=="LahoreHighCourt":
+            from scraper.tasks.lahorehighcourt import scrape_lahorehighcourt
+            await scrape_lahorehighcourt(source, db)
         elif source_name=="NationalAssembly":
             from scraper.tasks.nationalassembly import scrape_nationalassembly
             await scrape_nationalassembly(source, db)

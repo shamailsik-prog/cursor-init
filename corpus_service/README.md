@@ -39,6 +39,8 @@ docker compose up -d --build
 ```
 
 Dashboard / API come from the FastAPI app in `scraper/`.
+Celery beat includes Lahore High Court public judgment harvesting
+(`LahoreHighCourt`) alongside the existing SHC/Supreme Court jobs.
 
 ## App-repo boundary
 
