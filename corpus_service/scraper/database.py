@@ -37,23 +37,35 @@ async def seed_data():
         dict(source_name="PakistanLawSite", source_url="https://www.pakistanlawsite.com", scrape_case_law=True, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=6),
         dict(source_name="NasirLawSite", source_url="https://www.nasirlawsite.com", scrape_case_law=True, scrape_statutes=True, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=6),
         dict(source_name="PakistanCode", source_url="https://pakistancode.gov.pk", scrape_case_law=False, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=48),
-        dict(source_name="SindhHighCourt", source_url="https://www.shc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
+        dict(source_name="SindhHighCourt", source_url="https://sindhhighcourt.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
+        dict(source_name="SindhHighCourtPublic", source_url="https://sindhhighcourt.gov.pk/Imp_Judgement_Orders.php", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="SupremeCourt", source_url="https://www.supremecourt.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="LahoreHighCourt", source_url="https://lhc.gov.pk", scrape_case_law=True, scrape_statutes=False, trust_level="semi_trusted", requires_login=False, scrape_frequency_hours=12),
         dict(source_name="NationalAssembly", source_url="https://na.gov.pk/en/acts-tenure.php", scrape_case_law=False, scrape_statutes=True, trust_level="trusted", requires_login=False, scrape_frequency_hours=168),
     ]
 
     async with SessionLocal() as db:
-        result = await db.execute(select(ScraperSource.source_name))
-        existing_names = {name for (name,) in result.all()}
+        result = await db.execute(select(ScraperSource))
+        existing_sources = {source.source_name: source for source in result.scalars().all()}
         inserted = 0
+        updated = 0
 
         for row in source_defaults:
-            if row["source_name"] in existing_names:
+            existing = existing_sources.get(row["source_name"])
+            if not existing:
+                db.add(ScraperSource(**row))
+                inserted += 1
                 continue
-            db.add(ScraperSource(**row))
-            inserted += 1
 
-        if inserted:
+            # Keep existing trust/review posture, but repair stale legacy SHC URLs.
+            if existing.source_name == "SindhHighCourt" and "shc.gov.pk" in (existing.source_url or ""):
+                existing.source_url = "https://sindhhighcourt.gov.pk"
+                updated += 1
+
+        if inserted or updated:
             await db.commit()
-            logger.info("Inserted %d missing default source(s)", inserted)
+            logger.info(
+                "Seeded source defaults (inserted=%d, updated=%d)",
+                inserted,
+                updated,
+            )

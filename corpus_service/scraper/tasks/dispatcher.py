@@ -37,7 +37,7 @@ async def _run_async(source_name: str):
         elif source_name=="PakistanCode":
             from scraper.tasks.pakistancode import scrape_pakistancode
             await scrape_pakistancode(source, db)
-        elif source_name=="SindhHighCourt":
+        elif source_name in {"SindhHighCourt", "SindhHighCourtPublic"}:
             from scraper.tasks.shc import scrape_shc
             await scrape_shc(source, db)
         elif source_name=="SupremeCourt":

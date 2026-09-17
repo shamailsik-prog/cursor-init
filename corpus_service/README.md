@@ -40,7 +40,12 @@ docker compose up -d --build
 
 Dashboard / API come from the FastAPI app in `scraper/`.
 Celery beat includes Lahore High Court public judgment harvesting
-(`LahoreHighCourt`) alongside the existing SHC/Supreme Court jobs.
+(`LahoreHighCourt`) and a broadened Sindh High Court public stream
+(`SindhHighCourtPublic`).
+
+Sindh High Court harvesting now discovers judgment/order PDFs from public SHC
+listing pages (`sindhhighcourt.gov.pk`), keeps allowlisted domains only, and
+stages all extracted text as quarantined/review-first records.
 
 ## App-repo boundary
 
