@@ -328,3 +328,10 @@ Main was green on gates/tests but `npm run lint` failed on `react-hooks/set-stat
 
 - **Updated** `app/system-monitor.tsx` — initial refresh is now scheduled via `setTimeout(..., 0)` in `useEffect`, with cleanup, so mount does not trigger a synchronous setState in the effect body.
 - No behavior change to API payloads or monitor rendering; only mount scheduling changed.
+
+## Mainline hardening — enforce lint in CI (17 Sep 2026)
+
+`main` briefly carried a lint-only regression that did not break Gate G-0, G-1, or unit tests. To prevent another silent lint drift, CI now enforces lint as part of the same guard workflow.
+
+- **Updated** `.github/workflows/gate-g0.yml` — added a dedicated `npm run lint` step after `npm ci` / static gate checks and before unit tests.
+- Scope is intentionally small: no runtime behavior, data model, or guard semantics changed.
