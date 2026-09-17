@@ -43,7 +43,9 @@ Celery beat includes Lahore High Court public judgment harvesting
 (`LahoreHighCourt`) and a broadened Sindh High Court public stream
 (`SindhHighCourtPublic`), plus a Supreme Court public stream
 (`SupremeCourtPublic`) and a Peshawar High Court public stream
-(`PeshawarHighCourtPublic`).
+(`PeshawarHighCourtPublic`), a Balochistan High Court public stream
+(`BalochistanHighCourtPublic`), and an Islamabad High Court public stream
+(`IslamabadHighCourtPublic`).
 
 Sindh High Court harvesting now discovers judgment/order PDFs from public SHC
 listing pages (`sindhhighcourt.gov.pk`), keeps allowlisted domains only, and
@@ -67,6 +69,13 @@ across `bhc.gov.pk` judgment listings (including justice/year subpages on
 from anchors, anchor `data-*` attributes, and inline markup/script URLs, and
 stages only `%PDF`-signature documents as quarantined review-first records with
 listing-page provenance metadata.
+
+Islamabad High Court harvesting now combines allowlisted, multi-page discovery
+across `ihc.gov.pk` and `mis.ihc.gov.pk` listing pages with AJAX-feed discovery
+from the public `ihc.asmx/GetLatestJgmntsNew` endpoint, extracts case-law PDF
+URLs from anchors, anchor `data-*` attributes, inline markup/script URLs, and
+feed payload attachments, and stages only `%PDF`-signature documents as
+quarantined review-first records with listing/feed provenance metadata.
 
 ## App-repo boundary
 
