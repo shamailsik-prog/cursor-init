@@ -1,0 +1,49 @@
+{
+  "measuredAt": "2026-09-15T23:57:40.000Z",
+  "checks": [
+    {
+      "id": "g0",
+      "name": "Gate G-0 static",
+      "result": "PASS",
+      "elapsedMs": 2856
+    },
+    {
+      "id": "g1",
+      "name": "Gate G-1 spine",
+      "result": "PASS",
+      "elapsedMs": 644
+    },
+    {
+      "id": "unit",
+      "name": "Unit tests (P1 mask + G-1)",
+      "result": "PASS",
+      "elapsedMs": 655
+    }
+  ],
+  "workspace": [
+    {
+      "name": "System status updates",
+      "state": "running",
+      "detail": "This monitor pass — writing the console Update view.",
+      "elapsedMs": 95000
+    },
+    {
+      "name": "Scaffold SIKANDER eve agent",
+      "state": "running",
+      "detail": "Workspace run still in progress.",
+      "elapsedMs": 630000
+    },
+    {
+      "name": "Ai system validation (fork)",
+      "state": "waiting",
+      "detail": "Waiting for background work.",
+      "elapsedMs": 234540000
+    },
+    {
+      "name": "Ai system validation",
+      "state": "idle",
+      "detail": "Idle after the last validation turn.",
+      "elapsedMs": 241170000
+    }
+  ]
+}

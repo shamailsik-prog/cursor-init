@@ -16,7 +16,7 @@ Precedence: Erratum Set No. 1 > Layer 18 > Layer 17 > specification body. Anythi
 | `platform/p1/` | Committee Brain. Masked body is the only text sent to a provider. |
 | `agent/` | eve Committee Brain project. Model is a P1 LanguageModel, not a direct Gateway call. |
 | `core/case-number-normaliser.ts` | Same rules as `ci_gates/case_number_normaliser.py`. |
-| Foundation console (this app) | Inspect G-0 artefacts. Not the L4 Command Dashboard. |
+| Foundation console (this app) | Inspect G-0 artefacts. Monitor tab is the live status board (Update button). Not the L4 Command Dashboard. |
 
 ## Run locally
 

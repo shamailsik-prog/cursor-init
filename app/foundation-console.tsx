@@ -31,6 +31,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { CourtRecord, NormaliseResult } from "@/core/case-number-normaliser"
 import type { DocumentType } from "@/lib/foundation-data"
+import { SystemMonitor } from "@/app/system-monitor"
 import {
   CLASSIFICATION_RANKS,
   FEATURE_FLAGS,
@@ -46,6 +47,7 @@ type Props = {
 }
 
 const TABS = [
+  { value: "monitor", label: "Monitor" },
   { value: "gate", label: "Gate G-0" },
   { value: "brain", label: "Committee Brain" },
   { value: "courts", label: "Courts" },
@@ -70,7 +72,7 @@ type CommitteeBrainResult = {
 }
 
 export function FoundationConsole({ courts, fixtures, types }: Props) {
-  const [tab, setTab] = useState("gate")
+  const [tab, setTab] = useState("monitor")
   const [courtId, setCourtId] = useState("SHC")
   const [raw, setRaw] = useState("C.P. No. D-1234 of 2025")
   const [result, setResult] = useState<NormaliseResult | null>(null)
@@ -191,9 +193,9 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
             </h1>
             <p className="mt-2 max-w-xl text-sm text-[color:var(--paper)]/75">
               Litigation operating system — foundations. Gate G-0 is green.
-              G-1 forensic spine passes in-process. The eve Committee Brain
-              agent is wired through P1. Live providers remain blocked without a
-              Gateway key.
+              G-1 forensic spine passes in-process and eve Committee Brain is
+              wired through P1. Layer 3–16 work has not started. Live providers
+              remain blocked without a Gateway key.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -223,6 +225,10 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
               </TabsTrigger>
             ))}
           </TabsList>
+
+          <TabsContent value="monitor" className="mt-4">
+            <SystemMonitor />
+          </TabsContent>
 
           <TabsContent value="gate" className="mt-4">
             <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">

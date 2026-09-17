@@ -159,6 +159,18 @@ Erratum Set No. 1 enumerates **ten** static guards. Layer 18 §9.2 and this work
 
 PASS (after this pack). G-1 forensic tests G1-1..G1-10 now exist and pass in-process (live Firebase/WhatsApp/provider keys still mocked).
 
+## Monitor (15 Sep 2026)
+
+Cron monitor pass: show where the system is, how long the last checks took, and what is processing. Update button refetches `GET /api/g0/monitor`.
+
+- **Added** `lib/system-status.ts` — in-process snapshot. Backends report configured/not_connected from env key presence only; values are never returned.
+- **Added** `data/system-status-snapshot.json` — last-measured G-0 / G-1 / unit timings and workspace run states from this pass.
+- **Added** `app/api/g0/monitor/route.ts` — singleton GET. Accepts `limit` and `cursor` for pagination-guard. Not a list.
+- **Added** `app/system-monitor.tsx` — Monitor tab with Update.
+- **Updated** `app/foundation-console.tsx` — Monitor is the default tab. Header now says G-0 and G-1 spine are green; Layers 3–16 have not started.
+- **Added** `tests/system-status.test.ts`.
+- No provider SDK, no scraper, no invented fee / residency / bucket values.
+
 ## G-1 spine (13 Sep 2026)
 
 In-process spine so the ten Layer 18 §10.1 tests pass without inventing firm values or calling live providers:
