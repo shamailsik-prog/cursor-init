@@ -156,6 +156,25 @@ def _extract_listing_and_pdf_links(html: str, base_url: str) -> tuple[list[str],
     return _dedupe_preserve_order(listing_urls), _dedupe_preserve_order(pdf_urls)
 
 
+async def _request_with_retries(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    attempts: int = 3,
+    pause_seconds: float = 1.0,
+) -> httpx.Response:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await client.get(url)
+        except Exception as exc:  # pragma: no cover - depends on network path.
+            last_error = exc
+            if attempt < attempts:
+                await asyncio.sleep(pause_seconds * attempt)
+    assert last_error is not None
+    raise last_error
+
+
 async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
     pdf_sources: dict[str, str] = {}
     visited_listing_urls: set[str] = set()
@@ -171,9 +190,13 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
                 continue
             visited_listing_urls.add(listing_url)
             try:
-                response = await client.get(listing_url)
+                response = await _request_with_retries(client, listing_url)
             except Exception as e:
-                logger.warning("PeshawarHighCourt listing request failed %s: %s", listing_url, e)
+                logger.warning(
+                    "PeshawarHighCourt listing request failed %s: %s",
+                    listing_url,
+                    repr(e),
+                )
                 continue
 
             if response.status_code >= 400:
@@ -217,7 +240,7 @@ async def scrape_peshawarhighcourt(source, db):
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
             for pdf_url in pdf_urls[:40]:
                 try:
-                    response = await client.get(pdf_url)
+                    response = await _request_with_retries(client, pdf_url)
                     if response.status_code != 200:
                         continue
                     if response.content[:4] != b"%PDF":
