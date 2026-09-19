@@ -797,6 +797,38 @@ describe("GET/POST /api/d4/filings", () => {
     expect(retryPlanJson.result.dispatchQueue.status).toBe("retry_pending")
     expect(retryPlanJson.result.submissionException.status).toBe("escalated")
 
+    const acknowledged = await post(
+      {
+        action: "acknowledge_breach",
+        actorId: "partner_a",
+        packageId,
+        note: "Partner acknowledged SLA breach before deferred retry window",
+      },
+      "7df7f9be-fb4d-4de3-bb3c-e9ea31eea9f2"
+    )
+    expect(acknowledged.status).toBe(200)
+    const acknowledgedJson = (await acknowledged.json()) as {
+      result: { digest: { status: string } }
+    }
+    expect(acknowledgedJson.result.digest.status).toBe("acknowledged")
+
+    const deferred = await post(
+      {
+        action: "defer_window",
+        actorId: "partner_a",
+        packageId,
+        deferHours: 6,
+        note: "Partner deferred retry window pending court portal stabilization",
+      },
+      "790f8258-13fd-469e-9ad1-8ea2f359af8c"
+    )
+    expect(deferred.status).toBe(200)
+    const deferredJson = (await deferred.json()) as {
+      result: { digest: { status: string; deferUntil: number | null } }
+    }
+    expect(deferredJson.result.digest.status).toBe("deferred")
+    expect(typeof deferredJson.result.digest.deferUntil).toBe("number")
+
     const delivered = await post(
       {
         action: "confirm_delivered",
@@ -823,6 +855,22 @@ describe("GET/POST /api/d4/filings", () => {
     expect(deliveredJson.result.dispatchQueue.externalDispatchState).toBe("ready_for_firm_dispatch")
     expect(deliveredJson.result.submissionException.status).toBe("resolved")
 
+    const clearedDigest = await post(
+      {
+        action: "clear_digest",
+        actorId: "partner_a",
+        packageId,
+        note: "Digest cleared after deterministic delivery confirmation",
+      },
+      "e4777c9f-fa6e-4c37-a36b-353af0d43f0a"
+    )
+    expect(clearedDigest.status).toBe(200)
+    const clearedDigestJson = (await clearedDigest.json()) as {
+      result: { digest: { status: string; breachReasons: string[] } }
+    }
+    expect(clearedDigestJson.result.digest.status).toBe("cleared")
+    expect(clearedDigestJson.result.digest.breachReasons).toHaveLength(0)
+
     const transportEvidenceView = await get(
       new URLSearchParams({
         view: "transport_execution",
@@ -841,6 +889,28 @@ describe("GET/POST /api/d4/filings", () => {
     expect(
       transportEvidenceJson.items.some(
         (row) => row.packageId === packageId && row.outcome === "confirm_delivered"
+      )
+    ).toBe(true)
+
+    const digestView = await get(
+      new URLSearchParams({
+        view: "submission_sla_digests",
+        userId: "associate_a",
+        matterId,
+        packageId,
+        digestStatus: "cleared",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(digestView.status).toBe(200)
+    const digestViewJson = (await digestView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      digestViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "cleared"
       )
     ).toBe(true)
   })

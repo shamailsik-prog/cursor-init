@@ -41,6 +41,11 @@ import {
   isFilingTransportExecutionChannel,
   isFilingTransportExecutionOutcome,
 } from "@/platform/persistence/filingTransportExecutionEvidence"
+import {
+  buildSubmissionSlaDigestRow,
+  filingSubmissionSlaDigestId,
+  isFilingSubmissionSlaDigestStatus,
+} from "@/platform/persistence/filingSubmissionSlaDigests"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -196,6 +201,28 @@ type ConfirmDeliveredBody = {
   note?: string
 }
 
+type AcknowledgeBreachBody = {
+  action: "acknowledge_breach"
+  actorId?: string
+  packageId?: string
+  note?: string
+}
+
+type DeferWindowBody = {
+  action: "defer_window"
+  actorId?: string
+  packageId?: string
+  deferHours?: number
+  note?: string
+}
+
+type ClearDigestBody = {
+  action: "clear_digest"
+  actorId?: string
+  packageId?: string
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -210,6 +237,9 @@ type Body =
   | MarkTransportBlockedBody
   | AttachRetryPlanBody
   | ConfirmDeliveredBody
+  | AcknowledgeBreachBody
+  | DeferWindowBody
+  | ClearDigestBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -237,13 +267,15 @@ function parseFilingsView(
   | "submission_receipts"
   | "submission_reconciliation"
   | "submission_exceptions"
-  | "transport_execution" {
+  | "transport_execution"
+  | "submission_sla_digests" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
   if (value === "submission_reconciliation") return "submission_reconciliation"
   if (value === "submission_exceptions") return "submission_exceptions"
   if (value === "transport_execution") return "transport_execution"
+  if (value === "submission_sla_digests") return "submission_sla_digests"
   return "packages"
 }
 
@@ -607,6 +639,90 @@ export async function GET(request: Request) {
           return rankOf(user.clearanceLevel) >= rankOf(row.classification)
         })
         .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "submission_sla_digests") {
+      const packageId = url.searchParams.get("packageId")
+      const digestStatus = url.searchParams.get("digestStatus")
+      const ownerId = url.searchParams.get("ownerId")
+      const reason = url.searchParams.get("reason")
+      const now = Date.now()
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const exceptionRows = await repos.filingSubmissionExceptions.listByFirm(user.firmId)
+      const exceptionByPackage = new Map(exceptionRows.map((row) => [row.packageId, row]))
+      const evidenceRows = await repos.filingTransportExecutionEvidence.listByFirm(user.firmId)
+      const evidenceByPackage = new Map<string, typeof evidenceRows>()
+      for (const row of evidenceRows) {
+        const current = evidenceByPackage.get(row.packageId) ?? []
+        current.push(row)
+        evidenceByPackage.set(row.packageId, current)
+      }
+      const persistedDigestRows = await repos.filingSubmissionSlaDigests.listByFirm(user.firmId)
+      const rowsByPackage = new Map(persistedDigestRows.map((row) => [row.packageId, row]))
+      const candidatePackageIds = new Set<string>([
+        ...rowsByPackage.keys(),
+        ...exceptionByPackage.keys(),
+        ...evidenceByPackage.keys(),
+      ])
+      for (const pkgId of candidatePackageIds) {
+        const filingPackage = packageById.get(pkgId)
+        if (!filingPackage) continue
+        const existing = rowsByPackage.get(pkgId) ?? null
+        const evidence = (evidenceByPackage.get(pkgId) ?? []).sort(
+          (a, b) => a.createdAt - b.createdAt || a.sequenceNo - b.sequenceNo
+        )
+        const latestEvidence = evidence[evidence.length - 1] ?? null
+        const deliveredEvidenceAt = evidence
+          .filter((row) => row.outcome === "confirm_delivered")
+          .reduce((max, row) => (row.createdAt > max ? row.createdAt : max), 0)
+        const computed = buildSubmissionSlaDigestRow(filingPackage, {
+          exception: exceptionByPackage.get(pkgId) ?? null,
+          latestEvidence,
+          deliveredEvidenceAt: deliveredEvidenceAt > 0 ? deliveredEvidenceAt : null,
+          now,
+          existing,
+        })
+        const changed =
+          !existing ||
+          existing.status !== computed.status ||
+          existing.staleRetryPlan !== computed.staleRetryPlan ||
+          existing.outstandingOwnerId !== computed.outstandingOwnerId ||
+          existing.linkedExceptionId !== computed.linkedExceptionId ||
+          existing.linkedEvidenceId !== computed.linkedEvidenceId ||
+          existing.deferUntil !== computed.deferUntil ||
+          JSON.stringify(existing.breachReasons) !== JSON.stringify(computed.breachReasons)
+        const next = changed ? computed : existing
+        if (changed) {
+          await repos.filingSubmissionSlaDigests.upsert(next)
+        }
+        store.filingSubmissionSlaDigests.set(next.id, next)
+        rowsByPackage.set(pkgId, next)
+      }
+      const visible = [...rowsByPackage.values()]
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (!isFilingSubmissionSlaDigestStatus(digestStatus)) return true
+          return row.status === digestStatus
+        })
+        .filter((row) => (ownerId ? row.outstandingOwnerId === ownerId : true))
+        .filter((row) => (reason ? row.breachReasons.includes(reason as typeof row.breachReasons[number]) : true))
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => a.status.localeCompare(b.status) || a.breachWindowStartedAt - b.breachWindowStartedAt)
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor =
         cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -2061,6 +2177,247 @@ export async function POST(request: Request) {
         submissionException:
           resolvedException &&
           ((await repos.filingSubmissionExceptions.get(resolvedException.id)) ?? resolvedException),
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "acknowledge_breach") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json({ error: "actorId and packageId are required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "acknowledge_breach requires partner role" }, { status: 403 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm digest acknowledge denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const existingDigest =
+        (await repos.filingSubmissionSlaDigests.get(filingSubmissionSlaDigestId(filingPackage.id))) ??
+        null
+      const exception = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const evidence = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
+      const latestEvidence = [...evidence].sort((a, b) => b.createdAt - a.createdAt || b.sequenceNo - a.sequenceNo)[0] ?? null
+      const deliveredEvidenceAt = evidence
+        .filter((row) => row.outcome === "confirm_delivered")
+        .reduce((max, row) => (row.createdAt > max ? row.createdAt : max), 0)
+      const digest = buildSubmissionSlaDigestRow(filingPackage, {
+        exception,
+        latestEvidence,
+        deliveredEvidenceAt: deliveredEvidenceAt > 0 ? deliveredEvidenceAt : null,
+        existing: existingDigest,
+        now,
+      })
+      if (digest.breachReasons.length === 0) {
+        return NextResponse.json({ error: "no active SLA breach to acknowledge" }, { status: 422 })
+      }
+      const note = parsed.note?.trim() || "breach acknowledged by partner"
+      const updated = {
+        ...digest,
+        status: "acknowledged" as const,
+        acknowledgedBy: actor.id,
+        acknowledgedAt: now,
+        deferUntil: null,
+        deferredBy: null,
+        deferredAt: null,
+        notes: [...digest.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingSubmissionSlaDigests.upsert(updated)
+      store.filingSubmissionSlaDigests.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_sla_digest_acknowledge",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: updated.breachReasons.join(",") || "none",
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "acknowledge_breach",
+        digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "defer_window") {
+      if (!parsed.actorId || !parsed.packageId || parsed.deferHours === undefined) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and deferHours are required" },
+          { status: 400 }
+        )
+      }
+      const deferHours = Number(parsed.deferHours)
+      if (!Number.isFinite(deferHours) || deferHours < 1 || deferHours > 168) {
+        return NextResponse.json({ error: "deferHours must be between 1 and 168" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "defer_window requires partner role" }, { status: 403 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm digest defer denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const persistedDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const exception = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const evidence = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
+      const latestEvidence = [...evidence].sort((a, b) => b.createdAt - a.createdAt || b.sequenceNo - a.sequenceNo)[0] ?? null
+      const deliveredEvidenceAt = evidence
+        .filter((row) => row.outcome === "confirm_delivered")
+        .reduce((max, row) => (row.createdAt > max ? row.createdAt : max), 0)
+      const existingDigest = buildSubmissionSlaDigestRow(filingPackage, {
+        exception,
+        latestEvidence,
+        deliveredEvidenceAt: deliveredEvidenceAt > 0 ? deliveredEvidenceAt : null,
+        existing: persistedDigest,
+        now,
+      })
+      if (!existingDigest) {
+        return NextResponse.json({ error: "sla digest not found for package" }, { status: 404 })
+      }
+      if (existingDigest.breachReasons.length === 0) {
+        return NextResponse.json({ error: "cannot defer a cleared digest" }, { status: 422 })
+      }
+      const note = parsed.note?.trim() || `breach deferred by ${deferHours}h`
+      const updated = {
+        ...existingDigest,
+        status: "deferred" as const,
+        deferUntil: now + deferHours * 60 * 60 * 1000,
+        deferredBy: actor.id,
+        deferredAt: now,
+        notes: [...existingDigest.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+        lastEvaluatedAt: now,
+      }
+      await repos.filingSubmissionSlaDigests.upsert(updated)
+      store.filingSubmissionSlaDigests.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_sla_digest_defer",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: String(deferHours),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "defer_window",
+        digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "clear_digest") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json({ error: "actorId and packageId are required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "clear_digest requires partner role" }, { status: 403 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm digest clear denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const persistedDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const exception = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const evidence = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
+      const latestEvidence = [...evidence].sort((a, b) => b.createdAt - a.createdAt || b.sequenceNo - a.sequenceNo)[0] ?? null
+      const deliveredEvidenceAt = evidence
+        .filter((row) => row.outcome === "confirm_delivered")
+        .reduce((max, row) => (row.createdAt > max ? row.createdAt : max), 0)
+      const existingDigest = buildSubmissionSlaDigestRow(filingPackage, {
+        exception,
+        latestEvidence,
+        deliveredEvidenceAt: deliveredEvidenceAt > 0 ? deliveredEvidenceAt : null,
+        existing: persistedDigest,
+        now,
+      })
+      if (!existingDigest) {
+        return NextResponse.json({ error: "sla digest not found for package" }, { status: 404 })
+      }
+      const note = parsed.note?.trim() || "digest cleared by partner"
+      const updated = {
+        ...existingDigest,
+        status: "cleared" as const,
+        breachReasons: [],
+        staleRetryPlan: false,
+        deferUntil: null,
+        clearedBy: actor.id,
+        clearedAt: now,
+        notes: [...existingDigest.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+        lastEvaluatedAt: now,
+      }
+      await repos.filingSubmissionSlaDigests.upsert(updated)
+      store.filingSubmissionSlaDigests.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_sla_digest_clear",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: "cleared",
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "clear_digest",
+        digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
