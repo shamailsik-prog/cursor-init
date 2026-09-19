@@ -15,6 +15,7 @@ import type {
   Intimation,
   Job,
   MatterClientSearchIndexRow,
+  DraftTemplateAnalyticsRow,
   AuditEntry,
   CommitteeBrainOutput,
   Entity,
@@ -296,6 +297,17 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<MatterClientSearchIndexRow>(db, "matter_client_search_index", firmId)
+      },
+    },
+    draftTemplateAnalytics: {
+      async upsert(row) {
+        await setDoc(doc(db, "draft_template_analytics", row.id), row)
+      },
+      async get(id) {
+        return getById<DraftTemplateAnalyticsRow>(db, "draft_template_analytics", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<DraftTemplateAnalyticsRow>(db, "draft_template_analytics", firmId)
       },
     },
   }

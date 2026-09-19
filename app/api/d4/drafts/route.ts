@@ -9,10 +9,18 @@ import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import {
+  buildDraftTemplateAnalyticsRow,
+  draftTemplateAnalyticsId,
+  withTemplateComposed,
+  withTemplateSearchSeen,
+} from "@/platform/persistence/draftTemplateAnalytics"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   composeDraft,
+  listTemplateCatalog,
   listTemplates,
   runDraftPreflight,
   type DraftPreflightInput,
@@ -58,6 +66,16 @@ function parseCursor(value: string | null): number {
   return parsed
 }
 
+function normalizeTerms(value: string | null): string[] {
+  if (!value) return []
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((term) => term.length > 0)
+}
+
 function buildPreflightInput(parsed: {
   actorId?: string
   matterId?: string
@@ -99,19 +117,88 @@ export async function GET(request: Request) {
 
   if (view === "templates") {
     const query = (url.searchParams.get("q") ?? "").trim()
-    const templates = listTemplates(query, limit, cursor)
+    const actorId = (url.searchParams.get("actorId") ?? "").trim()
+    if (!actorId) {
+      const templates = listTemplates(query, limit, cursor)
+      return NextResponse.json({
+        view: "templates",
+        items: templates.items,
+        total: templates.total,
+        limit,
+        cursor,
+        nextCursor: templates.nextCursor,
+      })
+    }
+    const actor = store.users.get(actorId)
+    if (!actor) {
+      return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+    }
+    if (actor.role === "client" || actor.role === "intern") {
+      return NextResponse.json(
+        { error: "actor role not allowed for template analytics search" },
+        { status: 403 }
+      )
+    }
+    await syncFirmUsers(store, repos, actor.firmId)
+    const refreshedActor = store.users.get(actorId)
+    if (!refreshedActor) {
+      return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+    }
+
+    const existing = await repos.draftTemplateAnalytics.listByFirm(refreshedActor.firmId)
+    const analytics = new Map(existing.map((row) => [row.templateId, row]))
+    const ranked = listTemplateCatalog(query)
+      .map((template) => {
+        const row =
+          analytics.get(template.id) ??
+          buildDraftTemplateAnalyticsRow(refreshedActor.firmId, template)
+        return {
+          template,
+          row,
+        }
+      })
+      .sort((a, b) => {
+        const primary = b.row.composeCount - a.row.composeCount
+        if (primary !== 0) return primary
+        const secondary = b.row.templateSearchCount - a.row.templateSearchCount
+        if (secondary !== 0) return secondary
+        return a.template.id.localeCompare(b.template.id)
+      })
+    const sliced = ranked.slice(cursor, cursor + limit)
+    const nextCursor =
+      cursor + sliced.length < ranked.length ? String(cursor + sliced.length) : null
+    if (query.length > 0) {
+      const now = Date.now()
+      for (const entry of sliced) {
+        const next = withTemplateSearchSeen(entry.row, query, { now })
+        await repos.draftTemplateAnalytics.upsert(next)
+        analytics.set(next.templateId, next)
+      }
+    }
     return NextResponse.json({
       view: "templates",
-      items: templates.items,
-      total: templates.total,
+      items: sliced.map(({ template, row }) => {
+        const refreshed = analytics.get(template.id) ?? row
+        return {
+          ...template,
+          analytics: {
+            composeCount: refreshed.composeCount,
+            templateSearchCount: refreshed.templateSearchCount,
+            lastComposedAt: refreshed.lastComposedAt,
+            lastTemplateSearchAt: refreshed.lastTemplateSearchAt,
+          },
+        }
+      }),
+      total: ranked.length,
       limit,
       cursor,
-      nextCursor: templates.nextCursor,
+      nextCursor,
     })
   }
 
   const userId = url.searchParams.get("userId")
   const matterId = url.searchParams.get("matterId")
+  const terms = normalizeTerms(url.searchParams.get("q"))
   if (!userId) {
     return NextResponse.json({ error: "userId is required for drafts view" }, { status: 400 })
   }
@@ -124,15 +211,30 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
   await syncFirmMembers(store, repos, user.firmId)
+  const templateAnalytics = await repos.draftTemplateAnalytics.listByFirm(user.firmId)
+  const templateUsage = new Map(
+    templateAnalytics.map((row) => [row.templateId, row.composeCount])
+  )
   const firmDrafts = await repos.drafts.listByFirm(user.firmId)
   const visible = firmDrafts
     .filter((draft) => (matterId ? draft.matterId === matterId : true))
+    .filter((draft) => {
+      if (terms.length === 0) return true
+      const haystack = `${draft.templateId} ${draft.title} ${draft.body}`.toLowerCase()
+      return terms.every((term) => haystack.includes(term))
+    })
     .filter((draft) => {
       const permission = checkPermission(store, userId, "draft", draft.matterId)
       if (!permission.allow) return false
       return rankOf(user.clearanceLevel) >= rankOf(draft.classification)
     })
-    .sort((a, b) => a.id.localeCompare(b.id))
+    .sort((a, b) => {
+      const scoreA = templateUsage.get(a.templateId) ?? 0
+      const scoreB = templateUsage.get(b.templateId) ?? 0
+      if (scoreA !== scoreB) return scoreB - scoreA
+      if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt
+      return a.id.localeCompare(b.id)
+    })
   const items = visible.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
 
@@ -235,6 +337,20 @@ export async function POST(request: Request) {
       })
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       await repos.drafts.create(draft)
+      const template = listTemplateCatalog("").find((item) => item.id === draft.templateId)
+      const analyticsId = draftTemplateAnalyticsId(draft.templateId)
+      const existingAnalytics = await repos.draftTemplateAnalytics.get(analyticsId)
+      const baseAnalytics =
+        existingAnalytics ??
+        buildDraftTemplateAnalyticsRow(actor.firmId, {
+          id: draft.templateId,
+          name: template?.name ?? draft.templateId,
+          posture: template?.posture ?? "unknown",
+          category: template?.category ?? "unknown",
+        })
+      const nextAnalytics = withTemplateComposed(baseAnalytics)
+      await repos.draftTemplateAnalytics.upsert(nextAnalytics)
+      store.draftTemplateAnalytics.set(nextAnalytics.id, nextAnalytics)
       const payload = {
         action: "compose",
         preflight: gate,

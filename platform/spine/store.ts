@@ -226,6 +226,21 @@ export type MatterClientSearchIndexRow = {
   updatedAt: number
 }
 
+export type DraftTemplateAnalyticsRow = {
+  id: string
+  firmId: string
+  templateId: string
+  templateName: string
+  templatePosture: string
+  templateCategory: string
+  composeCount: number
+  templateSearchCount: number
+  lastComposedAt: number | null
+  lastTemplateSearchAt: number | null
+  lastTemplateSearchQuery: string | null
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -248,6 +263,7 @@ export class SpineStore {
   filingPackages = new Map<string, FilingPackage>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
+  draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

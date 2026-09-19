@@ -94,6 +94,30 @@ describe("Firestore repository adapters", () => {
       expect(indexRow?.label).toBe("Indexed Matter")
       const indexRows = await repos.reportingIndex.listByFirm("firmA")
       expect(indexRows.some((row) => row.id === "idx_1" && row.rowType === "matter")).toBe(true)
+      await repos.draftTemplateAnalytics.upsert({
+        id: "template:motion_template",
+        firmId: "firmA",
+        templateId: "motion_template",
+        templateName: "Motion Template",
+        templatePosture: "motion",
+        templateCategory: "drafting",
+        composeCount: 4,
+        templateSearchCount: 7,
+        lastComposedAt: 40,
+        lastTemplateSearchAt: 41,
+        lastTemplateSearchQuery: "motion",
+        updatedAt: 42,
+      })
+      const draftTemplateAnalytics = await repos.draftTemplateAnalytics.get(
+        "template:motion_template"
+      )
+      expect(draftTemplateAnalytics?.composeCount).toBe(4)
+      const analyticsRows = await repos.draftTemplateAnalytics.listByFirm("firmA")
+      expect(
+        analyticsRows.some(
+          (row) => row.templateId === "motion_template" && row.templateSearchCount === 7
+        )
+      ).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
