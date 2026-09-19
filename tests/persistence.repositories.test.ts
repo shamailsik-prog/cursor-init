@@ -76,6 +76,24 @@ describe("Firestore repository adapters", () => {
       expect(committeeRows.some((row) => row.id === "cbo_1" && row.actorId === "partner_a")).toBe(
         true
       )
+      await repos.reportingIndex.upsert({
+        id: "idx_1",
+        firmId: "firmA",
+        rowType: "matter",
+        referenceId: "mat_1",
+        classification: "internal",
+        label: "Indexed Matter",
+        detail: "SHC",
+        linkedMatterId: "mat_1",
+        linkedClientId: "client_a",
+        status: "engagement_unconfirmed:pending",
+        tags: ["indexed", "matter"],
+        updatedAt: 12,
+      })
+      const indexRow = await repos.reportingIndex.get("idx_1")
+      expect(indexRow?.label).toBe("Indexed Matter")
+      const indexRows = await repos.reportingIndex.listByFirm("firmA")
+      expect(indexRows.some((row) => row.id === "idx_1" && row.rowType === "matter")).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

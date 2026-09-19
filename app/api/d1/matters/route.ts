@@ -11,6 +11,7 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import {
   addMember,
   confirmEngagement,
@@ -196,6 +197,7 @@ export async function POST(request: Request) {
         classification: parsed.classification,
       }
       await repo.matters.create(matter)
+      await repo.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
       // Keep in-memory mirror in sync for flows that still read the spine directly.
       store.matters.set(matter.id, matter)
       const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
@@ -233,6 +235,7 @@ export async function POST(request: Request) {
         await repo.matters.update(parsed.matterId, {
           status: updatedMatter.status,
         })
+        await repo.reportingIndex.upsert(buildMatterSearchIndexRow(updatedMatter))
       }
       const newIntimations = store.intimations.filter(
         (row) => row.matterId === parsed.matterId && !priorIntimationIds.has(row.id)
@@ -274,6 +277,7 @@ export async function POST(request: Request) {
           caseNumber: updatedMatter.caseNumber,
           caseNumberStatus: updatedMatter.caseNumberStatus,
         })
+        await repo.reportingIndex.upsert(buildMatterSearchIndexRow(updatedMatter))
       }
       const newFollowUps = store.followUps.filter((row) => !priorFollowUpIds.has(row.id))
       for (const row of newFollowUps) {

@@ -10,6 +10,7 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmEntities } from "@/platform/persistence/entitySync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { buildClientSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import { conflictCheck, createClient } from "@/services/d1-1/clients"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -167,6 +168,7 @@ export async function POST(request: Request) {
         classification: parsed.classification,
       })
       await repos.entities.create(entity)
+      await repos.reportingIndex.upsert(buildClientSearchIndexRow(entity))
       for (const row of store.links) {
         if (row.firmId !== parsed.firmId) continue
         const linkKey = `${row.leftId}:${row.rightId}:${row.identityBasis}`

@@ -134,6 +134,7 @@ service cloud.firestore {
     match /api_keys/{id}       { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /audit_log/{id}      { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /committee_outputs/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /matter_client_search_index/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /feature_flags/{id}  { allow read: if signedIn(); allow write: if false; }
     match /firm_feature_overrides/{id} { allow read: if sameFirm(); allow write: if false; }
 

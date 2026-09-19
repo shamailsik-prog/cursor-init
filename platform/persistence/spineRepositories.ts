@@ -5,6 +5,7 @@ import type {
   FollowUp,
   Intimation,
   Job,
+  MatterClientSearchIndexRow,
   AuditEntry,
   CommitteeBrainOutput,
   Entity,
@@ -109,6 +110,12 @@ export type CommitteeBrainOutputRepository = {
   listByFirm(firmId: string): Promise<CommitteeBrainOutput[]>
 }
 
+export type MatterClientSearchIndexRepository = {
+  upsert(row: MatterClientSearchIndexRow): Promise<void>
+  get(id: string): Promise<MatterClientSearchIndexRow | null>
+  listByFirm(firmId: string): Promise<MatterClientSearchIndexRow[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -125,6 +132,7 @@ export type SpineRepositories = {
   intimations: IntimationRepository
   audit: AuditRepository
   committeeOutputs: CommitteeBrainOutputRepository
+  reportingIndex: MatterClientSearchIndexRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -344,6 +352,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.committeeOutputs.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    reportingIndex: {
+      async upsert(row) {
+        store.matterClientSearchIndex.set(row.id, row)
+      },
+      async get(id) {
+        return store.matterClientSearchIndex.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.matterClientSearchIndex.values()].filter((row) => row.firmId === firmId)
       },
     },
   }

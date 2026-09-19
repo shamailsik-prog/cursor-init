@@ -211,6 +211,21 @@ export type CommitteeBrainOutput = {
   createdAt: number
 }
 
+export type MatterClientSearchIndexRow = {
+  id: string
+  firmId: string
+  rowType: "matter" | "client"
+  referenceId: string
+  classification: Classification
+  label: string
+  detail: string
+  linkedMatterId: string | null
+  linkedClientId: string | null
+  status: string
+  tags: string[]
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -232,6 +247,7 @@ export class SpineStore {
   workflowEvents: WorkflowEvent[] = []
   filingPackages = new Map<string, FilingPackage>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
+  matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

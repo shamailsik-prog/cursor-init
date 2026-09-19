@@ -14,6 +14,7 @@ import type {
   FollowUp,
   Intimation,
   Job,
+  MatterClientSearchIndexRow,
   AuditEntry,
   CommitteeBrainOutput,
   Entity,
@@ -284,6 +285,17 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<CommitteeBrainOutput>(db, "committee_outputs", firmId)
+      },
+    },
+    reportingIndex: {
+      async upsert(row) {
+        await setDoc(doc(db, "matter_client_search_index", row.id), row)
+      },
+      async get(id) {
+        return getById<MatterClientSearchIndexRow>(db, "matter_client_search_index", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<MatterClientSearchIndexRow>(db, "matter_client_search_index", firmId)
       },
     },
   }
