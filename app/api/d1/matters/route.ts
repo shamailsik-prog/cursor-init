@@ -8,11 +8,10 @@ import {
 import { checkPermission } from "@/platform/p5/checkPermission"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
+import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
 import {
   addMember,
   confirmEngagement,
-  createMatter,
-  listMattersForUser,
 } from "@/services/d1-2/matters"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
@@ -90,6 +89,7 @@ function ensureMatterAccess(actorId: string, matterId: string) {
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
+  const repo = createMemoryRepositories(store)
   const url = new URL(request.url)
   const userId = url.searchParams.get("userId")
   const limit = parseLimit(url.searchParams.get("limit"))
@@ -105,8 +105,12 @@ export async function GET(request: Request) {
   if (!perm.allow) {
     return deny(`permission denied: ${perm.reason}`)
   }
-  const all = listMattersForUser(store, userId)
-    .slice()
+  const firmMatters = await repo.matters.listByFirm(user.firmId)
+  const all = firmMatters
+    .filter((matter) => {
+      if (user.role === "client") return matter.clientId === user.id
+      return store.members.has(store.memberKey(matter.id, user.id))
+    })
     .sort((a, b) => a.id.localeCompare(b.id))
   const items = all.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
@@ -121,6 +125,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
+  const repo = createMemoryRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -175,13 +180,18 @@ export async function POST(request: Request) {
       if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification as Classification)) {
         return deny("actor clearance is below requested matter classification")
       }
-      const matter = createMatter(store, {
+      const matter = {
+        id: store.id("mat"),
         firmId: parsed.firmId,
         clientId: parsed.clientId,
         title: parsed.title,
         courtId: parsed.courtId,
+        caseNumber: null,
+        caseNumberStatus: "pending" as const,
+        status: "engagement_unconfirmed" as const,
         classification: parsed.classification,
-      })
+      }
+      await repo.matters.create(matter)
       addMember(store, matter.id, parsed.actorId, parsed.firmId)
       for (const userId of new Set(parsed.memberUserIds ?? [])) {
         addMember(store, matter.id, userId, parsed.firmId)
