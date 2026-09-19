@@ -28,6 +28,8 @@ const baseStore = {
       },
     ],
   ]),
+  entities: new Map(),
+  links: [],
   members: new Map([["mat_1_associate_a", { matterId: "mat_1", userId: "associate_a", firmId: "firmA" }]]),
   jobs: [],
   documents: new Map(),
@@ -52,6 +54,24 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
     users: {
       upsert: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([]),
+    },
+    entities: {
+      create: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "ent_repo",
+          firmId: "firmA",
+          canonicalName: "Repo Entity",
+          cnic: "4220112345678",
+          phone: "+923001112233",
+          classification: "internal",
+        },
+      ]),
+    },
+    entityLinks: {
+      upsert: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
     },
     members: {
@@ -156,5 +176,15 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("pkg_repo")
+  })
+
+  it("clients route GET uses repository entities listByFirm", async () => {
+    const { GET } = await import("@/app/api/d1/clients/route")
+    const res = await GET(
+      new Request("http://127.0.0.1/api/d1/clients?userId=associate_a&limit=10&cursor=0")
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("ent_repo")
   })
 })

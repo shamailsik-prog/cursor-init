@@ -51,6 +51,26 @@ describe("Firestore repository adapters", () => {
       expect(auditRows.some((row) => row.id === "aud_1" && row.action === "tenant_update_role")).toBe(
         true
       )
+      await repos.entities.create({
+        id: "ent_1",
+        firmId: "firmA",
+        canonicalName: "Client One",
+        cnic: "4220112345678",
+        phone: "+923001112233",
+        classification: "internal",
+      })
+      const entity = await repos.entities.get("ent_1")
+      expect(entity?.canonicalName).toBe("Client One")
+      await repos.entityLinks.upsert({
+        firmId: "firmA",
+        leftId: "ent_1",
+        rightId: "ent_2",
+        identityBasis: "cnic",
+        band: "confirmed-candidate",
+        score: 0.99,
+      })
+      const links = await repos.entityLinks.listByFirm("firmA")
+      expect(links.some((row) => row.leftId === "ent_1" && row.rightId === "ent_2")).toBe(true)
 
       await repos.matters.create({
         id: "mat_1",

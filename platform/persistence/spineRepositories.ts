@@ -6,6 +6,8 @@ import type {
   Intimation,
   Job,
   AuditEntry,
+  Entity,
+  EntityLink,
   Matter,
   MatterMember,
   DocumentWorkflow,
@@ -25,6 +27,17 @@ export type UserRepository = {
   upsert(row: User): Promise<void>
   get(id: string): Promise<User | null>
   listByFirm(firmId: string): Promise<User[]>
+}
+
+export type EntityRepository = {
+  create(row: Entity): Promise<void>
+  get(id: string): Promise<Entity | null>
+  listByFirm(firmId: string): Promise<Entity[]>
+}
+
+export type EntityLinkRepository = {
+  upsert(row: EntityLink): Promise<void>
+  listByFirm(firmId: string): Promise<EntityLink[]>
 }
 
 export type MatterMemberRepository = {
@@ -92,6 +105,8 @@ export type AuditRepository = {
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
+  entities: EntityRepository
+  entityLinks: EntityLinkRepository
   members: MatterMemberRepository
   documents: DocumentRepository
   drafts: DraftRepository
@@ -133,6 +148,36 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.users.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    entities: {
+      async create(row) {
+        store.entities.set(row.id, row)
+      },
+      async get(id) {
+        return store.entities.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.entities.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    entityLinks: {
+      async upsert(row) {
+        const idx = store.links.findIndex(
+          (entry) =>
+            entry.firmId === row.firmId &&
+            entry.leftId === row.leftId &&
+            entry.rightId === row.rightId &&
+            entry.identityBasis === row.identityBasis
+        )
+        if (idx >= 0) {
+          store.links[idx] = row
+          return
+        }
+        store.links.push(row)
+      },
+      async listByFirm(firmId) {
+        return store.links.filter((row) => row.firmId === firmId)
       },
     },
     members: {

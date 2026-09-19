@@ -63,6 +63,7 @@ export type Entity = {
 }
 
 export type EntityLink = {
+  firmId: string
   leftId: string
   rightId: string
   identityBasis: "cnic"

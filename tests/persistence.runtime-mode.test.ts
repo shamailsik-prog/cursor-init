@@ -15,6 +15,7 @@ import { GET as filingsGet, POST as filingsPost } from "@/app/api/d4/filings/rou
 import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { GET as tenancyGet, POST as tenancyPost } from "@/app/api/p5/tenancy/route"
+import { GET as clientsGet, POST as clientsPost } from "@/app/api/d1/clients/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
 import { composeDraft } from "@/services/d4-1/drafts"
@@ -617,6 +618,103 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(ingestRes.status).toBe(200)
+    })
+  })
+
+  it("persists and rehydrates entity/client registry data after in-memory reset", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const createOne = await clientsPost(
+        new Request("http://127.0.0.1/api/d1/clients", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "4de4ff5f-1387-48a7-b0cc-af4e1f9a8d11",
+          },
+          body: JSON.stringify({
+            action: "create",
+            actorId: "partner_a",
+            firmId: "firmA",
+            canonicalName: "Persisted Entity A",
+            cnic: "4220112345601",
+            phone: "+923001110001",
+            classification: "internal",
+          }),
+        })
+      )
+      expect(createOne.status).toBe(200)
+      const createOneJson = (await createOne.json()) as {
+        result: { entity: { id: string } }
+      }
+
+      const createTwo = await clientsPost(
+        new Request("http://127.0.0.1/api/d1/clients", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "87d4f9aa-a0d2-48c1-9885-85881c1a2f47",
+          },
+          body: JSON.stringify({
+            action: "create",
+            actorId: "partner_a",
+            firmId: "firmA",
+            canonicalName: "Persisted Entity B",
+            cnic: "4220112345601",
+            phone: "+923001110002",
+            classification: "internal",
+          }),
+        })
+      )
+      expect(createTwo.status).toBe(200)
+
+      // Simulate a fresh cycle where in-memory entities and links are dropped.
+      getRuntimeStore().entities = new Map()
+      getRuntimeStore().links = []
+
+      const listRes = await clientsGet(
+        new Request("http://127.0.0.1/api/d1/clients?userId=associate_a&limit=10&cursor=0")
+      )
+      expect(listRes.status).toBe(200)
+      const listJson = (await listRes.json()) as { items: Array<{ id: string }> }
+      expect(listJson.items.some((item) => item.id === createOneJson.result.entity.id)).toBe(true)
+
+      const conflictRes = await clientsPost(
+        new Request("http://127.0.0.1/api/d1/clients", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "17bb9f7f-d3ec-4f0e-8b1f-194d974c9f45",
+          },
+          body: JSON.stringify({
+            action: "conflict_check",
+            actorId: "partner_a",
+            firmId: "firmA",
+            entityId: createOneJson.result.entity.id,
+          }),
+        })
+      )
+      expect(conflictRes.status).toBe(200)
+      const conflictJson = (await conflictRes.json()) as {
+        result: { result: { status: string; identityBasis?: string } }
+      }
+      expect(conflictJson.result.result.status).toBe("POSSIBLE_CANDIDATE_REVIEW")
+      expect(conflictJson.result.result.identityBasis).toBe("cnic")
+
+      const persistedEntities = await getDocs(collection(ctx.firestore(), "entities"))
+      expect(
+        persistedEntities.docs.some(
+          (entry) => entry.data()?.id === createOneJson.result.entity.id && entry.data()?.firmId === "firmA"
+        )
+      ).toBe(true)
+      const persistedLinks = await getDocs(collection(ctx.firestore(), "merge_events"))
+      expect(
+        persistedLinks.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.identityBasis === "cnic" &&
+            entry.data()?.band === "confirmed-candidate"
+        )
+      ).toBe(true)
     })
   })
 
