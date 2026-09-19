@@ -217,7 +217,20 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "actorId and matterId are required" }, { status: 400 })
       }
       const { matter } = ensureMatterAccess(parsed.actorId, parsed.matterId)
+      const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
+      const updatedMatter = store.matters.get(parsed.matterId)
+      if (updatedMatter) {
+        await repo.matters.update(parsed.matterId, {
+          status: updatedMatter.status,
+        })
+      }
+      const newIntimations = store.intimations.filter(
+        (row) => row.matterId === parsed.matterId && !priorIntimationIds.has(row.id)
+      )
+      for (const row of newIntimations) {
+        await repo.intimations.upsert(row)
+      }
       store.audit.push({
         action: "matter_confirm_engagement",
         actorId: parsed.actorId,
@@ -226,7 +239,7 @@ export async function POST(request: Request) {
       })
       const payload = {
         action: "confirm_engagement",
-        matter: store.matters.get(parsed.matterId),
+        matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -240,7 +253,19 @@ export async function POST(request: Request) {
         )
       }
       const { matter } = ensureMatterAccess(parsed.actorId, parsed.matterId)
+      const priorFollowUpIds = new Set(store.followUps.map((row) => row.id))
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)
+      const updatedMatter = store.matters.get(parsed.matterId)
+      if (updatedMatter) {
+        await repo.matters.update(parsed.matterId, {
+          caseNumber: updatedMatter.caseNumber,
+          caseNumberStatus: updatedMatter.caseNumberStatus,
+        })
+      }
+      const newFollowUps = store.followUps.filter((row) => !priorFollowUpIds.has(row.id))
+      for (const row of newFollowUps) {
+        await repo.followUps.upsert(row)
+      }
       store.audit.push({
         action: "matter_record_case_number",
         actorId: parsed.actorId,
@@ -251,7 +276,7 @@ export async function POST(request: Request) {
       const payload = {
         action: "record_case_number",
         result,
-        matter: store.matters.get(parsed.matterId),
+        matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

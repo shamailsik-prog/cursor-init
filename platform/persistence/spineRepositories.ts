@@ -3,6 +3,7 @@ import type {
   DraftRecord,
   FilingPackage,
   FollowUp,
+  Intimation,
   Job,
   Matter,
   DocumentWorkflow,
@@ -60,6 +61,13 @@ export type FollowUpRepository = {
   listByFirm(firmId: string): Promise<FollowUp[]>
 }
 
+export type IntimationRepository = {
+  upsert(row: Intimation): Promise<void>
+  get(id: string): Promise<Intimation | null>
+  listByFirm(firmId: string): Promise<Intimation[]>
+  listByMatter(matterId: string): Promise<Intimation[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   documents: DocumentRepository
@@ -69,6 +77,7 @@ export type SpineRepositories = {
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
+  intimations: IntimationRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -188,6 +197,25 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return store.followUps.filter((row) => row.firmId === firmId)
+      },
+    },
+    intimations: {
+      async upsert(row) {
+        const idx = store.intimations.findIndex((entry) => entry.id === row.id)
+        if (idx >= 0) {
+          store.intimations[idx] = row
+          return
+        }
+        store.intimations.push(row)
+      },
+      async get(id) {
+        return store.intimations.find((row) => row.id === id) ?? null
+      },
+      async listByFirm(firmId) {
+        return store.intimations.filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return store.intimations.filter((row) => row.matterId === matterId)
       },
     },
   }

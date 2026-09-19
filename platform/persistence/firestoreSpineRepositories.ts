@@ -12,6 +12,7 @@ import type {
   DraftRecord,
   FilingPackage,
   FollowUp,
+  Intimation,
   Job,
   Matter,
   DocumentWorkflow,
@@ -159,6 +160,23 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<FollowUp>(db, "follow_ups", firmId)
+      },
+    },
+    intimations: {
+      async upsert(row) {
+        await setDoc(doc(db, "intimation_register", row.id), row)
+      },
+      async get(id) {
+        return getById<Intimation>(db, "intimation_register", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<Intimation>(db, "intimation_register", firmId)
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "intimation_register"))
+        return rows.docs
+          .map((entry) => entry.data() as Intimation)
+          .filter((row) => row.matterId === matterId)
       },
     },
   }
