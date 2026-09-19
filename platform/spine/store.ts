@@ -91,11 +91,14 @@ export type Intimation = {
 }
 
 export type AuditEntry = {
+  id?: string
+  firmId?: string
   action: string
   actorId: string
   target: string
   classification: Classification
   reason?: string
+  at?: number
 }
 
 export type StatuteSectionVersion = {

@@ -99,6 +99,48 @@ export function listFirmMemberships(
   }
 }
 
+export function listFirmAudit(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  limit: number,
+  cursor: number
+): {
+  items: Array<{
+    id: string
+    action: string
+    actorId: string
+    target: string
+    classification: Classification
+    reason?: string
+    at: number
+  }>
+  total: number
+  nextCursor: string | null
+} {
+  const actor = requirePartnerInFirm(store, actorId, firmId)
+  const rows = store.audit
+    .filter((entry) => entry.firmId === firmId)
+    .filter((entry) => rankOf(entry.classification) <= rankOf(actor.clearanceLevel))
+    .map((entry) => ({
+      id: entry.id ?? "",
+      action: entry.action,
+      actorId: entry.actorId,
+      target: entry.target,
+      classification: entry.classification,
+      reason: entry.reason,
+      at: entry.at ?? 0,
+    }))
+    .sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
+    total: rows.length,
+    nextCursor,
+  }
+}
+
 export function updateUserRole(
   store: SpineStore,
   input: {
@@ -109,7 +151,7 @@ export function updateUserRole(
     nextClearance: Classification
     reason?: string
   }
-): User {
+): { user: User; auditEntry: NonNullable<SpineStore["audit"][number]> } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const target = store.users.get(input.targetUserId)
   if (!target) throw new Error("unknown target user")
@@ -128,12 +170,16 @@ export function updateUserRole(
   }
   target.role = input.nextRole
   target.clearanceLevel = input.nextClearance
-  store.audit.push({
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
     action: "tenant_update_role",
     actorId: actor.id,
     target: target.id,
     classification: target.clearanceLevel,
     reason: input.reason,
-  })
-  return target
+    at: Date.now(),
+  } as const
+  store.audit.push(auditEntry)
+  return { user: target, auditEntry }
 }

@@ -14,6 +14,7 @@ import type {
   FollowUp,
   Intimation,
   Job,
+  AuditEntry,
   Matter,
   MatterMember,
   DocumentWorkflow,
@@ -209,6 +210,19 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return rows.docs
           .map((entry) => entry.data() as Intimation)
           .filter((row) => row.matterId === matterId)
+      },
+    },
+    audit: {
+      async append(row) {
+        if (!row.id) {
+          throw new Error("audit entry id is required")
+        }
+        const payload: Record<string, unknown> = { ...row }
+        if (payload.reason === undefined) delete payload.reason
+        await setDoc(doc(db, "audit_log", row.id), payload)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<AuditEntry & { firmId: string }>(db, "audit_log", firmId)
       },
     },
   }

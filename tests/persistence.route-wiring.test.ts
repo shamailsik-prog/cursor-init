@@ -130,6 +130,10 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       listByFirm: vi.fn().mockResolvedValue([]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    audit: {
+      append: vi.fn(),
+      listByFirm: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 

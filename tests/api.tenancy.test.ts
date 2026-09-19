@@ -114,6 +114,54 @@ describe("GET/POST /api/p5/tenancy", () => {
     expect(denied.status).toBe(400)
   })
 
+  it("lists partner-admin audit entries and denies non-partner audit reads", async () => {
+    const writeRes = await post(
+      {
+        action: "update_role",
+        actorId: "partner_a",
+        firmId: "firmA",
+        targetUserId: "clerk_a",
+        nextRole: "clerk",
+        nextClearance: "internal",
+        reason: "Audit list verification",
+      },
+      "bf379f5f-5e99-4f3b-9617-72d3f3c10f2d"
+    )
+    expect(writeRes.status).toBe(200)
+
+    const auditRes = await get(
+      new URLSearchParams({
+        view: "audit",
+        actorId: "partner_a",
+        firmId: "firmA",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(auditRes.status).toBe(200)
+    const auditJson = (await auditRes.json()) as {
+      items: Array<{ action: string; target: string }>
+      total: number
+    }
+    expect(auditJson.total).toBeGreaterThan(0)
+    expect(
+      auditJson.items.some(
+        (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
+      )
+    ).toBe(true)
+
+    const deniedAudit = await get(
+      new URLSearchParams({
+        view: "audit",
+        actorId: "associate_a",
+        firmId: "firmA",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(deniedAudit.status).toBe(400)
+  })
+
   it("blocks role escalation and cross-firm role changes", async () => {
     const promotePartner = await post(
       {

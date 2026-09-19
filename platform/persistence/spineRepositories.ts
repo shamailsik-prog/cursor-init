@@ -5,6 +5,7 @@ import type {
   FollowUp,
   Intimation,
   Job,
+  AuditEntry,
   Matter,
   MatterMember,
   DocumentWorkflow,
@@ -83,6 +84,11 @@ export type IntimationRepository = {
   listByMatter(matterId: string): Promise<Intimation[]>
 }
 
+export type AuditRepository = {
+  append(row: AuditEntry): Promise<void>
+  listByFirm(firmId: string): Promise<AuditEntry[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -95,6 +101,7 @@ export type SpineRepositories = {
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
   intimations: IntimationRepository
+  audit: AuditRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -258,6 +265,14 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByMatter(matterId) {
         return store.intimations.filter((row) => row.matterId === matterId)
+      },
+    },
+    audit: {
+      async append(row) {
+        store.audit.push(row)
+      },
+      async listByFirm(firmId) {
+        return store.audit.filter((row) => row.firmId === firmId)
       },
     },
   }
