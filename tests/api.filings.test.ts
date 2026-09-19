@@ -864,6 +864,82 @@ describe("GET/POST /api/d4/filings", () => {
     expect(setBackupJson.result.rota.backupOwnerId).toBe("partner_a")
     expect(setBackupJson.result.rota.handoffRequired).toBe(true)
 
+    const workloadViewBefore = await get(
+      new URLSearchParams({
+        view: "escalation_workload_digests",
+        userId: "associate_a",
+        matterId,
+        packageId,
+        workloadStatus: "open_alert",
+        ownerId: "partner_a",
+        reason: "handoff_lag",
+        handoffLagBucket: "lt_4h",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(workloadViewBefore.status).toBe(200)
+    const workloadViewBeforeJson = (await workloadViewBefore.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      workloadViewBeforeJson.items.some(
+        (row) => row.packageId === packageId && row.status === "open_alert"
+      )
+    ).toBe(true)
+
+    const acknowledgeWorkload = await post(
+      {
+        action: "acknowledge_owner_drift",
+        actorId: "partner_a",
+        packageId,
+        note: "Owner drift acknowledged for escalation triage",
+      },
+      "68c1068e-fc1e-44e8-a09c-d2a90b64b876"
+    )
+    expect(acknowledgeWorkload.status).toBe(200)
+    const acknowledgeWorkloadJson = (await acknowledgeWorkload.json()) as {
+      result: { workloadDigest: { status: string } }
+    }
+    expect(acknowledgeWorkloadJson.result.workloadDigest.status).toBe("acknowledged")
+
+    const snoozeWorkload = await post(
+      {
+        action: "snooze_workload_alert",
+        actorId: "partner_a",
+        packageId,
+        snoozeHours: 4,
+        note: "Snoozing workload alert pending rebalance",
+      },
+      "315fdba9-0d5c-494a-b65e-e243e17a3260"
+    )
+    expect(snoozeWorkload.status).toBe(200)
+    const snoozeWorkloadJson = (await snoozeWorkload.json()) as {
+      result: { workloadDigest: { status: string; snoozeUntil: number | null } }
+    }
+    expect(snoozeWorkloadJson.result.workloadDigest.status).toBe("snoozed")
+    expect(typeof snoozeWorkloadJson.result.workloadDigest.snoozeUntil).toBe("number")
+
+    const rebalance = await post(
+      {
+        action: "rebalance_assignment",
+        actorId: "partner_a",
+        packageId,
+        newPrimaryOwnerId: "partner_a",
+        note: "Workload rebalanced after drift review",
+      },
+      "6be2fe74-c09a-4a7b-8fd3-9d40e2868f77"
+    )
+    expect(rebalance.status).toBe(200)
+    const rebalanceJson = (await rebalance.json()) as {
+      result: {
+        rota: { primaryOwnerId: string | null }
+        workloadDigest: { status: string }
+      }
+    }
+    expect(rebalanceJson.result.rota.primaryOwnerId).toBe("partner_a")
+    expect(["acknowledged", "cleared"]).toContain(rebalanceJson.result.workloadDigest.status)
+
     const acknowledgeHandoff = await post(
       {
         action: "acknowledge_handoff",
@@ -998,6 +1074,25 @@ describe("GET/POST /api/d4/filings", () => {
     }
     expect(
       rotaViewJson.items.some((row) => row.packageId === packageId && row.status === "revoked")
+    ).toBe(true)
+
+    const workloadView = await get(
+      new URLSearchParams({
+        view: "escalation_workload_digests",
+        userId: "associate_a",
+        matterId,
+        packageId,
+        workloadStatus: "cleared",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(workloadView.status).toBe(200)
+    const workloadViewJson = (await workloadView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      workloadViewJson.items.some((row) => row.packageId === packageId && row.status === "cleared")
     ).toBe(true)
   })
 

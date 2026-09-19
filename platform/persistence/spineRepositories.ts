@@ -7,6 +7,7 @@ import type {
   FilingPacketArtifactRow,
   FilingSubmissionExceptionRow,
   FilingEscalationOwnerRotaRow,
+  FilingEscalationWorkloadDigestRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
   FilingSubmissionSlaDigestRow,
@@ -149,6 +150,13 @@ export type FilingEscalationOwnerRotaRepository = {
   listByPackageId(packageId: string): Promise<FilingEscalationOwnerRotaRow[]>
 }
 
+export type FilingEscalationWorkloadDigestRepository = {
+  upsert(row: FilingEscalationWorkloadDigestRow): Promise<void>
+  get(id: string): Promise<FilingEscalationWorkloadDigestRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationWorkloadDigestRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationWorkloadDigestRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -221,6 +229,7 @@ export type SpineRepositories = {
   filingTransportExecutionEvidence: FilingTransportExecutionEvidenceRepository
   filingSubmissionSlaDigests: FilingSubmissionSlaDigestRepository
   filingEscalationOwnerRota: FilingEscalationOwnerRotaRepository
+  filingEscalationWorkloadDigests: FilingEscalationWorkloadDigestRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -491,6 +500,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingEscalationOwnerRota.values()].filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationWorkloadDigests: {
+      async upsert(row) {
+        store.filingEscalationWorkloadDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationWorkloadDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationWorkloadDigests.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationWorkloadDigests.values()].filter((row) => row.packageId === packageId)
       },
     },
     jobs: {

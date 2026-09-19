@@ -433,6 +433,48 @@ export type FilingEscalationOwnerRotaRow = {
   updatedAt: number
 }
 
+export type FilingEscalationWorkloadDigestStatus =
+  | "open_alert"
+  | "acknowledged"
+  | "snoozed"
+  | "cleared"
+
+export type FilingEscalationWorkloadAlertReason =
+  | "overloaded_owner"
+  | "unassigned_breach"
+  | "handoff_lag"
+
+export type FilingEscalationHandoffLagBucket =
+  | "none"
+  | "lt_4h"
+  | "between_4h_12h"
+  | "gte_12h"
+
+export type FilingEscalationWorkloadDigestRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingEscalationWorkloadDigestStatus
+  alertReasons: FilingEscalationWorkloadAlertReason[]
+  ownerId: string | null
+  ownerLoadCount: number
+  ownerLoadThreshold: number
+  handoffLagMs: number | null
+  handoffLagBucket: FilingEscalationHandoffLagBucket
+  snoozeUntil: number | null
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  rebalancedBy: string | null
+  rebalancedAt: number | null
+  linkedRotaId: string | null
+  linkedDigestId: string | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -530,6 +572,7 @@ export class SpineStore {
   filingTransportExecutionEvidence = new Map<string, FilingTransportExecutionEvidenceRow>()
   filingSubmissionSlaDigests = new Map<string, FilingSubmissionSlaDigestRow>()
   filingEscalationOwnerRota = new Map<string, FilingEscalationOwnerRotaRow>()
+  filingEscalationWorkloadDigests = new Map<string, FilingEscalationWorkloadDigestRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

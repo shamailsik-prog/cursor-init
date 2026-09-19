@@ -51,6 +51,12 @@ import {
   filingEscalationOwnerRotaId,
   isFilingEscalationOwnerRotaStatus,
 } from "@/platform/persistence/filingEscalationOwnerRota"
+import {
+  buildFilingEscalationWorkloadDigestRow,
+  filingEscalationWorkloadDigestId,
+  isFilingEscalationHandoffLagBucket,
+  isFilingEscalationWorkloadDigestStatus,
+} from "@/platform/persistence/filingEscalationWorkloadDigests"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -259,6 +265,29 @@ type RevokeAssignmentBody = {
   note?: string
 }
 
+type AcknowledgeOwnerDriftBody = {
+  action: "acknowledge_owner_drift"
+  actorId?: string
+  packageId?: string
+  note?: string
+}
+
+type RebalanceAssignmentBody = {
+  action: "rebalance_assignment"
+  actorId?: string
+  packageId?: string
+  newPrimaryOwnerId?: string
+  note?: string
+}
+
+type SnoozeWorkloadAlertBody = {
+  action: "snooze_workload_alert"
+  actorId?: string
+  packageId?: string
+  snoozeHours?: number
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -280,6 +309,9 @@ type Body =
   | SetBackupOwnerBody
   | AcknowledgeHandoffBody
   | RevokeAssignmentBody
+  | AcknowledgeOwnerDriftBody
+  | RebalanceAssignmentBody
+  | SnoozeWorkloadAlertBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -309,7 +341,8 @@ function parseFilingsView(
   | "submission_exceptions"
   | "transport_execution"
   | "submission_sla_digests"
-  | "escalation_owner_rota" {
+  | "escalation_owner_rota"
+  | "escalation_workload_digests" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -318,7 +351,20 @@ function parseFilingsView(
   if (value === "transport_execution") return "transport_execution"
   if (value === "submission_sla_digests") return "submission_sla_digests"
   if (value === "escalation_owner_rota") return "escalation_owner_rota"
+  if (value === "escalation_workload_digests") return "escalation_workload_digests"
   return "packages"
+}
+
+function buildOwnerActiveLoadCounts(
+  rows: Array<{ status: string; primaryOwnerId: string | null }>
+): Map<string, number> {
+  const byOwner = new Map<string, number>()
+  for (const row of rows) {
+    if (row.status === "revoked") continue
+    if (!row.primaryOwnerId) continue
+    byOwner.set(row.primaryOwnerId, (byOwner.get(row.primaryOwnerId) ?? 0) + 1)
+  }
+  return byOwner
 }
 
 export async function GET(request: Request) {
@@ -840,6 +886,96 @@ export async function GET(request: Request) {
         .filter((row) => {
           if (!ownerId) return true
           return row.primaryOwnerId === ownerId || row.backupOwnerId === ownerId
+        })
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "escalation_workload_digests") {
+      const packageId = url.searchParams.get("packageId")
+      const ownerId = url.searchParams.get("ownerId")
+      const workloadStatus = url.searchParams.get("workloadStatus")
+      const reason = url.searchParams.get("reason")
+      const handoffLagBucket = url.searchParams.get("handoffLagBucket")
+      const now = Date.now()
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(user.firmId)
+      const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
+      const ownerLoadByOwner = buildOwnerActiveLoadCounts(rotaRows)
+      const slaRows = await repos.filingSubmissionSlaDigests.listByFirm(user.firmId)
+      const slaByPackage = new Map(slaRows.map((row) => [row.packageId, row]))
+      const persistedRows = await repos.filingEscalationWorkloadDigests.listByFirm(user.firmId)
+      const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
+      const candidatePackageIds = new Set<string>([
+        ...rowsByPackage.keys(),
+        ...rotaByPackage.keys(),
+        ...slaByPackage.keys(),
+      ])
+      for (const pkgId of candidatePackageIds) {
+        const filingPackage = packageById.get(pkgId)
+        if (!filingPackage) continue
+        const rota = rotaByPackage.get(pkgId) ?? null
+        const slaDigest = slaByPackage.get(pkgId) ?? null
+        const existing = rowsByPackage.get(pkgId) ?? null
+        if (!rota && !slaDigest && !existing) continue
+        const ownerLoadCount =
+          rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
+        const computed = buildFilingEscalationWorkloadDigestRow(filingPackage, {
+          rota,
+          slaDigest,
+          ownerLoadCount,
+          now,
+          existing,
+        })
+        const changed =
+          !existing ||
+          existing.status !== computed.status ||
+          existing.ownerId !== computed.ownerId ||
+          existing.ownerLoadCount !== computed.ownerLoadCount ||
+          existing.ownerLoadThreshold !== computed.ownerLoadThreshold ||
+          existing.snoozeUntil !== computed.snoozeUntil ||
+          existing.handoffLagBucket !== computed.handoffLagBucket ||
+          existing.handoffLagMs !== computed.handoffLagMs ||
+          existing.linkedRotaId !== computed.linkedRotaId ||
+          existing.linkedDigestId !== computed.linkedDigestId ||
+          JSON.stringify(existing.alertReasons) !== JSON.stringify(computed.alertReasons)
+        const next = changed ? computed : existing
+        if (changed) {
+          await repos.filingEscalationWorkloadDigests.upsert(next)
+        }
+        store.filingEscalationWorkloadDigests.set(next.id, next)
+        rowsByPackage.set(pkgId, next)
+      }
+      const visible = [...rowsByPackage.values()]
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => {
+          if (!isFilingEscalationWorkloadDigestStatus(workloadStatus)) return true
+          return row.status === workloadStatus
+        })
+        .filter((row) =>
+          reason
+            ? row.alertReasons.includes(reason as (typeof row.alertReasons)[number])
+            : true
+        )
+        .filter((row) => {
+          if (!isFilingEscalationHandoffLagBucket(handoffLagBucket)) return true
+          return row.handoffLagBucket === handoffLagBucket
         })
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
@@ -2874,6 +3010,294 @@ export async function POST(request: Request) {
       const payload = {
         action: "revoke_assignment",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "acknowledge_owner_drift") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json({ error: "actorId and packageId are required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "acknowledge_owner_drift requires partner role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json(
+          { error: "cross-firm workload acknowledgement denied" },
+          { status: 403 }
+        )
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const rota = await repos.filingEscalationOwnerRota.get(
+        filingEscalationOwnerRotaId(filingPackage.id)
+      )
+      const slaDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const existing = await repos.filingEscalationWorkloadDigests.get(
+        filingEscalationWorkloadDigestId(filingPackage.id)
+      )
+      const ownerLoadByOwner = buildOwnerActiveLoadCounts(
+        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+      )
+      const ownerLoadCount =
+        rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
+      const digest = buildFilingEscalationWorkloadDigestRow(filingPackage, {
+        rota,
+        slaDigest,
+        ownerLoadCount,
+        existing,
+        now,
+      })
+      if (digest.alertReasons.length === 0) {
+        return NextResponse.json({ error: "no active workload alert to acknowledge" }, { status: 422 })
+      }
+      const note = parsed.note?.trim() || "owner drift acknowledged"
+      const updated = {
+        ...digest,
+        status: "acknowledged" as const,
+        snoozeUntil: null,
+        acknowledgedBy: actor.id,
+        acknowledgedAt: now,
+        notes: [...digest.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationWorkloadDigests.upsert(updated)
+      store.filingEscalationWorkloadDigests.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_escalation_workload_acknowledge",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: updated.alertReasons.join(",") || "none",
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "acknowledge_owner_drift",
+        workloadDigest: (await repos.filingEscalationWorkloadDigests.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "rebalance_assignment") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.newPrimaryOwnerId) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and newPrimaryOwnerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "rebalance_assignment requires partner role" }, { status: 403 })
+      }
+      const newPrimary = store.users.get(parsed.newPrimaryOwnerId)
+      if (!newPrimary) {
+        return NextResponse.json({ error: "unknown new primary owner" }, { status: 404 })
+      }
+      if (newPrimary.firmId !== actor.firmId || newPrimary.role !== "partner") {
+        return NextResponse.json(
+          { error: "newPrimaryOwnerId must be a partner in the same firm" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm workload rebalance denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const existingRota =
+        (await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))) ??
+        null
+      const linkedException = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const linkedSlaDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const changedOwner = existingRota?.primaryOwnerId !== newPrimary.id
+      const note = parsed.note?.trim() || `workload rebalanced to ${newPrimary.id}`
+      const baseRota = buildFilingEscalationOwnerRotaRow(filingPackage, {
+        now,
+        existing: existingRota,
+        primaryOwnerId: newPrimary.id,
+        backupOwnerId: existingRota?.backupOwnerId ?? null,
+        linkedExceptionId: linkedException?.id ?? null,
+        linkedDigestId: linkedSlaDigest?.id ?? null,
+        actorId: actor.id,
+        note,
+      })
+      const updatedRota = {
+        ...baseRota,
+        status: "active" as const,
+        handoffRequired: changedOwner && existingRota?.primaryOwnerId !== null,
+        handoffAcknowledgedBy: null,
+        handoffAcknowledgedAt: null,
+        lastAssignedBy: actor.id,
+        lastAssignedAt: now,
+        revokedBy: null,
+        revokedAt: null,
+        updatedAt: now,
+      }
+      await repos.filingEscalationOwnerRota.upsert(updatedRota)
+      store.filingEscalationOwnerRota.set(updatedRota.id, updatedRota)
+      const allRotaRows = await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+      const ownerLoadByOwner = buildOwnerActiveLoadCounts(allRotaRows)
+      const existingDigest = await repos.filingEscalationWorkloadDigests.get(
+        filingEscalationWorkloadDigestId(filingPackage.id)
+      )
+      const ownerLoadCount =
+        updatedRota.primaryOwnerId ? (ownerLoadByOwner.get(updatedRota.primaryOwnerId) ?? 0) : 0
+      const computedDigest = buildFilingEscalationWorkloadDigestRow(filingPackage, {
+        rota: updatedRota,
+        slaDigest: linkedSlaDigest,
+        ownerLoadCount,
+        existing: existingDigest,
+        now,
+      })
+      const digestNote = `assignment rebalanced to ${newPrimary.id}`
+      const updatedDigest = {
+        ...computedDigest,
+        status: computedDigest.alertReasons.length === 0 ? ("cleared" as const) : ("acknowledged" as const),
+        snoozeUntil: null,
+        acknowledgedBy: actor.id,
+        acknowledgedAt: now,
+        rebalancedBy: actor.id,
+        rebalancedAt: now,
+        notes: [...computedDigest.notes, `${new Date(now).toISOString()} ${actor.id}: ${digestNote}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationWorkloadDigests.upsert(updatedDigest)
+      store.filingEscalationWorkloadDigests.set(updatedDigest.id, updatedDigest)
+      store.audit.push({
+        action: "filing_escalation_workload_rebalance",
+        actorId: actor.id,
+        target: updatedDigest.id,
+        classification: filingPackage.classification,
+        reason: newPrimary.id,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "rebalance_assignment",
+        rota: (await repos.filingEscalationOwnerRota.get(updatedRota.id)) ?? updatedRota,
+        workloadDigest:
+          (await repos.filingEscalationWorkloadDigests.get(updatedDigest.id)) ?? updatedDigest,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "snooze_workload_alert") {
+      if (!parsed.actorId || !parsed.packageId || parsed.snoozeHours === undefined) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and snoozeHours are required" },
+          { status: 400 }
+        )
+      }
+      const snoozeHours = Number(parsed.snoozeHours)
+      if (!Number.isFinite(snoozeHours) || snoozeHours < 1 || snoozeHours > 168) {
+        return NextResponse.json({ error: "snoozeHours must be between 1 and 168" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "snooze_workload_alert requires partner role" }, { status: 403 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm workload snooze denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const rota = await repos.filingEscalationOwnerRota.get(
+        filingEscalationOwnerRotaId(filingPackage.id)
+      )
+      const slaDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const existing = await repos.filingEscalationWorkloadDigests.get(
+        filingEscalationWorkloadDigestId(filingPackage.id)
+      )
+      const ownerLoadByOwner = buildOwnerActiveLoadCounts(
+        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+      )
+      const ownerLoadCount =
+        rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
+      const digest = buildFilingEscalationWorkloadDigestRow(filingPackage, {
+        rota,
+        slaDigest,
+        ownerLoadCount,
+        existing,
+        now,
+      })
+      if (digest.alertReasons.length === 0) {
+        return NextResponse.json({ error: "no active workload alert to snooze" }, { status: 422 })
+      }
+      const note = parsed.note?.trim() || `workload alert snoozed for ${snoozeHours}h`
+      const updated = {
+        ...digest,
+        status: "snoozed" as const,
+        snoozeUntil: now + snoozeHours * 60 * 60 * 1000,
+        notes: [...digest.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+        lastEvaluatedAt: now,
+      }
+      await repos.filingEscalationWorkloadDigests.upsert(updated)
+      store.filingEscalationWorkloadDigests.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_escalation_workload_snooze",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: String(snoozeHours),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "snooze_workload_alert",
+        workloadDigest: (await repos.filingEscalationWorkloadDigests.get(updated.id)) ?? updated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

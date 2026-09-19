@@ -16,6 +16,7 @@ import type {
   FilingPacketArtifactRow,
   FilingSubmissionExceptionRow,
   FilingEscalationOwnerRotaRow,
+  FilingEscalationWorkloadDigestRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
   FilingSubmissionSlaDigestRow,
@@ -371,6 +372,23 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_owner_rota"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationOwnerRotaRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationWorkloadDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_workload_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationWorkloadDigestRow>(db, "filing_escalation_workload_digests", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationWorkloadDigestRow>(db, "filing_escalation_workload_digests", firmId)
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_workload_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationWorkloadDigestRow)
           .filter((row) => row.packageId === packageId)
       },
     },
