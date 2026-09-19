@@ -90,6 +90,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
   const firmDocs = await repos.documents.listByFirm(user.firmId)
+  const firmJobs = await repos.jobs.listByFirm(user.firmId)
+  const ocrJobCounts = new Map<string, number>()
+  for (const job of firmJobs) {
+    if (job.jobType !== "ocr") continue
+    ocrJobCounts.set(job.documentId, (ocrJobCounts.get(job.documentId) ?? 0) + 1)
+  }
   const visible = firmDocs
     .filter((doc) => (matterId ? doc.matterId === matterId : true))
     .filter((doc) => canViewDocument(store, userId, doc))
@@ -97,7 +103,7 @@ export async function GET(request: Request) {
 
   const items = visible.slice(cursor, cursor + limit).map((doc) => ({
     ...doc,
-    ocrJobs: store.jobs.filter((j) => j.documentId === doc.id && j.jobType === "ocr").length,
+    ocrJobs: ocrJobCounts.get(doc.id) ?? 0,
   }))
   const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
 
@@ -221,6 +227,10 @@ export async function POST(request: Request) {
     } else {
       await repos.documents.create(inMemoryDoc)
     }
+    const jobsForDocument = store.jobs.filter((job) => job.documentId === write.docId)
+    for (const job of jobsForDocument) {
+      await repos.jobs.create(job)
+    }
     const doc = (await repos.documents.get(write.docId)) ?? inMemoryDoc
     if (!doc) {
       return NextResponse.json({ error: "document write failed" }, { status: 500 })
@@ -237,7 +247,8 @@ export async function POST(request: Request) {
       action: "ingest",
       doc,
       reused: write.reused,
-      ocrJobs: store.jobs.filter((j) => j.documentId === doc.id && j.jobType === "ocr").length,
+      ocrJobs: (await repos.jobs.listByDocument(doc.id)).filter((job) => job.jobType === "ocr")
+        .length,
     }
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

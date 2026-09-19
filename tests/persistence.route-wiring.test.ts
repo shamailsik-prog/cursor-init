@@ -95,6 +95,15 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       get: vi.fn().mockResolvedValue(null),
       update: vi.fn().mockResolvedValue(null),
     },
+    jobs: {
+      create: vi.fn(),
+      listByFirm: vi.fn().mockResolvedValue([]),
+      listByDocument: vi.fn().mockResolvedValue([]),
+    },
+    workflowEvents: {
+      append: vi.fn(),
+      listByFirm: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 

@@ -12,7 +12,6 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import {
   applyReviewDecision,
   assignReviewer,
-  listWorkflowTimeline,
   transitionWorkflowStatus,
 } from "@/services/d1-7/documentWorkflow"
 
@@ -78,6 +77,17 @@ function canViewWorkflowDocument(
   return user.role !== "client" && user.role !== "intern"
 }
 
+async function persistWorkflowEventsSince(
+  repos: Awaited<ReturnType<typeof getRuntimeRepositories>>,
+  store: SpineStore,
+  startIndex: number
+): Promise<void> {
+  const newEvents = store.workflowEvents.slice(startIndex)
+  for (const event of newEvents) {
+    await repos.workflowEvents.append(event)
+  }
+}
+
 export async function GET(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
@@ -97,14 +107,36 @@ export async function GET(request: Request) {
       if (!matterId) {
         return NextResponse.json({ error: "matterId is required for timeline view" }, { status: 400 })
       }
-      const timeline = listWorkflowTimeline(store, userId, matterId, limit, cursor)
+      const user = store.users.get(userId)
+      if (!user) throw new Error("unknown user")
+      const matter = store.matters.get(matterId)
+      if (!matter) throw new Error("unknown matter")
+      if (matter.firmId !== user.firmId) throw new Error("cross-firm matter denied")
+      if (!store.members.has(store.memberKey(matterId, user.id))) {
+        throw new Error("not a matter member")
+      }
+      const timelineRows = (await repos.workflowEvents.listByFirm(user.firmId))
+        .filter((event) => event.matterId === matterId)
+        .sort((a, b) => a.at - b.at)
+      const paged = timelineRows.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + paged.length < timelineRows.length ? String(cursor + paged.length) : null
       return NextResponse.json({
         view: "timeline",
-        items: timeline.items,
-        total: timeline.total,
+        items: paged.map((event) => ({
+          id: event.id,
+          documentId: event.documentId,
+          action: event.action,
+          status: event.status,
+          classification: event.classification,
+          actorId: event.actorId,
+          reason: event.reason,
+          at: event.at,
+        })),
+        total: timelineRows.length,
         limit,
         cursor,
-        nextCursor: timeline.nextCursor,
+        nextCursor,
       })
     }
 
@@ -202,6 +234,7 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const priorEvents = store.workflowEvents.length
       const row = transitionWorkflowStatus(store, {
         actorId: parsed.actorId,
         documentId: parsed.documentId,
@@ -209,6 +242,7 @@ export async function POST(request: Request) {
         reason: parsed.reason,
       })
       await repos.workflow.createOrUpdate(row)
+      await persistWorkflowEventsSince(repos, store, priorEvents)
       const payload = { action: "transition", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -221,12 +255,14 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const priorEvents = store.workflowEvents.length
       const row = assignReviewer(store, {
         actorId: parsed.actorId,
         documentId: parsed.documentId,
         reviewerId: parsed.reviewerId,
       })
       await repos.workflow.createOrUpdate(row)
+      await persistWorkflowEventsSince(repos, store, priorEvents)
       const payload = { action: "assign_reviewer", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -239,6 +275,7 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const priorEvents = store.workflowEvents.length
       const row = applyReviewDecision(store, {
         actorId: parsed.actorId,
         documentId: parsed.documentId,
@@ -247,6 +284,7 @@ export async function POST(request: Request) {
         reason: parsed.reason,
       })
       await repos.workflow.createOrUpdate(row)
+      await persistWorkflowEventsSince(repos, store, priorEvents)
       const updatedDoc = store.documents.get(parsed.documentId)
       if (updatedDoc) {
         const persistedDoc = await repos.documents.get(updatedDoc.id)

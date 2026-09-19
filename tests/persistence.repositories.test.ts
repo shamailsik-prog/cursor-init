@@ -53,6 +53,16 @@ describe("Firestore repository adapters", () => {
       })
       const doc = await repos.documents.get("doc_1")
       expect(doc?.contentHash).toBe("hash-1")
+      await repos.jobs.create({
+        id: "job_1",
+        firmId: "firmA",
+        jobType: "ocr",
+        documentId: "doc_1",
+        classification: "internal",
+        idempotencyKey: "idem-1",
+      })
+      const docJobs = await repos.jobs.listByDocument("doc_1")
+      expect(docJobs.some((row) => row.id === "job_1")).toBe(true)
 
       await repos.drafts.create({
         id: "drf_1",
@@ -79,6 +89,20 @@ describe("Firestore repository adapters", () => {
       })
       const workflow = await repos.workflow.get("doc_1")
       expect(workflow?.status).toBe("review_required")
+      await repos.workflowEvents.append({
+        id: "wfe_1",
+        documentId: "doc_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        actorId: "associate_a",
+        action: "status_transition",
+        status: "review_required",
+        classification: "internal",
+        reason: "moved to review",
+        at: 4,
+      })
+      const events = await repos.workflowEvents.listByFirm("firmA")
+      expect(events.some((row) => row.id === "wfe_1")).toBe(true)
 
       await repos.filings.create({
         id: "pkg_1",

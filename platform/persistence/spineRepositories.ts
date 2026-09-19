@@ -2,8 +2,10 @@ import type {
   DocumentRecord,
   DraftRecord,
   FilingPackage,
+  Job,
   Matter,
   DocumentWorkflow,
+  WorkflowEvent,
   SpineStore,
 } from "@/platform/spine/store"
 
@@ -40,12 +42,25 @@ export type FilingRepository = {
   listByFirm(firmId: string): Promise<FilingPackage[]>
 }
 
+export type JobRepository = {
+  create(row: Job): Promise<void>
+  listByFirm(firmId: string): Promise<Job[]>
+  listByDocument(documentId: string): Promise<Job[]>
+}
+
+export type WorkflowEventRepository = {
+  append(row: WorkflowEvent): Promise<void>
+  listByFirm(firmId: string): Promise<WorkflowEvent[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   documents: DocumentRepository
   drafts: DraftRepository
   workflow: WorkflowRepository
   filings: FilingRepository
+  jobs: JobRepository
+  workflowEvents: WorkflowEventRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -124,6 +139,31 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.filingPackages.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    jobs: {
+      async create(row) {
+        const existingIndex = store.jobs.findIndex((job) => job.id === row.id)
+        if (existingIndex >= 0) {
+          store.jobs[existingIndex] = row
+          return
+        }
+        store.jobs.push(row)
+      },
+      async listByFirm(firmId) {
+        return store.jobs.filter((job) => job.firmId === firmId)
+      },
+      async listByDocument(documentId) {
+        return store.jobs.filter((job) => job.documentId === documentId)
+      },
+    },
+    workflowEvents: {
+      async append(row) {
+        if (store.workflowEvents.some((event) => event.id === row.id)) return
+        store.workflowEvents.push(row)
+      },
+      async listByFirm(firmId) {
+        return store.workflowEvents.filter((event) => event.firmId === firmId)
       },
     },
   }
