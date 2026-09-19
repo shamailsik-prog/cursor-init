@@ -829,6 +829,57 @@ describe("GET/POST /api/d4/filings", () => {
     expect(deferredJson.result.digest.status).toBe("deferred")
     expect(typeof deferredJson.result.digest.deferUntil).toBe("number")
 
+    const assignPrimary = await post(
+      {
+        action: "assign_primary_owner",
+        actorId: "partner_a",
+        packageId,
+        primaryOwnerId: "partner_a",
+        activeWindowHours: 12,
+        note: "Partner assigned as primary escalation owner",
+      },
+      "98955047-1cdf-415a-9f9b-57df46e47671"
+    )
+    expect(assignPrimary.status).toBe(200)
+    const assignPrimaryJson = (await assignPrimary.json()) as {
+      result: { rota: { primaryOwnerId: string | null; status: string } }
+    }
+    expect(assignPrimaryJson.result.rota.primaryOwnerId).toBe("partner_a")
+    expect(assignPrimaryJson.result.rota.status).toBe("active")
+
+    const setBackup = await post(
+      {
+        action: "set_backup_owner",
+        actorId: "partner_a",
+        packageId,
+        backupOwnerId: "partner_a",
+        note: "Backup assignment captured for deterministic handoff flow",
+      },
+      "45620d0d-4b2f-4f05-bddd-9e4c7060a615"
+    )
+    expect(setBackup.status).toBe(200)
+    const setBackupJson = (await setBackup.json()) as {
+      result: { rota: { backupOwnerId: string | null; handoffRequired: boolean } }
+    }
+    expect(setBackupJson.result.rota.backupOwnerId).toBe("partner_a")
+    expect(setBackupJson.result.rota.handoffRequired).toBe(true)
+
+    const acknowledgeHandoff = await post(
+      {
+        action: "acknowledge_handoff",
+        actorId: "partner_a",
+        packageId,
+        note: "Escalation handoff attested by assigned owner",
+      },
+      "a4c0b77b-a412-460d-9bf4-f57ca5f9feb8"
+    )
+    expect(acknowledgeHandoff.status).toBe(200)
+    const acknowledgeHandoffJson = (await acknowledgeHandoff.json()) as {
+      result: { rota: { status: string; handoffRequired: boolean } }
+    }
+    expect(acknowledgeHandoffJson.result.rota.status).toBe("handoff_acknowledged")
+    expect(acknowledgeHandoffJson.result.rota.handoffRequired).toBe(false)
+
     const delivered = await post(
       {
         action: "confirm_delivered",
@@ -871,6 +922,22 @@ describe("GET/POST /api/d4/filings", () => {
     expect(clearedDigestJson.result.digest.status).toBe("cleared")
     expect(clearedDigestJson.result.digest.breachReasons).toHaveLength(0)
 
+    const revokedRota = await post(
+      {
+        action: "revoke_assignment",
+        actorId: "partner_a",
+        packageId,
+        note: "Escalation assignment revoked after closure",
+      },
+      "aabce5a0-61ca-443e-8359-52ec764bca87"
+    )
+    expect(revokedRota.status).toBe(200)
+    const revokedRotaJson = (await revokedRota.json()) as {
+      result: { rota: { status: string; primaryOwnerId: string | null } }
+    }
+    expect(revokedRotaJson.result.rota.status).toBe("revoked")
+    expect(revokedRotaJson.result.rota.primaryOwnerId).toBe(null)
+
     const transportEvidenceView = await get(
       new URLSearchParams({
         view: "transport_execution",
@@ -912,6 +979,25 @@ describe("GET/POST /api/d4/filings", () => {
       digestViewJson.items.some(
         (row) => row.packageId === packageId && row.status === "cleared"
       )
+    ).toBe(true)
+
+    const rotaView = await get(
+      new URLSearchParams({
+        view: "escalation_owner_rota",
+        userId: "associate_a",
+        matterId,
+        packageId,
+        rotaStatus: "revoked",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(rotaView.status).toBe(200)
+    const rotaViewJson = (await rotaView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      rotaViewJson.items.some((row) => row.packageId === packageId && row.status === "revoked")
     ).toBe(true)
   })
 

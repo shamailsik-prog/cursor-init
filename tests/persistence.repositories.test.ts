@@ -501,6 +501,35 @@ describe("Firestore repository adapters", () => {
       expect(digestsByFirm.some((row) => row.id === "digest:pkg_1")).toBe(true)
       const digestsByPackage = await repos.filingSubmissionSlaDigests.listByPackageId("pkg_1")
       expect(digestsByPackage.some((row) => row.id === "digest:pkg_1")).toBe(true)
+      await repos.filingEscalationOwnerRota.upsert({
+        id: "rota:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "active",
+        primaryOwnerId: "partner_a",
+        backupOwnerId: "partner_b",
+        activeWindowStartAt: 34,
+        activeWindowEndAt: 35,
+        handoffRequired: true,
+        handoffAcknowledgedBy: null,
+        handoffAcknowledgedAt: null,
+        lastAssignedBy: "partner_a",
+        lastAssignedAt: 34,
+        revokedBy: null,
+        revokedAt: null,
+        linkedExceptionId: "exception:pkg_1",
+        linkedDigestId: "digest:pkg_1",
+        notes: ["handoff pending"],
+        updatedAt: 36,
+      })
+      const rota = await repos.filingEscalationOwnerRota.get("rota:pkg_1")
+      expect(rota?.primaryOwnerId).toBe("partner_a")
+      const rotaByFirm = await repos.filingEscalationOwnerRota.listByFirm("firmA")
+      expect(rotaByFirm.some((row) => row.id === "rota:pkg_1")).toBe(true)
+      const rotaByPackage = await repos.filingEscalationOwnerRota.listByPackageId("pkg_1")
+      expect(rotaByPackage.some((row) => row.id === "rota:pkg_1")).toBe(true)
     })
   })
 })

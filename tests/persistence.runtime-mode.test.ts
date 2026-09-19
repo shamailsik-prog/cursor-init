@@ -564,6 +564,57 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(deferDigest.status).toBe(200)
+      const assignPrimaryOwner = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f5ce3e5d-6f0d-4de1-af63-5dd8612de0ea",
+          },
+          body: JSON.stringify({
+            action: "assign_primary_owner",
+            actorId: "partner_a",
+            packageId,
+            primaryOwnerId: "partner_a",
+            activeWindowHours: 12,
+            note: "runtime primary escalation owner assigned",
+          }),
+        })
+      )
+      expect(assignPrimaryOwner.status).toBe(200)
+      const setBackupOwner = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f0aa39d8-8d56-4f72-b74f-1063dd0ad1ea",
+          },
+          body: JSON.stringify({
+            action: "set_backup_owner",
+            actorId: "partner_a",
+            packageId,
+            backupOwnerId: "partner_a",
+            note: "runtime backup escalation owner set",
+          }),
+        })
+      )
+      expect(setBackupOwner.status).toBe(200)
+      const acknowledgeHandoff = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "200344de-c464-44a9-9f41-0f8400ec32d3",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_handoff",
+            actorId: "partner_a",
+            packageId,
+            note: "runtime owner handoff acknowledged",
+          }),
+        })
+      )
+      expect(acknowledgeHandoff.status).toBe(200)
       const confirmDelivered = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -600,6 +651,22 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(clearDigest.status).toBe(200)
+      const revokeAssignment = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1af90fdd-c87d-4dca-b0bc-f494773ca9c4",
+          },
+          body: JSON.stringify({
+            action: "revoke_assignment",
+            actorId: "partner_a",
+            packageId,
+            note: "runtime escalation assignment revoked",
+          }),
+        })
+      )
+      expect(revokeAssignment.status).toBe(200)
 
       getRuntimeStore().filingPacketArtifacts = new Map()
       getRuntimeStore().filingDispatchQueue = new Map()
@@ -609,6 +676,7 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingSubmissionExceptions = new Map()
       getRuntimeStore().filingTransportExecutionEvidence = new Map()
       getRuntimeStore().filingSubmissionSlaDigests = new Map()
+      getRuntimeStore().filingEscalationOwnerRota = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -736,6 +804,20 @@ describe("Runtime persistence mode", () => {
           (item) => item.packageId === packageId && item.status === "cleared"
         )
       ).toBe(true)
+      const rehydratedRota = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=escalation_owner_rota&userId=associate_a&matterId=${matterId}&packageId=${packageId}&rotaStatus=revoked&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedRota.status).toBe(200)
+      const rehydratedRotaJson = (await rehydratedRota.json()) as {
+        items: Array<{ packageId: string; status: string }>
+      }
+      expect(
+        rehydratedRotaJson.items.some(
+          (item) => item.packageId === packageId && item.status === "revoked"
+        )
+      ).toBe(true)
       await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
         id: "transport:pkg_firmB:1",
         firmId: "firmB",
@@ -780,6 +862,29 @@ describe("Runtime persistence mode", () => {
         lastEvaluatedAt: Date.now(),
         updatedAt: Date.now(),
       })
+      await setDoc(doc(ctx.firestore(), "filing_escalation_owner_rota", "rota:pkg_firmB"), {
+        id: "rota:pkg_firmB",
+        firmId: "firmB",
+        packageId: "pkg_firmB",
+        matterId: "mat_firmB",
+        classification: "internal",
+        status: "active",
+        primaryOwnerId: "partner_b",
+        backupOwnerId: null,
+        activeWindowStartAt: Date.now(),
+        activeWindowEndAt: Date.now() + 2 * 60 * 60 * 1000,
+        handoffRequired: false,
+        handoffAcknowledgedBy: null,
+        handoffAcknowledgedAt: null,
+        lastAssignedBy: "partner_b",
+        lastAssignedAt: Date.now(),
+        revokedBy: null,
+        revokedAt: null,
+        linkedExceptionId: "exception:pkg_firmB",
+        linkedDigestId: "digest:pkg_firmB",
+        notes: ["firmB rota row"],
+        updatedAt: Date.now(),
+      })
       const firmAScopeEvidence = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
@@ -800,6 +905,16 @@ describe("Runtime persistence mode", () => {
         items: Array<{ packageId: string }>
       }
       expect(firmAScopeDigestJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
+      const firmAScopeRota = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=escalation_owner_rota&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeRota.status).toBe(200)
+      const firmAScopeRotaJson = (await firmAScopeRota.json()) as {
+        items: Array<{ packageId: string }>
+      }
+      expect(firmAScopeRotaJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -904,6 +1019,34 @@ describe("Runtime persistence mode", () => {
             item.target === `digest:${packageId}`
         )
       ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_escalation_rota_assign_primary" &&
+            item.target === `rota:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_escalation_rota_set_backup" &&
+            item.target === `rota:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_escalation_rota_acknowledge_handoff" &&
+            item.target === `rota:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_escalation_rota_revoke_assignment" &&
+            item.target === `rota:${packageId}`
+        )
+      ).toBe(true)
 
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
@@ -988,6 +1131,15 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.packageId === packageId &&
             entry.data()?.status === "cleared"
+        )
+      ).toBe(true)
+      const dbEscalationRota = await getDocs(collection(ctx.firestore(), "filing_escalation_owner_rota"))
+      expect(
+        dbEscalationRota.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.status === "revoked"
         )
       ).toBe(true)
     })
