@@ -385,10 +385,50 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(annexureReady.status).toBe(200)
+      const recordReceipt = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "4d90cf14-dfb8-4e9a-87a1-a09df8617f8a",
+          },
+          body: JSON.stringify({
+            action: "record_submission_receipt",
+            actorId: "clerk_a",
+            packageId,
+            courtChannel: "efiling_portal_stub",
+            dispatchOutcome: "retry_scheduled",
+            submissionReference: "RUNTIME-SUB-001",
+            failureReason: "timeout",
+            retryHint: "retry after court clerk callback",
+            note: "runtime deterministic submission attempt",
+          }),
+        })
+      )
+      expect(recordReceipt.status).toBe(200)
+      const reconcileSubmission = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "0ce9cc6f-e3df-46ec-89f6-f6f30c3763af",
+          },
+          body: JSON.stringify({
+            action: "reconcile_submission",
+            actorId: "partner_a",
+            packageId,
+            status: "needs_retry",
+            note: "partner reconciliation after deterministic failure",
+          }),
+        })
+      )
+      expect(reconcileSubmission.status).toBe(200)
 
       getRuntimeStore().filingPacketArtifacts = new Map()
       getRuntimeStore().filingDispatchQueue = new Map()
       getRuntimeStore().filingAnnexures = new Map()
+      getRuntimeStore().filingSubmissionReceipts = new Map()
+      getRuntimeStore().filingSubmissionReconciliation = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -442,6 +482,34 @@ describe("Runtime persistence mode", () => {
             item.submissionTransportBoundary === "todo_firm_external_transport_blocked"
         )
       ).toBe(true)
+      const rehydratedReceipts = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=submission_receipts&userId=associate_a&matterId=${matterId}&dispatchOutcome=retry_scheduled&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedReceipts.status).toBe(200)
+      const rehydratedReceiptsJson = (await rehydratedReceipts.json()) as {
+        items: Array<{ packageId: string; submissionReference: string }>
+      }
+      expect(
+        rehydratedReceiptsJson.items.some(
+          (item) => item.packageId === packageId && item.submissionReference === "RUNTIME-SUB-001"
+        )
+      ).toBe(true)
+      const rehydratedReconciliation = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=submission_reconciliation&userId=associate_a&matterId=${matterId}&reconciliationStatus=needs_retry&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedReconciliation.status).toBe(200)
+      const rehydratedReconciliationJson = (await rehydratedReconciliation.json()) as {
+        items: Array<{ packageId: string; status: string }>
+      }
+      expect(
+        rehydratedReconciliationJson.items.some(
+          (item) => item.packageId === packageId && item.status === "needs_retry"
+        )
+      ).toBe(true)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -462,6 +530,20 @@ describe("Runtime persistence mode", () => {
         auditViewJson.items.some(
           (item) =>
             item.action === "filing_annexure_checkpoint" && item.target === `annexure:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_submission_receipt_record" &&
+            item.target === `receipt:${packageId}:1`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_submission_reconcile" &&
+            item.target === `reconcile:${packageId}`
         )
       ).toBe(true)
 
@@ -495,6 +577,27 @@ describe("Runtime persistence mode", () => {
             entry.data()?.packageId === packageId &&
             entry.data()?.generationStatus === "ready" &&
             entry.data()?.submissionTransportBoundary === "todo_firm_external_transport_blocked"
+        )
+      ).toBe(true)
+      const dbReceipts = await getDocs(collection(ctx.firestore(), "filing_submission_receipts"))
+      expect(
+        dbReceipts.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.dispatchOutcome === "retry_scheduled" &&
+            entry.data()?.submissionReference === "RUNTIME-SUB-001"
+        )
+      ).toBe(true)
+      const dbReconciliation = await getDocs(
+        collection(ctx.firestore(), "filing_submission_reconciliation")
+      )
+      expect(
+        dbReconciliation.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.status === "needs_retry"
         )
       ).toBe(true)
     })

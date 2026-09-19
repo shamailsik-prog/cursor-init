@@ -5,6 +5,8 @@ import type {
   FilingDispatchQueueRow,
   FilingPackage,
   FilingPacketArtifactRow,
+  FilingSubmissionReceiptRow,
+  FilingSubmissionReconciliationRow,
   FollowUp,
   Intimation,
   Job,
@@ -101,6 +103,20 @@ export type FilingAnnexureRepository = {
   listByPackageId(packageId: string): Promise<FilingAnnexureRow[]>
 }
 
+export type FilingSubmissionReceiptRepository = {
+  upsert(row: FilingSubmissionReceiptRow): Promise<void>
+  get(id: string): Promise<FilingSubmissionReceiptRow | null>
+  listByFirm(firmId: string): Promise<FilingSubmissionReceiptRow[]>
+  listByPackageId(packageId: string): Promise<FilingSubmissionReceiptRow[]>
+}
+
+export type FilingSubmissionReconciliationRepository = {
+  upsert(row: FilingSubmissionReconciliationRow): Promise<void>
+  get(id: string): Promise<FilingSubmissionReconciliationRow | null>
+  listByFirm(firmId: string): Promise<FilingSubmissionReconciliationRow[]>
+  listByPackageId(packageId: string): Promise<FilingSubmissionReconciliationRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -167,6 +183,8 @@ export type SpineRepositories = {
   filingPacketArtifacts: FilingPacketArtifactRepository
   filingDispatchQueue: FilingDispatchQueueRepository
   filingAnnexures: FilingAnnexureRepository
+  filingSubmissionReceipts: FilingSubmissionReceiptRepository
+  filingSubmissionReconciliation: FilingSubmissionReconciliationRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -351,6 +369,34 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingAnnexures.values()].filter((row) => row.packageId === packageId)
+      },
+    },
+    filingSubmissionReceipts: {
+      async upsert(row) {
+        store.filingSubmissionReceipts.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingSubmissionReceipts.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingSubmissionReceipts.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingSubmissionReceipts.values()].filter((row) => row.packageId === packageId)
+      },
+    },
+    filingSubmissionReconciliation: {
+      async upsert(row) {
+        store.filingSubmissionReconciliation.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingSubmissionReconciliation.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingSubmissionReconciliation.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingSubmissionReconciliation.values()].filter((row) => row.packageId === packageId)
       },
     },
     jobs: {

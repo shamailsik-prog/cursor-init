@@ -373,6 +373,48 @@ describe("Firestore repository adapters", () => {
       expect(annexuresByFirm.some((row) => row.id === "annexure:pkg_1")).toBe(true)
       const annexuresByPackage = await repos.filingAnnexures.listByPackageId("pkg_1")
       expect(annexuresByPackage.some((row) => row.id === "annexure:pkg_1")).toBe(true)
+      await repos.filingSubmissionReceipts.upsert({
+        id: "receipt:pkg_1:1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        attemptNo: 1,
+        courtChannel: "efiling_portal_stub",
+        dispatchOutcome: "retry_scheduled",
+        submissionReference: "ref-001",
+        failureReason: "timeout",
+        retryHint: "retry in 1h",
+        recordedBy: "clerk_a",
+        recordedAt: 25,
+        submissionTransportBoundary: "todo_firm_external_transport_blocked",
+      })
+      const receipt = await repos.filingSubmissionReceipts.get("receipt:pkg_1:1")
+      expect(receipt?.dispatchOutcome).toBe("retry_scheduled")
+      const receiptsByFirm = await repos.filingSubmissionReceipts.listByFirm("firmA")
+      expect(receiptsByFirm.some((row) => row.id === "receipt:pkg_1:1")).toBe(true)
+      const receiptsByPackage = await repos.filingSubmissionReceipts.listByPackageId("pkg_1")
+      expect(receiptsByPackage.some((row) => row.id === "receipt:pkg_1:1")).toBe(true)
+      await repos.filingSubmissionReconciliation.upsert({
+        id: "reconcile:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        totalAttempts: 1,
+        latestReceiptId: "receipt:pkg_1:1",
+        latestSubmissionReference: "ref-001",
+        latestDispatchOutcome: "retry_scheduled",
+        status: "open",
+        notes: ["awaiting retry"],
+        updatedAt: 26,
+      })
+      const reconciliation = await repos.filingSubmissionReconciliation.get("reconcile:pkg_1")
+      expect(reconciliation?.latestReceiptId).toBe("receipt:pkg_1:1")
+      const reconciliationByFirm = await repos.filingSubmissionReconciliation.listByFirm("firmA")
+      expect(reconciliationByFirm.some((row) => row.id === "reconcile:pkg_1")).toBe(true)
+      const reconciliationByPackage = await repos.filingSubmissionReconciliation.listByPackageId("pkg_1")
+      expect(reconciliationByPackage.some((row) => row.id === "reconcile:pkg_1")).toBe(true)
     })
   })
 })
