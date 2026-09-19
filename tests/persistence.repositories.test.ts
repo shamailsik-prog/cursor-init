@@ -124,6 +124,18 @@ describe("Firestore repository adapters", () => {
       const followUps = await repos.followUps.listByFirm("firmA")
       expect(followUps.some((row) => row.id === "fu_1" && row.status === "resolved")).toBe(true)
 
+      await repos.intimations.upsert({
+        id: "int_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        notifiedAt: 10,
+        confirmedAt: null,
+      })
+      const intimation = await repos.intimations.get("int_1")
+      expect(intimation?.matterId).toBe("mat_1")
+      const matterIntimations = await repos.intimations.listByMatter("mat_1")
+      expect(matterIntimations.some((row) => row.id === "int_1")).toBe(true)
+
       await repos.filings.create({
         id: "pkg_1",
         firmId: "firmA",

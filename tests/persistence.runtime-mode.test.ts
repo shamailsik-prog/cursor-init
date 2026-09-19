@@ -484,4 +484,74 @@ describe("Runtime persistence mode", () => {
       expect(dbWorkflow.data()?.status).toBe("complete")
     })
   })
+
+  it("persists follow-up and intimation creation at source through matters route", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const matterId = await createMatterViaRoute(
+        "Persisted source follow-up matter",
+        "c80ce346-af03-4e18-8d29-8a179fd95bd3"
+      )
+
+      const confirmRes = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "7c7f14a6-499d-49f0-b6dc-2868e812f9ab",
+          },
+          body: JSON.stringify({
+            action: "confirm_engagement",
+            actorId: "partner_a",
+            matterId,
+          }),
+        })
+      )
+      expect(confirmRes.status).toBe(200)
+
+      const rejectCaseNumberRes = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b14a8ce0-7909-4729-8fef-3e066fd093f3",
+          },
+          body: JSON.stringify({
+            action: "record_case_number",
+            actorId: "partner_a",
+            matterId,
+            raw: "CP 1234",
+            courtId: "SHC",
+          }),
+        })
+      )
+      expect(rejectCaseNumberRes.status).toBe(200)
+
+      const followUpsBeforeQueue = await getDocs(collection(ctx.firestore(), "follow_ups"))
+      const followUpRow = followUpsBeforeQueue.docs.find(
+        (entry) => entry.data()?.matterId === matterId && entry.data()?.kind === "case_number_reject"
+      )
+      expect(followUpRow?.id).toBeTruthy()
+
+      const intimationRows = await getDocs(collection(ctx.firestore(), "intimation_register"))
+      expect(intimationRows.docs.some((entry) => entry.data()?.matterId === matterId)).toBe(true)
+
+      // Clear in-memory follow ups to prove court-ops can hydrate from persistent source.
+      getRuntimeStore().followUps = []
+      const queueRes = await courtOpsGet(
+        new Request(
+          `http://127.0.0.1/api/d2/court-ops?userId=associate_a&matterId=${matterId}&limit=10&cursor=0`
+        )
+      )
+      expect(queueRes.status).toBe(200)
+      const queueJson = (await queueRes.json()) as {
+        items: Array<{ queueType: string; id: string }>
+      }
+      expect(
+        queueJson.items.some(
+          (item) => item.queueType === "follow_up" && item.id === followUpRow?.id
+        )
+      ).toBe(true)
+    })
+  })
 })
