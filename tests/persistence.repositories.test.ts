@@ -1,0 +1,103 @@
+import { readFileSync } from "node:fs"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import {
+  initializeTestEnvironment,
+  type RulesTestEnvironment,
+} from "@firebase/rules-unit-testing"
+import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
+
+const RULES = readFileSync("firestore.rules", "utf8")
+
+let env: RulesTestEnvironment
+
+beforeAll(async () => {
+  env = await initializeTestEnvironment({
+    projectId: "sikander-persistence-adapters",
+    firestore: { rules: RULES },
+  })
+})
+
+afterAll(async () => {
+  await env.cleanup()
+})
+
+describe("Firestore repository adapters", () => {
+  it("round-trips matters/documents/drafts/workflow/filings without secrets (emulator)", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      const repos = createFirestoreRepositories(db)
+
+      await repos.matters.create({
+        id: "mat_1",
+        firmId: "firmA",
+        clientId: "client_a",
+        title: "Persisted matter",
+        courtId: "SHC",
+        caseNumber: null,
+        caseNumberStatus: "pending",
+        status: "engagement_unconfirmed",
+        classification: "internal",
+      })
+      const matter = await repos.matters.get("mat_1")
+      expect(matter?.title).toBe("Persisted matter")
+      const matterRows = await repos.matters.listByFirm("firmA")
+      expect(matterRows.some((row) => row.id === "mat_1")).toBe(true)
+
+      await repos.documents.create({
+        id: "doc_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        contentHash: "hash-1",
+        sourceChannel: "web",
+        classification: "internal",
+      })
+      const doc = await repos.documents.get("doc_1")
+      expect(doc?.contentHash).toBe("hash-1")
+
+      await repos.drafts.create({
+        id: "drf_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        templateId: "motion",
+        title: "Draft 1",
+        body: "Body",
+        classification: "internal",
+        createdBy: "associate_a",
+        createdAt: 1,
+        status: "draft",
+      })
+      const draft = await repos.drafts.get("drf_1")
+      expect(draft?.title).toBe("Draft 1")
+
+      await repos.workflow.createOrUpdate({
+        documentId: "doc_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        status: "review_required",
+        reviewerId: "associate_a",
+        updatedAt: 2,
+      })
+      const workflow = await repos.workflow.get("doc_1")
+      expect(workflow?.status).toBe("review_required")
+
+      await repos.filings.create({
+        id: "pkg_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        draftId: "drf_1",
+        classification: "internal",
+        citationStatus: "OK",
+        temporalAllOk: true,
+        status: "pending_partner_approval",
+        createdBy: "associate_a",
+        createdAt: 3,
+        approvedBy: null,
+        approvalReason: null,
+      })
+      const filing = await repos.filings.get("pkg_1")
+      expect(filing?.status).toBe("pending_partner_approval")
+      const filings = await repos.filings.listByFirm("firmA")
+      expect(filings.some((row) => row.id === "pkg_1")).toBe(true)
+    })
+  })
+})
