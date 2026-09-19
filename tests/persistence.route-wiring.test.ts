@@ -43,6 +43,7 @@ const baseStore = {
   filingTransportExecutionEvidence: new Map(),
   filingSubmissionSlaDigests: new Map(),
   filingEscalationOwnerRota: new Map(),
+  filingEscalationWorkloadDigests: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -386,6 +387,37 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationWorkloadDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workload:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "open_alert",
+          alertReasons: ["handoff_lag"],
+          ownerId: "partner_a",
+          ownerLoadCount: 4,
+          ownerLoadThreshold: 3,
+          handoffLagMs: 3600000,
+          handoffLagBucket: "lt_4h",
+          snoozeUntil: null,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          rebalancedBy: null,
+          rebalancedAt: null,
+          linkedRotaId: "rota:pkg_repo",
+          linkedDigestId: "digest:pkg_repo",
+          notes: ["repo workload digest row"],
+          lastEvaluatedAt: 14,
+          updatedAt: 14,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -625,6 +657,19 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
     expect(json.items.map((item) => item.id)).toContain("rota:pkg_repo")
+    expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings escalation workload digest view GET uses repository filingEscalationWorkloadDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=escalation_workload_digests&userId=associate_a&matterId=mat_1&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workload:pkg_repo")
     expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
   })
 

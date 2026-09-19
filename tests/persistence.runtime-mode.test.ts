@@ -599,6 +599,56 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(setBackupOwner.status).toBe(200)
+      const acknowledgeWorkload = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f385f5ca-fa18-4eb5-8245-3554d5b6dad4",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_owner_drift",
+            actorId: "partner_a",
+            packageId,
+            note: "runtime workload drift acknowledged",
+          }),
+        })
+      )
+      expect(acknowledgeWorkload.status).toBe(200)
+      const snoozeWorkload = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "c300b45b-242d-467f-b7a5-fdcbfb0e6915",
+          },
+          body: JSON.stringify({
+            action: "snooze_workload_alert",
+            actorId: "partner_a",
+            packageId,
+            snoozeHours: 4,
+            note: "runtime workload alert snoozed",
+          }),
+        })
+      )
+      expect(snoozeWorkload.status).toBe(200)
+      const rebalanceWorkload = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "0f7363df-cd6f-4911-98e4-52a822a3ea9d",
+          },
+          body: JSON.stringify({
+            action: "rebalance_assignment",
+            actorId: "partner_a",
+            packageId,
+            newPrimaryOwnerId: "partner_a",
+            note: "runtime workload assignment rebalanced",
+          }),
+        })
+      )
+      expect(rebalanceWorkload.status).toBe(200)
       const acknowledgeHandoff = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -677,6 +727,7 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingTransportExecutionEvidence = new Map()
       getRuntimeStore().filingSubmissionSlaDigests = new Map()
       getRuntimeStore().filingEscalationOwnerRota = new Map()
+      getRuntimeStore().filingEscalationWorkloadDigests = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -818,6 +869,20 @@ describe("Runtime persistence mode", () => {
           (item) => item.packageId === packageId && item.status === "revoked"
         )
       ).toBe(true)
+      const rehydratedWorkload = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=escalation_workload_digests&userId=associate_a&matterId=${matterId}&packageId=${packageId}&workloadStatus=cleared&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedWorkload.status).toBe(200)
+      const rehydratedWorkloadJson = (await rehydratedWorkload.json()) as {
+        items: Array<{ packageId: string; status: string }>
+      }
+      expect(
+        rehydratedWorkloadJson.items.some(
+          (item) => item.packageId === packageId && item.status === "cleared"
+        )
+      ).toBe(true)
       await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
         id: "transport:pkg_firmB:1",
         firmId: "firmB",
@@ -885,6 +950,30 @@ describe("Runtime persistence mode", () => {
         notes: ["firmB rota row"],
         updatedAt: Date.now(),
       })
+      await setDoc(doc(ctx.firestore(), "filing_escalation_workload_digests", "workload:pkg_firmB"), {
+        id: "workload:pkg_firmB",
+        firmId: "firmB",
+        packageId: "pkg_firmB",
+        matterId: "mat_firmB",
+        classification: "internal",
+        status: "open_alert",
+        alertReasons: ["unassigned_breach"],
+        ownerId: null,
+        ownerLoadCount: 0,
+        ownerLoadThreshold: 3,
+        handoffLagMs: null,
+        handoffLagBucket: "none",
+        snoozeUntil: null,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        rebalancedBy: null,
+        rebalancedAt: null,
+        linkedRotaId: "rota:pkg_firmB",
+        linkedDigestId: "digest:pkg_firmB",
+        notes: ["firmB workload row"],
+        lastEvaluatedAt: Date.now(),
+        updatedAt: Date.now(),
+      })
       const firmAScopeEvidence = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
@@ -915,6 +1004,16 @@ describe("Runtime persistence mode", () => {
         items: Array<{ packageId: string }>
       }
       expect(firmAScopeRotaJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
+      const firmAScopeWorkload = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=escalation_workload_digests&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeWorkload.status).toBe(200)
+      const firmAScopeWorkloadJson = (await firmAScopeWorkload.json()) as {
+        items: Array<{ packageId: string }>
+      }
+      expect(firmAScopeWorkloadJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -1047,6 +1146,27 @@ describe("Runtime persistence mode", () => {
             item.target === `rota:${packageId}`
         )
       ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_escalation_workload_acknowledge" &&
+            item.target === `workload:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_escalation_workload_snooze" &&
+            item.target === `workload:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_escalation_workload_rebalance" &&
+            item.target === `workload:${packageId}`
+        )
+      ).toBe(true)
 
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
@@ -1140,6 +1260,17 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.packageId === packageId &&
             entry.data()?.status === "revoked"
+        )
+      ).toBe(true)
+      const dbWorkloadDigests = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_workload_digests")
+      )
+      expect(
+        dbWorkloadDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.status === "cleared"
         )
       ).toBe(true)
     })

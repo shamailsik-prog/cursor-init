@@ -530,6 +530,36 @@ describe("Firestore repository adapters", () => {
       expect(rotaByFirm.some((row) => row.id === "rota:pkg_1")).toBe(true)
       const rotaByPackage = await repos.filingEscalationOwnerRota.listByPackageId("pkg_1")
       expect(rotaByPackage.some((row) => row.id === "rota:pkg_1")).toBe(true)
+      await repos.filingEscalationWorkloadDigests.upsert({
+        id: "workload:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "open_alert",
+        alertReasons: ["overloaded_owner"],
+        ownerId: "partner_a",
+        ownerLoadCount: 4,
+        ownerLoadThreshold: 3,
+        handoffLagMs: 3600000,
+        handoffLagBucket: "lt_4h",
+        snoozeUntil: null,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        rebalancedBy: null,
+        rebalancedAt: null,
+        linkedRotaId: "rota:pkg_1",
+        linkedDigestId: "digest:pkg_1",
+        notes: ["owner overload detected"],
+        lastEvaluatedAt: 37,
+        updatedAt: 37,
+      })
+      const workload = await repos.filingEscalationWorkloadDigests.get("workload:pkg_1")
+      expect(workload?.status).toBe("open_alert")
+      const workloadByFirm = await repos.filingEscalationWorkloadDigests.listByFirm("firmA")
+      expect(workloadByFirm.some((row) => row.id === "workload:pkg_1")).toBe(true)
+      const workloadByPackage = await repos.filingEscalationWorkloadDigests.listByPackageId("pkg_1")
+      expect(workloadByPackage.some((row) => row.id === "workload:pkg_1")).toBe(true)
     })
   })
 })
