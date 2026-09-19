@@ -10,6 +10,7 @@ import {
 import type {
   DocumentRecord,
   DraftRecord,
+  FilingAnnexureRow,
   FilingDispatchQueueRow,
   FilingPackage,
   FilingPacketArtifactRow,
@@ -237,6 +238,23 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_submission_dispatch_queue"))
         return rows.docs
           .map((entry) => entry.data() as FilingDispatchQueueRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingAnnexures: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_annexures", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingAnnexureRow>(db, "filing_annexures", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingAnnexureRow>(db, "filing_annexures", firmId)
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_annexures"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingAnnexureRow)
           .filter((row) => row.packageId === packageId)
       },
     },

@@ -38,6 +38,7 @@ function seedMatterAndDraft() {
   })
   addMember(store, matter.id, "partner_a", "firmA")
   addMember(store, matter.id, "associate_a", "firmA")
+  addMember(store, matter.id, "clerk_a", "firmA")
   const firstTemplate = getDocumentTypes()[0]
   if (!firstTemplate) throw new Error("missing template seed")
   const draft = composeDraft(store, {
@@ -352,6 +353,122 @@ describe("GET/POST /api/d4/filings", () => {
       handoffJson.items.some(
         (row) =>
           row.packageId === packageId && row.status === "handoff_ready" && row.assigneeId === "clerk_a"
+      )
+    ).toBe(true)
+  })
+
+  it("tracks annexure checkpoints and keeps external transport boundary blocked", async () => {
+    const { matterId, draftId } = seedMatterAndDraft()
+    const created = await post(
+      {
+        action: "create_package",
+        actorId: "associate_a",
+        matterId,
+        draftId,
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+      },
+      "bc7fbc67-a0c7-412a-bb49-042420a64061"
+    )
+    expect(created.status).toBe(200)
+    const createdJson = (await created.json()) as { result: { filingPackage: { id: string } } }
+    const packageId = createdJson.result.filingPackage.id
+    const approved = await post(
+      {
+        action: "decide_package",
+        actorId: "partner_a",
+        packageId,
+        decision: "approve",
+        reason: "Approved for annexure packaging",
+      },
+      "f388a0a4-d671-4c97-b5de-d6e60405e75f"
+    )
+    expect(approved.status).toBe(200)
+    const handoff = await post(
+      {
+        action: "dispatch_update",
+        actorId: "partner_a",
+        packageId,
+        nextStatus: "handoff_ready",
+        assigneeId: "clerk_a",
+        note: "Queue handoff complete",
+      },
+      "dbf0f98d-2ab4-4250-a6c0-3ff1d754013a"
+    )
+    expect(handoff.status).toBe(200)
+    const deniedSignoff = await post(
+      {
+        action: "annexure_checkpoint",
+        actorId: "associate_a",
+        packageId,
+        checkpoint: "record_partner_signoff",
+      },
+      "534988e0-c1e9-4f06-b7f3-814cff0ecfc8"
+    )
+    expect(deniedSignoff.status).toBe(403)
+    const partnerSignoff = await post(
+      {
+        action: "annexure_checkpoint",
+        actorId: "partner_a",
+        packageId,
+        checkpoint: "record_partner_signoff",
+        note: "Partner reviewed annexure packet",
+      },
+      "d61eb2cc-c8a3-4f55-a741-83b89d31fef1"
+    )
+    expect(partnerSignoff.status).toBe(200)
+    const clerkVerify = await post(
+      {
+        action: "annexure_checkpoint",
+        actorId: "clerk_a",
+        packageId,
+        checkpoint: "record_clerk_verification",
+        note: "Clerk verified annexures",
+      },
+      "f6a72a4b-2ecd-4a95-b53f-42f4ff2f08b7"
+    )
+    expect(clerkVerify.status).toBe(200)
+    const readyCheckpoint = await post(
+      {
+        action: "annexure_checkpoint",
+        actorId: "partner_a",
+        packageId,
+        checkpoint: "mark_ready_for_transport",
+      },
+      "58decee8-c056-44bd-b6ca-2c5ffc18f35e"
+    )
+    expect(readyCheckpoint.status).toBe(200)
+    const readyCheckpointJson = (await readyCheckpoint.json()) as {
+      result: {
+        annexure: {
+          generationStatus: string
+          submissionTransportBoundary: string
+        }
+      }
+    }
+    expect(readyCheckpointJson.result.annexure.generationStatus).toBe("ready")
+    expect(readyCheckpointJson.result.annexure.submissionTransportBoundary).toBe(
+      "todo_firm_external_transport_blocked"
+    )
+
+    const annexureView = await get(
+      new URLSearchParams({
+        view: "annexures",
+        userId: "associate_a",
+        matterId,
+        annexureStatus: "ready",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(annexureView.status).toBe(200)
+    const annexureJson = (await annexureView.json()) as {
+      items: Array<{ packageId: string; generationStatus: string }>
+    }
+    expect(
+      annexureJson.items.some(
+        (row) => row.packageId === packageId && row.generationStatus === "ready"
       )
     ).toBe(true)
   })
