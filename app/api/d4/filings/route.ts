@@ -7,7 +7,7 @@ import {
 import { isClassification } from "@/platform/p1/types"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
-import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
+import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -58,7 +58,7 @@ function parseCursor(value: string | null): number {
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
-  const repos = createMemoryRepositories(store)
+  const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
   const userId = url.searchParams.get("userId")
   const matterId = url.searchParams.get("matterId") ?? undefined
@@ -99,7 +99,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
-  const repos = createMemoryRepositories(store)
+  const repos = await getRuntimeRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
