@@ -16,6 +16,7 @@ import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { GET as tenancyGet, POST as tenancyPost } from "@/app/api/p5/tenancy/route"
 import { GET as clientsGet, POST as clientsPost } from "@/app/api/d1/clients/route"
+import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
 import { composeDraft } from "@/services/d4-1/drafts"
@@ -864,6 +865,80 @@ describe("Runtime persistence mode", () => {
             entry.data()?.action === "document_ingest" &&
             entry.data()?.target === ingestJson.result.doc.id &&
             entry.data()?.firmId === "firmA"
+        )
+      ).toBe(true)
+    })
+  })
+
+  it("persists committee-brain outputs and rehydrates listing after in-memory reset", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const first = await committeePost(
+        new Request("http://127.0.0.1/api/p1/committee-brain", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b1fca58a-f8e1-4d5d-856b-a7e5c65db4ca",
+          },
+          body: JSON.stringify({
+            actorId: "partner_a",
+            body: "Partner committee summary",
+            classification: "privileged",
+            purpose: "committee-brain",
+          }),
+        })
+      )
+      expect(first.status).toBe(200)
+
+      const second = await committeePost(
+        new Request("http://127.0.0.1/api/p1/committee-brain", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "4e53441b-40bb-4f43-9b6c-9f6f3f90f28f",
+          },
+          body: JSON.stringify({
+            actorId: "associate_a",
+            body: "Associate committee summary",
+            classification: "internal",
+            purpose: "summarise",
+          }),
+        })
+      )
+      expect(second.status).toBe(200)
+
+      // Simulate stateless request cycle.
+      getRuntimeStore().committeeOutputs = new Map()
+
+      const partnerList = await committeeGet(
+        new Request("http://127.0.0.1/api/p1/committee-brain?actorId=partner_a&limit=10&cursor=0")
+      )
+      expect(partnerList.status).toBe(200)
+      const partnerJson = (await partnerList.json()) as {
+        items: Array<{ id: string; classification: string }>
+        total: number
+      }
+      expect(partnerJson.total).toBe(2)
+      expect(partnerJson.items.some((row) => row.classification === "privileged")).toBe(true)
+
+      const clerkList = await committeeGet(
+        new Request("http://127.0.0.1/api/p1/committee-brain?actorId=clerk_a&limit=10&cursor=0")
+      )
+      expect(clerkList.status).toBe(200)
+      const clerkJson = (await clerkList.json()) as {
+        items: Array<{ classification: string }>
+        total: number
+      }
+      expect(clerkJson.total).toBe(1)
+      expect(clerkJson.items[0]?.classification).toBe("internal")
+
+      const persisted = await getDocs(collection(ctx.firestore(), "committee_outputs"))
+      expect(
+        persisted.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.actorId === "partner_a" &&
+            entry.data()?.classification === "privileged"
         )
       ).toBe(true)
     })

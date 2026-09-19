@@ -6,6 +6,7 @@ import type {
   Intimation,
   Job,
   AuditEntry,
+  CommitteeBrainOutput,
   Entity,
   EntityLink,
   Matter,
@@ -102,6 +103,12 @@ export type AuditRepository = {
   listByFirm(firmId: string): Promise<AuditEntry[]>
 }
 
+export type CommitteeBrainOutputRepository = {
+  create(row: CommitteeBrainOutput): Promise<void>
+  get(id: string): Promise<CommitteeBrainOutput | null>
+  listByFirm(firmId: string): Promise<CommitteeBrainOutput[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -117,6 +124,7 @@ export type SpineRepositories = {
   followUps: FollowUpRepository
   intimations: IntimationRepository
   audit: AuditRepository
+  committeeOutputs: CommitteeBrainOutputRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -325,6 +333,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return store.audit.filter((row) => row.firmId === firmId)
+      },
+    },
+    committeeOutputs: {
+      async create(row) {
+        store.committeeOutputs.set(row.id, row)
+      },
+      async get(id) {
+        return store.committeeOutputs.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.committeeOutputs.values()].filter((row) => row.firmId === firmId)
       },
     },
   }

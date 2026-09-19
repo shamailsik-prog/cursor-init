@@ -15,6 +15,7 @@ import type {
   Intimation,
   Job,
   AuditEntry,
+  CommitteeBrainOutput,
   Entity,
   EntityLink,
   Matter,
@@ -269,6 +270,20 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<AuditEntry & { firmId: string }>(db, "audit_log", firmId)
+      },
+    },
+    committeeOutputs: {
+      async create(row) {
+        const payload: Record<string, unknown> = { ...row }
+        if (payload.reason === undefined) delete payload.reason
+        if (payload.text === undefined) delete payload.text
+        await setById(db, "committee_outputs", payload as CommitteeBrainOutput)
+      },
+      async get(id) {
+        return getById<CommitteeBrainOutput>(db, "committee_outputs", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<CommitteeBrainOutput>(db, "committee_outputs", firmId)
       },
     },
   }

@@ -190,6 +190,27 @@ export type FilingPackage = {
   approvalReason: string | null
 }
 
+export type CommitteeBrainOutput = {
+  id: string
+  firmId: string
+  actorId: string
+  classification: Classification
+  purpose: string
+  blocked: boolean
+  reason?: string
+  text?: string
+  outbound: {
+    body: string
+    metadata: {
+      classification: Classification
+      provider: string
+      purpose: string
+      redactionCounts: Record<string, number>
+    }
+  }
+  createdAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -210,6 +231,7 @@ export class SpineStore {
   documentWorkflow = new Map<string, DocumentWorkflow>()
   workflowEvents: WorkflowEvent[] = []
   filingPackages = new Map<string, FilingPackage>()
+  committeeOutputs = new Map<string, CommitteeBrainOutput>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",
