@@ -5,6 +5,7 @@ import type {
   FilingDispatchQueueRow,
   FilingPackage,
   FilingPacketArtifactRow,
+  FilingSubmissionExceptionRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
   FollowUp,
@@ -117,6 +118,13 @@ export type FilingSubmissionReconciliationRepository = {
   listByPackageId(packageId: string): Promise<FilingSubmissionReconciliationRow[]>
 }
 
+export type FilingSubmissionExceptionRepository = {
+  upsert(row: FilingSubmissionExceptionRow): Promise<void>
+  get(id: string): Promise<FilingSubmissionExceptionRow | null>
+  listByFirm(firmId: string): Promise<FilingSubmissionExceptionRow[]>
+  listByPackageId(packageId: string): Promise<FilingSubmissionExceptionRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -185,6 +193,7 @@ export type SpineRepositories = {
   filingAnnexures: FilingAnnexureRepository
   filingSubmissionReceipts: FilingSubmissionReceiptRepository
   filingSubmissionReconciliation: FilingSubmissionReconciliationRepository
+  filingSubmissionExceptions: FilingSubmissionExceptionRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -397,6 +406,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingSubmissionReconciliation.values()].filter((row) => row.packageId === packageId)
+      },
+    },
+    filingSubmissionExceptions: {
+      async upsert(row) {
+        store.filingSubmissionExceptions.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingSubmissionExceptions.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingSubmissionExceptions.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingSubmissionExceptions.values()].filter((row) => row.packageId === packageId)
       },
     },
     jobs: {

@@ -423,12 +423,81 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(reconcileSubmission.status).toBe(200)
+      const claimException = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "66559f9e-3acf-44f6-a7a0-f82a53c96d11",
+          },
+          body: JSON.stringify({
+            action: "claim_submission_exception",
+            actorId: "clerk_a",
+            packageId,
+            note: "clerk claimed exception queue item",
+          }),
+        })
+      )
+      expect(claimException.status).toBe(200)
+      const escalateException = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "6ce0f6ee-06f6-469d-951c-d8e6f9ba8fdf",
+          },
+          body: JSON.stringify({
+            action: "escalate_submission_exception",
+            actorId: "clerk_a",
+            packageId,
+            escalationOwnerId: "partner_a",
+            severity: "critical",
+            slaHours: 4,
+            note: "escalated to partner for priority retry window",
+          }),
+        })
+      )
+      expect(escalateException.status).toBe(200)
+      const resolveException = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f4deab2b-335f-44f0-8760-c5c982634f4f",
+          },
+          body: JSON.stringify({
+            action: "resolve_submission_exception",
+            actorId: "partner_a",
+            packageId,
+            note: "partner approved deterministic retry plan",
+          }),
+        })
+      )
+      expect(resolveException.status).toBe(200)
+      const reopenException = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "0f4ef0d2-b1f5-47c2-a985-ca9241161474",
+          },
+          body: JSON.stringify({
+            action: "reopen_submission_exception",
+            actorId: "partner_a",
+            packageId,
+            severity: "high",
+            note: "reopened after follow-up court feedback",
+          }),
+        })
+      )
+      expect(reopenException.status).toBe(200)
 
       getRuntimeStore().filingPacketArtifacts = new Map()
       getRuntimeStore().filingDispatchQueue = new Map()
       getRuntimeStore().filingAnnexures = new Map()
       getRuntimeStore().filingSubmissionReceipts = new Map()
       getRuntimeStore().filingSubmissionReconciliation = new Map()
+      getRuntimeStore().filingSubmissionExceptions = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -510,6 +579,24 @@ describe("Runtime persistence mode", () => {
           (item) => item.packageId === packageId && item.status === "needs_retry"
         )
       ).toBe(true)
+      const rehydratedExceptions = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=submission_exceptions&userId=associate_a&matterId=${matterId}&exceptionStatus=open&severity=high&escalationOwnerId=partner_a&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedExceptions.status).toBe(200)
+      const rehydratedExceptionsJson = (await rehydratedExceptions.json()) as {
+        items: Array<{ packageId: string; status: string; severity: string; escalationOwnerId: string | null }>
+      }
+      expect(
+        rehydratedExceptionsJson.items.some(
+          (item) =>
+            item.packageId === packageId &&
+            item.status === "open" &&
+            item.severity === "high" &&
+            item.escalationOwnerId === "partner_a"
+        )
+      ).toBe(true)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -544,6 +631,41 @@ describe("Runtime persistence mode", () => {
           (item) =>
             item.action === "filing_submission_reconcile" &&
             item.target === `reconcile:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_submission_exception_raise" &&
+            item.target === `exception:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_submission_exception_claim" &&
+            item.target === `exception:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_submission_exception_escalate" &&
+            item.target === `exception:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_submission_exception_resolve" &&
+            item.target === `exception:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_submission_exception_reopen" &&
+            item.target === `exception:${packageId}`
         )
       ).toBe(true)
 
@@ -598,6 +720,17 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.packageId === packageId &&
             entry.data()?.status === "needs_retry"
+        )
+      ).toBe(true)
+      const dbExceptions = await getDocs(collection(ctx.firestore(), "filing_submission_exceptions"))
+      expect(
+        dbExceptions.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.status === "open" &&
+            entry.data()?.severity === "high" &&
+            entry.data()?.escalationOwnerId === "partner_a"
         )
       ).toBe(true)
     })

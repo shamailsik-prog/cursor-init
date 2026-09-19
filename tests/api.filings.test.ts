@@ -651,6 +651,98 @@ describe("GET/POST /api/d4/filings", () => {
         (row) => row.packageId === packageId && row.status === "needs_retry"
       )
     ).toBe(true)
+
+    const claim = await post(
+      {
+        action: "claim_submission_exception",
+        actorId: "clerk_a",
+        packageId,
+        note: "Clerk claimed submission exception queue item",
+      },
+      "f41c0f8d-86f0-435f-9b3b-04a6db658f0d"
+    )
+    expect(claim.status).toBe(200)
+    const claimJson = (await claim.json()) as {
+      result: { submissionException: { status: string; claimedBy: string | null } }
+    }
+    expect(claimJson.result.submissionException.status).toBe("claimed")
+    expect(claimJson.result.submissionException.claimedBy).toBe("clerk_a")
+
+    const escalate = await post(
+      {
+        action: "escalate_submission_exception",
+        actorId: "clerk_a",
+        packageId,
+        escalationOwnerId: "partner_a",
+        severity: "critical",
+        slaHours: 3,
+        note: "Escalated to partner for urgent deterministic retry",
+      },
+      "98f72b66-688c-4692-b0f0-2f8db4f77be6"
+    )
+    expect(escalate.status).toBe(200)
+    const escalateJson = (await escalate.json()) as {
+      result: { submissionException: { status: string; severity: string; escalationOwnerId: string | null } }
+    }
+    expect(escalateJson.result.submissionException.status).toBe("escalated")
+    expect(escalateJson.result.submissionException.severity).toBe("critical")
+    expect(escalateJson.result.submissionException.escalationOwnerId).toBe("partner_a")
+
+    const resolve = await post(
+      {
+        action: "resolve_submission_exception",
+        actorId: "partner_a",
+        packageId,
+        note: "Resolved after partner retry plan confirmation",
+      },
+      "8f3f2eb4-c2fa-4c8e-b1a3-c2eb19120902"
+    )
+    expect(resolve.status).toBe(200)
+    const resolveJson = (await resolve.json()) as {
+      result: { submissionException: { status: string; resolvedBy: string | null } }
+    }
+    expect(resolveJson.result.submissionException.status).toBe("resolved")
+    expect(resolveJson.result.submissionException.resolvedBy).toBe("partner_a")
+
+    const reopen = await post(
+      {
+        action: "reopen_submission_exception",
+        actorId: "partner_a",
+        packageId,
+        severity: "high",
+        note: "Reopened after additional court follow-up",
+      },
+      "2c15bf03-88bc-4383-aa9f-2124781c95d2"
+    )
+    expect(reopen.status).toBe(200)
+    const reopenJson = (await reopen.json()) as {
+      result: { submissionException: { status: string; severity: string; resolvedAt: number | null } }
+    }
+    expect(reopenJson.result.submissionException.status).toBe("open")
+    expect(reopenJson.result.submissionException.severity).toBe("high")
+    expect(reopenJson.result.submissionException.resolvedAt).toBeNull()
+
+    const exceptionView = await get(
+      new URLSearchParams({
+        view: "submission_exceptions",
+        userId: "associate_a",
+        matterId,
+        exceptionStatus: "open",
+        severity: "high",
+        escalationOwnerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(exceptionView.status).toBe(200)
+    const exceptionViewJson = (await exceptionView.json()) as {
+      items: Array<{ packageId: string; status: string; severity: string }>
+    }
+    expect(
+      exceptionViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "open" && row.severity === "high"
+      )
+    ).toBe(true)
   })
 
   it("replays idempotent create package requests and rejects conflicts", async () => {

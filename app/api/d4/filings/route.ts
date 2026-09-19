@@ -30,6 +30,12 @@ import {
   isFilingSubmissionDispatchOutcome,
   isFilingSubmissionReconciliationStatus,
 } from "@/platform/persistence/filingSubmissionReceipts"
+import {
+  buildSubmissionExceptionRowFromFailure,
+  filingSubmissionExceptionId,
+  isFilingSubmissionExceptionSeverity,
+  isFilingSubmissionExceptionStatus,
+} from "@/platform/persistence/filingSubmissionExceptions"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -108,6 +114,38 @@ type ReconcileSubmissionBody = {
   note?: string
 }
 
+type ClaimSubmissionExceptionBody = {
+  action: "claim_submission_exception"
+  actorId?: string
+  packageId?: string
+  note?: string
+}
+
+type EscalateSubmissionExceptionBody = {
+  action: "escalate_submission_exception"
+  actorId?: string
+  packageId?: string
+  escalationOwnerId?: string
+  severity?: "medium" | "high" | "critical"
+  slaHours?: number
+  note?: string
+}
+
+type ResolveSubmissionExceptionBody = {
+  action: "resolve_submission_exception"
+  actorId?: string
+  packageId?: string
+  note?: string
+}
+
+type ReopenSubmissionExceptionBody = {
+  action: "reopen_submission_exception"
+  actorId?: string
+  packageId?: string
+  severity?: "medium" | "high" | "critical"
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -115,6 +153,10 @@ type Body =
   | AnnexureCheckpointBody
   | RecordSubmissionReceiptBody
   | ReconcileSubmissionBody
+  | ClaimSubmissionExceptionBody
+  | EscalateSubmissionExceptionBody
+  | ResolveSubmissionExceptionBody
+  | ReopenSubmissionExceptionBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -135,11 +177,18 @@ function parseReadiness(value: string | null): "ready" | "blocked" | undefined {
 
 function parseFilingsView(
   value: string | null
-): "packages" | "dispatch" | "annexures" | "submission_receipts" | "submission_reconciliation" {
+):
+  | "packages"
+  | "dispatch"
+  | "annexures"
+  | "submission_receipts"
+  | "submission_reconciliation"
+  | "submission_exceptions" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
   if (value === "submission_reconciliation") return "submission_reconciliation"
+  if (value === "submission_exceptions") return "submission_exceptions"
   return "packages"
 }
 
@@ -349,6 +398,122 @@ export async function GET(request: Request) {
           return rankOf(user.clearanceLevel) >= rankOf(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "submission_exceptions") {
+      const packageId = url.searchParams.get("packageId")
+      const exceptionStatus = url.searchParams.get("exceptionStatus")
+      const severity = url.searchParams.get("severity")
+      const escalationOwnerId = url.searchParams.get("escalationOwnerId")
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const persistedRows = await repos.filingSubmissionExceptions.listByFirm(user.firmId)
+      const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
+      const receiptRows = await repos.filingSubmissionReceipts.listByFirm(user.firmId)
+      const receiptById = new Map(receiptRows.map((row) => [row.id, row]))
+      const latestFailingReceiptByPackage = new Map<string, (typeof receiptRows)[number]>()
+      for (const row of receiptRows) {
+        if (row.dispatchOutcome === "accepted") continue
+        const current = latestFailingReceiptByPackage.get(row.packageId)
+        if (!current || row.attemptNo > current.attemptNo) {
+          latestFailingReceiptByPackage.set(row.packageId, row)
+        }
+      }
+      const reconciliationRows = await repos.filingSubmissionReconciliation.listByFirm(user.firmId)
+      const needsRetryReconciliationByPackage = new Map(
+        reconciliationRows
+          .filter((row) => row.status === "needs_retry")
+          .map((row) => [row.packageId, row])
+      )
+      for (const [pkgId, reconciliation] of needsRetryReconciliationByPackage.entries()) {
+        const filingPackage = packageById.get(pkgId)
+        if (!filingPackage) continue
+        const existing = rowsByPackage.get(pkgId) ?? null
+        const linkedReceipt =
+          (reconciliation.latestReceiptId && receiptById.get(reconciliation.latestReceiptId)) ?? null
+        const next = buildSubmissionExceptionRowFromFailure(
+          filingPackage,
+          {
+            source: "reconciliation_needs_retry",
+            receipt: linkedReceipt,
+            reconciliation,
+            actorId: "system_sync",
+            now: reconciliation.updatedAt,
+          },
+          existing
+        )
+        const changed =
+          !existing ||
+          existing.source !== next.source ||
+          existing.latestReceiptId !== next.latestReceiptId ||
+          existing.latestReconciliationId !== next.latestReconciliationId ||
+          existing.lastRaisedAt !== next.lastRaisedAt ||
+          existing.status === "resolved"
+        if (changed) {
+          await repos.filingSubmissionExceptions.upsert(next)
+        }
+        store.filingSubmissionExceptions.set(next.id, next)
+        rowsByPackage.set(pkgId, next)
+      }
+      for (const [pkgId, receipt] of latestFailingReceiptByPackage.entries()) {
+        if (needsRetryReconciliationByPackage.has(pkgId)) continue
+        const filingPackage = packageById.get(pkgId)
+        if (!filingPackage) continue
+        const existing = rowsByPackage.get(pkgId) ?? null
+        const source =
+          receipt.dispatchOutcome === "rejected"
+            ? ("receipt_rejected" as const)
+            : ("receipt_retry_scheduled" as const)
+        const next = buildSubmissionExceptionRowFromFailure(
+          filingPackage,
+          {
+            source,
+            receipt,
+            reconciliation: null,
+            actorId: "system_sync",
+            now: receipt.recordedAt,
+          },
+          existing
+        )
+        const changed =
+          !existing ||
+          existing.source !== next.source ||
+          existing.latestReceiptId !== next.latestReceiptId ||
+          existing.lastRaisedAt !== next.lastRaisedAt ||
+          existing.status === "resolved"
+        if (changed) {
+          await repos.filingSubmissionExceptions.upsert(next)
+        }
+        store.filingSubmissionExceptions.set(next.id, next)
+        rowsByPackage.set(pkgId, next)
+      }
+      const visible = [...rowsByPackage.values()]
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (!isFilingSubmissionExceptionStatus(exceptionStatus)) return true
+          return row.status === exceptionStatus
+        })
+        .filter((row) => {
+          if (!isFilingSubmissionExceptionSeverity(severity)) return true
+          return row.severity === severity
+        })
+        .filter((row) => (escalationOwnerId ? row.escalationOwnerId === escalationOwnerId : true))
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => a.slaTargetAt - b.slaTargetAt || b.updatedAt - a.updatedAt)
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor =
         cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -895,6 +1060,30 @@ export async function POST(request: Request) {
       )
       await repos.filingSubmissionReconciliation.upsert(reconciliation)
       store.filingSubmissionReconciliation.set(reconciliation.id, reconciliation)
+      let submissionException = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      if (parsed.dispatchOutcome !== "accepted") {
+        const source =
+          parsed.dispatchOutcome === "rejected"
+            ? ("receipt_rejected" as const)
+            : ("receipt_retry_scheduled" as const)
+        const nextException = buildSubmissionExceptionRowFromFailure(
+          filingPackage,
+          {
+            source,
+            receipt,
+            reconciliation,
+            actorId: actor.id,
+            note: note ? `auto-raised from receipt outcome ${parsed.dispatchOutcome}: ${note}` : undefined,
+            now: receipt.recordedAt,
+          },
+          submissionException
+        )
+        await repos.filingSubmissionExceptions.upsert(nextException)
+        store.filingSubmissionExceptions.set(nextException.id, nextException)
+        submissionException = nextException
+      }
       const dispatchQueue = await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))
       const dispatchStatus =
         parsed.dispatchOutcome === "accepted" ? "handoff_ready" : "retry_pending"
@@ -927,12 +1116,24 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: reconciliation.status,
       })
+      if (submissionException && parsed.dispatchOutcome !== "accepted") {
+        store.audit.push({
+          action: "filing_submission_exception_raise",
+          actorId: actor.id,
+          target: submissionException.id,
+          classification: filingPackage.classification,
+          reason: `${submissionException.source}:${submissionException.severity}`,
+        })
+      }
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "record_submission_receipt",
         receipt: (await repos.filingSubmissionReceipts.get(receipt.id)) ?? receipt,
         reconciliation:
           (await repos.filingSubmissionReconciliation.get(reconciliation.id)) ?? reconciliation,
+        submissionException:
+          submissionException &&
+          ((await repos.filingSubmissionExceptions.get(submissionException.id)) ?? submissionException),
         dispatchQueue: updatedDispatchQueue
           ? (await repos.filingDispatchQueue.get(updatedDispatchQueue.id)) ?? updatedDispatchQueue
           : null,
@@ -991,6 +1192,46 @@ export async function POST(request: Request) {
       }
       await repos.filingSubmissionReconciliation.upsert(updated)
       store.filingSubmissionReconciliation.set(updated.id, updated)
+      let submissionException = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      if (parsed.status === "needs_retry") {
+        const latestReceipt =
+          (updated.latestReceiptId &&
+            (await repos.filingSubmissionReceipts.get(updated.latestReceiptId))) ||
+          null
+        const nextException = buildSubmissionExceptionRowFromFailure(
+          filingPackage,
+          {
+            source: "reconciliation_needs_retry",
+            receipt: latestReceipt,
+            reconciliation: updated,
+            actorId: actor.id,
+            note: note ? `auto-raised from reconciliation: ${note}` : undefined,
+            now: updated.updatedAt,
+          },
+          submissionException
+        )
+        await repos.filingSubmissionExceptions.upsert(nextException)
+        store.filingSubmissionExceptions.set(nextException.id, nextException)
+        submissionException = nextException
+      } else if (parsed.status === "reconciled" && submissionException) {
+        const now = Date.now()
+        const resolved = {
+          ...submissionException,
+          status: "resolved" as const,
+          resolvedBy: actor.id,
+          resolvedAt: now,
+          resolutionNotes: [
+            ...submissionException.resolutionNotes,
+            `${new Date(now).toISOString()} ${actor.id}: auto-resolved from reconciliation`,
+          ],
+          updatedAt: now,
+        }
+        await repos.filingSubmissionExceptions.upsert(resolved)
+        store.filingSubmissionExceptions.set(resolved.id, resolved)
+        submissionException = resolved
+      }
       store.audit.push({
         action: "filing_submission_reconcile",
         actorId: actor.id,
@@ -998,10 +1239,330 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: parsed.status,
       })
+      if (submissionException && parsed.status === "needs_retry") {
+        store.audit.push({
+          action: "filing_submission_exception_raise",
+          actorId: actor.id,
+          target: submissionException.id,
+          classification: filingPackage.classification,
+          reason: `${submissionException.source}:${submissionException.severity}`,
+        })
+      }
+      if (submissionException && parsed.status === "reconciled") {
+        store.audit.push({
+          action: "filing_submission_exception_resolve",
+          actorId: actor.id,
+          target: submissionException.id,
+          classification: filingPackage.classification,
+          reason: "auto_reconciled",
+        })
+      }
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "reconcile_submission",
         reconciliation: (await repos.filingSubmissionReconciliation.get(updated.id)) ?? updated,
+        submissionException:
+          submissionException &&
+          ((await repos.filingSubmissionExceptions.get(submissionException.id)) ?? submissionException),
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "claim_submission_exception") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json(
+          { error: "actorId and packageId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "claim_submission_exception requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm exception claim denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const existing = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      if (!existing) {
+        return NextResponse.json({ error: "submission exception not found for package" }, { status: 404 })
+      }
+      const now = Date.now()
+      const note = parsed.note?.trim()
+      const updated = {
+        ...existing,
+        status: "claimed" as const,
+        escalationOwnerId: existing.escalationOwnerId ?? actor.id,
+        claimedBy: actor.id,
+        claimedAt: now,
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNotes: note
+          ? [...existing.resolutionNotes, `${new Date(now).toISOString()} ${actor.id}: ${note}`]
+          : existing.resolutionNotes,
+        updatedAt: now,
+      }
+      await repos.filingSubmissionExceptions.upsert(updated)
+      store.filingSubmissionExceptions.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_submission_exception_claim",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: updated.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "claim_submission_exception",
+        submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "escalate_submission_exception") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.escalationOwnerId) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and escalationOwnerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "escalate_submission_exception requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm exception escalation denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const escalationOwner =
+        store.users.get(parsed.escalationOwnerId) ?? (await repos.users.get(parsed.escalationOwnerId))
+      if (!escalationOwner || escalationOwner.firmId !== actor.firmId || escalationOwner.role !== "partner") {
+        return NextResponse.json(
+          { error: "escalationOwnerId must be a partner in actor firm" },
+          { status: 422 }
+        )
+      }
+      if (parsed.severity && !isFilingSubmissionExceptionSeverity(parsed.severity)) {
+        return NextResponse.json({ error: "invalid severity" }, { status: 400 })
+      }
+      if (parsed.slaHours !== undefined) {
+        const parsedHours = Number(parsed.slaHours)
+        if (!Number.isFinite(parsedHours) || parsedHours < 1 || parsedHours > 168) {
+          return NextResponse.json(
+            { error: "slaHours must be between 1 and 168" },
+            { status: 400 }
+          )
+        }
+      }
+      const priorAuditCount = store.audit.length
+      const existing = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      if (!existing) {
+        return NextResponse.json({ error: "submission exception not found for package" }, { status: 404 })
+      }
+      const now = Date.now()
+      const note = parsed.note?.trim()
+      const updated = {
+        ...existing,
+        status: "escalated" as const,
+        severity: parsed.severity ?? existing.severity,
+        escalationOwnerId: escalationOwner.id,
+        escalatedBy: actor.id,
+        escalatedAt: now,
+        slaTargetAt: parsed.slaHours ? now + parsed.slaHours * 60 * 60 * 1000 : existing.slaTargetAt,
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNotes: note
+          ? [...existing.resolutionNotes, `${new Date(now).toISOString()} ${actor.id}: ${note}`]
+          : existing.resolutionNotes,
+        updatedAt: now,
+      }
+      await repos.filingSubmissionExceptions.upsert(updated)
+      store.filingSubmissionExceptions.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_submission_exception_escalate",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: `${updated.severity}:${updated.escalationOwnerId}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "escalate_submission_exception",
+        submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_submission_exception") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json(
+          { error: "actorId and packageId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "resolve_submission_exception requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm exception resolution denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const existing = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      if (!existing) {
+        return NextResponse.json({ error: "submission exception not found for package" }, { status: 404 })
+      }
+      const now = Date.now()
+      const note = parsed.note?.trim() || "exception resolved by operator"
+      const updated = {
+        ...existing,
+        status: "resolved" as const,
+        resolvedBy: actor.id,
+        resolvedAt: now,
+        resolutionNotes: [...existing.resolutionNotes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingSubmissionExceptions.upsert(updated)
+      store.filingSubmissionExceptions.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_submission_exception_resolve",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: updated.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "resolve_submission_exception",
+        submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "reopen_submission_exception") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json(
+          { error: "actorId and packageId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "reopen_submission_exception requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      if (parsed.severity && !isFilingSubmissionExceptionSeverity(parsed.severity)) {
+        return NextResponse.json({ error: "invalid severity" }, { status: 400 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm exception reopen denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const existing = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      if (!existing) {
+        return NextResponse.json({ error: "submission exception not found for package" }, { status: 404 })
+      }
+      const now = Date.now()
+      const note = parsed.note?.trim() || "exception reopened by operator"
+      const updatedSeverity = parsed.severity ?? existing.severity
+      const updated = {
+        ...existing,
+        status: "open" as const,
+        severity: updatedSeverity,
+        resolvedBy: null,
+        resolvedAt: null,
+        lastRaisedAt: now,
+        slaTargetAt: now + (updatedSeverity === "critical" ? 2 : updatedSeverity === "high" ? 8 : 24) * 60 * 60 * 1000,
+        resolutionNotes: [...existing.resolutionNotes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingSubmissionExceptions.upsert(updated)
+      store.filingSubmissionExceptions.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_submission_exception_reopen",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: updated.severity,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "reopen_submission_exception",
+        submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
