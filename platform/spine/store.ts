@@ -165,6 +165,21 @@ export type WorkflowEvent = {
   at: number
 }
 
+export type FilingPackage = {
+  id: string
+  firmId: string
+  matterId: string
+  draftId: string
+  classification: Classification
+  citationStatus: "OK" | "OVERRULED"
+  temporalAllOk: boolean
+  status: "pending_partner_approval" | "approved" | "rejected"
+  createdBy: string
+  createdAt: number
+  approvedBy: string | null
+  approvalReason: string | null
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, { matterId: string; userId: string; firmId: string }>()
@@ -184,6 +199,7 @@ export class SpineStore {
   drafts = new Map<string, DraftRecord>()
   documentWorkflow = new Map<string, DocumentWorkflow>()
   workflowEvents: WorkflowEvent[] = []
+  filingPackages = new Map<string, FilingPackage>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",
