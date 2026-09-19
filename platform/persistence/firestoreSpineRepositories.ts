@@ -11,6 +11,7 @@ import type {
   DocumentRecord,
   DraftRecord,
   FilingPackage,
+  FilingPacketArtifactRow,
   FollowUp,
   Intimation,
   Job,
@@ -202,6 +203,23 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<FilingPackage>(db, "filing_packages", firmId)
+      },
+    },
+    filingPacketArtifacts: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_packet_artifacts", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingPacketArtifactRow>(db, "filing_packet_artifacts", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingPacketArtifactRow>(db, "filing_packet_artifacts", firmId)
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_packet_artifacts"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingPacketArtifactRow)
+          .filter((row) => row.packageId === packageId)
       },
     },
     jobs: {

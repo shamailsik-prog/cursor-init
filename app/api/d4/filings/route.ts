@@ -10,6 +10,7 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { buildFilingPacketArtifactRow } from "@/platform/persistence/filingPacketArtifacts"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -58,12 +59,18 @@ function parseCursor(value: string | null): number {
   return parsed
 }
 
+function parseReadiness(value: string | null): "ready" | "blocked" | undefined {
+  if (value === "ready" || value === "blocked") return value
+  return undefined
+}
+
 export async function GET(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
   const userId = url.searchParams.get("userId")
   const matterId = url.searchParams.get("matterId") ?? undefined
+  const readiness = parseReadiness(url.searchParams.get("readiness"))
   const limit = parseLimit(url.searchParams.get("limit"))
   const cursor = parseCursor(url.searchParams.get("cursor"))
   if (!userId) {
@@ -76,6 +83,17 @@ export async function GET(request: Request) {
     }
     await syncFirmMembers(store, repos, user.firmId)
     const firmPackages = await repos.filings.listByFirm(user.firmId)
+    const artifactRows = await repos.filingPacketArtifacts.listByFirm(user.firmId)
+    const artifactByPackage = new Map(artifactRows.map((row) => [row.packageId, row]))
+    for (const filingPackage of firmPackages) {
+      if (artifactByPackage.has(filingPackage.id)) continue
+      const draft =
+        store.drafts.get(filingPackage.draftId) ?? (await repos.drafts.get(filingPackage.draftId))
+      const artifact = buildFilingPacketArtifactRow(filingPackage, draft)
+      await repos.filingPacketArtifacts.upsert(artifact)
+      store.filingPacketArtifacts.set(artifact.id, artifact)
+      artifactByPackage.set(filingPackage.id, artifact)
+    }
     const visible = firmPackages
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => {
@@ -83,6 +101,16 @@ export async function GET(request: Request) {
         if (!permission.allow) return false
         return rankOf(user.clearanceLevel) >= rankOf(row.classification)
       })
+      .filter((row) => {
+        if (!readiness) return true
+        const artifact = artifactByPackage.get(row.id)
+        if (!artifact) return readiness === "blocked"
+        return artifact.readiness === readiness
+      })
+      .map((row) => ({
+        ...row,
+        packetArtifact: artifactByPackage.get(row.id) ?? null,
+      }))
       .sort((a, b) => a.id.localeCompare(b.id))
     const items = visible.slice(cursor, cursor + limit)
     const nextCursor =
@@ -178,11 +206,18 @@ export async function POST(request: Request) {
         },
       })
       await repos.filings.create(created.filingPackage)
+      const draft =
+        store.drafts.get(created.filingPackage.draftId) ??
+        (await repos.drafts.get(created.filingPackage.draftId))
+      const packetArtifact = buildFilingPacketArtifactRow(created.filingPackage, draft)
+      await repos.filingPacketArtifacts.upsert(packetArtifact)
+      store.filingPacketArtifacts.set(packetArtifact.id, packetArtifact)
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "create_package",
         filingPackage:
           (await repos.filings.get(created.filingPackage.id)) ?? created.filingPackage,
+        packetArtifact: (await repos.filingPacketArtifacts.get(packetArtifact.id)) ?? packetArtifact,
         preflight: created.preflight,
       }
       idempotency.set(key, payload, fingerprint)
@@ -218,10 +253,16 @@ export async function POST(request: Request) {
       } else {
         await repos.filings.create(filingPackage)
       }
+      const draft =
+        store.drafts.get(filingPackage.draftId) ?? (await repos.drafts.get(filingPackage.draftId))
+      const packetArtifact = buildFilingPacketArtifactRow(filingPackage, draft)
+      await repos.filingPacketArtifacts.upsert(packetArtifact)
+      store.filingPacketArtifacts.set(packetArtifact.id, packetArtifact)
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "decide_package",
         filingPackage: (await repos.filings.get(filingPackage.id)) ?? filingPackage,
+        packetArtifact: (await repos.filingPacketArtifacts.get(packetArtifact.id)) ?? packetArtifact,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

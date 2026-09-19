@@ -34,6 +34,7 @@ const baseStore = {
   jobs: [],
   documents: new Map(),
   filingPackages: new Map(),
+  filingPacketArtifacts: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -132,6 +133,33 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       create: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
       update: vi.fn().mockResolvedValue(null),
+    },
+    filingPacketArtifacts: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "packet:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          draftId: "drf_1",
+          classification: "internal",
+          readiness: "blocked",
+          blockedReasons: ["partner_approval_pending"],
+          components: [
+            {
+              componentId: "draft_body",
+              label: "Draft body",
+              required: true,
+              status: "ready",
+              sourceRef: "drf_1",
+            },
+          ],
+          updatedAt: 1,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
     },
     jobs: {
       create: vi.fn(),
@@ -264,8 +292,11 @@ describe("Route wiring uses repository adapters", () => {
       new Request("http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=mat_1&limit=10&cursor=0")
     )
     expect(res.status).toBe(200)
-    const json = (await res.json()) as { items: Array<{ id: string }> }
+    const json = (await res.json()) as {
+      items: Array<{ id: string; packetArtifact: { packageId: string } | null }>
+    }
     expect(json.items.map((item) => item.id)).toContain("pkg_repo")
+    expect(json.items.some((item) => item.packetArtifact?.packageId === "pkg_repo")).toBe(true)
   })
 
   it("clients route GET uses repository entities listByFirm", async () => {

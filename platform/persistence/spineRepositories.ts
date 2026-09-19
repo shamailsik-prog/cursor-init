@@ -2,6 +2,7 @@ import type {
   DocumentRecord,
   DraftRecord,
   FilingPackage,
+  FilingPacketArtifactRow,
   FollowUp,
   Intimation,
   Job,
@@ -77,6 +78,13 @@ export type FilingRepository = {
   listByFirm(firmId: string): Promise<FilingPackage[]>
 }
 
+export type FilingPacketArtifactRepository = {
+  upsert(row: FilingPacketArtifactRow): Promise<void>
+  get(id: string): Promise<FilingPacketArtifactRow | null>
+  listByFirm(firmId: string): Promise<FilingPacketArtifactRow[]>
+  listByPackageId(packageId: string): Promise<FilingPacketArtifactRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -140,6 +148,7 @@ export type SpineRepositories = {
   drafts: DraftRepository
   workflow: WorkflowRepository
   filings: FilingRepository
+  filingPacketArtifacts: FilingPacketArtifactRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -282,6 +291,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.filingPackages.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    filingPacketArtifacts: {
+      async upsert(row) {
+        store.filingPacketArtifacts.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingPacketArtifacts.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingPacketArtifacts.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingPacketArtifacts.values()].filter((row) => row.packageId === packageId)
       },
     },
     jobs: {

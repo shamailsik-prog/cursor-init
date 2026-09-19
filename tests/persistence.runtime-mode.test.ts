@@ -282,19 +282,50 @@ describe("Runtime persistence mode", () => {
 
       const filingsList = await filingsGet(
         new Request(
-          `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&limit=10&cursor=0`
+          `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
         )
       )
       expect(filingsList.status).toBe(200)
       const listJson = (await filingsList.json()) as {
-        items: Array<{ id: string; status: string }>
+        items: Array<{
+          id: string
+          status: string
+          packetArtifact: { readiness: string; blockedReasons: string[] } | null
+        }>
       }
       const row = listJson.items.find((item) => item.id === packageId)
       expect(row?.status).toBe("approved")
+      expect(row?.packetArtifact?.readiness).toBe("ready")
+      expect(row?.packetArtifact?.blockedReasons).toHaveLength(0)
+
+      getRuntimeStore().filingPacketArtifacts = new Map()
+      const rehydratedList = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedList.status).toBe(200)
+      const rehydratedJson = (await rehydratedList.json()) as {
+        items: Array<{ id: string; packetArtifact: { readiness: string } | null }>
+      }
+      expect(
+        rehydratedJson.items.some(
+          (item) => item.id === packageId && item.packetArtifact?.readiness === "ready"
+        )
+      ).toBe(true)
 
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
       expect(dbPackage.data()?.status).toBe("approved")
+      const dbPacketArtifacts = await getDocs(collection(ctx.firestore(), "filing_packet_artifacts"))
+      expect(
+        dbPacketArtifacts.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.readiness === "ready"
+        )
+      ).toBe(true)
     })
   })
 
