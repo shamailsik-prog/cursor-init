@@ -8,6 +8,7 @@ import { isClassification } from "@/platform/p1/types"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -72,6 +73,7 @@ export async function GET(request: Request) {
     if (!user) {
       return NextResponse.json({ error: "unknown user" }, { status: 404 })
     }
+    await syncFirmMembers(store, repos, user.firmId)
     const firmPackages = await repos.filings.listByFirm(user.firmId)
     const visible = firmPackages
       .filter((row) => (matterId ? row.matterId === matterId : true))
@@ -155,6 +157,11 @@ export async function POST(request: Request) {
               reason: parsed.partnerOverride?.reason ?? "",
             }
           : undefined
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
       const created = createFilingPackage(store, {
         actorId: parsed.actorId,
         matterId: parsed.matterId,
@@ -192,6 +199,11 @@ export async function POST(request: Request) {
         decision: parsed.decision,
         reason: parsed.reason,
       })
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
       const persisted = await repos.filings.get(filingPackage.id)
       if (persisted) {
         await repos.filings.update(filingPackage.id, {

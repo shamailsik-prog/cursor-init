@@ -49,6 +49,16 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       get: vi.fn().mockResolvedValue(null),
       update: vi.fn().mockResolvedValue(null),
     },
+    members: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        { matterId: "mat_1", userId: "associate_a", firmId: "firmA" },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([
+        { matterId: "mat_1", userId: "associate_a", firmId: "firmA" },
+      ]),
+    },
     documents: {
       listByFirm: vi.fn().mockResolvedValue([
         {
@@ -103,6 +113,17 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
     workflowEvents: {
       append: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
+    },
+    followUps: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([]),
+    },
+    intimations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([]),
+      listByMatter: vi.fn().mockResolvedValue([]),
     },
   })),
 }))

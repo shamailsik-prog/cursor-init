@@ -554,4 +554,68 @@ describe("Runtime persistence mode", () => {
       ).toBe(true)
     })
   })
+
+  it("hydrates permission checks from persisted matter memberships after in-memory reset", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const matterId = await createMatterViaRoute(
+        "Persisted membership matter",
+        "60c99e85-5d41-4edc-abca-af5631d2557d"
+      )
+
+      // Simulate fresh request cycle where in-memory membership map is empty.
+      getRuntimeStore().members = new Map()
+
+      const mattersList = await mattersGet(
+        new Request("http://127.0.0.1/api/d1/matters?userId=associate_a&limit=10&cursor=0")
+      )
+      expect(mattersList.status).toBe(200)
+      const mattersJson = (await mattersList.json()) as { items: Array<{ id: string }> }
+      expect(mattersJson.items.some((item) => item.id === matterId)).toBe(true)
+
+      const draftTemplate = getDocumentTypes()[0]
+      if (!draftTemplate) throw new Error("missing template seed")
+      const draftRes = await draftsPost(
+        new Request("http://127.0.0.1/api/d4/drafts", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8ce2f6f2-eb6f-44c3-8f7a-03691a6de4a2",
+          },
+          body: JSON.stringify({
+            action: "compose",
+            actorId: "associate_a",
+            matterId,
+            templateId: draftTemplate.id,
+            title: "Membership hydrated draft",
+            body: "Body",
+            classification: "internal",
+            citedJudgmentIds: [],
+            temporalCitations: [],
+          }),
+        })
+      )
+      expect(draftRes.status).toBe(200)
+
+      const ingestRes = await documentsPost(
+        new Request("http://127.0.0.1/api/d1/documents", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "aa3400ce-7214-4302-b6c9-a4425f894666",
+          },
+          body: JSON.stringify({
+            action: "ingest",
+            actorId: "associate_a",
+            firmId: "firmA",
+            matterId,
+            contentBase64: Buffer.from("%PDF-membership-check%").toString("base64"),
+            sourceChannel: "web",
+            classification: "internal",
+          }),
+        })
+      )
+      expect(ingestRes.status).toBe(200)
+    })
+  })
 })

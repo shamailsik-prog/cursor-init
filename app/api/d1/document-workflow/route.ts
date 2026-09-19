@@ -9,6 +9,7 @@ import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/s
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import {
   applyReviewDecision,
   assignReviewer,
@@ -109,6 +110,7 @@ export async function GET(request: Request) {
       }
       const user = store.users.get(userId)
       if (!user) throw new Error("unknown user")
+      await syncFirmMembers(store, repos, user.firmId)
       const matter = store.matters.get(matterId)
       if (!matter) throw new Error("unknown matter")
       if (matter.firmId !== user.firmId) throw new Error("cross-firm matter denied")
@@ -144,6 +146,7 @@ export async function GET(request: Request) {
     const status = isWorkflowStatus(rawStatus) ? rawStatus : undefined
     const user = store.users.get(userId)
     if (!user) throw new Error("unknown user")
+    await syncFirmMembers(store, repos, user.firmId)
     const docs = await repos.documents.listByFirm(user.firmId)
     const rows = await repos.workflow.listByFirm(user.firmId)
     const rowsByDocId = new Map(rows.map((row) => [row.documentId, row]))
@@ -234,6 +237,9 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) throw new Error("unknown actor")
+      await syncFirmMembers(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = transitionWorkflowStatus(store, {
         actorId: parsed.actorId,
@@ -255,6 +261,9 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) throw new Error("unknown actor")
+      await syncFirmMembers(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = assignReviewer(store, {
         actorId: parsed.actorId,
@@ -275,6 +284,9 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) throw new Error("unknown actor")
+      await syncFirmMembers(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = applyReviewDecision(store, {
         actorId: parsed.actorId,

@@ -17,6 +17,12 @@ export type User = {
   clearanceLevel: Classification
 }
 
+export type MatterMember = {
+  matterId: string
+  userId: string
+  firmId: string
+}
+
 export type Matter = {
   id: string
   firmId: string
@@ -182,7 +188,7 @@ export type FilingPackage = {
 
 export class SpineStore {
   users = new Map<string, User>()
-  members = new Map<string, { matterId: string; userId: string; firmId: string }>()
+  members = new Map<string, MatterMember>()
   matters = new Map<string, Matter>()
   documents = new Map<string, DocumentRecord>()
   docsByHash = new Map<string, string>()

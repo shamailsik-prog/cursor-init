@@ -15,6 +15,7 @@ import type {
   Intimation,
   Job,
   Matter,
+  MatterMember,
   DocumentWorkflow,
   WorkflowEvent,
 } from "@/platform/spine/store"
@@ -69,6 +70,25 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<Matter>(db, "matters", firmId)
+      },
+    },
+    members: {
+      async upsert(row) {
+        const key = `${row.matterId}_${row.userId}`
+        await setDoc(doc(db, "matter_members", key), row)
+      },
+      async get(matterId, userId) {
+        const key = `${matterId}_${userId}`
+        return getById<MatterMember>(db, "matter_members", key)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<MatterMember>(db, "matter_members", firmId)
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "matter_members"))
+        return rows.docs
+          .map((entry) => entry.data() as MatterMember)
+          .filter((row) => row.matterId === matterId)
       },
     },
     documents: {

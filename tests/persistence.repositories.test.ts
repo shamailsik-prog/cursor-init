@@ -42,6 +42,15 @@ describe("Firestore repository adapters", () => {
       expect(matter?.title).toBe("Persisted matter")
       const matterRows = await repos.matters.listByFirm("firmA")
       expect(matterRows.some((row) => row.id === "mat_1")).toBe(true)
+      await repos.members.upsert({
+        matterId: "mat_1",
+        userId: "associate_a",
+        firmId: "firmA",
+      })
+      const member = await repos.members.get("mat_1", "associate_a")
+      expect(member?.firmId).toBe("firmA")
+      const members = await repos.members.listByMatter("mat_1")
+      expect(members.some((row) => row.userId === "associate_a")).toBe(true)
 
       await repos.documents.create({
         id: "doc_1",
