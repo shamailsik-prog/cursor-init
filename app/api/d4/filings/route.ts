@@ -22,6 +22,14 @@ import {
   filingAnnexureId,
   isFilingAnnexureGenerationStatus,
 } from "@/platform/persistence/filingAnnexures"
+import {
+  buildFilingSubmissionReceiptRow,
+  buildFilingSubmissionReconciliationRow,
+  filingSubmissionReconciliationId,
+  isFilingSubmissionCourtChannel,
+  isFilingSubmissionDispatchOutcome,
+  isFilingSubmissionReconciliationStatus,
+} from "@/platform/persistence/filingSubmissionReceipts"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -80,7 +88,33 @@ type AnnexureCheckpointBody = {
   note?: string
 }
 
-type Body = CreateBody | DecideBody | DispatchUpdateBody | AnnexureCheckpointBody
+type RecordSubmissionReceiptBody = {
+  action: "record_submission_receipt"
+  actorId?: string
+  packageId?: string
+  courtChannel?: "efiling_portal_stub" | "physical_counter_stub" | "courier_stub"
+  dispatchOutcome?: "accepted" | "rejected" | "retry_scheduled"
+  submissionReference?: string
+  failureReason?: string
+  retryHint?: string
+  note?: string
+}
+
+type ReconcileSubmissionBody = {
+  action: "reconcile_submission"
+  actorId?: string
+  packageId?: string
+  status?: "open" | "reconciled" | "needs_retry"
+  note?: string
+}
+
+type Body =
+  | CreateBody
+  | DecideBody
+  | DispatchUpdateBody
+  | AnnexureCheckpointBody
+  | RecordSubmissionReceiptBody
+  | ReconcileSubmissionBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -99,9 +133,13 @@ function parseReadiness(value: string | null): "ready" | "blocked" | undefined {
   return undefined
 }
 
-function parseFilingsView(value: string | null): "packages" | "dispatch" | "annexures" {
+function parseFilingsView(
+  value: string | null
+): "packages" | "dispatch" | "annexures" | "submission_receipts" | "submission_reconciliation" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
+  if (value === "submission_receipts") return "submission_receipts"
+  if (value === "submission_reconciliation") return "submission_reconciliation"
   return "packages"
 }
 
@@ -198,6 +236,117 @@ export async function GET(request: Request) {
         .filter((row) => {
           if (!annexureStatus || !isFilingAnnexureGenerationStatus(annexureStatus)) return true
           return row.generationStatus === annexureStatus
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "submission_receipts") {
+      const packageId = url.searchParams.get("packageId")
+      const dispatchOutcome = url.searchParams.get("dispatchOutcome")
+      const receiptRows = await repos.filingSubmissionReceipts.listByFirm(user.firmId)
+      const visible = receiptRows
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (!dispatchOutcome || !isFilingSubmissionDispatchOutcome(dispatchOutcome)) return true
+          return row.dispatchOutcome === dispatchOutcome
+        })
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => b.recordedAt - a.recordedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "submission_reconciliation") {
+      const packageId = url.searchParams.get("packageId")
+      const reconciliationStatus = url.searchParams.get("reconciliationStatus")
+      const annexureRows = await repos.filingAnnexures.listByFirm(user.firmId)
+      const readyAnnexureByPackage = new Map(
+        annexureRows
+          .filter((row) => row.generationStatus === "ready")
+          .map((row) => [row.packageId, row])
+      )
+      const receiptRows = await repos.filingSubmissionReceipts.listByFirm(user.firmId)
+      const receiptsByPackage = new Map<string, typeof receiptRows>()
+      for (const receipt of receiptRows) {
+        const current = receiptsByPackage.get(receipt.packageId) ?? []
+        current.push(receipt)
+        receiptsByPackage.set(receipt.packageId, current)
+      }
+      const persistedRows = await repos.filingSubmissionReconciliation.listByFirm(user.firmId)
+      const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
+      for (const filingPackage of firmPackages) {
+        if (filingPackage.status !== "approved") continue
+        if (!readyAnnexureByPackage.has(filingPackage.id)) continue
+        const receipts = receiptsByPackage.get(filingPackage.id) ?? []
+        const existing = rowsByPackage.get(filingPackage.id)
+        const computed = buildFilingSubmissionReconciliationRow(filingPackage, receipts, {
+          notes: existing?.notes ?? [],
+        })
+        const hasNewAttempt =
+          !existing ||
+          existing.totalAttempts !== computed.totalAttempts ||
+          existing.latestReceiptId !== computed.latestReceiptId
+        const changed =
+          !existing ||
+          existing.totalAttempts !== computed.totalAttempts ||
+          existing.latestReceiptId !== computed.latestReceiptId ||
+          existing.latestSubmissionReference !== computed.latestSubmissionReference ||
+          existing.latestDispatchOutcome !== computed.latestDispatchOutcome
+        const next = changed
+          ? existing
+            ? {
+                ...computed,
+                status: hasNewAttempt ? computed.status : existing.status,
+                notes: existing.notes,
+                updatedAt: Date.now(),
+              }
+            : computed
+          : existing
+        if (changed || !existing) {
+          await repos.filingSubmissionReconciliation.upsert(next)
+        }
+        store.filingSubmissionReconciliation.set(next.id, next)
+        rowsByPackage.set(filingPackage.id, next)
+      }
+      const visible = [...rowsByPackage.values()]
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (
+            !reconciliationStatus ||
+            !isFilingSubmissionReconciliationStatus(reconciliationStatus)
+          ) {
+            return true
+          }
+          return row.status === reconciliationStatus
+        })
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -630,6 +779,229 @@ export async function POST(request: Request) {
       const payload = {
         action: "annexure_checkpoint",
         annexure: (await repos.filingAnnexures.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "record_submission_receipt") {
+      if (
+        !parsed.actorId ||
+        !parsed.packageId ||
+        !parsed.courtChannel ||
+        !parsed.dispatchOutcome ||
+        !parsed.submissionReference
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, packageId, courtChannel, dispatchOutcome, and submissionReference are required",
+          },
+          { status: 400 }
+        )
+      }
+      if (!isFilingSubmissionCourtChannel(parsed.courtChannel)) {
+        return NextResponse.json({ error: "invalid courtChannel" }, { status: 400 })
+      }
+      if (!isFilingSubmissionDispatchOutcome(parsed.dispatchOutcome)) {
+        return NextResponse.json({ error: "invalid dispatchOutcome" }, { status: 400 })
+      }
+      if (parsed.dispatchOutcome === "rejected" && !parsed.failureReason?.trim()) {
+        return NextResponse.json(
+          { error: "failureReason is required when dispatchOutcome is rejected" },
+          { status: 400 }
+        )
+      }
+      if (parsed.dispatchOutcome === "retry_scheduled" && !parsed.retryHint?.trim()) {
+        return NextResponse.json(
+          { error: "retryHint is required when dispatchOutcome is retry_scheduled" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "record_submission_receipt requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm receipt record denied" }, { status: 403 })
+      }
+      if (filingPackage.status !== "approved") {
+        return NextResponse.json(
+          { error: "submission receipt can only be recorded for approved filing packages" },
+          { status: 422 }
+        )
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const annexure =
+        (await repos.filingAnnexures.get(filingAnnexureId(filingPackage.id))) ??
+        store.filingAnnexures.get(filingAnnexureId(filingPackage.id))
+      if (!annexure || annexure.generationStatus !== "ready") {
+        return NextResponse.json(
+          { error: "submission receipt requires annexure generationStatus=ready" },
+          { status: 422 }
+        )
+      }
+      const priorAuditCount = store.audit.length
+      const existingReceipts = await repos.filingSubmissionReceipts.listByPackageId(filingPackage.id)
+      const highestAttempt = existingReceipts.reduce(
+        (max, row) => (row.attemptNo > max ? row.attemptNo : max),
+        0
+      )
+      const receipt = buildFilingSubmissionReceiptRow(
+        filingPackage,
+        {
+          attemptNo: highestAttempt + 1,
+          courtChannel: parsed.courtChannel,
+          dispatchOutcome: parsed.dispatchOutcome,
+          submissionReference: parsed.submissionReference.trim(),
+          failureReason: parsed.failureReason?.trim() || null,
+          retryHint: parsed.retryHint?.trim() || null,
+          actorId: actor.id,
+        },
+        { now: Date.now() }
+      )
+      await repos.filingSubmissionReceipts.upsert(receipt)
+      store.filingSubmissionReceipts.set(receipt.id, receipt)
+      const existingReconciliation = await repos.filingSubmissionReconciliation.get(
+        filingSubmissionReconciliationId(filingPackage.id)
+      )
+      const note = parsed.note?.trim()
+      const reconciliation = buildFilingSubmissionReconciliationRow(
+        filingPackage,
+        [...existingReceipts, receipt],
+        {
+          notes: note
+            ? [
+                ...(existingReconciliation?.notes ?? []),
+                `${new Date(receipt.recordedAt).toISOString()} ${actor.id}: ${note}`,
+              ]
+            : existingReconciliation?.notes ?? [],
+        }
+      )
+      await repos.filingSubmissionReconciliation.upsert(reconciliation)
+      store.filingSubmissionReconciliation.set(reconciliation.id, reconciliation)
+      const dispatchQueue = await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))
+      const dispatchStatus =
+        parsed.dispatchOutcome === "accepted" ? "handoff_ready" : "retry_pending"
+      const updatedDispatchQueue = dispatchQueue
+        ? {
+            ...dispatchQueue,
+            status: dispatchStatus,
+            operatorNotes: [
+              ...dispatchQueue.operatorNotes,
+              `${new Date(receipt.recordedAt).toISOString()} ${actor.id}: receipt ${receipt.id} (${parsed.dispatchOutcome})`,
+            ],
+            updatedAt: Date.now(),
+          }
+        : null
+      if (updatedDispatchQueue) {
+        await repos.filingDispatchQueue.upsert(updatedDispatchQueue)
+        store.filingDispatchQueue.set(updatedDispatchQueue.id, updatedDispatchQueue)
+      }
+      store.audit.push({
+        action: "filing_submission_receipt_record",
+        actorId: actor.id,
+        target: receipt.id,
+        classification: filingPackage.classification,
+        reason: parsed.dispatchOutcome,
+      })
+      store.audit.push({
+        action: "filing_submission_reconciliation_update",
+        actorId: actor.id,
+        target: reconciliation.id,
+        classification: filingPackage.classification,
+        reason: reconciliation.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "record_submission_receipt",
+        receipt: (await repos.filingSubmissionReceipts.get(receipt.id)) ?? receipt,
+        reconciliation:
+          (await repos.filingSubmissionReconciliation.get(reconciliation.id)) ?? reconciliation,
+        dispatchQueue: updatedDispatchQueue
+          ? (await repos.filingDispatchQueue.get(updatedDispatchQueue.id)) ?? updatedDispatchQueue
+          : null,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "reconcile_submission") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.status) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and status are required" },
+          { status: 400 }
+        )
+      }
+      if (!isFilingSubmissionReconciliationStatus(parsed.status)) {
+        return NextResponse.json({ error: "invalid reconciliation status" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "reconcile_submission requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm reconciliation denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const receipts = await repos.filingSubmissionReceipts.listByPackageId(filingPackage.id)
+      const current =
+        (await repos.filingSubmissionReconciliation.get(
+          filingSubmissionReconciliationId(filingPackage.id)
+        )) ?? buildFilingSubmissionReconciliationRow(filingPackage, receipts)
+      const note = parsed.note?.trim()
+      const updated = {
+        ...current,
+        status: parsed.status,
+        notes: note
+          ? [...current.notes, `${new Date().toISOString()} ${actor.id}: ${note}`]
+          : current.notes,
+        updatedAt: Date.now(),
+      }
+      await repos.filingSubmissionReconciliation.upsert(updated)
+      store.filingSubmissionReconciliation.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_submission_reconcile",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: parsed.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "reconcile_submission",
+        reconciliation: (await repos.filingSubmissionReconciliation.get(updated.id)) ?? updated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

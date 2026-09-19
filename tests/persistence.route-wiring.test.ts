@@ -37,6 +37,8 @@ const baseStore = {
   filingPacketArtifacts: new Map(),
   filingDispatchQueue: new Map(),
   filingAnnexures: new Map(),
+  filingSubmissionReceipts: new Map(),
+  filingSubmissionReconciliation: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -217,6 +219,50 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingSubmissionReceipts: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "receipt:pkg_repo:1",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          attemptNo: 1,
+          courtChannel: "efiling_portal_stub",
+          dispatchOutcome: "retry_scheduled",
+          submissionReference: "ref-repo-1",
+          failureReason: "gateway timeout",
+          retryHint: "retry after review",
+          recordedBy: "clerk_a",
+          recordedAt: 4,
+          submissionTransportBoundary: "todo_firm_external_transport_blocked",
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
+    filingSubmissionReconciliation: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "reconcile:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          totalAttempts: 1,
+          latestReceiptId: "receipt:pkg_repo:1",
+          latestSubmissionReference: "ref-repo-1",
+          latestDispatchOutcome: "retry_scheduled",
+          status: "open",
+          notes: ["repo reconciliation row"],
+          updatedAt: 5,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -378,6 +424,32 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
     expect(json.items.map((item) => item.id)).toContain("annexure:pkg_repo")
+    expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings submission receipts view GET uses repository filingSubmissionReceipts listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=submission_receipts&userId=associate_a&matterId=mat_1&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
+    expect(json.items.map((item) => item.id)).toContain("receipt:pkg_repo:1")
+    expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings submission reconciliation view GET uses repository filingSubmissionReconciliation listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=submission_reconciliation&userId=associate_a&matterId=mat_1&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
+    expect(json.items.map((item) => item.id)).toContain("reconcile:pkg_repo")
     expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
   })
 

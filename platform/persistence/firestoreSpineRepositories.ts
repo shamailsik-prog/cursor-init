@@ -14,6 +14,8 @@ import type {
   FilingDispatchQueueRow,
   FilingPackage,
   FilingPacketArtifactRow,
+  FilingSubmissionReceiptRow,
+  FilingSubmissionReconciliationRow,
   FollowUp,
   Intimation,
   Job,
@@ -255,6 +257,48 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_annexures"))
         return rows.docs
           .map((entry) => entry.data() as FilingAnnexureRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingSubmissionReceipts: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_submission_receipts", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingSubmissionReceiptRow>(db, "filing_submission_receipts", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingSubmissionReceiptRow>(db, "filing_submission_receipts", firmId)
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_submission_receipts"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingSubmissionReceiptRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingSubmissionReconciliation: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_submission_reconciliation", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingSubmissionReconciliationRow>(
+          db,
+          "filing_submission_reconciliation",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingSubmissionReconciliationRow>(
+          db,
+          "filing_submission_reconciliation",
+          firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_submission_reconciliation"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingSubmissionReconciliationRow)
           .filter((row) => row.packageId === packageId)
       },
     },

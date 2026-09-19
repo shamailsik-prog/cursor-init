@@ -473,6 +473,186 @@ describe("GET/POST /api/d4/filings", () => {
     ).toBe(true)
   })
 
+  it("records submission receipts and reconciles deterministic transport outcomes", async () => {
+    const { matterId, draftId } = seedMatterAndDraft()
+    const created = await post(
+      {
+        action: "create_package",
+        actorId: "associate_a",
+        matterId,
+        draftId,
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+      },
+      "88562da9-b09f-48d5-b77a-a7c4f7f76240"
+    )
+    expect(created.status).toBe(200)
+    const createdJson = (await created.json()) as { result: { filingPackage: { id: string } } }
+    const packageId = createdJson.result.filingPackage.id
+    const approved = await post(
+      {
+        action: "decide_package",
+        actorId: "partner_a",
+        packageId,
+        decision: "approve",
+        reason: "Approve for submission ledger",
+      },
+      "397391fc-a6c0-42f0-b6c2-8b73755227b2"
+    )
+    expect(approved.status).toBe(200)
+    const handoff = await post(
+      {
+        action: "dispatch_update",
+        actorId: "partner_a",
+        packageId,
+        nextStatus: "handoff_ready",
+        assigneeId: "clerk_a",
+        note: "Ready for deterministic stub submission",
+      },
+      "bf18c871-b3dd-4456-9b82-f5900ecdd896"
+    )
+    expect(handoff.status).toBe(200)
+    expect(
+      (
+        await post(
+          {
+            action: "annexure_checkpoint",
+            actorId: "partner_a",
+            packageId,
+            checkpoint: "record_partner_signoff",
+          },
+          "38a925ca-51ee-4f82-b123-bc7d64f658b1"
+        )
+      ).status
+    ).toBe(200)
+    expect(
+      (
+        await post(
+          {
+            action: "annexure_checkpoint",
+            actorId: "clerk_a",
+            packageId,
+            checkpoint: "record_clerk_verification",
+          },
+          "9498d6c2-7277-4d93-b47f-3bcb5022368e"
+        )
+      ).status
+    ).toBe(200)
+    expect(
+      (
+        await post(
+          {
+            action: "annexure_checkpoint",
+            actorId: "partner_a",
+            packageId,
+            checkpoint: "mark_ready_for_transport",
+          },
+          "9376fce6-db44-4647-b68e-f1148046393f"
+        )
+      ).status
+    ).toBe(200)
+
+    const deniedReceipt = await post(
+      {
+        action: "record_submission_receipt",
+        actorId: "associate_a",
+        packageId,
+        courtChannel: "efiling_portal_stub",
+        dispatchOutcome: "retry_scheduled",
+        submissionReference: "SUB-TEST-001",
+        retryHint: "retry after supervisor check",
+      },
+      "f145f691-06e7-4fd8-9f42-f01970f74a66"
+    )
+    expect(deniedReceipt.status).toBe(403)
+
+    const receipt = await post(
+      {
+        action: "record_submission_receipt",
+        actorId: "clerk_a",
+        packageId,
+        courtChannel: "efiling_portal_stub",
+        dispatchOutcome: "retry_scheduled",
+        submissionReference: "SUB-TEST-001",
+        failureReason: "network timeout",
+        retryHint: "retry after supervisor check",
+        note: "First deterministic submission attempt failed",
+      },
+      "f5339bbd-6498-4521-9137-f17a7c513f6f"
+    )
+    expect(receipt.status).toBe(200)
+    const receiptJson = (await receipt.json()) as {
+      result: {
+        receipt: { dispatchOutcome: string; submissionTransportBoundary: string }
+        reconciliation: { status: string }
+        dispatchQueue: { status: string } | null
+      }
+    }
+    expect(receiptJson.result.receipt.dispatchOutcome).toBe("retry_scheduled")
+    expect(receiptJson.result.receipt.submissionTransportBoundary).toBe(
+      "todo_firm_external_transport_blocked"
+    )
+    expect(receiptJson.result.reconciliation.status).toBe("open")
+    expect(receiptJson.result.dispatchQueue?.status).toBe("retry_pending")
+
+    const receiptsView = await get(
+      new URLSearchParams({
+        view: "submission_receipts",
+        userId: "associate_a",
+        matterId,
+        dispatchOutcome: "retry_scheduled",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(receiptsView.status).toBe(200)
+    const receiptsViewJson = (await receiptsView.json()) as {
+      items: Array<{ packageId: string; submissionReference: string }>
+    }
+    expect(
+      receiptsViewJson.items.some(
+        (row) => row.packageId === packageId && row.submissionReference === "SUB-TEST-001"
+      )
+    ).toBe(true)
+
+    const reconciled = await post(
+      {
+        action: "reconcile_submission",
+        actorId: "partner_a",
+        packageId,
+        status: "needs_retry",
+        note: "Partner requested corrected transport retry",
+      },
+      "07ca64f1-5f13-47a5-bdfa-94389bc7f4f1"
+    )
+    expect(reconciled.status).toBe(200)
+    const reconciledJson = (await reconciled.json()) as {
+      result: { reconciliation: { status: string } }
+    }
+    expect(reconciledJson.result.reconciliation.status).toBe("needs_retry")
+
+    const reconciliationView = await get(
+      new URLSearchParams({
+        view: "submission_reconciliation",
+        userId: "associate_a",
+        matterId,
+        reconciliationStatus: "needs_retry",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(reconciliationView.status).toBe(200)
+    const reconciliationJson = (await reconciliationView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      reconciliationJson.items.some(
+        (row) => row.packageId === packageId && row.status === "needs_retry"
+      )
+    ).toBe(true)
+  })
+
   it("replays idempotent create package requests and rejects conflicts", async () => {
     const { matterId, draftId } = seedMatterAndDraft()
     const key = "fee8efdf-d8ca-4115-a978-a91ddeb03684"
