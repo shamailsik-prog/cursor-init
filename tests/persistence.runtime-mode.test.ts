@@ -620,7 +620,7 @@ describe("Runtime persistence mode", () => {
     })
   })
 
-  it("hydrates tenancy membership + role-admin views from persisted repositories after reset", async () => {
+  it("hydrates tenancy membership, roles, and audit views from persisted repositories after reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
       const matterId = await createMatterViaRoute(
@@ -657,6 +657,7 @@ describe("Runtime persistence mode", () => {
         clearanceLevel: "confidential",
       })
       getRuntimeStore().members = new Map()
+      getRuntimeStore().audit = []
 
       const sessionRes = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
@@ -694,9 +695,34 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const auditRes = await tenancyGet(
+        new Request(
+          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=10&cursor=0"
+        )
+      )
+      expect(auditRes.status).toBe(200)
+      const auditJson = (await auditRes.json()) as {
+        items: Array<{ action: string; target: string }>
+      }
+      expect(
+        auditJson.items.some(
+          (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
+        )
+      ).toBe(true)
+
       const persistedClerk = await getDoc(doc(ctx.firestore(), "users", "clerk_a"))
       expect(persistedClerk.exists()).toBe(true)
       expect(persistedClerk.data()?.clearanceLevel).toBe("internal")
+
+      const persistedAudit = await getDocs(collection(ctx.firestore(), "audit_log"))
+      expect(
+        persistedAudit.docs.some(
+          (entry) =>
+            entry.data()?.action === "tenant_update_role" &&
+            entry.data()?.target === "clerk_a" &&
+            entry.data()?.firmId === "firmA"
+        )
+      ).toBe(true)
     })
   })
 })

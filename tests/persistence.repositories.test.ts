@@ -37,6 +37,20 @@ describe("Firestore repository adapters", () => {
       expect(persistedUser?.role).toBe("associate")
       const firmUsers = await repos.users.listByFirm("firmA")
       expect(firmUsers.some((row) => row.id === "associate_a")).toBe(true)
+      await repos.audit.append({
+        id: "aud_1",
+        firmId: "firmA",
+        action: "tenant_update_role",
+        actorId: "partner_a",
+        target: "associate_a",
+        classification: "internal",
+        reason: "Audit parity",
+        at: 11,
+      })
+      const auditRows = await repos.audit.listByFirm("firmA")
+      expect(auditRows.some((row) => row.id === "aud_1" && row.action === "tenant_update_role")).toBe(
+        true
+      )
 
       await repos.matters.create({
         id: "mat_1",

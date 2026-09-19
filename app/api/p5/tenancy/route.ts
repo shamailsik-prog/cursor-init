@@ -10,8 +10,10 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
+import { syncFirmAudit } from "@/platform/persistence/auditSync"
 import {
   buildSessionContext,
+  listFirmAudit,
   listFirmMemberships,
   listFirmUsers,
   updateUserRole,
@@ -130,6 +132,25 @@ export async function GET(request: Request) {
       })
     }
 
+    if (view === "audit") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmAudit(store, repos, firmId)
+      const audit = listFirmAudit(store, actorId, firmId, limit, cursor)
+      return NextResponse.json({
+        view: "audit",
+        items: audit.items,
+        total: audit.total,
+        limit,
+        cursor,
+        nextCursor: audit.nextCursor,
+      })
+    }
+
     return NextResponse.json({ error: "unknown view" }, { status: 400 })
   } catch (err) {
     const message = err instanceof Error ? err.message : "tenancy read failed"
@@ -199,14 +220,15 @@ export async function POST(request: Request) {
       nextClearance: parsed.nextClearance,
       reason: parsed.reason,
     })
-    await repos.users.upsert(updated)
+    await repos.users.upsert(updated.user)
+    await repos.audit.append(updated.auditEntry)
     const payload = {
       action: "update_role",
       user: {
-        id: updated.id,
-        firmId: updated.firmId,
-        role: updated.role,
-        clearanceLevel: updated.clearanceLevel,
+        id: updated.user.id,
+        firmId: updated.user.firmId,
+        role: updated.user.role,
+        clearanceLevel: updated.user.clearanceLevel,
       },
     }
     idempotency.set(key, payload, fingerprint)
