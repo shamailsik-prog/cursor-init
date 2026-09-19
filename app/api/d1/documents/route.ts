@@ -7,7 +7,7 @@ import {
 import { isClassification } from "@/platform/p1/types"
 import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
-import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
+import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -75,7 +75,7 @@ function canViewDocument(
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
-  const repos = createMemoryRepositories(store)
+  const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
   const userId = url.searchParams.get("userId")
   const matterId = url.searchParams.get("matterId")
@@ -112,7 +112,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
-  const repos = createMemoryRepositories(store)
+  const repos = await getRuntimeRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -206,7 +206,7 @@ export async function POST(request: Request) {
       idempotencyKey: key,
     })
 
-    const doc = await repos.documents.get(write.docId)
+    const doc = (await repos.documents.get(write.docId)) ?? store.documents.get(write.docId)
     if (!doc) {
       return NextResponse.json({ error: "document write failed" }, { status: 500 })
     }

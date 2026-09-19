@@ -41,8 +41,8 @@ vi.mock("@/platform/spine/runtimeStore", () => ({
   getRuntimeStore: () => baseStore,
 }))
 
-vi.mock("@/platform/persistence/spineRepositories", () => ({
-  createMemoryRepositories: () => ({
+vi.mock("@/platform/persistence/runtimeRepositories", () => ({
+  getRuntimeRepositories: vi.fn(async () => ({
     matters: {
       listByFirm: vi.fn().mockResolvedValue([]),
       create: vi.fn(),
@@ -95,7 +95,7 @@ vi.mock("@/platform/persistence/spineRepositories", () => ({
       get: vi.fn().mockResolvedValue(null),
       update: vi.fn().mockResolvedValue(null),
     },
-  }),
+  })),
 }))
 
 describe("Route wiring uses repository adapters", () => {

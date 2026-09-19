@@ -8,7 +8,7 @@ import {
 import { checkPermission } from "@/platform/p5/checkPermission"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
-import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
+import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import {
   addMember,
   confirmEngagement,
@@ -89,7 +89,7 @@ function ensureMatterAccess(actorId: string, matterId: string) {
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
-  const repo = createMemoryRepositories(store)
+  const repo = await getRuntimeRepositories(store)
   const url = new URL(request.url)
   const userId = url.searchParams.get("userId")
   const limit = parseLimit(url.searchParams.get("limit"))
@@ -125,7 +125,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
-  const repo = createMemoryRepositories(store)
+  const repo = await getRuntimeRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -192,6 +192,8 @@ export async function POST(request: Request) {
         classification: parsed.classification,
       }
       await repo.matters.create(matter)
+      // Keep in-memory mirror in sync for flows that still read the spine directly.
+      store.matters.set(matter.id, matter)
       addMember(store, matter.id, parsed.actorId, parsed.firmId)
       for (const userId of new Set(parsed.memberUserIds ?? [])) {
         addMember(store, matter.id, userId, parsed.firmId)
