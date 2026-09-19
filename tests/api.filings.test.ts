@@ -873,7 +873,6 @@ describe("GET/POST /api/d4/filings", () => {
         workloadStatus: "open_alert",
         ownerId: "partner_a",
         reason: "handoff_lag",
-        handoffLagBucket: "lt_4h",
         limit: "10",
         cursor: "0",
       })
