@@ -12,6 +12,8 @@ import {
   POST as workflowPost,
 } from "@/app/api/d1/document-workflow/route"
 import { GET as filingsGet, POST as filingsPost } from "@/app/api/d4/filings/route"
+import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
+import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
 import { composeDraft } from "@/services/d4-1/drafts"
@@ -288,6 +290,198 @@ describe("Runtime persistence mode", () => {
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
       expect(dbPackage.data()?.status).toBe("approved")
+    })
+  })
+
+  it("persists draft compose/list through Firestore-backed route mode", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const matterId = await createMatterViaRoute(
+        "Persisted draft matter",
+        "5983eb9b-5f04-4590-a6fe-c6508862494f"
+      )
+      const template = getDocumentTypes()[0]
+      if (!template) throw new Error("missing template seed")
+
+      const composeRes = await draftsPost(
+        new Request("http://127.0.0.1/api/d4/drafts", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "29b5dd73-d75f-4cad-b838-a7a4f5db8518",
+          },
+          body: JSON.stringify({
+            action: "compose",
+            actorId: "associate_a",
+            matterId,
+            templateId: template.id,
+            title: "Persisted runtime draft",
+            body: "Draft body",
+            classification: "internal",
+            citedJudgmentIds: [],
+            temporalCitations: [],
+          }),
+        })
+      )
+      expect(composeRes.status).toBe(200)
+      const composeJson = (await composeRes.json()) as {
+        result: { draft: { id: string } }
+      }
+      const draftId = composeJson.result.draft.id
+
+      const listRes = await draftsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/drafts?view=drafts&userId=associate_a&matterId=${matterId}&limit=10&cursor=0`
+        )
+      )
+      expect(listRes.status).toBe(200)
+      const listJson = (await listRes.json()) as { items: Array<{ id: string }> }
+      expect(listJson.items.some((item) => item.id === draftId)).toBe(true)
+
+      const dbDraft = await getDoc(doc(ctx.firestore(), "drafts", draftId))
+      expect(dbDraft.exists()).toBe(true)
+      expect(dbDraft.data()?.title).toBe("Persisted runtime draft")
+    })
+  })
+
+  it("persists court-ops queue resolution lifecycle in Firestore mode", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const matterId = await createMatterViaRoute(
+        "Persisted ops matter",
+        "e2e2d157-16f4-4452-ab24-d0119c5260ac"
+      )
+
+      const recordCaseRes = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "92894752-d7aa-4ec7-b6a3-054fca850772",
+          },
+          body: JSON.stringify({
+            action: "record_case_number",
+            actorId: "partner_a",
+            matterId,
+            raw: "CP 1234",
+            courtId: "SHC",
+          }),
+        })
+      )
+      expect(recordCaseRes.status).toBe(200)
+
+      const ingestRes = await documentsPost(
+        new Request("http://127.0.0.1/api/d1/documents", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "7c4ca228-d862-46e2-a8fe-cf4a6901f49a",
+          },
+          body: JSON.stringify({
+            action: "ingest",
+            actorId: "partner_a",
+            firmId: "firmA",
+            matterId,
+            contentBase64: Buffer.from("%PDF-ops-doc%").toString("base64"),
+            sourceChannel: "web",
+            classification: "internal",
+          }),
+        })
+      )
+      expect(ingestRes.status).toBe(200)
+      const ingestJson = (await ingestRes.json()) as {
+        result: { doc: { id: string } }
+      }
+      const docId = ingestJson.result.doc.id
+
+      const processingRes = await workflowPost(
+        new Request("http://127.0.0.1/api/d1/document-workflow", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "cad17bd4-7d80-4051-b0f0-a8a307077847",
+          },
+          body: JSON.stringify({
+            action: "transition",
+            actorId: "associate_a",
+            documentId: docId,
+            nextStatus: "processing",
+          }),
+        })
+      )
+      expect(processingRes.status).toBe(200)
+
+      const reviewReqRes = await workflowPost(
+        new Request("http://127.0.0.1/api/d1/document-workflow", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "843b4e8c-b8db-40ca-952f-9f1f55db262a",
+          },
+          body: JSON.stringify({
+            action: "transition",
+            actorId: "associate_a",
+            documentId: docId,
+            nextStatus: "review_required",
+          }),
+        })
+      )
+      expect(reviewReqRes.status).toBe(200)
+
+      const queueRes = await courtOpsGet(
+        new Request(
+          `http://127.0.0.1/api/d2/court-ops?userId=associate_a&matterId=${matterId}&limit=10&cursor=0`
+        )
+      )
+      expect(queueRes.status).toBe(200)
+      const queueJson = (await queueRes.json()) as {
+        items: Array<{ queueType: string; id: string; documentId?: string }>
+      }
+      const followUpItem = queueJson.items.find((item) => item.queueType === "follow_up")
+      expect(followUpItem?.id).toBeTruthy()
+
+      const resolveFollowUpRes = await courtOpsPost(
+        new Request("http://127.0.0.1/api/d2/court-ops", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "3f070548-4e2c-41a7-a080-e89c0f83b744",
+          },
+          body: JSON.stringify({
+            action: "resolve_follow_up",
+            actorId: "partner_a",
+            followUpId: followUpItem?.id,
+            reason: "Resolved in runtime mode",
+          }),
+        })
+      )
+      expect(resolveFollowUpRes.status).toBe(200)
+
+      const resolveWorkflowRes = await courtOpsPost(
+        new Request("http://127.0.0.1/api/d2/court-ops", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b92c4725-9185-4cf4-926e-cf0f1e8c74f6",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow",
+            actorId: "associate_a",
+            documentId: docId,
+            nextStatus: "complete",
+            reason: "Cleared in court ops",
+          }),
+        })
+      )
+      expect(resolveWorkflowRes.status).toBe(200)
+
+      const dbFollowUp = await getDoc(doc(ctx.firestore(), "follow_ups", followUpItem?.id ?? ""))
+      expect(dbFollowUp.exists()).toBe(true)
+      expect(dbFollowUp.data()?.status).toBe("resolved")
+
+      const dbWorkflow = await getDoc(doc(ctx.firestore(), "document_workflow", docId))
+      expect(dbWorkflow.exists()).toBe(true)
+      expect(dbWorkflow.data()?.status).toBe("complete")
     })
   })
 })

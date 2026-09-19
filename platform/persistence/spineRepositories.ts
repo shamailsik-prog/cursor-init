@@ -2,6 +2,7 @@ import type {
   DocumentRecord,
   DraftRecord,
   FilingPackage,
+  FollowUp,
   Job,
   Matter,
   DocumentWorkflow,
@@ -53,6 +54,12 @@ export type WorkflowEventRepository = {
   listByFirm(firmId: string): Promise<WorkflowEvent[]>
 }
 
+export type FollowUpRepository = {
+  upsert(row: FollowUp): Promise<void>
+  get(id: string): Promise<FollowUp | null>
+  listByFirm(firmId: string): Promise<FollowUp[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   documents: DocumentRepository
@@ -61,6 +68,7 @@ export type SpineRepositories = {
   filings: FilingRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
+  followUps: FollowUpRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -164,6 +172,22 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return store.workflowEvents.filter((event) => event.firmId === firmId)
+      },
+    },
+    followUps: {
+      async upsert(row) {
+        const idx = store.followUps.findIndex((entry) => entry.id === row.id)
+        if (idx >= 0) {
+          store.followUps[idx] = row
+          return
+        }
+        store.followUps.push(row)
+      },
+      async get(id) {
+        return store.followUps.find((row) => row.id === id) ?? null
+      },
+      async listByFirm(firmId) {
+        return store.followUps.filter((row) => row.firmId === firmId)
       },
     },
   }
