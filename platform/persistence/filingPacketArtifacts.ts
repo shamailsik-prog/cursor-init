@@ -13,6 +13,17 @@ export function buildFilingPacketArtifactRow(
   draft: DraftRecord | null,
   opts?: { now?: number }
 ): FilingPacketArtifactRow {
+  const draftNote = draft ? undefined : "draft record not found"
+  const citationNote =
+    filingPackage.citationStatus === "OK" ? undefined : "citation gate is overruled"
+  const temporalNote =
+    filingPackage.temporalAllOk ? undefined : "temporal gate has mismatch"
+  const approvalNote =
+    filingPackage.status === "approved"
+      ? filingPackage.approvedBy
+        ? undefined
+        : "approved package missing approver"
+      : "package not approved"
   const components = [
     {
       componentId: "draft_body",
@@ -20,7 +31,7 @@ export function buildFilingPacketArtifactRow(
       required: true,
       status: draft ? ("ready" as const) : ("missing" as const),
       sourceRef: draft?.id ?? null,
-      note: draft ? undefined : "draft record not found",
+      ...(draftNote ? { note: draftNote } : {}),
     },
     {
       componentId: "citation_gate",
@@ -29,10 +40,7 @@ export function buildFilingPacketArtifactRow(
       status:
         filingPackage.citationStatus === "OK" ? ("ready" as const) : ("missing" as const),
       sourceRef: filingPackage.id,
-      note:
-        filingPackage.citationStatus === "OK"
-          ? undefined
-          : "citation gate is overruled",
+      ...(citationNote ? { note: citationNote } : {}),
     },
     {
       componentId: "temporal_gate",
@@ -40,7 +48,7 @@ export function buildFilingPacketArtifactRow(
       required: true,
       status: filingPackage.temporalAllOk ? ("ready" as const) : ("missing" as const),
       sourceRef: filingPackage.id,
-      note: filingPackage.temporalAllOk ? undefined : "temporal gate has mismatch",
+      ...(temporalNote ? { note: temporalNote } : {}),
     },
     {
       componentId: "partner_approval",
@@ -51,12 +59,7 @@ export function buildFilingPacketArtifactRow(
           ? ("ready" as const)
           : ("missing" as const),
       sourceRef: filingPackage.approvedBy,
-      note:
-        filingPackage.status === "approved"
-          ? filingPackage.approvedBy
-            ? undefined
-            : "approved package missing approver"
-          : "package not approved",
+      ...(approvalNote ? { note: approvalNote } : {}),
     },
   ]
 
