@@ -1,0 +1,27 @@
+# Legal OS roadmap (Phase A inventory)
+
+Snapshot basis: current `main` as of this branch cut plus repository contents in `cursor-init`. The related `blueprint` repo was not accessible in this environment (`403`), so this inventory uses in-repo specs (`README.md`, `docs/HANDOVER_MANIFEST.md`, `docs/REPO_AUDIT_blueprint.md`).
+
+## Coverage matrix
+
+| Area | Status | Evidence in tree | Gap to complete legal OS |
+|---|---|---|---|
+| Matters / cases / parties | PARTIAL | Party/entity primitives in `services/d1-1/clients.ts`; matter primitives in `services/d1-2/matters.ts`; case-number attach flow in `services/d6-1/caseNumber.ts`; in-memory data model in `platform/spine/store.ts`; forensic tests in `tests/gate_g1.test.ts`. | No first-class API/product surface for day-to-day matter lifecycle operations (intake/list/update/assignment/status/case recording) and no persistent backing store integration yet. |
+| Courts / case-number normaliser / foundation console | DONE (Phase 0 scope) | Prefix-table normaliser in `core/case-number-normaliser.ts`; seed table `data/courts.json`; route `app/api/g0/normalise/route.ts`; UI in `app/foundation-console.tsx` (Courts tab); guard parity scripts in `ci_gates/case_number_normaliser.py` and `ci_gates/validate_case_numbers.py`. | Needs future extension only when firm closes `O-9` and additional courts/fixtures are validated. |
+| Document ingest + classification + P1 masking / Committee Brain | PARTIAL | Ingest + dedupe semantics in `services/d1-6/uploadDocument.ts`; classification types/ranks in `platform/p1/types.ts`; outbound masking and provider policy in `platform/p1/maskOutboundPII.ts`, `platform/p1/providerPolicy.ts`; API route `app/api/p1/committee-brain/route.ts`; tests in `tests/api.committee-brain.test.ts`, `tests/p1.outbound-mask.test.ts`. | Missing end-to-end document pipeline surface (ingest endpoint + queue orchestration + reviewer workflow) and production credentialed provider path (kept blocked by `TODO(firm)` constraints). |
+| Drafting / templates / filings | PARTIAL | Drafting guards for authority/temporal checks in `services/d4-2/draftingIntelligence.ts`; citation gate behavior in `tests/gate_g1.test.ts`; master-writer boundaries via `platform/p6/proposeChange.ts`. | No actual drafting composer, template catalog, filing packet builder, or court-facing approval/publish API yet. |
+| WhatsApp / Court Ops | PARTIAL | Minimal command parser in `services/d2-1/whatsapp.ts` (`/matters`, `/research`) and permission checks in `platform/p5/checkPermission.ts`. | No real WhatsApp integration transport, full grammar/workflows, or Court Ops operational board. |
+| Auth, tenancy, permissions, audit | PARTIAL | Permission engine in `platform/p5/checkPermission.ts`; tenant boundaries in service checks (`services/d1-2/matters.ts`, `services/d1-1/clients.ts`); Firestore deny-by-default policy in `firestore.rules`; audit rows in `platform/spine/store.ts` and `platform/classification/declassify.ts`. | No production auth identity/session layer, no role-admin surface, and no durable audit sink/query surface. |
+| Gates G-0 / G-1 and CI | DONE (for foundations) | Gate scripts `ci_gates/gate_g0.sh`, `ci_gates/gate_g1.py` + guard scripts; tests under `tests/`; CI workflow `.github/workflows/gate-g0.yml`. | Future layers must keep extending tests while preserving current fail-closed guard posture. |
+| Deploy path | PARTIAL | Local run + gate instructions in `README.md`; standard Next scripts in `package.json`; CI automation in `.github/workflows/gate-g0.yml`. | No explicit production deployment manifests/runbooks (environment promotion, secrets management, service topology, recovery). |
+
+## Recommended immediate slice (Phase B)
+
+Ship a first-class **Matters/Cases operational API slice** on top of existing D1/D6 service primitives:
+
+1. Add idempotent create/list endpoints for matters with tenancy + permission checks.
+2. Add case-number recording endpoint wired to the existing normaliser path.
+3. Persist an audit trail for matter lifecycle actions.
+4. Cover with API tests (idempotency, pagination cursor, tenant isolation, permission denial, case-number outcomes).
+
+Rationale: this closes a high-value PARTIAL area already in-tree, improves real product operability, and does not require firm-only secrets.
