@@ -129,6 +129,39 @@ export type DraftRecord = {
   status: "draft"
 }
 
+export type WorkflowStatus =
+  | "queued"
+  | "processing"
+  | "review_required"
+  | "complete"
+
+export type DocumentWorkflow = {
+  documentId: string
+  firmId: string
+  matterId: string | null
+  status: WorkflowStatus
+  reviewerId: string | null
+  updatedAt: number
+}
+
+export type WorkflowEvent = {
+  id: string
+  documentId: string
+  firmId: string
+  matterId: string | null
+  actorId: string
+  action:
+    | "workflow_created"
+    | "status_transition"
+    | "reviewer_assigned"
+    | "classification_confirmed"
+    | "classification_declassified"
+  status: WorkflowStatus
+  classification: Classification
+  reason?: string
+  at: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, { matterId: string; userId: string; firmId: string }>()
@@ -146,6 +179,8 @@ export class SpineStore {
   treatments: TreatmentRow[] = []
   embeddings: EmbeddingRow[] = []
   drafts = new Map<string, DraftRecord>()
+  documentWorkflow = new Map<string, DocumentWorkflow>()
+  workflowEvents: WorkflowEvent[] = []
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",
