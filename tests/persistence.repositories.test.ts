@@ -341,6 +341,38 @@ describe("Firestore repository adapters", () => {
       expect(dispatchByFirm.some((row) => row.id === "dispatch:pkg_1")).toBe(true)
       const dispatchByPackage = await repos.filingDispatchQueue.listByPackageId("pkg_1")
       expect(dispatchByPackage.some((row) => row.id === "dispatch:pkg_1")).toBe(true)
+      await repos.filingAnnexures.upsert({
+        id: "annexure:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        generationStatus: "assembling",
+        manifest: [
+          {
+            artifactId: "annexure_draft_pdf",
+            label: "Final draft PDF",
+            required: true,
+            status: "ready",
+            sourceRef: "drf_1",
+          },
+        ],
+        signerRequirements: {
+          partnerSignoffBy: "partner_a",
+          partnerSignoffAt: 23,
+          clerkVerificationBy: null,
+          clerkVerificationAt: null,
+        },
+        operatorNotes: ["manifest generated"],
+        submissionTransportBoundary: "todo_firm_external_transport_blocked",
+        updatedAt: 24,
+      })
+      const annexure = await repos.filingAnnexures.get("annexure:pkg_1")
+      expect(annexure?.packageId).toBe("pkg_1")
+      const annexuresByFirm = await repos.filingAnnexures.listByFirm("firmA")
+      expect(annexuresByFirm.some((row) => row.id === "annexure:pkg_1")).toBe(true)
+      const annexuresByPackage = await repos.filingAnnexures.listByPackageId("pkg_1")
+      expect(annexuresByPackage.some((row) => row.id === "annexure:pkg_1")).toBe(true)
     })
   })
 })

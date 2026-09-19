@@ -139,6 +139,7 @@ service cloud.firestore {
     match /workflow_ops_activity/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_packet_artifacts/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_submission_dispatch_queue/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /filing_annexures/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /feature_flags/{id}  { allow read: if signedIn(); allow write: if false; }
     match /firm_feature_overrides/{id} { allow read: if sameFirm(); allow write: if false; }
 

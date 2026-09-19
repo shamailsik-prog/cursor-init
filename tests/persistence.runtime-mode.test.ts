@@ -335,9 +335,60 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(dispatchUpdate.status).toBe(200)
+      const partnerSignoff = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "cfca79bb-3de4-40f8-b581-337ce2dc2df9",
+          },
+          body: JSON.stringify({
+            action: "annexure_checkpoint",
+            actorId: "partner_a",
+            packageId,
+            checkpoint: "record_partner_signoff",
+            note: "Runtime partner signoff",
+          }),
+        })
+      )
+      expect(partnerSignoff.status).toBe(200)
+      const clerkVerify = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "71f529a4-f913-4d3a-bca0-8ef0b9528ffb",
+          },
+          body: JSON.stringify({
+            action: "annexure_checkpoint",
+            actorId: "clerk_a",
+            packageId,
+            checkpoint: "record_clerk_verification",
+            note: "Runtime clerk verification",
+          }),
+        })
+      )
+      expect(clerkVerify.status).toBe(200)
+      const annexureReady = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "0f45faaf-bf48-4c99-b4de-4246ce59f8ca",
+          },
+          body: JSON.stringify({
+            action: "annexure_checkpoint",
+            actorId: "partner_a",
+            packageId,
+            checkpoint: "mark_ready_for_transport",
+          }),
+        })
+      )
+      expect(annexureReady.status).toBe(200)
 
       getRuntimeStore().filingPacketArtifacts = new Map()
       getRuntimeStore().filingDispatchQueue = new Map()
+      getRuntimeStore().filingAnnexures = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -370,6 +421,27 @@ describe("Runtime persistence mode", () => {
             item.retryCount >= 1
         )
       ).toBe(true)
+      const rehydratedAnnexures = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=annexures&userId=associate_a&matterId=${matterId}&annexureStatus=ready&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedAnnexures.status).toBe(200)
+      const rehydratedAnnexuresJson = (await rehydratedAnnexures.json()) as {
+        items: Array<{
+          packageId: string
+          generationStatus: string
+          submissionTransportBoundary: string
+        }>
+      }
+      expect(
+        rehydratedAnnexuresJson.items.some(
+          (item) =>
+            item.packageId === packageId &&
+            item.generationStatus === "ready" &&
+            item.submissionTransportBoundary === "todo_firm_external_transport_blocked"
+        )
+      ).toBe(true)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -384,6 +456,12 @@ describe("Runtime persistence mode", () => {
         auditViewJson.items.some(
           (item) =>
             item.action === "filing_dispatch_update" && item.target === `dispatch:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_annexure_checkpoint" && item.target === `annexure:${packageId}`
         )
       ).toBe(true)
 
@@ -407,6 +485,16 @@ describe("Runtime persistence mode", () => {
             entry.data()?.packageId === packageId &&
             entry.data()?.status === "handoff_ready" &&
             entry.data()?.assigneeId === "clerk_a"
+        )
+      ).toBe(true)
+      const dbAnnexures = await getDocs(collection(ctx.firestore(), "filing_annexures"))
+      expect(
+        dbAnnexures.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.generationStatus === "ready" &&
+            entry.data()?.submissionTransportBoundary === "todo_firm_external_transport_blocked"
         )
       ).toBe(true)
     })

@@ -16,6 +16,12 @@ import {
   filingDispatchQueueId,
   isFilingDispatchQueueStatus,
 } from "@/platform/persistence/filingDispatchQueue"
+import {
+  annexureReadyForTransport,
+  buildFilingAnnexureRow,
+  filingAnnexureId,
+  isFilingAnnexureGenerationStatus,
+} from "@/platform/persistence/filingAnnexures"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -60,7 +66,21 @@ type DispatchUpdateBody = {
   markAttempt?: boolean
 }
 
-type Body = CreateBody | DecideBody | DispatchUpdateBody
+type AnnexureCheckpointBody = {
+  action: "annexure_checkpoint"
+  actorId?: string
+  packageId?: string
+  checkpoint?:
+    | "mark_assembling"
+    | "mark_artifact_ready"
+    | "record_partner_signoff"
+    | "record_clerk_verification"
+    | "mark_ready_for_transport"
+  artifactId?: string
+  note?: string
+}
+
+type Body = CreateBody | DecideBody | DispatchUpdateBody | AnnexureCheckpointBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -79,8 +99,9 @@ function parseReadiness(value: string | null): "ready" | "blocked" | undefined {
   return undefined
 }
 
-function parseFilingsView(value: string | null): "packages" | "dispatch" {
+function parseFilingsView(value: string | null): "packages" | "dispatch" | "annexures" {
   if (value === "dispatch") return "dispatch"
+  if (value === "annexures") return "annexures"
   return "packages"
 }
 
@@ -117,16 +138,16 @@ export async function GET(request: Request) {
       store.filingPacketArtifacts.set(artifact.id, artifact)
       artifactByPackage.set(filingPackage.id, artifact)
     }
+    const queueRows = await repos.filingDispatchQueue.listByFirm(user.firmId)
+    const queueByPackage = new Map(queueRows.map((row) => [row.packageId, row]))
+    for (const filingPackage of firmPackages) {
+      if (filingPackage.status !== "approved" || queueByPackage.has(filingPackage.id)) continue
+      const queueRow = buildFilingDispatchQueueRow(filingPackage)
+      await repos.filingDispatchQueue.upsert(queueRow)
+      store.filingDispatchQueue.set(queueRow.id, queueRow)
+      queueByPackage.set(filingPackage.id, queueRow)
+    }
     if (view === "dispatch") {
-      const queueRows = await repos.filingDispatchQueue.listByFirm(user.firmId)
-      const queueByPackage = new Map(queueRows.map((row) => [row.packageId, row]))
-      for (const filingPackage of firmPackages) {
-        if (filingPackage.status !== "approved" || queueByPackage.has(filingPackage.id)) continue
-        const queueRow = buildFilingDispatchQueueRow(filingPackage)
-        await repos.filingDispatchQueue.upsert(queueRow)
-        store.filingDispatchQueue.set(queueRow.id, queueRow)
-        queueByPackage.set(filingPackage.id, queueRow)
-      }
       const visible = [...queueByPackage.values()]
         .filter((row) => (matterId ? row.matterId === matterId : true))
         .filter((row) => {
@@ -139,6 +160,45 @@ export async function GET(request: Request) {
           return row.status === dispatchStatus
         })
         .filter((row) => (assigneeId ? row.assigneeId === assigneeId : true))
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "annexures") {
+      const annexureStatus = url.searchParams.get("annexureStatus")
+      const packageId = url.searchParams.get("packageId")
+      const annexureRows = await repos.filingAnnexures.listByFirm(user.firmId)
+      const annexureByPackage = new Map(annexureRows.map((row) => [row.packageId, row]))
+      for (const filingPackage of firmPackages) {
+        if (filingPackage.status !== "approved" || annexureByPackage.has(filingPackage.id)) continue
+        const queueRow = queueByPackage.get(filingPackage.id) ?? null
+        if (!queueRow || queueRow.status === "blocked") continue
+        const annexure = buildFilingAnnexureRow(filingPackage, queueRow)
+        await repos.filingAnnexures.upsert(annexure)
+        store.filingAnnexures.set(annexure.id, annexure)
+        annexureByPackage.set(filingPackage.id, annexure)
+      }
+      const visible = [...annexureByPackage.values()]
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .filter((row) => {
+          if (!annexureStatus || !isFilingAnnexureGenerationStatus(annexureStatus)) return true
+          return row.generationStatus === annexureStatus
+        })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor =
@@ -320,9 +380,17 @@ export async function POST(request: Request) {
       store.filingPacketArtifacts.set(packetArtifact.id, packetArtifact)
       const dispatchQueueRow =
         filingPackage.status === "approved" ? buildFilingDispatchQueueRow(filingPackage) : null
+      const annexureRow =
+        dispatchQueueRow && dispatchQueueRow.status !== "blocked"
+          ? buildFilingAnnexureRow(filingPackage, dispatchQueueRow)
+          : null
       if (dispatchQueueRow) {
         await repos.filingDispatchQueue.upsert(dispatchQueueRow)
         store.filingDispatchQueue.set(dispatchQueueRow.id, dispatchQueueRow)
+      }
+      if (annexureRow) {
+        await repos.filingAnnexures.upsert(annexureRow)
+        store.filingAnnexures.set(annexureRow.id, annexureRow)
       }
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
@@ -332,6 +400,7 @@ export async function POST(request: Request) {
         dispatchQueue:
           dispatchQueueRow &&
           ((await repos.filingDispatchQueue.get(dispatchQueueRow.id)) ?? dispatchQueueRow),
+        annexure: annexureRow && ((await repos.filingAnnexures.get(annexureRow.id)) ?? annexureRow),
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -405,6 +474,25 @@ export async function POST(request: Request) {
       }
       await repos.filingDispatchQueue.upsert(updated)
       store.filingDispatchQueue.set(updated.id, updated)
+      const existingAnnexure =
+        (await repos.filingAnnexures.get(filingAnnexureId(filingPackage.id))) ??
+        buildFilingAnnexureRow(filingPackage, updated)
+      const annexure = {
+        ...existingAnnexure,
+        generationStatus:
+          nextStatus === "blocked"
+            ? ("blocked" as const)
+            : existingAnnexure.generationStatus === "blocked"
+              ? ("pending" as const)
+              : existingAnnexure.generationStatus,
+        operatorNotes:
+          nextStatus === "blocked"
+            ? [...existingAnnexure.operatorNotes, "dispatch queue moved to blocked status"]
+            : existingAnnexure.operatorNotes,
+        updatedAt: now,
+      }
+      await repos.filingAnnexures.upsert(annexure)
+      store.filingAnnexures.set(annexure.id, annexure)
       store.audit.push({
         action: "filing_dispatch_update",
         actorId: actor.id,
@@ -416,6 +504,132 @@ export async function POST(request: Request) {
       const payload = {
         action: "dispatch_update",
         dispatchQueue: (await repos.filingDispatchQueue.get(updated.id)) ?? updated,
+        annexure: (await repos.filingAnnexures.get(annexure.id)) ?? annexure,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "annexure_checkpoint") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.checkpoint) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and checkpoint are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "associate", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "annexure checkpoints require partner, associate, or clerk role" },
+          { status: 403 }
+        )
+      }
+      if (parsed.checkpoint === "record_partner_signoff" && actor.role !== "partner") {
+        return NextResponse.json({ error: "partner role required for partner signoff checkpoint" }, { status: 403 })
+      }
+      if (parsed.checkpoint === "record_clerk_verification" && !["clerk", "partner"].includes(actor.role)) {
+        return NextResponse.json({ error: "clerk or partner role required for clerk verification checkpoint" }, { status: 403 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm annexure checkpoint denied" }, { status: 403 })
+      }
+      if (filingPackage.status !== "approved") {
+        return NextResponse.json(
+          { error: "annexure checkpoints require approved filing package" },
+          { status: 422 }
+        )
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const persistedQueue = await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))
+      const queueRow = persistedQueue ?? buildFilingDispatchQueueRow(filingPackage)
+      if (!persistedQueue) {
+        await repos.filingDispatchQueue.upsert(queueRow)
+        store.filingDispatchQueue.set(queueRow.id, queueRow)
+      }
+      if (queueRow.status === "blocked") {
+        return NextResponse.json(
+          { error: "annexure checkpoints require non-blocked dispatch queue state" },
+          { status: 422 }
+        )
+      }
+      const priorAuditCount = store.audit.length
+      const existing =
+        (await repos.filingAnnexures.get(filingAnnexureId(filingPackage.id))) ??
+        buildFilingAnnexureRow(filingPackage, queueRow)
+      const now = Date.now()
+      const trimmedNote = parsed.note?.trim()
+      const nextManifest = [...existing.manifest]
+      let generationStatus = existing.generationStatus
+      const signerRequirements = { ...existing.signerRequirements }
+      if (parsed.checkpoint === "mark_assembling") {
+        generationStatus = "assembling"
+      } else if (parsed.checkpoint === "mark_artifact_ready") {
+        if (!parsed.artifactId) {
+          return NextResponse.json({ error: "artifactId is required for mark_artifact_ready" }, { status: 400 })
+        }
+        const idx = nextManifest.findIndex((item) => item.artifactId === parsed.artifactId)
+        if (idx < 0) {
+          return NextResponse.json({ error: "unknown annexure artifactId" }, { status: 404 })
+        }
+        const { note: _ignoredNote, ...withoutNote } = nextManifest[idx]
+        nextManifest[idx] = { ...withoutNote, status: "ready" }
+      } else if (parsed.checkpoint === "record_partner_signoff") {
+        signerRequirements.partnerSignoffBy = actor.id
+        signerRequirements.partnerSignoffAt = now
+      } else if (parsed.checkpoint === "record_clerk_verification") {
+        signerRequirements.clerkVerificationBy = actor.id
+        signerRequirements.clerkVerificationAt = now
+      } else if (parsed.checkpoint === "mark_ready_for_transport") {
+        const candidate = {
+          ...existing,
+          manifest: nextManifest,
+          signerRequirements,
+        }
+        if (!annexureReadyForTransport(candidate)) {
+          return NextResponse.json(
+            { error: "annexure is not ready: required artifacts/signoffs missing" },
+            { status: 422 }
+          )
+        }
+        generationStatus = "ready"
+      }
+      const checkpointNote = trimmedNote
+        ? `${new Date(now).toISOString()} ${actor.id}: ${parsed.checkpoint} (${trimmedNote})`
+        : `${new Date(now).toISOString()} ${actor.id}: ${parsed.checkpoint}`
+      const updated = {
+        ...existing,
+        generationStatus,
+        manifest: nextManifest,
+        signerRequirements,
+        operatorNotes: [...existing.operatorNotes, checkpointNote],
+        submissionTransportBoundary: "todo_firm_external_transport_blocked" as const,
+        updatedAt: now,
+      }
+      await repos.filingAnnexures.upsert(updated)
+      store.filingAnnexures.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_annexure_checkpoint",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: parsed.checkpoint,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "annexure_checkpoint",
+        annexure: (await repos.filingAnnexures.get(updated.id)) ?? updated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

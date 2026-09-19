@@ -36,6 +36,7 @@ const baseStore = {
   filingPackages: new Map(),
   filingPacketArtifacts: new Map(),
   filingDispatchQueue: new Map(),
+  filingAnnexures: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -179,6 +180,39 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
           operatorNotes: ["queued for handoff"],
           externalDispatchState: "blocked_todo_firm",
           updatedAt: 2,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
+    filingAnnexures: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "annexure:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          generationStatus: "pending",
+          manifest: [
+            {
+              artifactId: "annexure_draft_pdf",
+              label: "Final draft PDF",
+              required: true,
+              status: "ready",
+              sourceRef: "drf_1",
+            },
+          ],
+          signerRequirements: {
+            partnerSignoffBy: null,
+            partnerSignoffAt: null,
+            clerkVerificationBy: null,
+            clerkVerificationAt: null,
+          },
+          operatorNotes: ["repo annexure row"],
+          submissionTransportBoundary: "todo_firm_external_transport_blocked",
+          updatedAt: 3,
         },
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
@@ -331,6 +365,19 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
     expect(json.items.map((item) => item.id)).toContain("dispatch:pkg_repo")
+    expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings annexures view GET uses repository filingAnnexures listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=annexures&userId=associate_a&matterId=mat_1&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
+    expect(json.items.map((item) => item.id)).toContain("annexure:pkg_repo")
     expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
   })
 

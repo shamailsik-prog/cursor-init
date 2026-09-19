@@ -234,6 +234,36 @@ export type FilingDispatchQueueRow = {
   updatedAt: number
 }
 
+export type FilingAnnexureGenerationStatus = "pending" | "assembling" | "ready" | "blocked"
+
+export type FilingAnnexureManifestItem = {
+  artifactId: string
+  label: string
+  required: boolean
+  status: "pending" | "ready" | "blocked"
+  sourceRef: string | null
+  note?: string
+}
+
+export type FilingAnnexureRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  generationStatus: FilingAnnexureGenerationStatus
+  manifest: FilingAnnexureManifestItem[]
+  signerRequirements: {
+    partnerSignoffBy: string | null
+    partnerSignoffAt: number | null
+    clerkVerificationBy: string | null
+    clerkVerificationAt: number | null
+  }
+  operatorNotes: string[]
+  submissionTransportBoundary: "todo_firm_external_transport_blocked"
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -324,6 +354,7 @@ export class SpineStore {
   filingPackages = new Map<string, FilingPackage>()
   filingPacketArtifacts = new Map<string, FilingPacketArtifactRow>()
   filingDispatchQueue = new Map<string, FilingDispatchQueueRow>()
+  filingAnnexures = new Map<string, FilingAnnexureRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
