@@ -154,6 +154,31 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       append: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
     },
+    committeeOutputs: {
+      create: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "cbo_repo",
+          firmId: "firmA",
+          actorId: "associate_a",
+          classification: "internal",
+          purpose: "committee-brain",
+          blocked: true,
+          reason: "phase0-no-credentials",
+          outbound: {
+            body: "[REDACTED]",
+            metadata: {
+              classification: "internal",
+              provider: "ai-gateway",
+              purpose: "committee-brain",
+              redactionCounts: {},
+            },
+          },
+          createdAt: 1,
+        },
+      ]),
+    },
   })),
 }))
 
@@ -186,5 +211,15 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("ent_repo")
+  })
+
+  it("committee route GET uses repository committeeOutputs listByFirm", async () => {
+    const { GET } = await import("@/app/api/p1/committee-brain/route")
+    const res = await GET(
+      new Request("http://127.0.0.1/api/p1/committee-brain?actorId=associate_a&limit=10&cursor=0")
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("cbo_repo")
   })
 })

@@ -51,6 +51,31 @@ describe("Firestore repository adapters", () => {
       expect(auditRows.some((row) => row.id === "aud_1" && row.action === "tenant_update_role")).toBe(
         true
       )
+      await repos.committeeOutputs.create({
+        id: "cbo_1",
+        firmId: "firmA",
+        actorId: "partner_a",
+        classification: "internal",
+        purpose: "committee-brain",
+        blocked: true,
+        reason: "phase0-no-credentials",
+        outbound: {
+          body: "[REDACTED]",
+          metadata: {
+            classification: "internal",
+            provider: "ai-gateway",
+            purpose: "committee-brain",
+            redactionCounts: {},
+          },
+        },
+        createdAt: 123,
+      })
+      const committeeOutput = await repos.committeeOutputs.get("cbo_1")
+      expect(committeeOutput?.purpose).toBe("committee-brain")
+      const committeeRows = await repos.committeeOutputs.listByFirm("firmA")
+      expect(committeeRows.some((row) => row.id === "cbo_1" && row.actorId === "partner_a")).toBe(
+        true
+      )
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

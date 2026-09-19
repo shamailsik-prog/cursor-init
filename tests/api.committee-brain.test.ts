@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { POST } from "@/app/api/p1/committee-brain/route"
+import { GET, POST } from "@/app/api/p1/committee-brain/route"
 import { setTransportForTests } from "@/platform/p1/internalAICaller"
+import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 
 afterEach(() => {
   setTransportForTests(null)
+  resetRuntimeStoreForTests()
 })
 
 function post(body: unknown, key = "dddddddd-dddd-4ddd-8ddd-dddddddddddd") {
@@ -26,6 +28,7 @@ describe("POST /api/p1/committee-brain", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          actorId: "partner_a",
           body: "hello",
           classification: "public",
         }),
@@ -39,6 +42,7 @@ describe("POST /api/p1/committee-brain", () => {
     const payload = {
       body: "hello",
       classification: "public",
+      actorId: "partner_a",
       purpose: "summarise",
     }
     const first = await post(payload, key)
@@ -57,6 +61,7 @@ describe("POST /api/p1/committee-brain", () => {
       {
         body: "hello",
         classification: "public",
+        actorId: "partner_a",
         purpose: "summarise",
       },
       key
@@ -65,6 +70,7 @@ describe("POST /api/p1/committee-brain", () => {
       {
         body: "hello again",
         classification: "public",
+        actorId: "partner_a",
         purpose: "summarise",
       },
       key
@@ -77,6 +83,7 @@ describe("POST /api/p1/committee-brain", () => {
 
   it("refuses unknown classification", async () => {
     const res = await post({
+      actorId: "partner_a",
       body: "hello",
       classification: "super-secret",
     })
@@ -91,6 +98,7 @@ describe("POST /api/p1/committee-brain", () => {
     const res = await post({
       body: `Counsel for ${party}, CNIC ${cnic}`,
       classification: "public",
+      actorId: "partner_a",
       purpose: "summarise",
       partyNames: [party],
     })
@@ -119,6 +127,7 @@ describe("POST /api/p1/committee-brain", () => {
     })
     const res = await post(
       {
+        actorId: "partner_a",
         body: "privileged memo",
         classification: "privileged",
       },
@@ -128,5 +137,48 @@ describe("POST /api/p1/committee-brain", () => {
     const json = (await res.json()) as { result: { blocked: boolean } }
     expect(json.result.blocked).toBe(true)
     expect(sent).toBe(false)
+  })
+
+  it("lists persisted outputs with actor-bound firm and clearance filtering", async () => {
+    const first = await post(
+      {
+        actorId: "partner_a",
+        body: "internal summary",
+        classification: "internal",
+      },
+      "b8f0d1f8-6b5c-4384-844a-1a6485daed74"
+    )
+    expect(first.status).toBe(200)
+    const second = await post(
+      {
+        actorId: "partner_a",
+        body: "privileged summary",
+        classification: "privileged",
+      },
+      "f5fb869a-e344-4462-99f7-e0f0762ec8eb"
+    )
+    expect(second.status).toBe(200)
+
+    const clerkList = await GET(
+      new Request("http://127.0.0.1/api/p1/committee-brain?actorId=clerk_a&limit=10&cursor=0")
+    )
+    expect(clerkList.status).toBe(200)
+    const clerkJson = (await clerkList.json()) as {
+      items: Array<{ classification: string }>
+      total: number
+    }
+    expect(clerkJson.total).toBe(1)
+    expect(clerkJson.items[0]?.classification).toBe("internal")
+
+    const partnerList = await GET(
+      new Request("http://127.0.0.1/api/p1/committee-brain?actorId=partner_a&limit=10&cursor=0")
+    )
+    expect(partnerList.status).toBe(200)
+    const partnerJson = (await partnerList.json()) as {
+      items: Array<{ classification: string }>
+      total: number
+    }
+    expect(partnerJson.total).toBe(2)
+    expect(partnerJson.items.some((row) => row.classification === "privileged")).toBe(true)
   })
 })
