@@ -241,6 +241,23 @@ export type DraftTemplateAnalyticsRow = {
   updatedAt: number
 }
 
+export type WorkflowOpsActivityRow = {
+  id: string
+  firmId: string
+  source: "workflow_event" | "court_ops"
+  action: string
+  actorId: string
+  classification: Classification
+  matterId: string | null
+  documentId: string | null
+  followUpId: string | null
+  queueType: "follow_up" | "workflow" | null
+  status: string | null
+  detail: string
+  tags: string[]
+  createdAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -264,6 +281,7 @@ export class SpineStore {
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
+  workflowOpsActivity = new Map<string, WorkflowOpsActivityRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

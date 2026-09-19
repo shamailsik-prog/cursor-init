@@ -8,6 +8,7 @@ import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { buildCourtOpsActivityRow, buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import { handleWhatsApp } from "@/services/d2-1/whatsapp"
 import {
   acknowledgeCourtOpsItem,
@@ -132,6 +133,20 @@ async function syncCourtOpsState(
   return repos
 }
 
+async function persistWorkflowEventsSince(
+  repos: Awaited<ReturnType<typeof getRuntimeRepositories>>,
+  store: ReturnType<typeof getRuntimeStore>,
+  startIndex: number,
+  sourceAction: string
+): Promise<void> {
+  for (const event of store.workflowEvents.slice(startIndex)) {
+    await repos.workflowEvents.append(event)
+    await repos.workflowOpsActivity.upsert(
+      buildWorkflowEventActivityRow(event, { sourceAction })
+    )
+  }
+}
+
 export async function GET(request: Request) {
   const store = getRuntimeStore()
   const url = new URL(request.url)
@@ -254,6 +269,23 @@ export async function POST(request: Request) {
         id: parsed.id,
         reason: parsed.reason,
       })
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) throw new Error("unknown actor")
+      await repos.workflowOpsActivity.upsert(
+        buildCourtOpsActivityRow({
+          id: `ops:court_ops:ack:${parsed.queueType}:${parsed.id}`,
+          firmId: actor.firmId,
+          action: "court_ops_acknowledge",
+          actorId: actor.id,
+          classification: "internal",
+          matterId: null,
+          documentId: parsed.queueType === "workflow" ? parsed.id : null,
+          followUpId: parsed.queueType === "follow_up" ? parsed.id : null,
+          queueType: parsed.queueType,
+          status: "acknowledged",
+          detail: parsed.reason ?? "acknowledged by operator",
+        })
+      )
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_item",
@@ -281,6 +313,21 @@ export async function POST(request: Request) {
       const updated = store.followUps.find((row) => row.id === parsed.followUpId)
       if (updated) {
         await repos.followUps.upsert(updated)
+        await repos.workflowOpsActivity.upsert(
+          buildCourtOpsActivityRow({
+            id: `ops:court_ops:follow_up:${updated.id}`,
+            firmId: updated.firmId,
+            action: "court_ops_resolve_follow_up",
+            actorId: parsed.actorId,
+            classification: "internal",
+            matterId: updated.matterId,
+            documentId: null,
+            followUpId: updated.id,
+            queueType: "follow_up",
+            status: updated.status ?? "resolved",
+            detail: parsed.reason ?? updated.raw,
+          })
+        )
       }
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "resolve_follow_up", followUpId: parsed.followUpId }
@@ -305,9 +352,7 @@ export async function POST(request: Request) {
         reason: parsed.reason,
       })
       await repos.workflow.createOrUpdate(row)
-      for (const event of store.workflowEvents.slice(priorEvents)) {
-        await repos.workflowEvents.append(event)
-      }
+      await persistWorkflowEventsSince(repos, store, priorEvents, "court_ops_resolve_workflow")
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "resolve_workflow", row }
       idempotency.set(key, payload, fingerprint)
