@@ -14,6 +14,7 @@ import {
 import { GET as filingsGet, POST as filingsPost } from "@/app/api/d4/filings/route"
 import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
+import { GET as tenancyGet, POST as tenancyPost } from "@/app/api/p5/tenancy/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
 import { composeDraft } from "@/services/d4-1/drafts"
@@ -616,6 +617,86 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(ingestRes.status).toBe(200)
+    })
+  })
+
+  it("hydrates tenancy membership + role-admin views from persisted repositories after reset", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const matterId = await createMatterViaRoute(
+        "Persisted tenancy membership matter",
+        "fdccf93b-c5d5-43fe-9445-3573b526c5a6"
+      )
+
+      const roleUpdate = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "76804e1d-bce0-412a-8524-c7eb27dfaec3",
+          },
+          body: JSON.stringify({
+            action: "update_role",
+            actorId: "partner_a",
+            firmId: "firmA",
+            targetUserId: "clerk_a",
+            nextRole: "clerk",
+            nextClearance: "internal",
+            reason: "Tenancy parity persistence check",
+          }),
+        })
+      )
+      expect(roleUpdate.status).toBe(200)
+
+      // Simulate a fresh cycle with stale in-memory role + memberships.
+      const staleUser = getRuntimeStore().users.get("clerk_a")
+      if (!staleUser) throw new Error("expected clerk seed")
+      getRuntimeStore().users.set("clerk_a", {
+        ...staleUser,
+        role: "clerk",
+        clearanceLevel: "confidential",
+      })
+      getRuntimeStore().members = new Map()
+
+      const sessionRes = await tenancyGet(
+        new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
+      )
+      expect(sessionRes.status).toBe(200)
+      const sessionJson = (await sessionRes.json()) as {
+        session: { accessibleMatterIds: string[] }
+      }
+      expect(sessionJson.session.accessibleMatterIds).toContain(matterId)
+
+      const usersRes = await tenancyGet(
+        new Request(
+          "http://127.0.0.1/api/p5/tenancy?view=users&actorId=partner_a&firmId=firmA&limit=10&cursor=0"
+        )
+      )
+      expect(usersRes.status).toBe(200)
+      const usersJson = (await usersRes.json()) as {
+        items: Array<{ id: string; clearanceLevel: string }>
+      }
+      const clerk = usersJson.items.find((row) => row.id === "clerk_a")
+      expect(clerk?.clearanceLevel).toBe("internal")
+
+      const membershipsRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=memberships&actorId=partner_a&firmId=firmA&matterId=${matterId}&limit=10&cursor=0`
+        )
+      )
+      expect(membershipsRes.status).toBe(200)
+      const membershipsJson = (await membershipsRes.json()) as {
+        items: Array<{ matterId: string; userId: string }>
+      }
+      expect(
+        membershipsJson.items.some(
+          (row) => row.matterId === matterId && row.userId === "associate_a"
+        )
+      ).toBe(true)
+
+      const persistedClerk = await getDoc(doc(ctx.firestore(), "users", "clerk_a"))
+      expect(persistedClerk.exists()).toBe(true)
+      expect(persistedClerk.data()?.clearanceLevel).toBe("internal")
     })
   })
 })

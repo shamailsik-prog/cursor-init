@@ -9,6 +9,7 @@ import type {
   MatterMember,
   DocumentWorkflow,
   WorkflowEvent,
+  User,
   SpineStore,
 } from "@/platform/spine/store"
 
@@ -17,6 +18,12 @@ export type MatterRepository = {
   get(id: string): Promise<Matter | null>
   update(id: string, patch: Partial<Matter>): Promise<Matter | null>
   listByFirm(firmId: string): Promise<Matter[]>
+}
+
+export type UserRepository = {
+  upsert(row: User): Promise<void>
+  get(id: string): Promise<User | null>
+  listByFirm(firmId: string): Promise<User[]>
 }
 
 export type MatterMemberRepository = {
@@ -78,6 +85,7 @@ export type IntimationRepository = {
 
 export type SpineRepositories = {
   matters: MatterRepository
+  users: UserRepository
   members: MatterMemberRepository
   documents: DocumentRepository
   drafts: DraftRepository
@@ -107,6 +115,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.matters.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    users: {
+      async upsert(row) {
+        store.users.set(row.id, row)
+      },
+      async get(id) {
+        return store.users.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.users.values()].filter((row) => row.firmId === firmId)
       },
     },
     members: {

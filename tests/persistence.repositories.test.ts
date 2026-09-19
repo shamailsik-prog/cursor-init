@@ -27,6 +27,17 @@ describe("Firestore repository adapters", () => {
       const db = ctx.firestore()
       const repos = createFirestoreRepositories(db)
 
+      await repos.users.upsert({
+        id: "associate_a",
+        firmId: "firmA",
+        role: "associate",
+        clearanceLevel: "privileged",
+      })
+      const persistedUser = await repos.users.get("associate_a")
+      expect(persistedUser?.role).toBe("associate")
+      const firmUsers = await repos.users.listByFirm("firmA")
+      expect(firmUsers.some((row) => row.id === "associate_a")).toBe(true)
+
       await repos.matters.create({
         id: "mat_1",
         firmId: "firmA",

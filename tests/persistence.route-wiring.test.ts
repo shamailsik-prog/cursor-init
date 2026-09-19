@@ -49,6 +49,11 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       get: vi.fn().mockResolvedValue(null),
       update: vi.fn().mockResolvedValue(null),
     },
+    users: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([]),
+    },
     members: {
       upsert: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
