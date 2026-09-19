@@ -40,6 +40,7 @@ const baseStore = {
   filingSubmissionReceipts: new Map(),
   filingSubmissionReconciliation: new Map(),
   filingSubmissionExceptions: new Map(),
+  filingTransportExecutionEvidence: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -295,6 +296,33 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingTransportExecutionEvidence: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "transport:pkg_repo:1",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          sequenceNo: 1,
+          dispatchQueueId: "dispatch:pkg_repo",
+          outcome: "transport_blocked",
+          transportOperatorId: "clerk_a",
+          transportChannel: "efiling_portal_stub",
+          channelPayloadHash: "hash-repo-1",
+          deterministicBlockerTags: ["portal_timeout"],
+          attachmentPointers: ["ops://retry-plan/1"],
+          relatedReceiptId: "receipt:pkg_repo:1",
+          relatedReconciliationId: "reconcile:pkg_repo",
+          relatedExceptionId: "exception:pkg_repo",
+          note: "repo transport evidence row",
+          createdAt: 10,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -495,6 +523,19 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
     expect(json.items.map((item) => item.id)).toContain("exception:pkg_repo")
+    expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings transport execution view GET uses repository filingTransportExecutionEvidence listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=mat_1&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
+    expect(json.items.map((item) => item.id)).toContain("transport:pkg_repo:1")
     expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
   })
 

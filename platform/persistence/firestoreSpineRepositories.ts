@@ -17,6 +17,7 @@ import type {
   FilingSubmissionExceptionRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
+  FilingTransportExecutionEvidenceRow,
   FollowUp,
   Intimation,
   Job,
@@ -317,6 +318,23 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_submission_exceptions"))
         return rows.docs
           .map((entry) => entry.data() as FilingSubmissionExceptionRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingTransportExecutionEvidence: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_transport_execution_evidence", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingTransportExecutionEvidenceRow>(db, "filing_transport_execution_evidence", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingTransportExecutionEvidenceRow>(db, "filing_transport_execution_evidence", firmId)
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_transport_execution_evidence"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingTransportExecutionEvidenceRow)
           .filter((row) => row.packageId === packageId)
       },
     },

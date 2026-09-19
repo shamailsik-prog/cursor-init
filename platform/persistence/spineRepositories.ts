@@ -8,6 +8,7 @@ import type {
   FilingSubmissionExceptionRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
+  FilingTransportExecutionEvidenceRow,
   FollowUp,
   Intimation,
   Job,
@@ -125,6 +126,13 @@ export type FilingSubmissionExceptionRepository = {
   listByPackageId(packageId: string): Promise<FilingSubmissionExceptionRow[]>
 }
 
+export type FilingTransportExecutionEvidenceRepository = {
+  upsert(row: FilingTransportExecutionEvidenceRow): Promise<void>
+  get(id: string): Promise<FilingTransportExecutionEvidenceRow | null>
+  listByFirm(firmId: string): Promise<FilingTransportExecutionEvidenceRow[]>
+  listByPackageId(packageId: string): Promise<FilingTransportExecutionEvidenceRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -194,6 +202,7 @@ export type SpineRepositories = {
   filingSubmissionReceipts: FilingSubmissionReceiptRepository
   filingSubmissionReconciliation: FilingSubmissionReconciliationRepository
   filingSubmissionExceptions: FilingSubmissionExceptionRepository
+  filingTransportExecutionEvidence: FilingTransportExecutionEvidenceRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -420,6 +429,22 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingSubmissionExceptions.values()].filter((row) => row.packageId === packageId)
+      },
+    },
+    filingTransportExecutionEvidence: {
+      async upsert(row) {
+        store.filingTransportExecutionEvidence.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingTransportExecutionEvidence.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingTransportExecutionEvidence.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingTransportExecutionEvidence.values()].filter(
+          (row) => row.packageId === packageId
+        )
       },
     },
     jobs: {

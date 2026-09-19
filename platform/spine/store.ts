@@ -313,6 +313,8 @@ export type FilingSubmissionExceptionSource =
   | "receipt_retry_scheduled"
   | "receipt_rejected"
   | "reconciliation_needs_retry"
+  | "dispatch_transport_blocked"
+  | "dispatch_retry_plan"
 
 export type FilingSubmissionExceptionRow = {
   id: string
@@ -337,6 +339,36 @@ export type FilingSubmissionExceptionRow = {
   resolvedAt: number | null
   resolutionNotes: string[]
   updatedAt: number
+}
+
+export type FilingTransportExecutionOutcome =
+  | "confirm_delivered"
+  | "transport_blocked"
+  | "retry_plan_attached"
+
+export type FilingTransportExecutionChannel =
+  | FilingSubmissionCourtChannel
+  | "operator_followup_stub"
+
+export type FilingTransportExecutionEvidenceRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  sequenceNo: number
+  dispatchQueueId: string
+  outcome: FilingTransportExecutionOutcome
+  transportOperatorId: string
+  transportChannel: FilingTransportExecutionChannel
+  channelPayloadHash: string
+  deterministicBlockerTags: string[]
+  attachmentPointers: string[]
+  relatedReceiptId: string | null
+  relatedReconciliationId: string | null
+  relatedExceptionId: string | null
+  note: string | null
+  createdAt: number
 }
 
 export type CommitteeBrainOutput = {
@@ -433,6 +465,7 @@ export class SpineStore {
   filingSubmissionReceipts = new Map<string, FilingSubmissionReceiptRow>()
   filingSubmissionReconciliation = new Map<string, FilingSubmissionReconciliationRow>()
   filingSubmissionExceptions = new Map<string, FilingSubmissionExceptionRow>()
+  filingTransportExecutionEvidence = new Map<string, FilingTransportExecutionEvidenceRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

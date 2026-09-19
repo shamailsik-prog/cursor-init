@@ -743,6 +743,106 @@ describe("GET/POST /api/d4/filings", () => {
         (row) => row.packageId === packageId && row.status === "open" && row.severity === "high"
       )
     ).toBe(true)
+
+    const blockedTransport = await post(
+      {
+        action: "mark_transport_blocked",
+        actorId: "clerk_a",
+        packageId,
+        transportChannel: "efiling_portal_stub",
+        channelPayloadHash: "transport-hash-001",
+        blockerTags: ["portal_timeout", "token_expired"],
+        attachmentPointers: ["ops://dispatch/retry-window-note"],
+        severity: "critical",
+        note: "Transport blocked waiting for refreshed e-filing token",
+      },
+      "7844b7ea-540a-4f6a-bec7-3268e6f0e67b"
+    )
+    expect(blockedTransport.status).toBe(200)
+    const blockedTransportJson = (await blockedTransport.json()) as {
+      result: {
+        evidence: { outcome: string; deterministicBlockerTags: string[] }
+        dispatchQueue: { status: string }
+        submissionException: { status: string; severity: string }
+      }
+    }
+    expect(blockedTransportJson.result.evidence.outcome).toBe("transport_blocked")
+    expect(blockedTransportJson.result.evidence.deterministicBlockerTags).toContain("portal_timeout")
+    expect(blockedTransportJson.result.dispatchQueue.status).toBe("blocked")
+    expect(blockedTransportJson.result.submissionException.status).toBe("open")
+    expect(blockedTransportJson.result.submissionException.severity).toBe("critical")
+
+    const retryPlan = await post(
+      {
+        action: "attach_retry_plan",
+        actorId: "partner_a",
+        packageId,
+        transportChannel: "operator_followup_stub",
+        channelPayloadHash: "transport-hash-002",
+        attachmentPointers: ["ops://dispatch/retry-plan-v2"],
+        note: "Partner attached deterministic retry execution plan",
+      },
+      "ce7190a0-d11d-44d9-bf07-ee9ec3215cbc"
+    )
+    expect(retryPlan.status).toBe(200)
+    const retryPlanJson = (await retryPlan.json()) as {
+      result: {
+        evidence: { outcome: string; attachmentPointers: string[] }
+        dispatchQueue: { status: string }
+        submissionException: { status: string }
+      }
+    }
+    expect(retryPlanJson.result.evidence.outcome).toBe("retry_plan_attached")
+    expect(retryPlanJson.result.evidence.attachmentPointers).toContain("ops://dispatch/retry-plan-v2")
+    expect(retryPlanJson.result.dispatchQueue.status).toBe("retry_pending")
+    expect(retryPlanJson.result.submissionException.status).toBe("escalated")
+
+    const delivered = await post(
+      {
+        action: "confirm_delivered",
+        actorId: "partner_a",
+        packageId,
+        transportChannel: "courier_stub",
+        channelPayloadHash: "transport-hash-003",
+        attachmentPointers: ["ops://dispatch/proof-of-delivery"],
+        relatedReceiptId: `receipt:${packageId}:1`,
+        note: "Courier delivery confirmed in deterministic transport mode",
+      },
+      "2b5d5a95-4dd6-4f99-9535-4d2f07454d26"
+    )
+    expect(delivered.status).toBe(200)
+    const deliveredJson = (await delivered.json()) as {
+      result: {
+        evidence: { outcome: string }
+        dispatchQueue: { status: string; externalDispatchState: string }
+        submissionException: { status: string }
+      }
+    }
+    expect(deliveredJson.result.evidence.outcome).toBe("confirm_delivered")
+    expect(deliveredJson.result.dispatchQueue.status).toBe("handoff_ready")
+    expect(deliveredJson.result.dispatchQueue.externalDispatchState).toBe("ready_for_firm_dispatch")
+    expect(deliveredJson.result.submissionException.status).toBe("resolved")
+
+    const transportEvidenceView = await get(
+      new URLSearchParams({
+        view: "transport_execution",
+        userId: "associate_a",
+        matterId,
+        packageId,
+        outcome: "confirm_delivered",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(transportEvidenceView.status).toBe(200)
+    const transportEvidenceJson = (await transportEvidenceView.json()) as {
+      items: Array<{ packageId: string; outcome: string }>
+    }
+    expect(
+      transportEvidenceJson.items.some(
+        (row) => row.packageId === packageId && row.outcome === "confirm_delivered"
+      )
+    ).toBe(true)
   })
 
   it("replays idempotent create package requests and rejects conflicts", async () => {

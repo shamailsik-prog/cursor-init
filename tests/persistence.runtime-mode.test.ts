@@ -4,7 +4,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
-import { collection, doc, getDoc, getDocs } from "firebase/firestore"
+import { collection, doc, getDoc, getDocs, setDoc } from "firebase/firestore"
 import { GET as mattersGet, POST as mattersPost } from "@/app/api/d1/matters/route"
 import { GET as documentsGet, POST as documentsPost } from "@/app/api/d1/documents/route"
 import {
@@ -491,6 +491,66 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(reopenException.status).toBe(200)
+      const markTransportBlocked = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "634f3f5c-14a0-45d2-a3cd-8ea34e5f47e6",
+          },
+          body: JSON.stringify({
+            action: "mark_transport_blocked",
+            actorId: "clerk_a",
+            packageId,
+            transportChannel: "efiling_portal_stub",
+            channelPayloadHash: "runtime-transport-hash-001",
+            blockerTags: ["portal_timeout", "token_expired"],
+            attachmentPointers: ["ops://runtime/retry-window-note"],
+            severity: "critical",
+            note: "runtime transport blocked by portal timeout",
+          }),
+        })
+      )
+      expect(markTransportBlocked.status).toBe(200)
+      const attachRetryPlan = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "d5d4cc84-e8a8-4ea0-bf4f-a2ecf51e05c2",
+          },
+          body: JSON.stringify({
+            action: "attach_retry_plan",
+            actorId: "partner_a",
+            packageId,
+            transportChannel: "operator_followup_stub",
+            channelPayloadHash: "runtime-transport-hash-002",
+            attachmentPointers: ["ops://runtime/retry-plan-v2"],
+            note: "runtime partner retry plan attached",
+          }),
+        })
+      )
+      expect(attachRetryPlan.status).toBe(200)
+      const confirmDelivered = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "29d0ca9d-66df-4f26-bc84-28e2e5f51674",
+          },
+          body: JSON.stringify({
+            action: "confirm_delivered",
+            actorId: "partner_a",
+            packageId,
+            transportChannel: "courier_stub",
+            channelPayloadHash: "runtime-transport-hash-003",
+            attachmentPointers: ["ops://runtime/proof-of-delivery"],
+            relatedReceiptId: `receipt:${packageId}:1`,
+            note: "runtime deterministic delivery confirmed",
+          }),
+        })
+      )
+      expect(confirmDelivered.status).toBe(200)
 
       getRuntimeStore().filingPacketArtifacts = new Map()
       getRuntimeStore().filingDispatchQueue = new Map()
@@ -498,6 +558,7 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingSubmissionReceipts = new Map()
       getRuntimeStore().filingSubmissionReconciliation = new Map()
       getRuntimeStore().filingSubmissionExceptions = new Map()
+      getRuntimeStore().filingTransportExecutionEvidence = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -514,7 +575,7 @@ describe("Runtime persistence mode", () => {
       ).toBe(true)
       const rehydratedDispatch = await filingsGet(
         new Request(
-          `http://127.0.0.1/api/d4/filings?view=dispatch&userId=associate_a&matterId=${matterId}&dispatchStatus=retry_pending&assigneeId=clerk_a&limit=10&cursor=0`
+          `http://127.0.0.1/api/d4/filings?view=dispatch&userId=associate_a&matterId=${matterId}&dispatchStatus=handoff_ready&assigneeId=clerk_a&limit=10&cursor=0`
         )
       )
       expect(rehydratedDispatch.status).toBe(200)
@@ -525,7 +586,7 @@ describe("Runtime persistence mode", () => {
         rehydratedDispatchJson.items.some(
           (item) =>
             item.packageId === packageId &&
-            item.status === "retry_pending" &&
+            item.status === "handoff_ready" &&
             item.assigneeId === "clerk_a" &&
             item.retryCount >= 1
         )
@@ -567,7 +628,7 @@ describe("Runtime persistence mode", () => {
       ).toBe(true)
       const rehydratedReconciliation = await filingsGet(
         new Request(
-          `http://127.0.0.1/api/d4/filings?view=submission_reconciliation&userId=associate_a&matterId=${matterId}&reconciliationStatus=needs_retry&limit=10&cursor=0`
+          `http://127.0.0.1/api/d4/filings?view=submission_reconciliation&userId=associate_a&matterId=${matterId}&reconciliationStatus=reconciled&limit=10&cursor=0`
         )
       )
       expect(rehydratedReconciliation.status).toBe(200)
@@ -576,12 +637,12 @@ describe("Runtime persistence mode", () => {
       }
       expect(
         rehydratedReconciliationJson.items.some(
-          (item) => item.packageId === packageId && item.status === "needs_retry"
+          (item) => item.packageId === packageId && item.status === "reconciled"
         )
       ).toBe(true)
       const rehydratedExceptions = await filingsGet(
         new Request(
-          `http://127.0.0.1/api/d4/filings?view=submission_exceptions&userId=associate_a&matterId=${matterId}&exceptionStatus=open&severity=high&escalationOwnerId=partner_a&limit=10&cursor=0`
+          `http://127.0.0.1/api/d4/filings?view=submission_exceptions&userId=associate_a&matterId=${matterId}&exceptionStatus=resolved&severity=high&escalationOwnerId=partner_a&limit=10&cursor=0`
         )
       )
       expect(rehydratedExceptions.status).toBe(200)
@@ -592,11 +653,55 @@ describe("Runtime persistence mode", () => {
         rehydratedExceptionsJson.items.some(
           (item) =>
             item.packageId === packageId &&
-            item.status === "open" &&
+            item.status === "resolved" &&
             item.severity === "high" &&
             item.escalationOwnerId === "partner_a"
         )
       ).toBe(true)
+      const rehydratedTransportEvidence = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&packageId=${packageId}&outcome=confirm_delivered&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedTransportEvidence.status).toBe(200)
+      const rehydratedTransportEvidenceJson = (await rehydratedTransportEvidence.json()) as {
+        items: Array<{ packageId: string; outcome: string }>
+      }
+      expect(
+        rehydratedTransportEvidenceJson.items.some(
+          (item) => item.packageId === packageId && item.outcome === "confirm_delivered"
+        )
+      ).toBe(true)
+      await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
+        id: "transport:pkg_firmB:1",
+        firmId: "firmB",
+        packageId: "pkg_firmB",
+        matterId: "mat_firmB",
+        classification: "internal",
+        sequenceNo: 1,
+        dispatchQueueId: "dispatch:pkg_firmB",
+        outcome: "transport_blocked",
+        transportOperatorId: "clerk_b",
+        transportChannel: "operator_followup_stub",
+        channelPayloadHash: "hash-firm-b",
+        deterministicBlockerTags: ["firm_b_only"],
+        attachmentPointers: ["ops://firm-b/retry"],
+        relatedReceiptId: null,
+        relatedReconciliationId: null,
+        relatedExceptionId: null,
+        note: "firmB transport evidence row",
+        createdAt: Date.now(),
+      })
+      const firmAScopeEvidence = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeEvidence.status).toBe(200)
+      const firmAScopeEvidenceJson = (await firmAScopeEvidence.json()) as {
+        items: Array<{ packageId: string }>
+      }
+      expect(firmAScopeEvidenceJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -668,6 +773,18 @@ describe("Runtime persistence mode", () => {
             item.target === `exception:${packageId}`
         )
       ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) => item.action === "filing_transport_execution_evidence_record"
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_dispatch_closure_update" &&
+            item.target === `dispatch:${packageId}`
+        )
+      ).toBe(true)
 
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
@@ -687,7 +804,7 @@ describe("Runtime persistence mode", () => {
           (entry) =>
             entry.data()?.firmId === "firmA" &&
             entry.data()?.packageId === packageId &&
-            entry.data()?.status === "retry_pending" &&
+            entry.data()?.status === "handoff_ready" &&
             entry.data()?.assigneeId === "clerk_a"
         )
       ).toBe(true)
@@ -719,7 +836,7 @@ describe("Runtime persistence mode", () => {
           (entry) =>
             entry.data()?.firmId === "firmA" &&
             entry.data()?.packageId === packageId &&
-            entry.data()?.status === "needs_retry"
+            entry.data()?.status === "reconciled"
         )
       ).toBe(true)
       const dbExceptions = await getDocs(collection(ctx.firestore(), "filing_submission_exceptions"))
@@ -728,9 +845,21 @@ describe("Runtime persistence mode", () => {
           (entry) =>
             entry.data()?.firmId === "firmA" &&
             entry.data()?.packageId === packageId &&
-            entry.data()?.status === "open" &&
+            entry.data()?.status === "resolved" &&
             entry.data()?.severity === "high" &&
             entry.data()?.escalationOwnerId === "partner_a"
+        )
+      ).toBe(true)
+      const dbTransportEvidence = await getDocs(
+        collection(ctx.firestore(), "filing_transport_execution_evidence")
+      )
+      expect(
+        dbTransportEvidence.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.outcome === "confirm_delivered" &&
+            entry.data()?.channelPayloadHash === "runtime-transport-hash-003"
         )
       ).toBe(true)
     })
