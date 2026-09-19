@@ -305,6 +305,40 @@ export type FilingSubmissionReconciliationRow = {
   updatedAt: number
 }
 
+export type FilingSubmissionExceptionSeverity = "medium" | "high" | "critical"
+
+export type FilingSubmissionExceptionStatus = "open" | "claimed" | "escalated" | "resolved"
+
+export type FilingSubmissionExceptionSource =
+  | "receipt_retry_scheduled"
+  | "receipt_rejected"
+  | "reconciliation_needs_retry"
+
+export type FilingSubmissionExceptionRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingSubmissionExceptionStatus
+  severity: FilingSubmissionExceptionSeverity
+  source: FilingSubmissionExceptionSource
+  latestReceiptId: string | null
+  latestReconciliationId: string | null
+  escalationOwnerId: string | null
+  firstRaisedAt: number
+  lastRaisedAt: number
+  slaTargetAt: number
+  claimedBy: string | null
+  claimedAt: number | null
+  escalatedBy: string | null
+  escalatedAt: number | null
+  resolvedBy: string | null
+  resolvedAt: number | null
+  resolutionNotes: string[]
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -398,6 +432,7 @@ export class SpineStore {
   filingAnnexures = new Map<string, FilingAnnexureRow>()
   filingSubmissionReceipts = new Map<string, FilingSubmissionReceiptRow>()
   filingSubmissionReconciliation = new Map<string, FilingSubmissionReconciliationRow>()
+  filingSubmissionExceptions = new Map<string, FilingSubmissionExceptionRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

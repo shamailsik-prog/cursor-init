@@ -39,6 +39,7 @@ const baseStore = {
   filingAnnexures: new Map(),
   filingSubmissionReceipts: new Map(),
   filingSubmissionReconciliation: new Map(),
+  filingSubmissionExceptions: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -263,6 +264,37 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingSubmissionExceptions: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "exception:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "open",
+          severity: "high",
+          source: "reconciliation_needs_retry",
+          latestReceiptId: "receipt:pkg_repo:1",
+          latestReconciliationId: "reconcile:pkg_repo",
+          escalationOwnerId: "partner_a",
+          firstRaisedAt: 6,
+          lastRaisedAt: 7,
+          slaTargetAt: 8,
+          claimedBy: null,
+          claimedAt: null,
+          escalatedBy: null,
+          escalatedAt: null,
+          resolvedBy: null,
+          resolvedAt: null,
+          resolutionNotes: ["repo exception row"],
+          updatedAt: 9,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -450,6 +482,19 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
     expect(json.items.map((item) => item.id)).toContain("reconcile:pkg_repo")
+    expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings submission exceptions view GET uses repository filingSubmissionExceptions listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=submission_exceptions&userId=associate_a&matterId=mat_1&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
+    expect(json.items.map((item) => item.id)).toContain("exception:pkg_repo")
     expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
   })
 

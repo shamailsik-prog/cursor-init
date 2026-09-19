@@ -415,6 +415,36 @@ describe("Firestore repository adapters", () => {
       expect(reconciliationByFirm.some((row) => row.id === "reconcile:pkg_1")).toBe(true)
       const reconciliationByPackage = await repos.filingSubmissionReconciliation.listByPackageId("pkg_1")
       expect(reconciliationByPackage.some((row) => row.id === "reconcile:pkg_1")).toBe(true)
+      await repos.filingSubmissionExceptions.upsert({
+        id: "exception:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "open",
+        severity: "high",
+        source: "reconciliation_needs_retry",
+        latestReceiptId: "receipt:pkg_1:1",
+        latestReconciliationId: "reconcile:pkg_1",
+        escalationOwnerId: "partner_a",
+        firstRaisedAt: 27,
+        lastRaisedAt: 28,
+        slaTargetAt: 29,
+        claimedBy: null,
+        claimedAt: null,
+        escalatedBy: null,
+        escalatedAt: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNotes: ["escalation opened"],
+        updatedAt: 30,
+      })
+      const exception = await repos.filingSubmissionExceptions.get("exception:pkg_1")
+      expect(exception?.severity).toBe("high")
+      const exceptionByFirm = await repos.filingSubmissionExceptions.listByFirm("firmA")
+      expect(exceptionByFirm.some((row) => row.id === "exception:pkg_1")).toBe(true)
+      const exceptionByPackage = await repos.filingSubmissionExceptions.listByPackageId("pkg_1")
+      expect(exceptionByPackage.some((row) => row.id === "exception:pkg_1")).toBe(true)
     })
   })
 })

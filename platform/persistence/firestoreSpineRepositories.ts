@@ -14,6 +14,7 @@ import type {
   FilingDispatchQueueRow,
   FilingPackage,
   FilingPacketArtifactRow,
+  FilingSubmissionExceptionRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
   FollowUp,
@@ -299,6 +300,23 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_submission_reconciliation"))
         return rows.docs
           .map((entry) => entry.data() as FilingSubmissionReconciliationRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingSubmissionExceptions: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_submission_exceptions", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingSubmissionExceptionRow>(db, "filing_submission_exceptions", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingSubmissionExceptionRow>(db, "filing_submission_exceptions", firmId)
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_submission_exceptions"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingSubmissionExceptionRow)
           .filter((row) => row.packageId === packageId)
       },
     },
