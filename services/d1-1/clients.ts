@@ -37,13 +37,23 @@ export function createClient(
   for (const other of store.entities.values()) {
     if (other.id === id || other.firmId !== input.firmId) continue
     if (other.cnic === cnic) {
-      store.links.push({
-        leftId: other.id,
-        rightId: id,
-        identityBasis: "cnic",
-        band: "confirmed-candidate",
-        score: 0.99,
-      })
+      const exists = store.links.some(
+        (row) =>
+          row.firmId === input.firmId &&
+          row.leftId === other.id &&
+          row.rightId === id &&
+          row.identityBasis === "cnic"
+      )
+      if (!exists) {
+        store.links.push({
+          firmId: input.firmId,
+          leftId: other.id,
+          rightId: id,
+          identityBasis: "cnic",
+          band: "confirmed-candidate",
+          score: 0.99,
+        })
+      }
     }
   }
   return entity

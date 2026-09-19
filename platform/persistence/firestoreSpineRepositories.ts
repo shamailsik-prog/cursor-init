@@ -15,6 +15,8 @@ import type {
   Intimation,
   Job,
   AuditEntry,
+  Entity,
+  EntityLink,
   Matter,
   MatterMember,
   DocumentWorkflow,
@@ -83,6 +85,50 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<User>(db, "users", firmId)
+      },
+    },
+    entities: {
+      async create(row) {
+        await setById(db, "entities", row)
+      },
+      async get(id) {
+        return getById<Entity>(db, "entities", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<Entity>(db, "entities", firmId)
+      },
+    },
+    entityLinks: {
+      async upsert(row) {
+        const key = `${row.firmId}_${row.leftId}_${row.rightId}_${row.identityBasis}`
+        await setDoc(doc(db, "merge_events", key), row)
+      },
+      async listByFirm(firmId) {
+        const rows = await listByFirm<Record<string, unknown> & { firmId: string }>(
+          db,
+          "merge_events",
+          firmId
+        )
+        return rows
+          .filter(
+            (row) =>
+              typeof row.leftId === "string" &&
+              typeof row.rightId === "string" &&
+              row.identityBasis === "cnic" &&
+              row.band === "confirmed-candidate" &&
+              typeof row.score === "number"
+          )
+          .map(
+            (row) =>
+              ({
+                firmId: row.firmId,
+                leftId: row.leftId,
+                rightId: row.rightId,
+                identityBasis: row.identityBasis,
+                band: row.band,
+                score: row.score,
+              }) as EntityLink
+          )
       },
     },
     members: {
