@@ -321,6 +321,26 @@ describe("Firestore repository adapters", () => {
       expect(packetArtifactsByFirm.some((row) => row.id === "packet:pkg_1")).toBe(true)
       const packetArtifactsByPackage = await repos.filingPacketArtifacts.listByPackageId("pkg_1")
       expect(packetArtifactsByPackage.some((row) => row.id === "packet:pkg_1")).toBe(true)
+      await repos.filingDispatchQueue.upsert({
+        id: "dispatch:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "queued",
+        assigneeId: "clerk_a",
+        retryCount: 1,
+        lastAttemptAt: 21,
+        operatorNotes: ["handoff staged"],
+        externalDispatchState: "blocked_todo_firm",
+        updatedAt: 22,
+      })
+      const dispatchRow = await repos.filingDispatchQueue.get("dispatch:pkg_1")
+      expect(dispatchRow?.packageId).toBe("pkg_1")
+      const dispatchByFirm = await repos.filingDispatchQueue.listByFirm("firmA")
+      expect(dispatchByFirm.some((row) => row.id === "dispatch:pkg_1")).toBe(true)
+      const dispatchByPackage = await repos.filingDispatchQueue.listByPackageId("pkg_1")
+      expect(dispatchByPackage.some((row) => row.id === "dispatch:pkg_1")).toBe(true)
     })
   })
 })

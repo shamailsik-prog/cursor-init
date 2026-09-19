@@ -11,6 +11,11 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildFilingPacketArtifactRow } from "@/platform/persistence/filingPacketArtifacts"
+import {
+  buildFilingDispatchQueueRow,
+  filingDispatchQueueId,
+  isFilingDispatchQueueStatus,
+} from "@/platform/persistence/filingDispatchQueue"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -45,7 +50,17 @@ type DecideBody = {
   reason?: string
 }
 
-type Body = CreateBody | DecideBody
+type DispatchUpdateBody = {
+  action: "dispatch_update"
+  actorId?: string
+  packageId?: string
+  nextStatus?: "queued" | "in_progress" | "retry_pending" | "handoff_ready" | "blocked"
+  assigneeId?: string | null
+  note?: string
+  markAttempt?: boolean
+}
+
+type Body = CreateBody | DecideBody | DispatchUpdateBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -64,13 +79,21 @@ function parseReadiness(value: string | null): "ready" | "blocked" | undefined {
   return undefined
 }
 
+function parseFilingsView(value: string | null): "packages" | "dispatch" {
+  if (value === "dispatch") return "dispatch"
+  return "packages"
+}
+
 export async function GET(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
+  const view = parseFilingsView(url.searchParams.get("view"))
   const userId = url.searchParams.get("userId")
   const matterId = url.searchParams.get("matterId") ?? undefined
   const readiness = parseReadiness(url.searchParams.get("readiness"))
+  const dispatchStatus = url.searchParams.get("dispatchStatus")
+  const assigneeId = url.searchParams.get("assigneeId")
   const limit = parseLimit(url.searchParams.get("limit"))
   const cursor = parseCursor(url.searchParams.get("cursor"))
   if (!userId) {
@@ -94,6 +117,42 @@ export async function GET(request: Request) {
       store.filingPacketArtifacts.set(artifact.id, artifact)
       artifactByPackage.set(filingPackage.id, artifact)
     }
+    if (view === "dispatch") {
+      const queueRows = await repos.filingDispatchQueue.listByFirm(user.firmId)
+      const queueByPackage = new Map(queueRows.map((row) => [row.packageId, row]))
+      for (const filingPackage of firmPackages) {
+        if (filingPackage.status !== "approved" || queueByPackage.has(filingPackage.id)) continue
+        const queueRow = buildFilingDispatchQueueRow(filingPackage)
+        await repos.filingDispatchQueue.upsert(queueRow)
+        store.filingDispatchQueue.set(queueRow.id, queueRow)
+        queueByPackage.set(filingPackage.id, queueRow)
+      }
+      const visible = [...queueByPackage.values()]
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .filter((row) => {
+          if (!dispatchStatus || !isFilingDispatchQueueStatus(dispatchStatus)) return true
+          return row.status === dispatchStatus
+        })
+        .filter((row) => (assigneeId ? row.assigneeId === assigneeId : true))
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+
     const visible = firmPackages
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => {
@@ -116,6 +175,7 @@ export async function GET(request: Request) {
     const nextCursor =
       cursor + items.length < visible.length ? String(cursor + items.length) : null
     return NextResponse.json({
+      view,
       items,
       total: visible.length,
       limit,
@@ -258,11 +318,104 @@ export async function POST(request: Request) {
       const packetArtifact = buildFilingPacketArtifactRow(filingPackage, draft)
       await repos.filingPacketArtifacts.upsert(packetArtifact)
       store.filingPacketArtifacts.set(packetArtifact.id, packetArtifact)
+      const dispatchQueueRow =
+        filingPackage.status === "approved" ? buildFilingDispatchQueueRow(filingPackage) : null
+      if (dispatchQueueRow) {
+        await repos.filingDispatchQueue.upsert(dispatchQueueRow)
+        store.filingDispatchQueue.set(dispatchQueueRow.id, dispatchQueueRow)
+      }
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "decide_package",
         filingPackage: (await repos.filings.get(filingPackage.id)) ?? filingPackage,
         packetArtifact: (await repos.filingPacketArtifacts.get(packetArtifact.id)) ?? packetArtifact,
+        dispatchQueue:
+          dispatchQueueRow &&
+          ((await repos.filingDispatchQueue.get(dispatchQueueRow.id)) ?? dispatchQueueRow),
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "dispatch_update") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json(
+          { error: "actorId and packageId are required" },
+          { status: 400 }
+        )
+      }
+      if (parsed.nextStatus && !isFilingDispatchQueueStatus(parsed.nextStatus)) {
+        return NextResponse.json({ error: "invalid dispatch status" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "associate", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "dispatch queue updates require partner, associate, or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm dispatch update denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      if (filingPackage.status !== "approved") {
+        return NextResponse.json(
+          { error: "dispatch queue can only be updated for approved filing packages" },
+          { status: 422 }
+        )
+      }
+      const priorAuditCount = store.audit.length
+      const existing =
+        (await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))) ??
+        buildFilingDispatchQueueRow(filingPackage)
+      if (parsed.assigneeId !== undefined && parsed.assigneeId !== null) {
+        const assignee =
+          store.users.get(parsed.assigneeId) ?? (await repos.users.get(parsed.assigneeId))
+        if (!assignee || assignee.firmId !== actor.firmId) {
+          return NextResponse.json({ error: "unknown assignee in actor firm" }, { status: 404 })
+        }
+      }
+      const now = Date.now()
+      const note = parsed.note?.trim()
+      const nextStatus = parsed.nextStatus ?? existing.status
+      const updated = {
+        ...existing,
+        status: nextStatus,
+        assigneeId: parsed.assigneeId === undefined ? existing.assigneeId : parsed.assigneeId,
+        retryCount: existing.retryCount + (parsed.markAttempt ? 1 : 0),
+        lastAttemptAt: parsed.markAttempt ? now : existing.lastAttemptAt,
+        operatorNotes: note
+          ? [...existing.operatorNotes, `${new Date(now).toISOString()} ${actor.id}: ${note}`]
+          : existing.operatorNotes,
+        externalDispatchState:
+          nextStatus === "handoff_ready" ? "ready_for_firm_dispatch" : "blocked_todo_firm",
+        updatedAt: now,
+      }
+      await repos.filingDispatchQueue.upsert(updated)
+      store.filingDispatchQueue.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_dispatch_update",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: parsed.note?.trim() || parsed.nextStatus || "dispatch queue update",
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "dispatch_update",
+        dispatchQueue: (await repos.filingDispatchQueue.get(updated.id)) ?? updated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

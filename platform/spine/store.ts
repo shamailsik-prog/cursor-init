@@ -212,6 +212,28 @@ export type FilingPacketArtifactRow = {
   updatedAt: number
 }
 
+export type FilingDispatchQueueStatus =
+  | "queued"
+  | "in_progress"
+  | "retry_pending"
+  | "handoff_ready"
+  | "blocked"
+
+export type FilingDispatchQueueRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingDispatchQueueStatus
+  assigneeId: string | null
+  retryCount: number
+  lastAttemptAt: number | null
+  operatorNotes: string[]
+  externalDispatchState: "blocked_todo_firm" | "ready_for_firm_dispatch"
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -301,6 +323,7 @@ export class SpineStore {
   workflowEvents: WorkflowEvent[] = []
   filingPackages = new Map<string, FilingPackage>()
   filingPacketArtifacts = new Map<string, FilingPacketArtifactRow>()
+  filingDispatchQueue = new Map<string, FilingDispatchQueueRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
