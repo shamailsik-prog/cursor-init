@@ -531,6 +531,39 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(attachRetryPlan.status).toBe(200)
+      const acknowledgeDigest = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "12920f7d-3598-46a8-abf3-a842556f6488",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_breach",
+            actorId: "partner_a",
+            packageId,
+            note: "runtime partner acknowledged digest breach",
+          }),
+        })
+      )
+      expect(acknowledgeDigest.status).toBe(200)
+      const deferDigest = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f362f5e9-b2dc-4f22-a18b-5f9561f7f264",
+          },
+          body: JSON.stringify({
+            action: "defer_window",
+            actorId: "partner_a",
+            packageId,
+            deferHours: 6,
+            note: "runtime digest deferred window",
+          }),
+        })
+      )
+      expect(deferDigest.status).toBe(200)
       const confirmDelivered = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -551,6 +584,22 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(confirmDelivered.status).toBe(200)
+      const clearDigest = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "eb8a5f68-a9bb-47f8-aa7c-4cbf2295db53",
+          },
+          body: JSON.stringify({
+            action: "clear_digest",
+            actorId: "partner_a",
+            packageId,
+            note: "runtime digest cleared after closure",
+          }),
+        })
+      )
+      expect(clearDigest.status).toBe(200)
 
       getRuntimeStore().filingPacketArtifacts = new Map()
       getRuntimeStore().filingDispatchQueue = new Map()
@@ -559,6 +608,7 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingSubmissionReconciliation = new Map()
       getRuntimeStore().filingSubmissionExceptions = new Map()
       getRuntimeStore().filingTransportExecutionEvidence = new Map()
+      getRuntimeStore().filingSubmissionSlaDigests = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -672,6 +722,20 @@ describe("Runtime persistence mode", () => {
           (item) => item.packageId === packageId && item.outcome === "confirm_delivered"
         )
       ).toBe(true)
+      const rehydratedDigest = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=submission_sla_digests&userId=associate_a&matterId=${matterId}&packageId=${packageId}&digestStatus=cleared&ownerId=partner_a&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedDigest.status).toBe(200)
+      const rehydratedDigestJson = (await rehydratedDigest.json()) as {
+        items: Array<{ packageId: string; status: string }>
+      }
+      expect(
+        rehydratedDigestJson.items.some(
+          (item) => item.packageId === packageId && item.status === "cleared"
+        )
+      ).toBe(true)
       await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
         id: "transport:pkg_firmB:1",
         firmId: "firmB",
@@ -692,6 +756,30 @@ describe("Runtime persistence mode", () => {
         note: "firmB transport evidence row",
         createdAt: Date.now(),
       })
+      await setDoc(doc(ctx.firestore(), "filing_submission_sla_digests", "digest:pkg_firmB"), {
+        id: "digest:pkg_firmB",
+        firmId: "firmB",
+        packageId: "pkg_firmB",
+        matterId: "mat_firmB",
+        classification: "internal",
+        status: "open_breach",
+        breachReasons: ["sla_overdue"],
+        staleRetryPlan: false,
+        outstandingOwnerId: "partner_b",
+        linkedExceptionId: "exception:pkg_firmB",
+        linkedEvidenceId: "transport:pkg_firmB:1",
+        breachWindowStartedAt: Date.now(),
+        deferUntil: null,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        deferredBy: null,
+        deferredAt: null,
+        clearedBy: null,
+        clearedAt: null,
+        notes: ["firmB digest row"],
+        lastEvaluatedAt: Date.now(),
+        updatedAt: Date.now(),
+      })
       const firmAScopeEvidence = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
@@ -702,6 +790,16 @@ describe("Runtime persistence mode", () => {
         items: Array<{ packageId: string }>
       }
       expect(firmAScopeEvidenceJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
+      const firmAScopeDigest = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=submission_sla_digests&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeDigest.status).toBe(200)
+      const firmAScopeDigestJson = (await firmAScopeDigest.json()) as {
+        items: Array<{ packageId: string }>
+      }
+      expect(firmAScopeDigestJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -785,6 +883,27 @@ describe("Runtime persistence mode", () => {
             item.target === `dispatch:${packageId}`
         )
       ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_sla_digest_acknowledge" &&
+            item.target === `digest:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_sla_digest_defer" &&
+            item.target === `digest:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_sla_digest_clear" &&
+            item.target === `digest:${packageId}`
+        )
+      ).toBe(true)
 
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
@@ -860,6 +979,15 @@ describe("Runtime persistence mode", () => {
             entry.data()?.packageId === packageId &&
             entry.data()?.outcome === "confirm_delivered" &&
             entry.data()?.channelPayloadHash === "runtime-transport-hash-003"
+        )
+      ).toBe(true)
+      const dbSlaDigests = await getDocs(collection(ctx.firestore(), "filing_submission_sla_digests"))
+      expect(
+        dbSlaDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.status === "cleared"
         )
       ).toBe(true)
     })

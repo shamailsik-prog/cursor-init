@@ -41,6 +41,7 @@ const baseStore = {
   filingSubmissionReconciliation: new Map(),
   filingSubmissionExceptions: new Map(),
   filingTransportExecutionEvidence: new Map(),
+  filingSubmissionSlaDigests: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -323,6 +324,37 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingSubmissionSlaDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "digest:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "open_breach",
+          breachReasons: ["sla_overdue"],
+          staleRetryPlan: false,
+          outstandingOwnerId: "partner_a",
+          linkedExceptionId: "exception:pkg_repo",
+          linkedEvidenceId: "transport:pkg_repo:1",
+          breachWindowStartedAt: 11,
+          deferUntil: null,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          deferredBy: null,
+          deferredAt: null,
+          clearedBy: null,
+          clearedAt: null,
+          notes: ["repo digest row"],
+          lastEvaluatedAt: 12,
+          updatedAt: 12,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -536,6 +568,19 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
     expect(json.items.map((item) => item.id)).toContain("transport:pkg_repo:1")
+    expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings submission sla digests view GET uses repository filingSubmissionSlaDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=submission_sla_digests&userId=associate_a&matterId=mat_1&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
+    expect(json.items.map((item) => item.id)).toContain("digest:pkg_repo")
     expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
   })
 

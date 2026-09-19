@@ -471,6 +471,36 @@ describe("Firestore repository adapters", () => {
       expect(transportEvidenceByFirm.some((row) => row.id === "transport:pkg_1:1")).toBe(true)
       const transportEvidenceByPackage = await repos.filingTransportExecutionEvidence.listByPackageId("pkg_1")
       expect(transportEvidenceByPackage.some((row) => row.id === "transport:pkg_1:1")).toBe(true)
+      await repos.filingSubmissionSlaDigests.upsert({
+        id: "digest:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "open_breach",
+        breachReasons: ["sla_overdue"],
+        staleRetryPlan: false,
+        outstandingOwnerId: "partner_a",
+        linkedExceptionId: "exception:pkg_1",
+        linkedEvidenceId: "transport:pkg_1:1",
+        breachWindowStartedAt: 32,
+        deferUntil: null,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        deferredBy: null,
+        deferredAt: null,
+        clearedBy: null,
+        clearedAt: null,
+        notes: ["digest opened"],
+        lastEvaluatedAt: 33,
+        updatedAt: 33,
+      })
+      const digest = await repos.filingSubmissionSlaDigests.get("digest:pkg_1")
+      expect(digest?.status).toBe("open_breach")
+      const digestsByFirm = await repos.filingSubmissionSlaDigests.listByFirm("firmA")
+      expect(digestsByFirm.some((row) => row.id === "digest:pkg_1")).toBe(true)
+      const digestsByPackage = await repos.filingSubmissionSlaDigests.listByPackageId("pkg_1")
+      expect(digestsByPackage.some((row) => row.id === "digest:pkg_1")).toBe(true)
     })
   })
 })
