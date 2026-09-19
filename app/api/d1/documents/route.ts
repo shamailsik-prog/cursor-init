@@ -9,6 +9,7 @@ import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/s
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -173,6 +174,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    const priorAuditCount = store.audit.length
     const actor = requireActor(parsed.actorId, parsed.firmId)
     await syncFirmMembers(store, repos, actor.firmId)
     if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification)) {
@@ -245,6 +247,7 @@ export async function POST(request: Request) {
       classification: doc.classification,
       reason: write.reused ? "reused" : "created",
     })
+    await persistAuditEntriesSince(store, repos, priorAuditCount)
 
     const payload = {
       action: "ingest",

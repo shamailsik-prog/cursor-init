@@ -314,6 +314,13 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
     },
     audit: {
       async append(row) {
+        if (row.id) {
+          const idx = store.audit.findIndex((entry) => entry.id === row.id)
+          if (idx >= 0) {
+            store.audit[idx] = row
+            return
+          }
+        }
         store.audit.push(row)
       },
       async listByFirm(firmId) {

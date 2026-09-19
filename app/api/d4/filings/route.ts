@@ -9,6 +9,7 @@ import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -162,6 +163,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "unknown actor" }, { status: 404 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      const priorAuditCount = store.audit.length
       const created = createFilingPackage(store, {
         actorId: parsed.actorId,
         matterId: parsed.matterId,
@@ -176,6 +178,7 @@ export async function POST(request: Request) {
         },
       })
       await repos.filings.create(created.filingPackage)
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "create_package",
         filingPackage:
@@ -204,6 +207,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "unknown actor" }, { status: 404 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      const priorAuditCount = store.audit.length
       const persisted = await repos.filings.get(filingPackage.id)
       if (persisted) {
         await repos.filings.update(filingPackage.id, {
@@ -214,6 +218,7 @@ export async function POST(request: Request) {
       } else {
         await repos.filings.create(filingPackage)
       }
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "decide_package",
         filingPackage: (await repos.filings.get(filingPackage.id)) ?? filingPackage,

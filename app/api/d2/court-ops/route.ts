@@ -7,6 +7,7 @@ import {
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { handleWhatsApp } from "@/services/d2-1/whatsapp"
 import {
   acknowledgeCourtOpsItem,
@@ -245,12 +246,15 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const repos = await syncCourtOpsState(store, parsed.actorId)
+      const priorAuditCount = store.audit.length
       acknowledgeCourtOpsItem(store, {
         actorId: parsed.actorId,
         queueType: parsed.queueType,
         id: parsed.id,
         reason: parsed.reason,
       })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_item",
         queueType: parsed.queueType,
@@ -268,6 +272,7 @@ export async function POST(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
+      const priorAuditCount = store.audit.length
       resolveFollowUp(store, {
         actorId: parsed.actorId,
         followUpId: parsed.followUpId,
@@ -277,6 +282,7 @@ export async function POST(request: Request) {
       if (updated) {
         await repos.followUps.upsert(updated)
       }
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "resolve_follow_up", followUpId: parsed.followUpId }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -290,6 +296,7 @@ export async function POST(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
+      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = resolveWorkflowBlocker(store, {
         actorId: parsed.actorId,
@@ -301,6 +308,7 @@ export async function POST(request: Request) {
       for (const event of store.workflowEvents.slice(priorEvents)) {
         await repos.workflowEvents.append(event)
       }
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "resolve_workflow", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
