@@ -5,8 +5,9 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
+import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -57,11 +58,13 @@ function requireActor(actorId: string, firmId?: string) {
   return actor
 }
 
-function canViewDocument(userId: string, documentId: string): boolean {
-  const store = getRuntimeStore()
+function canViewDocument(
+  store: SpineStore,
+  userId: string,
+  doc: Pick<DocumentRecord, "firmId" | "classification" | "matterId">
+): boolean {
   const user = store.users.get(userId)
-  const doc = store.documents.get(documentId)
-  if (!user || !doc) return false
+  if (!user) return false
   if (user.firmId !== doc.firmId) return false
   if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
   if (doc.matterId) {
@@ -72,6 +75,7 @@ function canViewDocument(userId: string, documentId: string): boolean {
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
+  const repos = createMemoryRepositories(store)
   const url = new URL(request.url)
   const userId = url.searchParams.get("userId")
   const matterId = url.searchParams.get("matterId")
@@ -81,13 +85,14 @@ export async function GET(request: Request) {
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
   }
-  if (!store.users.has(userId)) {
+  const user = store.users.get(userId)
+  if (!user) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
-
-  const visible = [...store.documents.values()]
+  const firmDocs = await repos.documents.listByFirm(user.firmId)
+  const visible = firmDocs
     .filter((doc) => (matterId ? doc.matterId === matterId : true))
-    .filter((doc) => canViewDocument(userId, doc.id))
+    .filter((doc) => canViewDocument(store, userId, doc))
     .sort((a, b) => a.id.localeCompare(b.id))
 
   const items = visible.slice(cursor, cursor + limit).map((doc) => ({
@@ -107,6 +112,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
+  const repos = createMemoryRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -200,7 +206,7 @@ export async function POST(request: Request) {
       idempotencyKey: key,
     })
 
-    const doc = store.documents.get(write.docId)
+    const doc = await repos.documents.get(write.docId)
     if (!doc) {
       return NextResponse.json({ error: "document write failed" }, { status: 500 })
     }

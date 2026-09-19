@@ -5,11 +5,13 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
+import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
+import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
+import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
   decideFilingPackage,
-  listFilingPackages,
 } from "@/services/d4-3/filingPackage"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -56,6 +58,7 @@ function parseCursor(value: string | null): number {
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
+  const repos = createMemoryRepositories(store)
   const url = new URL(request.url)
   const userId = url.searchParams.get("userId")
   const matterId = url.searchParams.get("matterId") ?? undefined
@@ -65,13 +68,28 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
   }
   try {
-    const list = listFilingPackages(store, { userId, matterId, limit, cursor })
+    const user = store.users.get(userId)
+    if (!user) {
+      return NextResponse.json({ error: "unknown user" }, { status: 404 })
+    }
+    const firmPackages = await repos.filings.listByFirm(user.firmId)
+    const visible = firmPackages
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) => {
+        const permission = checkPermission(store, user.id, "draft", row.matterId)
+        if (!permission.allow) return false
+        return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+      })
+      .sort((a, b) => a.id.localeCompare(b.id))
+    const items = visible.slice(cursor, cursor + limit)
+    const nextCursor =
+      cursor + items.length < visible.length ? String(cursor + items.length) : null
     return NextResponse.json({
-      items: list.items,
-      total: list.total,
+      items,
+      total: visible.length,
       limit,
       cursor,
-      nextCursor: list.nextCursor,
+      nextCursor,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : "filings read failed"
@@ -81,6 +99,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
+  const repos = createMemoryRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -151,7 +170,8 @@ export async function POST(request: Request) {
       })
       const payload = {
         action: "create_package",
-        filingPackage: created.filingPackage,
+        filingPackage:
+          (await repos.filings.get(created.filingPackage.id)) ?? created.filingPackage,
         preflight: created.preflight,
       }
       idempotency.set(key, payload, fingerprint)
@@ -173,7 +193,7 @@ export async function POST(request: Request) {
       })
       const payload = {
         action: "decide_package",
-        filingPackage,
+        filingPackage: (await repos.filings.get(filingPackage.id)) ?? filingPackage,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
