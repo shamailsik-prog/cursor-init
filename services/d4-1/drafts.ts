@@ -35,12 +35,9 @@ export type DraftPreflightResult = {
   temporal: Array<{ sectionId: string; status: "OK" | "TEMPORAL-MISMATCH" }>
 }
 
-export function listTemplates(
-  query: string,
-  limit: number,
-  cursor: number
-): { items: TemplateSummary[]; total: number; nextCursor: string | null } {
-  const all = getDocumentTypes()
+export function listTemplateCatalog(query: string): TemplateSummary[] {
+  const normalizedQuery = query.toLowerCase()
+  return getDocumentTypes()
     .map((type) => ({
       id: type.id,
       name: type.name,
@@ -49,14 +46,21 @@ export function listTemplates(
     }))
     .sort((a, b) => a.id.localeCompare(b.id))
     .filter((item) => {
-      if (!query) return true
-      const q = query.toLowerCase()
+      if (!normalizedQuery) return true
       return (
-        item.id.toLowerCase().includes(q) ||
-        item.name.toLowerCase().includes(q) ||
-        item.posture.toLowerCase().includes(q)
+        item.id.toLowerCase().includes(normalizedQuery) ||
+        item.name.toLowerCase().includes(normalizedQuery) ||
+        item.posture.toLowerCase().includes(normalizedQuery)
       )
     })
+}
+
+export function listTemplates(
+  query: string,
+  limit: number,
+  cursor: number
+): { items: TemplateSummary[]; total: number; nextCursor: string | null } {
+  const all = listTemplateCatalog(query)
   const items = all.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
   return { items, total: all.length, nextCursor }

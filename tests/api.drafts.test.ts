@@ -51,6 +51,12 @@ function templateId(): string {
   return first.id
 }
 
+function secondTemplateId(): string {
+  const second = getDocumentTypes()[1]
+  if (!second) throw new Error("second document type seed missing")
+  return second.id
+}
+
 describe("POST/GET /api/d4/drafts", () => {
   it("lists id-keyed templates with pagination", async () => {
     const firstPage = await get(
@@ -79,6 +85,42 @@ describe("POST/GET /api/d4/drafts", () => {
       )
       expect(secondPage.status).toBe(200)
     }
+  })
+
+  it("tracks template search analytics for actor-scoped template discovery", async () => {
+    const query = templateId()
+    const first = await get(
+      new URLSearchParams({
+        view: "templates",
+        actorId: "associate_a",
+        q: query,
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(first.status).toBe(200)
+    const one = (await first.json()) as {
+      items: Array<{ id: string; analytics: { templateSearchCount: number } }>
+    }
+    expect(one.items).toHaveLength(1)
+    expect(one.items[0]?.id).toBe(query)
+    expect(one.items[0]?.analytics.templateSearchCount).toBe(1)
+
+    const second = await get(
+      new URLSearchParams({
+        view: "templates",
+        actorId: "associate_a",
+        q: query,
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(second.status).toBe(200)
+    const two = (await second.json()) as {
+      items: Array<{ id: string; analytics: { templateSearchCount: number } }>
+    }
+    expect(two.items[0]?.id).toBe(query)
+    expect(two.items[0]?.analytics.templateSearchCount).toBe(2)
   })
 
   it("blocks preflight when citation is overruled without partner override", async () => {
@@ -285,5 +327,66 @@ describe("POST/GET /api/d4/drafts", () => {
     const two = (await pageTwo.json()) as { items: Array<{ id: string }>; nextCursor: string | null }
     expect(two.items).toHaveLength(1)
     expect(two.nextCursor).toBeNull()
+  })
+
+  it("orders draft discovery by persisted template compose analytics", async () => {
+    const matterId = seedMatter("internal")
+    const primaryTemplate = templateId()
+    const secondaryTemplate = secondTemplateId()
+    await post(
+      {
+        action: "compose",
+        actorId: "associate_a",
+        matterId,
+        templateId: primaryTemplate,
+        title: "Draft Primary A",
+        body: "Body",
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+      },
+      "fbbf9be9-a051-43d6-9f3d-df4f0d0b68bf"
+    )
+    await post(
+      {
+        action: "compose",
+        actorId: "associate_a",
+        matterId,
+        templateId: secondaryTemplate,
+        title: "Draft Secondary",
+        body: "Body",
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+      },
+      "e8aa0905-b58a-4f99-8382-0a0aa4fd846d"
+    )
+    await post(
+      {
+        action: "compose",
+        actorId: "associate_a",
+        matterId,
+        templateId: primaryTemplate,
+        title: "Draft Primary B",
+        body: "Body",
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+      },
+      "7a9aa75b-c412-4a4d-8eab-5caad3a5f992"
+    )
+
+    const ranked = await get(
+      new URLSearchParams({
+        view: "drafts",
+        userId: "associate_a",
+        matterId,
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(ranked.status).toBe(200)
+    const rankedJson = (await ranked.json()) as { items: Array<{ templateId: string }> }
+    expect(rankedJson.items[0]?.templateId).toBe(primaryTemplate)
   })
 })

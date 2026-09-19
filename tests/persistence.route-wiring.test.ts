@@ -35,6 +35,7 @@ const baseStore = {
   documents: new Map(),
   filingPackages: new Map(),
   matterClientSearchIndex: new Map(),
+  draftTemplateAnalytics: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -200,6 +201,26 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
     },
+    draftTemplateAnalytics: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "template:constitutional_petition_199",
+          firmId: "firmA",
+          templateId: "constitutional_petition_199",
+          templateName: "Constitutional Petition (Art. 199)",
+          templatePosture: "writ",
+          templateCategory: "constitutional",
+          composeCount: 2,
+          templateSearchCount: 5,
+          lastComposedAt: 10,
+          lastTemplateSearchAt: 11,
+          lastTemplateSearchQuery: "petition",
+          updatedAt: 12,
+        },
+      ]),
+    },
   })),
 }))
 
@@ -252,5 +273,19 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("idx_repo")
+  })
+
+  it("draft templates route GET uses repository draftTemplateAnalytics listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/drafts/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/drafts?view=templates&actorId=associate_a&q=petition&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ analytics?: { templateSearchCount?: number } }>
+    }
+    expect(json.items.some((item) => (item.analytics?.templateSearchCount ?? 0) >= 5)).toBe(true)
   })
 })

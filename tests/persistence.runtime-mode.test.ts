@@ -348,6 +348,117 @@ describe("Runtime persistence mode", () => {
     })
   })
 
+  it("persists draft template analytics and rehydrates discovery ordering after reset", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const matterId = await createMatterViaRoute(
+        "Persisted draft analytics matter",
+        "5ef90e29-122d-4ba0-967d-278a11ba9a86"
+      )
+      const templates = getDocumentTypes()
+      const primary = templates[0]
+      const secondary = templates[1]
+      if (!primary || !secondary) throw new Error("missing template seeds")
+
+      const composePayload = (templateId: string, title: string, key: string) =>
+        draftsPost(
+          new Request("http://127.0.0.1/api/d4/drafts", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": key,
+            },
+            body: JSON.stringify({
+              action: "compose",
+              actorId: "associate_a",
+              matterId,
+              templateId,
+              title,
+              body: "Body",
+              classification: "internal",
+              citedJudgmentIds: [],
+              temporalCitations: [],
+            }),
+          })
+        )
+
+      expect(
+        (
+          await composePayload(
+            primary.id,
+            "Analytics draft A",
+            "3d9f28e1-ed4f-4db4-bf1c-987ff869ec97"
+          )
+        ).status
+      ).toBe(200)
+      expect(
+        (
+          await composePayload(
+            secondary.id,
+            "Analytics draft B",
+            "86f756ce-df6f-4ad0-b5dc-59e1e446f2c4"
+          )
+        ).status
+      ).toBe(200)
+      expect(
+        (
+          await composePayload(
+            primary.id,
+            "Analytics draft C",
+            "6ac14923-7eff-4e4d-8a6e-f450e6c7dba4"
+          )
+        ).status
+      ).toBe(200)
+
+      const searchRes = await draftsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/drafts?view=templates&actorId=associate_a&q=${encodeURIComponent(primary.id)}&limit=10&cursor=0`
+        )
+      )
+      expect(searchRes.status).toBe(200)
+
+      getRuntimeStore().draftTemplateAnalytics = new Map()
+
+      const templateView = await draftsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/drafts?view=templates&actorId=associate_a&q=${encodeURIComponent(primary.id)}&limit=10&cursor=0`
+        )
+      )
+      expect(templateView.status).toBe(200)
+      const templateJson = (await templateView.json()) as {
+        items: Array<{
+          id: string
+          analytics: { composeCount: number; templateSearchCount: number }
+        }>
+      }
+      const primaryRow = templateJson.items.find((item) => item.id === primary.id)
+      expect((primaryRow?.analytics.composeCount ?? 0) >= 2).toBe(true)
+      expect((primaryRow?.analytics.templateSearchCount ?? 0) >= 1).toBe(true)
+
+      const draftsView = await draftsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/drafts?view=drafts&userId=associate_a&matterId=${matterId}&limit=10&cursor=0`
+        )
+      )
+      expect(draftsView.status).toBe(200)
+      const draftsJson = (await draftsView.json()) as {
+        items: Array<{ templateId: string }>
+      }
+      expect(draftsJson.items[0]?.templateId).toBe(primary.id)
+
+      const persistedAnalytics = await getDocs(collection(ctx.firestore(), "draft_template_analytics"))
+      expect(
+        persistedAnalytics.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.templateId === primary.id &&
+            entry.data()?.composeCount >= 2 &&
+            entry.data()?.templateSearchCount >= 1
+        )
+      ).toBe(true)
+    })
+  })
+
   it("persists court-ops queue resolution lifecycle in Firestore mode", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
