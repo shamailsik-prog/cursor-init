@@ -6,6 +6,7 @@ import {
 } from "@/platform/http/idempotency"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
+import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { handleWhatsApp } from "@/services/d2-1/whatsapp"
 import {
   acknowledgeCourtOpsItem,
@@ -77,6 +78,49 @@ function validateWhatsAppCommand(command: string): boolean {
   )
 }
 
+async function syncCourtOpsState(
+  store: ReturnType<typeof getRuntimeStore>,
+  actorId: string
+) {
+  const repos = await getRuntimeRepositories(store)
+  const actor = store.users.get(actorId)
+  if (!actor) throw new Error("unknown actor")
+
+  const firmDocs = await repos.documents.listByFirm(actor.firmId)
+  for (const row of firmDocs) {
+    store.documents.set(row.id, row)
+  }
+
+  const firmFollowUps = await repos.followUps.listByFirm(actor.firmId)
+  const mergedFollowUps = new Map<string, (typeof firmFollowUps)[number]>()
+  for (const row of store.followUps) {
+    if (row.firmId !== actor.firmId) continue
+    mergedFollowUps.set(row.id, row)
+  }
+  for (const row of firmFollowUps) {
+    mergedFollowUps.set(row.id, row)
+  }
+  store.followUps = [
+    ...store.followUps.filter((row) => row.firmId !== actor.firmId),
+    ...mergedFollowUps.values(),
+  ]
+
+  const firmWorkflow = await repos.workflow.listByFirm(actor.firmId)
+  const mergedWorkflow = new Map<string, (typeof firmWorkflow)[number]>()
+  for (const [key, row] of store.documentWorkflow.entries()) {
+    if (row.firmId !== actor.firmId) continue
+    mergedWorkflow.set(key, row)
+  }
+  for (const row of firmWorkflow) {
+    mergedWorkflow.set(row.documentId, row)
+  }
+  for (const [key, row] of mergedWorkflow.entries()) {
+    store.documentWorkflow.set(key, row)
+  }
+
+  return repos
+}
+
 export async function GET(request: Request) {
   const store = getRuntimeStore()
   const url = new URL(request.url)
@@ -88,6 +132,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
   }
   try {
+    await syncCourtOpsState(store, userId)
     const queue = listCourtOpsQueue(store, userId, { matterId, limit, cursor })
     return NextResponse.json({
       view: "court_ops_queue",
@@ -145,6 +190,7 @@ export async function POST(request: Request) {
       if (!parsed.actorId || !parsed.command) {
         return NextResponse.json({ error: "actorId and command are required" }, { status: 400 })
       }
+      await syncCourtOpsState(store, parsed.actorId)
       if (!validateWhatsAppCommand(parsed.command)) {
         return NextResponse.json(
           {
@@ -211,11 +257,16 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const repos = await syncCourtOpsState(store, parsed.actorId)
       resolveFollowUp(store, {
         actorId: parsed.actorId,
         followUpId: parsed.followUpId,
         reason: parsed.reason,
       })
+      const updated = store.followUps.find((row) => row.id === parsed.followUpId)
+      if (updated) {
+        await repos.followUps.upsert(updated)
+      }
       const payload = { action: "resolve_follow_up", followUpId: parsed.followUpId }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -228,12 +279,18 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const repos = await syncCourtOpsState(store, parsed.actorId)
+      const priorEvents = store.workflowEvents.length
       const row = resolveWorkflowBlocker(store, {
         actorId: parsed.actorId,
         documentId: parsed.documentId,
         nextStatus: parsed.nextStatus,
         reason: parsed.reason,
       })
+      await repos.workflow.createOrUpdate(row)
+      for (const event of store.workflowEvents.slice(priorEvents)) {
+        await repos.workflowEvents.append(event)
+      }
       const payload = { action: "resolve_workflow", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

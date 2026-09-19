@@ -11,6 +11,7 @@ import type {
   DocumentRecord,
   DraftRecord,
   FilingPackage,
+  FollowUp,
   Job,
   Matter,
   DocumentWorkflow,
@@ -143,6 +144,21 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<WorkflowEvent>(db, "workflow_events", firmId)
+      },
+    },
+    followUps: {
+      async upsert(row) {
+        const payload: Record<string, unknown> = { ...row }
+        if (payload.status === undefined) delete payload.status
+        if (payload.resolvedBy === undefined) delete payload.resolvedBy
+        if (payload.resolvedAt === undefined) delete payload.resolvedAt
+        await setDoc(doc(db, "follow_ups", row.id), payload)
+      },
+      async get(id) {
+        return getById<FollowUp>(db, "follow_ups", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FollowUp>(db, "follow_ups", firmId)
       },
     },
   }

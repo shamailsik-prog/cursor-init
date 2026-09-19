@@ -104,6 +104,26 @@ describe("Firestore repository adapters", () => {
       const events = await repos.workflowEvents.listByFirm("firmA")
       expect(events.some((row) => row.id === "wfe_1")).toBe(true)
 
+      await repos.followUps.upsert({
+        id: "fu_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        courtId: "SHC",
+        raw: "CP 1234",
+        kind: "case_number_reject",
+        status: "open",
+      })
+      const followUp = await repos.followUps.get("fu_1")
+      expect(followUp?.kind).toBe("case_number_reject")
+      await repos.followUps.upsert({
+        ...(followUp as NonNullable<typeof followUp>),
+        status: "resolved",
+        resolvedBy: "associate_a",
+        resolvedAt: 5,
+      })
+      const followUps = await repos.followUps.listByFirm("firmA")
+      expect(followUps.some((row) => row.id === "fu_1" && row.status === "resolved")).toBe(true)
+
       await repos.filings.create({
         id: "pkg_1",
         firmId: "firmA",

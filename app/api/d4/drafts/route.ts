@@ -7,6 +7,7 @@ import {
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
+import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   composeDraft,
@@ -88,6 +89,7 @@ function buildPreflightInput(parsed: {
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
+  const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
   const view = url.searchParams.get("view") ?? "drafts"
   const limit = parseLimit(url.searchParams.get("limit"))
@@ -115,13 +117,17 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
 
-  const visible = [...store.drafts.values()]
+  const user = store.users.get(userId)
+  if (!user) {
+    return NextResponse.json({ error: "unknown user" }, { status: 404 })
+  }
+  const firmDrafts = await repos.drafts.listByFirm(user.firmId)
+  const visible = firmDrafts
     .filter((draft) => (matterId ? draft.matterId === matterId : true))
     .filter((draft) => {
       const permission = checkPermission(store, userId, "draft", draft.matterId)
       if (!permission.allow) return false
-      const user = store.users.get(userId)
-      return Boolean(user && rankOf(user.clearanceLevel) >= rankOf(draft.classification))
+      return rankOf(user.clearanceLevel) >= rankOf(draft.classification)
     })
     .sort((a, b) => a.id.localeCompare(b.id))
   const items = visible.slice(cursor, cursor + limit)
@@ -139,6 +145,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
+  const repos = await getRuntimeRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -216,10 +223,11 @@ export async function POST(request: Request) {
         target: draft.id,
         classification: draft.classification,
       })
+      await repos.drafts.create(draft)
       const payload = {
         action: "compose",
         preflight: gate,
-        draft,
+        draft: (await repos.drafts.get(draft.id)) ?? draft,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
