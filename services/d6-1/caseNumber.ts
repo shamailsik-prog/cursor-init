@@ -21,6 +21,9 @@ export function recordCaseNumber(
       courtId,
       raw,
       kind: "case_number_reject",
+      status: "open",
+      resolvedBy: null,
+      resolvedAt: null,
     })
     return { status: "REJECT" }
   }
