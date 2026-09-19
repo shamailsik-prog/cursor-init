@@ -4,12 +4,14 @@ import {
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
+import { type Classification } from "@/platform/p1/types"
+import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
+import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import {
   applyReviewDecision,
   assignReviewer,
-  listWorkflowQueue,
   listWorkflowTimeline,
   transitionWorkflowStatus,
 } from "@/services/d1-7/documentWorkflow"
@@ -63,8 +65,22 @@ function isWorkflowStatus(value: unknown): value is WorkflowStatus {
   )
 }
 
+function canViewWorkflowDocument(
+  store: SpineStore,
+  userId: string,
+  doc: Pick<DocumentRecord, "firmId" | "classification" | "matterId">
+): boolean {
+  const user = store.users.get(userId)
+  if (!user) return false
+  if (user.firmId !== doc.firmId) return false
+  if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
+  if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, userId))
+  return user.role !== "client" && user.role !== "intern"
+}
+
 export async function GET(request: Request) {
   const store = getRuntimeStore()
+  const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
   const view = url.searchParams.get("view") ?? "queue"
   const userId = url.searchParams.get("userId")
@@ -94,19 +110,45 @@ export async function GET(request: Request) {
 
     const rawStatus = url.searchParams.get("status")
     const status = isWorkflowStatus(rawStatus) ? rawStatus : undefined
-    const queue = listWorkflowQueue(store, userId, {
-      matterId,
-      status,
-      limit,
-      cursor,
-    })
+    const user = store.users.get(userId)
+    if (!user) throw new Error("unknown user")
+    const docs = await repos.documents.listByFirm(user.firmId)
+    const rows = await repos.workflow.listByFirm(user.firmId)
+    const rowsByDocId = new Map(rows.map((row) => [row.documentId, row]))
+    const queueItems = docs
+      .filter((doc) => (matterId ? doc.matterId === matterId : true))
+      .filter((doc) => canViewWorkflowDocument(store, userId, doc))
+      .map((doc) => {
+        const row = rowsByDocId.get(doc.id) ??
+          store.documentWorkflow.get(doc.id) ?? {
+            documentId: doc.id,
+            firmId: doc.firmId,
+            matterId: doc.matterId,
+            status: "queued" as WorkflowStatus,
+            reviewerId: null,
+            updatedAt: 0,
+          }
+        return {
+          documentId: doc.id,
+          matterId: doc.matterId,
+          status: row.status,
+          reviewerId: row.reviewerId,
+          classification: doc.classification as Classification,
+          updatedAt: row.updatedAt,
+        }
+      })
+      .filter((row) => (status ? row.status === status : true))
+      .sort((a, b) => a.updatedAt - b.updatedAt)
+    const items = queueItems.slice(cursor, cursor + limit)
+    const nextCursor =
+      cursor + items.length < queueItems.length ? String(cursor + items.length) : null
     return NextResponse.json({
       view: "queue",
-      items: queue.items,
-      total: queue.total,
+      items,
+      total: queueItems.length,
       limit,
       cursor,
-      nextCursor: queue.nextCursor,
+      nextCursor,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : "workflow read failed"
@@ -116,6 +158,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
+  const repos = await getRuntimeRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -165,6 +208,7 @@ export async function POST(request: Request) {
         nextStatus: parsed.nextStatus,
         reason: parsed.reason,
       })
+      await repos.workflow.createOrUpdate(row)
       const payload = { action: "transition", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -182,6 +226,7 @@ export async function POST(request: Request) {
         documentId: parsed.documentId,
         reviewerId: parsed.reviewerId,
       })
+      await repos.workflow.createOrUpdate(row)
       const payload = { action: "assign_reviewer", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -201,6 +246,21 @@ export async function POST(request: Request) {
         nextClassification: parsed.nextClassification,
         reason: parsed.reason,
       })
+      await repos.workflow.createOrUpdate(row)
+      const updatedDoc = store.documents.get(parsed.documentId)
+      if (updatedDoc) {
+        const persistedDoc = await repos.documents.get(updatedDoc.id)
+        if (persistedDoc) {
+          await repos.documents.update(updatedDoc.id, {
+            classification: updatedDoc.classification,
+            matterId: updatedDoc.matterId,
+            sourceChannel: updatedDoc.sourceChannel,
+            contentHash: updatedDoc.contentHash,
+          })
+        } else {
+          await repos.documents.create(updatedDoc)
+        }
+      }
       const payload = { action: "review_decision", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
