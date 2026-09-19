@@ -6,6 +6,7 @@ import type {
   FilingPackage,
   FilingPacketArtifactRow,
   FilingSubmissionExceptionRow,
+  FilingEscalationOwnerRotaRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
   FilingSubmissionSlaDigestRow,
@@ -141,6 +142,13 @@ export type FilingSubmissionSlaDigestRepository = {
   listByPackageId(packageId: string): Promise<FilingSubmissionSlaDigestRow[]>
 }
 
+export type FilingEscalationOwnerRotaRepository = {
+  upsert(row: FilingEscalationOwnerRotaRow): Promise<void>
+  get(id: string): Promise<FilingEscalationOwnerRotaRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationOwnerRotaRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationOwnerRotaRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -212,6 +220,7 @@ export type SpineRepositories = {
   filingSubmissionExceptions: FilingSubmissionExceptionRepository
   filingTransportExecutionEvidence: FilingTransportExecutionEvidenceRepository
   filingSubmissionSlaDigests: FilingSubmissionSlaDigestRepository
+  filingEscalationOwnerRota: FilingEscalationOwnerRotaRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -468,6 +477,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingSubmissionSlaDigests.values()].filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationOwnerRota: {
+      async upsert(row) {
+        store.filingEscalationOwnerRota.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationOwnerRota.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationOwnerRota.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationOwnerRota.values()].filter((row) => row.packageId === packageId)
       },
     },
     jobs: {

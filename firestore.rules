@@ -145,6 +145,7 @@ service cloud.firestore {
     match /filing_submission_exceptions/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_transport_execution_evidence/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_submission_sla_digests/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /filing_escalation_owner_rota/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /feature_flags/{id}  { allow read: if signedIn(); allow write: if false; }
     match /firm_feature_overrides/{id} { allow read: if sameFirm(); allow write: if false; }
 

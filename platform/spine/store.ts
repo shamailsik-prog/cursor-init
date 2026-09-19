@@ -407,6 +407,32 @@ export type FilingSubmissionSlaDigestRow = {
   updatedAt: number
 }
 
+export type FilingEscalationOwnerRotaStatus = "active" | "handoff_acknowledged" | "revoked"
+
+export type FilingEscalationOwnerRotaRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingEscalationOwnerRotaStatus
+  primaryOwnerId: string | null
+  backupOwnerId: string | null
+  activeWindowStartAt: number
+  activeWindowEndAt: number | null
+  handoffRequired: boolean
+  handoffAcknowledgedBy: string | null
+  handoffAcknowledgedAt: number | null
+  lastAssignedBy: string | null
+  lastAssignedAt: number | null
+  revokedBy: string | null
+  revokedAt: number | null
+  linkedExceptionId: string | null
+  linkedDigestId: string | null
+  notes: string[]
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -503,6 +529,7 @@ export class SpineStore {
   filingSubmissionExceptions = new Map<string, FilingSubmissionExceptionRow>()
   filingTransportExecutionEvidence = new Map<string, FilingTransportExecutionEvidenceRow>()
   filingSubmissionSlaDigests = new Map<string, FilingSubmissionSlaDigestRow>()
+  filingEscalationOwnerRota = new Map<string, FilingEscalationOwnerRotaRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

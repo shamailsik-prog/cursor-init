@@ -46,6 +46,11 @@ import {
   filingSubmissionSlaDigestId,
   isFilingSubmissionSlaDigestStatus,
 } from "@/platform/persistence/filingSubmissionSlaDigests"
+import {
+  buildFilingEscalationOwnerRotaRow,
+  filingEscalationOwnerRotaId,
+  isFilingEscalationOwnerRotaStatus,
+} from "@/platform/persistence/filingEscalationOwnerRota"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -223,6 +228,37 @@ type ClearDigestBody = {
   note?: string
 }
 
+type AssignPrimaryOwnerBody = {
+  action: "assign_primary_owner"
+  actorId?: string
+  packageId?: string
+  primaryOwnerId?: string
+  activeWindowHours?: number
+  note?: string
+}
+
+type SetBackupOwnerBody = {
+  action: "set_backup_owner"
+  actorId?: string
+  packageId?: string
+  backupOwnerId?: string
+  note?: string
+}
+
+type AcknowledgeHandoffBody = {
+  action: "acknowledge_handoff"
+  actorId?: string
+  packageId?: string
+  note?: string
+}
+
+type RevokeAssignmentBody = {
+  action: "revoke_assignment"
+  actorId?: string
+  packageId?: string
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -240,6 +276,10 @@ type Body =
   | AcknowledgeBreachBody
   | DeferWindowBody
   | ClearDigestBody
+  | AssignPrimaryOwnerBody
+  | SetBackupOwnerBody
+  | AcknowledgeHandoffBody
+  | RevokeAssignmentBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -268,7 +308,8 @@ function parseFilingsView(
   | "submission_reconciliation"
   | "submission_exceptions"
   | "transport_execution"
-  | "submission_sla_digests" {
+  | "submission_sla_digests"
+  | "escalation_owner_rota" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -276,6 +317,7 @@ function parseFilingsView(
   if (value === "submission_exceptions") return "submission_exceptions"
   if (value === "transport_execution") return "transport_execution"
   if (value === "submission_sla_digests") return "submission_sla_digests"
+  if (value === "escalation_owner_rota") return "escalation_owner_rota"
   return "packages"
 }
 
@@ -723,6 +765,88 @@ export async function GET(request: Request) {
           return rankOf(user.clearanceLevel) >= rankOf(row.classification)
         })
         .sort((a, b) => a.status.localeCompare(b.status) || a.breachWindowStartedAt - b.breachWindowStartedAt)
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "escalation_owner_rota") {
+      const packageId = url.searchParams.get("packageId")
+      const ownerId = url.searchParams.get("ownerId")
+      const rotaStatus = url.searchParams.get("rotaStatus")
+      const now = Date.now()
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const exceptionRows = await repos.filingSubmissionExceptions.listByFirm(user.firmId)
+      const exceptionByPackage = new Map(exceptionRows.map((row) => [row.packageId, row]))
+      const digestRows = await repos.filingSubmissionSlaDigests.listByFirm(user.firmId)
+      const digestByPackage = new Map(digestRows.map((row) => [row.packageId, row]))
+      const persistedRows = await repos.filingEscalationOwnerRota.listByFirm(user.firmId)
+      const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
+      const candidatePackageIds = new Set<string>([
+        ...rowsByPackage.keys(),
+        ...exceptionByPackage.keys(),
+        ...digestByPackage.keys(),
+      ])
+      for (const pkgId of candidatePackageIds) {
+        const filingPackage = packageById.get(pkgId)
+        if (!filingPackage) continue
+        const exception = exceptionByPackage.get(pkgId) ?? null
+        const digest = digestByPackage.get(pkgId) ?? null
+        const existing = rowsByPackage.get(pkgId) ?? null
+        const seedPrimary =
+          existing?.primaryOwnerId ?? exception?.escalationOwnerId ?? digest?.outstandingOwnerId ?? null
+        const seedBackup = existing?.backupOwnerId ?? null
+        if (!existing && !seedPrimary && !seedBackup) continue
+        const computed = buildFilingEscalationOwnerRotaRow(filingPackage, {
+          now,
+          existing,
+          primaryOwnerId: seedPrimary,
+          backupOwnerId: seedBackup,
+          linkedExceptionId: exception?.id ?? null,
+          linkedDigestId: digest?.id ?? null,
+        })
+        const changed =
+          !existing ||
+          existing.status !== computed.status ||
+          existing.primaryOwnerId !== computed.primaryOwnerId ||
+          existing.backupOwnerId !== computed.backupOwnerId ||
+          existing.activeWindowEndAt !== computed.activeWindowEndAt ||
+          existing.linkedExceptionId !== computed.linkedExceptionId ||
+          existing.linkedDigestId !== computed.linkedDigestId ||
+          existing.handoffRequired !== computed.handoffRequired ||
+          existing.handoffAcknowledgedBy !== computed.handoffAcknowledgedBy ||
+          existing.handoffAcknowledgedAt !== computed.handoffAcknowledgedAt
+        const next = changed ? computed : existing
+        if (changed) {
+          await repos.filingEscalationOwnerRota.upsert(next)
+        }
+        store.filingEscalationOwnerRota.set(next.id, next)
+        rowsByPackage.set(pkgId, next)
+      }
+      const visible = [...rowsByPackage.values()]
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (!isFilingEscalationOwnerRotaStatus(rotaStatus)) return true
+          return row.status === rotaStatus
+        })
+        .filter((row) => {
+          if (!ownerId) return true
+          return row.primaryOwnerId === ownerId || row.backupOwnerId === ownerId
+        })
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor =
         cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -2418,6 +2542,338 @@ export async function POST(request: Request) {
       const payload = {
         action: "clear_digest",
         digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "assign_primary_owner") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.primaryOwnerId) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and primaryOwnerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "assign_primary_owner requires partner role" },
+          { status: 403 }
+        )
+      }
+      const primaryOwner = store.users.get(parsed.primaryOwnerId)
+      if (!primaryOwner) {
+        return NextResponse.json({ error: "unknown primary owner" }, { status: 404 })
+      }
+      if (primaryOwner.firmId !== actor.firmId || primaryOwner.role !== "partner") {
+        return NextResponse.json(
+          { error: "primary owner must be a partner in the same firm" },
+          { status: 403 }
+        )
+      }
+      const activeWindowHours =
+        parsed.activeWindowHours === undefined ? 24 : Number(parsed.activeWindowHours)
+      if (!Number.isFinite(activeWindowHours) || activeWindowHours < 1 || activeWindowHours > 336) {
+        return NextResponse.json(
+          { error: "activeWindowHours must be between 1 and 336" },
+          { status: 400 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm rota assignment denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const existing =
+        (await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))) ??
+        null
+      const linkedException = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const linkedDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const note = parsed.note?.trim() || `primary owner assigned to ${primaryOwner.id}`
+      const reassignedPrimary = !!existing && existing.primaryOwnerId !== primaryOwner.id
+      const base = buildFilingEscalationOwnerRotaRow(filingPackage, {
+        now,
+        existing,
+        primaryOwnerId: primaryOwner.id,
+        backupOwnerId: existing?.backupOwnerId ?? null,
+        linkedExceptionId: linkedException?.id ?? null,
+        linkedDigestId: linkedDigest?.id ?? null,
+        activeWindowMs: activeWindowHours * 60 * 60 * 1000,
+        actorId: actor.id,
+        note,
+      })
+      const updated = {
+        ...base,
+        status: "active" as const,
+        activeWindowStartAt: now,
+        activeWindowEndAt: now + activeWindowHours * 60 * 60 * 1000,
+        handoffRequired: reassignedPrimary && existing?.primaryOwnerId !== null,
+        handoffAcknowledgedBy:
+          reassignedPrimary && existing?.primaryOwnerId !== null ? null : base.handoffAcknowledgedBy,
+        handoffAcknowledgedAt:
+          reassignedPrimary && existing?.primaryOwnerId !== null ? null : base.handoffAcknowledgedAt,
+        lastAssignedBy: actor.id,
+        lastAssignedAt: now,
+        revokedBy: null,
+        revokedAt: null,
+        updatedAt: now,
+      }
+      await repos.filingEscalationOwnerRota.upsert(updated)
+      store.filingEscalationOwnerRota.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_escalation_rota_assign_primary",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: primaryOwner.id,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "assign_primary_owner",
+        rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "set_backup_owner") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.backupOwnerId) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and backupOwnerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "set_backup_owner requires partner role" }, { status: 403 })
+      }
+      const backupOwner = store.users.get(parsed.backupOwnerId)
+      if (!backupOwner) {
+        return NextResponse.json({ error: "unknown backup owner" }, { status: 404 })
+      }
+      if (backupOwner.firmId !== actor.firmId || backupOwner.role !== "partner") {
+        return NextResponse.json(
+          { error: "backup owner must be a partner in the same firm" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm rota backup denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const existing =
+        (await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))) ??
+        null
+      const linkedException = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const linkedDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const note = parsed.note?.trim() || `backup owner set to ${backupOwner.id}`
+      const backupChanged = !existing || existing.backupOwnerId !== backupOwner.id
+      const base = buildFilingEscalationOwnerRotaRow(filingPackage, {
+        now,
+        existing,
+        primaryOwnerId:
+          existing?.primaryOwnerId ?? linkedException?.escalationOwnerId ?? linkedDigest?.outstandingOwnerId ?? null,
+        backupOwnerId: backupOwner.id,
+        linkedExceptionId: linkedException?.id ?? null,
+        linkedDigestId: linkedDigest?.id ?? null,
+        actorId: actor.id,
+        note,
+      })
+      const handoffRequired = backupChanged && !!base.primaryOwnerId
+      const updated = {
+        ...base,
+        status: "active" as const,
+        handoffRequired,
+        handoffAcknowledgedBy: handoffRequired ? null : base.handoffAcknowledgedBy,
+        handoffAcknowledgedAt: handoffRequired ? null : base.handoffAcknowledgedAt,
+        lastAssignedBy: actor.id,
+        lastAssignedAt: now,
+        revokedBy: null,
+        revokedAt: null,
+        updatedAt: now,
+      }
+      await repos.filingEscalationOwnerRota.upsert(updated)
+      store.filingEscalationOwnerRota.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_escalation_rota_set_backup",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: backupOwner.id,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "set_backup_owner",
+        rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "acknowledge_handoff") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json({ error: "actorId and packageId are required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "acknowledge_handoff requires partner role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm handoff acknowledge denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const existing = await repos.filingEscalationOwnerRota.get(
+        filingEscalationOwnerRotaId(filingPackage.id)
+      )
+      if (!existing) {
+        return NextResponse.json({ error: "escalation rota not found for package" }, { status: 404 })
+      }
+      if (existing.status === "revoked") {
+        return NextResponse.json({ error: "cannot acknowledge a revoked assignment" }, { status: 422 })
+      }
+      if (existing.primaryOwnerId !== actor.id && existing.backupOwnerId !== actor.id) {
+        return NextResponse.json({ error: "actor must be assigned in rota to acknowledge handoff" }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const note = parsed.note?.trim() || "handoff acknowledged"
+      const updated = {
+        ...existing,
+        status: "handoff_acknowledged" as const,
+        handoffRequired: false,
+        handoffAcknowledgedBy: actor.id,
+        handoffAcknowledgedAt: now,
+        notes: [...existing.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationOwnerRota.upsert(updated)
+      store.filingEscalationOwnerRota.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_escalation_rota_acknowledge_handoff",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: "handoff_acknowledged",
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "acknowledge_handoff",
+        rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "revoke_assignment") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json({ error: "actorId and packageId are required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "revoke_assignment requires partner role" }, { status: 403 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm rota revoke denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const existing = await repos.filingEscalationOwnerRota.get(
+        filingEscalationOwnerRotaId(filingPackage.id)
+      )
+      if (!existing) {
+        return NextResponse.json({ error: "escalation rota not found for package" }, { status: 404 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const note = parsed.note?.trim() || "assignment revoked"
+      const updated = {
+        ...existing,
+        status: "revoked" as const,
+        primaryOwnerId: null,
+        backupOwnerId: null,
+        activeWindowEndAt: now,
+        handoffRequired: false,
+        handoffAcknowledgedBy: null,
+        handoffAcknowledgedAt: null,
+        revokedBy: actor.id,
+        revokedAt: now,
+        notes: [...existing.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationOwnerRota.upsert(updated)
+      store.filingEscalationOwnerRota.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_escalation_rota_revoke_assignment",
+        actorId: actor.id,
+        target: updated.id,
+        classification: filingPackage.classification,
+        reason: "revoked",
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "revoke_assignment",
+        rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

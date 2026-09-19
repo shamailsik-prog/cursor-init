@@ -42,6 +42,7 @@ const baseStore = {
   filingSubmissionExceptions: new Map(),
   filingTransportExecutionEvidence: new Map(),
   filingSubmissionSlaDigests: new Map(),
+  filingEscalationOwnerRota: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -355,6 +356,36 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationOwnerRota: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "rota:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "active",
+          primaryOwnerId: "partner_a",
+          backupOwnerId: "partner_b",
+          activeWindowStartAt: 13,
+          activeWindowEndAt: 14,
+          handoffRequired: true,
+          handoffAcknowledgedBy: null,
+          handoffAcknowledgedAt: null,
+          lastAssignedBy: "partner_a",
+          lastAssignedAt: 13,
+          revokedBy: null,
+          revokedAt: null,
+          linkedExceptionId: "exception:pkg_repo",
+          linkedDigestId: "digest:pkg_repo",
+          notes: ["repo rota row"],
+          updatedAt: 13,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -581,6 +612,19 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
     expect(json.items.map((item) => item.id)).toContain("digest:pkg_repo")
+    expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings escalation owner rota view GET uses repository filingEscalationOwnerRota listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=escalation_owner_rota&userId=associate_a&matterId=mat_1&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
+    expect(json.items.map((item) => item.id)).toContain("rota:pkg_repo")
     expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
   })
 
