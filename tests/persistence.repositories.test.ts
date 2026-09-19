@@ -445,6 +445,32 @@ describe("Firestore repository adapters", () => {
       expect(exceptionByFirm.some((row) => row.id === "exception:pkg_1")).toBe(true)
       const exceptionByPackage = await repos.filingSubmissionExceptions.listByPackageId("pkg_1")
       expect(exceptionByPackage.some((row) => row.id === "exception:pkg_1")).toBe(true)
+      await repos.filingTransportExecutionEvidence.upsert({
+        id: "transport:pkg_1:1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        sequenceNo: 1,
+        dispatchQueueId: "dispatch:pkg_1",
+        outcome: "transport_blocked",
+        transportOperatorId: "clerk_a",
+        transportChannel: "efiling_portal_stub",
+        channelPayloadHash: "hash-transport-001",
+        deterministicBlockerTags: ["portal_timeout"],
+        attachmentPointers: ["ops://retry-plan/1"],
+        relatedReceiptId: "receipt:pkg_1:1",
+        relatedReconciliationId: "reconcile:pkg_1",
+        relatedExceptionId: "exception:pkg_1",
+        note: "transport blocked during deterministic submission",
+        createdAt: 31,
+      })
+      const transportEvidence = await repos.filingTransportExecutionEvidence.get("transport:pkg_1:1")
+      expect(transportEvidence?.outcome).toBe("transport_blocked")
+      const transportEvidenceByFirm = await repos.filingTransportExecutionEvidence.listByFirm("firmA")
+      expect(transportEvidenceByFirm.some((row) => row.id === "transport:pkg_1:1")).toBe(true)
+      const transportEvidenceByPackage = await repos.filingTransportExecutionEvidence.listByPackageId("pkg_1")
+      expect(transportEvidenceByPackage.some((row) => row.id === "transport:pkg_1:1")).toBe(true)
     })
   })
 })

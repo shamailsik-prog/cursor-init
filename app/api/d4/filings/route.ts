@@ -36,6 +36,11 @@ import {
   isFilingSubmissionExceptionSeverity,
   isFilingSubmissionExceptionStatus,
 } from "@/platform/persistence/filingSubmissionExceptions"
+import {
+  buildFilingTransportExecutionEvidenceRow,
+  isFilingTransportExecutionChannel,
+  isFilingTransportExecutionOutcome,
+} from "@/platform/persistence/filingTransportExecutionEvidence"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -146,6 +151,51 @@ type ReopenSubmissionExceptionBody = {
   note?: string
 }
 
+type MarkTransportBlockedBody = {
+  action: "mark_transport_blocked"
+  actorId?: string
+  packageId?: string
+  transportChannel?:
+    | "efiling_portal_stub"
+    | "physical_counter_stub"
+    | "courier_stub"
+    | "operator_followup_stub"
+  channelPayloadHash?: string
+  blockerTags?: string[]
+  attachmentPointers?: string[]
+  severity?: "medium" | "high" | "critical"
+  note?: string
+}
+
+type AttachRetryPlanBody = {
+  action: "attach_retry_plan"
+  actorId?: string
+  packageId?: string
+  transportChannel?:
+    | "efiling_portal_stub"
+    | "physical_counter_stub"
+    | "courier_stub"
+    | "operator_followup_stub"
+  channelPayloadHash?: string
+  attachmentPointers?: string[]
+  note?: string
+}
+
+type ConfirmDeliveredBody = {
+  action: "confirm_delivered"
+  actorId?: string
+  packageId?: string
+  transportChannel?:
+    | "efiling_portal_stub"
+    | "physical_counter_stub"
+    | "courier_stub"
+    | "operator_followup_stub"
+  channelPayloadHash?: string
+  attachmentPointers?: string[]
+  relatedReceiptId?: string
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -157,6 +207,9 @@ type Body =
   | EscalateSubmissionExceptionBody
   | ResolveSubmissionExceptionBody
   | ReopenSubmissionExceptionBody
+  | MarkTransportBlockedBody
+  | AttachRetryPlanBody
+  | ConfirmDeliveredBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -183,12 +236,14 @@ function parseFilingsView(
   | "annexures"
   | "submission_receipts"
   | "submission_reconciliation"
-  | "submission_exceptions" {
+  | "submission_exceptions"
+  | "transport_execution" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
   if (value === "submission_reconciliation") return "submission_reconciliation"
   if (value === "submission_exceptions") return "submission_exceptions"
+  if (value === "transport_execution") return "transport_execution"
   return "packages"
 }
 
@@ -514,6 +569,40 @@ export async function GET(request: Request) {
           return rankOf(user.clearanceLevel) >= rankOf(row.classification)
         })
         .sort((a, b) => a.slaTargetAt - b.slaTargetAt || b.updatedAt - a.updatedAt)
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "transport_execution") {
+      const packageId = url.searchParams.get("packageId")
+      const outcome = url.searchParams.get("outcome")
+      const blockerTag = url.searchParams.get("blockerTag")?.trim().toLowerCase()
+      const rows = await repos.filingTransportExecutionEvidence.listByFirm(user.firmId)
+      const visible = rows
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (!isFilingTransportExecutionOutcome(outcome)) return true
+          return row.outcome === outcome
+        })
+        .filter((row) => {
+          if (!blockerTag) return true
+          return row.deterministicBlockerTags.includes(blockerTag)
+        })
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor =
         cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -1563,6 +1652,411 @@ export async function POST(request: Request) {
       const payload = {
         action: "reopen_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "mark_transport_blocked") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.transportChannel || !parsed.channelPayloadHash) {
+        return NextResponse.json(
+          { error: "actorId, packageId, transportChannel, and channelPayloadHash are required" },
+          { status: 400 }
+        )
+      }
+      if (!isFilingTransportExecutionChannel(parsed.transportChannel)) {
+        return NextResponse.json({ error: "invalid transportChannel" }, { status: 400 })
+      }
+      if (parsed.severity && !isFilingSubmissionExceptionSeverity(parsed.severity)) {
+        return NextResponse.json({ error: "invalid severity" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "mark_transport_blocked requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm transport block denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const evidenceRows = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
+      const nextSequenceNo = evidenceRows.reduce((max, row) => Math.max(max, row.sequenceNo), 0) + 1
+      const currentException = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const reconciliation = await repos.filingSubmissionReconciliation.get(
+        filingSubmissionReconciliationId(filingPackage.id)
+      )
+      const nextException = buildSubmissionExceptionRowFromFailure(
+        filingPackage,
+        {
+          source: "dispatch_transport_blocked",
+          receipt: null,
+          reconciliation,
+          actorId: actor.id,
+          note: parsed.note ?? "transport blocked during deterministic handoff",
+          now,
+        },
+        currentException
+      )
+      const normalizedException = {
+        ...nextException,
+        severity: parsed.severity ?? nextException.severity,
+      }
+      await repos.filingSubmissionExceptions.upsert(normalizedException)
+      store.filingSubmissionExceptions.set(normalizedException.id, normalizedException)
+      const existingQueue =
+        (await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))) ??
+        buildFilingDispatchQueueRow(filingPackage)
+      const updatedQueue = {
+        ...existingQueue,
+        status: "blocked" as const,
+        externalDispatchState: "blocked_todo_firm" as const,
+        operatorNotes: [
+          ...existingQueue.operatorNotes,
+          `${new Date(now).toISOString()} ${actor.id}: transport blocked`,
+        ],
+        updatedAt: now,
+      }
+      await repos.filingDispatchQueue.upsert(updatedQueue)
+      store.filingDispatchQueue.set(updatedQueue.id, updatedQueue)
+      const evidence = buildFilingTransportExecutionEvidenceRow(
+        filingPackage,
+        {
+          sequenceNo: nextSequenceNo,
+          outcome: "transport_blocked",
+          transportOperatorId: actor.id,
+          transportChannel: parsed.transportChannel,
+          channelPayloadHash: parsed.channelPayloadHash,
+          deterministicBlockerTags: parsed.blockerTags,
+          attachmentPointers: parsed.attachmentPointers,
+          relatedReconciliationId: reconciliation?.id ?? null,
+          relatedExceptionId: normalizedException.id,
+          note: parsed.note,
+        },
+        { now }
+      )
+      await repos.filingTransportExecutionEvidence.upsert(evidence)
+      store.filingTransportExecutionEvidence.set(evidence.id, evidence)
+      store.audit.push({
+        action: "filing_transport_execution_evidence_record",
+        actorId: actor.id,
+        target: evidence.id,
+        classification: filingPackage.classification,
+        reason: evidence.outcome,
+      })
+      store.audit.push({
+        action: "filing_dispatch_closure_update",
+        actorId: actor.id,
+        target: updatedQueue.id,
+        classification: filingPackage.classification,
+        reason: "transport_blocked",
+      })
+      store.audit.push({
+        action: "filing_submission_exception_raise",
+        actorId: actor.id,
+        target: normalizedException.id,
+        classification: filingPackage.classification,
+        reason: `${normalizedException.source}:${normalizedException.severity}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "mark_transport_blocked",
+        evidence: (await repos.filingTransportExecutionEvidence.get(evidence.id)) ?? evidence,
+        dispatchQueue: (await repos.filingDispatchQueue.get(updatedQueue.id)) ?? updatedQueue,
+        submissionException:
+          (await repos.filingSubmissionExceptions.get(normalizedException.id)) ?? normalizedException,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "attach_retry_plan") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.transportChannel || !parsed.channelPayloadHash) {
+        return NextResponse.json(
+          { error: "actorId, packageId, transportChannel, and channelPayloadHash are required" },
+          { status: 400 }
+        )
+      }
+      if (!isFilingTransportExecutionChannel(parsed.transportChannel)) {
+        return NextResponse.json({ error: "invalid transportChannel" }, { status: 400 })
+      }
+      if (!parsed.attachmentPointers?.some((entry) => entry.trim().length > 0)) {
+        return NextResponse.json({ error: "attachmentPointers must include at least one entry" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "attach_retry_plan requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm retry plan attach denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const evidenceRows = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
+      const nextSequenceNo = evidenceRows.reduce((max, row) => Math.max(max, row.sequenceNo), 0) + 1
+      const currentException = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const reconciliation = await repos.filingSubmissionReconciliation.get(
+        filingSubmissionReconciliationId(filingPackage.id)
+      )
+      const nextException = buildSubmissionExceptionRowFromFailure(
+        filingPackage,
+        {
+          source: "dispatch_retry_plan",
+          receipt: null,
+          reconciliation,
+          actorId: actor.id,
+          note: parsed.note ?? "retry plan attached",
+          now,
+        },
+        currentException
+      )
+      const normalizedException = {
+        ...nextException,
+        status: "escalated" as const,
+        escalationOwnerId:
+          actor.role === "partner" ? actor.id : (currentException?.escalationOwnerId ?? nextException.escalationOwnerId),
+        escalatedBy: actor.id,
+        escalatedAt: now,
+      }
+      await repos.filingSubmissionExceptions.upsert(normalizedException)
+      store.filingSubmissionExceptions.set(normalizedException.id, normalizedException)
+      const existingQueue =
+        (await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))) ??
+        buildFilingDispatchQueueRow(filingPackage)
+      const updatedQueue = {
+        ...existingQueue,
+        status: "retry_pending" as const,
+        externalDispatchState: "blocked_todo_firm" as const,
+        operatorNotes: [
+          ...existingQueue.operatorNotes,
+          `${new Date(now).toISOString()} ${actor.id}: retry plan attached`,
+        ],
+        updatedAt: now,
+      }
+      await repos.filingDispatchQueue.upsert(updatedQueue)
+      store.filingDispatchQueue.set(updatedQueue.id, updatedQueue)
+      const evidence = buildFilingTransportExecutionEvidenceRow(
+        filingPackage,
+        {
+          sequenceNo: nextSequenceNo,
+          outcome: "retry_plan_attached",
+          transportOperatorId: actor.id,
+          transportChannel: parsed.transportChannel,
+          channelPayloadHash: parsed.channelPayloadHash,
+          attachmentPointers: parsed.attachmentPointers,
+          relatedReconciliationId: reconciliation?.id ?? null,
+          relatedExceptionId: normalizedException.id,
+          note: parsed.note,
+        },
+        { now }
+      )
+      await repos.filingTransportExecutionEvidence.upsert(evidence)
+      store.filingTransportExecutionEvidence.set(evidence.id, evidence)
+      store.audit.push({
+        action: "filing_transport_execution_evidence_record",
+        actorId: actor.id,
+        target: evidence.id,
+        classification: filingPackage.classification,
+        reason: evidence.outcome,
+      })
+      store.audit.push({
+        action: "filing_dispatch_closure_update",
+        actorId: actor.id,
+        target: updatedQueue.id,
+        classification: filingPackage.classification,
+        reason: "retry_plan_attached",
+      })
+      store.audit.push({
+        action: "filing_submission_exception_escalate",
+        actorId: actor.id,
+        target: normalizedException.id,
+        classification: filingPackage.classification,
+        reason: normalizedException.severity,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "attach_retry_plan",
+        evidence: (await repos.filingTransportExecutionEvidence.get(evidence.id)) ?? evidence,
+        dispatchQueue: (await repos.filingDispatchQueue.get(updatedQueue.id)) ?? updatedQueue,
+        submissionException:
+          (await repos.filingSubmissionExceptions.get(normalizedException.id)) ?? normalizedException,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "confirm_delivered") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.transportChannel || !parsed.channelPayloadHash) {
+        return NextResponse.json(
+          { error: "actorId, packageId, transportChannel, and channelPayloadHash are required" },
+          { status: 400 }
+        )
+      }
+      if (!isFilingTransportExecutionChannel(parsed.transportChannel)) {
+        return NextResponse.json({ error: "invalid transportChannel" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (!["partner", "clerk"].includes(actor.role)) {
+        return NextResponse.json(
+          { error: "confirm_delivered requires partner or clerk role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage =
+        store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm delivery confirm denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const evidenceRows = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
+      const nextSequenceNo = evidenceRows.reduce((max, row) => Math.max(max, row.sequenceNo), 0) + 1
+      const reconciliation = await repos.filingSubmissionReconciliation.get(
+        filingSubmissionReconciliationId(filingPackage.id)
+      )
+      const currentException = await repos.filingSubmissionExceptions.get(
+        filingSubmissionExceptionId(filingPackage.id)
+      )
+      const resolvedException = currentException
+        ? {
+            ...currentException,
+            status: "resolved" as const,
+            resolvedBy: actor.id,
+            resolvedAt: now,
+            resolutionNotes: [
+              ...currentException.resolutionNotes,
+              `${new Date(now).toISOString()} ${actor.id}: deterministic delivery confirmed`,
+            ],
+            updatedAt: now,
+          }
+        : null
+      if (resolvedException) {
+        await repos.filingSubmissionExceptions.upsert(resolvedException)
+        store.filingSubmissionExceptions.set(resolvedException.id, resolvedException)
+      }
+      if (reconciliation) {
+        const nextReconciliation = {
+          ...reconciliation,
+          status: "reconciled" as const,
+          notes: [
+            ...reconciliation.notes,
+            `${new Date(now).toISOString()} ${actor.id}: deterministic delivery confirmed`,
+          ],
+          updatedAt: now,
+        }
+        await repos.filingSubmissionReconciliation.upsert(nextReconciliation)
+        store.filingSubmissionReconciliation.set(nextReconciliation.id, nextReconciliation)
+      }
+      const existingQueue =
+        (await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))) ??
+        buildFilingDispatchQueueRow(filingPackage)
+      const updatedQueue = {
+        ...existingQueue,
+        status: "handoff_ready" as const,
+        externalDispatchState: "ready_for_firm_dispatch" as const,
+        operatorNotes: [
+          ...existingQueue.operatorNotes,
+          `${new Date(now).toISOString()} ${actor.id}: deterministic delivery confirmed`,
+        ],
+        updatedAt: now,
+      }
+      await repos.filingDispatchQueue.upsert(updatedQueue)
+      store.filingDispatchQueue.set(updatedQueue.id, updatedQueue)
+      const evidence = buildFilingTransportExecutionEvidenceRow(
+        filingPackage,
+        {
+          sequenceNo: nextSequenceNo,
+          outcome: "confirm_delivered",
+          transportOperatorId: actor.id,
+          transportChannel: parsed.transportChannel,
+          channelPayloadHash: parsed.channelPayloadHash,
+          attachmentPointers: parsed.attachmentPointers,
+          relatedReceiptId: parsed.relatedReceiptId?.trim() || null,
+          relatedReconciliationId: reconciliation?.id ?? null,
+          relatedExceptionId: resolvedException?.id ?? null,
+          note: parsed.note,
+        },
+        { now }
+      )
+      await repos.filingTransportExecutionEvidence.upsert(evidence)
+      store.filingTransportExecutionEvidence.set(evidence.id, evidence)
+      store.audit.push({
+        action: "filing_transport_execution_evidence_record",
+        actorId: actor.id,
+        target: evidence.id,
+        classification: filingPackage.classification,
+        reason: evidence.outcome,
+      })
+      store.audit.push({
+        action: "filing_dispatch_closure_update",
+        actorId: actor.id,
+        target: updatedQueue.id,
+        classification: filingPackage.classification,
+        reason: "confirm_delivered",
+      })
+      if (resolvedException) {
+        store.audit.push({
+          action: "filing_submission_exception_resolve",
+          actorId: actor.id,
+          target: resolvedException.id,
+          classification: filingPackage.classification,
+          reason: "confirm_delivered",
+        })
+      }
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "confirm_delivered",
+        evidence: (await repos.filingTransportExecutionEvidence.get(evidence.id)) ?? evidence,
+        dispatchQueue: (await repos.filingDispatchQueue.get(updatedQueue.id)) ?? updatedQueue,
+        submissionException:
+          resolvedException &&
+          ((await repos.filingSubmissionExceptions.get(resolvedException.id)) ?? resolvedException),
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

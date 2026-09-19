@@ -34,7 +34,9 @@ export function severityForSubmissionExceptionSource(
   source: FilingSubmissionExceptionSource
 ): FilingSubmissionExceptionSeverity {
   if (source === "receipt_rejected") return "critical"
+  if (source === "dispatch_transport_blocked") return "critical"
   if (source === "reconciliation_needs_retry") return "high"
+  if (source === "dispatch_retry_plan") return "high"
   return "medium"
 }
 
