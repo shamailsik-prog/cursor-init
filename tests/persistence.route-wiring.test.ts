@@ -34,6 +34,7 @@ const baseStore = {
   jobs: [],
   documents: new Map(),
   filingPackages: new Map(),
+  matterClientSearchIndex: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -179,6 +180,26 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
     },
+    reportingIndex: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "idx_repo",
+          firmId: "firmA",
+          rowType: "matter",
+          referenceId: "mat_1",
+          classification: "internal",
+          label: "Repo Indexed Matter",
+          detail: "SHC",
+          linkedMatterId: "mat_1",
+          linkedClientId: "client_a",
+          status: "engagement_unconfirmed:pending",
+          tags: ["repo", "indexed", "matter"],
+          updatedAt: 1,
+        },
+      ]),
+    },
   })),
 }))
 
@@ -221,5 +242,15 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("cbo_repo")
+  })
+
+  it("reporting route GET uses repository reportingIndex listByFirm", async () => {
+    const { GET } = await import("@/app/api/d1/reporting/route")
+    const res = await GET(
+      new Request("http://127.0.0.1/api/d1/reporting?actorId=associate_a&limit=10&cursor=0")
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("idx_repo")
   })
 })

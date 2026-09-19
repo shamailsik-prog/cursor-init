@@ -16,6 +16,7 @@ import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { GET as tenancyGet, POST as tenancyPost } from "@/app/api/p5/tenancy/route"
 import { GET as clientsGet, POST as clientsPost } from "@/app/api/d1/clients/route"
+import { GET as reportingGet } from "@/app/api/d1/reporting/route"
 import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
@@ -714,6 +715,97 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.identityBasis === "cnic" &&
             entry.data()?.band === "confirmed-candidate"
+        )
+      ).toBe(true)
+    })
+  })
+
+  it("persists matter/client search index rows and rehydrates reporting after reset", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+
+      const clientCreate = await clientsPost(
+        new Request("http://127.0.0.1/api/d1/clients", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f22a7038-fdbf-4976-b637-cb1ef4b15c47",
+          },
+          body: JSON.stringify({
+            action: "create",
+            actorId: "partner_a",
+            firmId: "firmA",
+            canonicalName: "Indexed Client",
+            cnic: "4220112345619",
+            phone: "+923001110019",
+            classification: "internal",
+          }),
+        })
+      )
+      expect(clientCreate.status).toBe(200)
+
+      const matterId = await createMatterViaRoute(
+        "Indexed Matter Search Row",
+        "f6a5f9cb-0efe-4f5e-8c65-17f9f7ac8aa0"
+      )
+      const privilegedMatter = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8ca96f83-d575-4dae-bd80-b0a7ecdfe198",
+          },
+          body: JSON.stringify({
+            action: "create",
+            actorId: "partner_a",
+            firmId: "firmA",
+            clientId: "client_a",
+            title: "Privileged Indexed Matter",
+            courtId: "SHC",
+            classification: "privileged",
+          }),
+        })
+      )
+      expect(privilegedMatter.status).toBe(200)
+
+      getRuntimeStore().matterClientSearchIndex = new Map()
+
+      const partnerList = await reportingGet(
+        new Request("http://127.0.0.1/api/d1/reporting?actorId=partner_a&q=indexed&limit=20&cursor=0")
+      )
+      expect(partnerList.status).toBe(200)
+      const partnerJson = (await partnerList.json()) as {
+        items: Array<{ rowType: string; linkedMatterId: string | null; label: string }>
+      }
+      expect(partnerJson.items.some((row) => row.rowType === "client" && row.label === "Indexed Client")).toBe(
+        true
+      )
+      expect(
+        partnerJson.items.some((row) => row.rowType === "matter" && row.linkedMatterId === matterId)
+      ).toBe(true)
+
+      const clerkList = await reportingGet(
+        new Request("http://127.0.0.1/api/d1/reporting?actorId=clerk_a&q=privileged&limit=20&cursor=0")
+      )
+      expect(clerkList.status).toBe(200)
+      const clerkJson = (await clerkList.json()) as { total: number }
+      expect(clerkJson.total).toBe(0)
+
+      const persistedIndex = await getDocs(collection(ctx.firestore(), "matter_client_search_index"))
+      expect(
+        persistedIndex.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.rowType === "matter" &&
+            entry.data()?.referenceId === matterId
+        )
+      ).toBe(true)
+      expect(
+        persistedIndex.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.rowType === "client" &&
+            entry.data()?.label === "Indexed Client"
         )
       ).toBe(true)
     })
