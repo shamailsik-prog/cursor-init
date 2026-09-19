@@ -8,6 +8,7 @@ import { isClassification } from "@/platform/p1/types"
 import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -89,6 +90,7 @@ export async function GET(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
+  await syncFirmMembers(store, repos, user.firmId)
   const firmDocs = await repos.documents.listByFirm(user.firmId)
   const firmJobs = await repos.jobs.listByFirm(user.firmId)
   const ocrJobCounts = new Map<string, number>()
@@ -172,6 +174,7 @@ export async function POST(request: Request) {
 
   try {
     const actor = requireActor(parsed.actorId, parsed.firmId)
+    await syncFirmMembers(store, repos, actor.firmId)
     if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification)) {
       return NextResponse.json(
         { error: "actor clearance is below requested document classification" },

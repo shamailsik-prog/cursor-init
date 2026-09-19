@@ -8,6 +8,7 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   composeDraft,
@@ -121,6 +122,7 @@ export async function GET(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
+  await syncFirmMembers(store, repos, user.firmId)
   const firmDrafts = await repos.drafts.listByFirm(user.firmId)
   const visible = firmDrafts
     .filter((draft) => (matterId ? draft.matterId === matterId : true))
@@ -184,6 +186,9 @@ export async function POST(request: Request) {
   try {
     if (parsed.action === "preflight") {
       const input = buildPreflightInput(parsed)
+      const actor = store.users.get(input.actorId)
+      if (!actor) throw new Error("unknown actor")
+      await syncFirmMembers(store, repos, actor.firmId)
       const result = runDraftPreflight(store, input)
       const payload = {
         action: "preflight",
@@ -201,6 +206,9 @@ export async function POST(request: Request) {
         )
       }
       const preflightInput = buildPreflightInput(parsed)
+      const actor = store.users.get(preflightInput.actorId)
+      if (!actor) throw new Error("unknown actor")
+      await syncFirmMembers(store, repos, actor.firmId)
       const gate = runDraftPreflight(store, preflightInput)
       if (!gate.ok) {
         return NextResponse.json(

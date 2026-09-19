@@ -91,6 +91,16 @@ async function syncCourtOpsState(
     store.documents.set(row.id, row)
   }
 
+  const firmMembers = await repos.members.listByFirm(actor.firmId)
+  for (const [key, row] of store.members.entries()) {
+    if (row.firmId === actor.firmId) {
+      store.members.delete(key)
+    }
+  }
+  for (const row of firmMembers) {
+    store.members.set(store.memberKey(row.matterId, row.userId), row)
+  }
+
   const firmFollowUps = await repos.followUps.listByFirm(actor.firmId)
   const mergedFollowUps = new Map<string, (typeof firmFollowUps)[number]>()
   for (const row of store.followUps) {

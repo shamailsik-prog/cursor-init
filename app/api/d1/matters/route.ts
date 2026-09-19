@@ -9,6 +9,7 @@ import { checkPermission } from "@/platform/p5/checkPermission"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import {
   addMember,
   confirmEngagement,
@@ -101,6 +102,7 @@ export async function GET(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
+  await syncFirmMembers(store, repo, user.firmId)
   const perm = checkPermission(store, userId, "list_matters")
   if (!perm.allow) {
     return deny(`permission denied: ${perm.reason}`)
@@ -194,9 +196,10 @@ export async function POST(request: Request) {
       await repo.matters.create(matter)
       // Keep in-memory mirror in sync for flows that still read the spine directly.
       store.matters.set(matter.id, matter)
-      addMember(store, matter.id, parsed.actorId, parsed.firmId)
-      for (const userId of new Set(parsed.memberUserIds ?? [])) {
+      const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
+      for (const userId of memberIds) {
         addMember(store, matter.id, userId, parsed.firmId)
+        await repo.members.upsert({ matterId: matter.id, userId, firmId: parsed.firmId })
       }
       store.audit.push({
         action: "matter_create",
@@ -216,6 +219,8 @@ export async function POST(request: Request) {
       if (!parsed.actorId || !parsed.matterId) {
         return NextResponse.json({ error: "actorId and matterId are required" }, { status: 400 })
       }
+      const actor = ensureActor(parsed.actorId)
+      await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = ensureMatterAccess(parsed.actorId, parsed.matterId)
       const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
@@ -252,6 +257,8 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const actor = ensureActor(parsed.actorId)
+      await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = ensureMatterAccess(parsed.actorId, parsed.matterId)
       const priorFollowUpIds = new Set(store.followUps.map((row) => row.id))
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)

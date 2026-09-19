@@ -6,6 +6,7 @@ import type {
   Intimation,
   Job,
   Matter,
+  MatterMember,
   DocumentWorkflow,
   WorkflowEvent,
   SpineStore,
@@ -16,6 +17,13 @@ export type MatterRepository = {
   get(id: string): Promise<Matter | null>
   update(id: string, patch: Partial<Matter>): Promise<Matter | null>
   listByFirm(firmId: string): Promise<Matter[]>
+}
+
+export type MatterMemberRepository = {
+  upsert(row: MatterMember): Promise<void>
+  get(matterId: string, userId: string): Promise<MatterMember | null>
+  listByFirm(firmId: string): Promise<MatterMember[]>
+  listByMatter(matterId: string): Promise<MatterMember[]>
 }
 
 export type DocumentRepository = {
@@ -70,6 +78,7 @@ export type IntimationRepository = {
 
 export type SpineRepositories = {
   matters: MatterRepository
+  members: MatterMemberRepository
   documents: DocumentRepository
   drafts: DraftRepository
   workflow: WorkflowRepository
@@ -98,6 +107,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.matters.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    members: {
+      async upsert(row) {
+        store.members.set(store.memberKey(row.matterId, row.userId), row)
+      },
+      async get(matterId, userId) {
+        return store.members.get(store.memberKey(matterId, userId)) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.members.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.members.values()].filter((row) => row.matterId === matterId)
       },
     },
     documents: {
