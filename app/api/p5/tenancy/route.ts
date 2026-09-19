@@ -7,6 +7,9 @@ import {
 import { isClassification } from "@/platform/p1/types"
 import type { Role } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
+import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmUsers } from "@/platform/persistence/userSync"
 import {
   buildSessionContext,
   listFirmMemberships,
@@ -53,6 +56,7 @@ function isRole(value: unknown): value is Role {
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
+  const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
   const view = url.searchParams.get("view") ?? "session"
   const limit = parseLimit(url.searchParams.get("limit"))
@@ -65,6 +69,12 @@ export async function GET(request: Request) {
       if (!userId) {
         return NextResponse.json({ error: "userId is required" }, { status: 400 })
       }
+      const user = store.users.get(userId)
+      if (!user) {
+        return NextResponse.json({ error: "unknown user" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, user.firmId)
+      await syncFirmMembers(store, repos, user.firmId)
       const session = buildSessionContext(store, userId, firmId)
       return NextResponse.json({
         view: "session",
@@ -80,6 +90,8 @@ export async function GET(request: Request) {
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmMembers(store, repos, firmId)
       const users = listFirmUsers(store, actorId, firmId, limit, cursor)
       return NextResponse.json({
         view: "users",
@@ -98,6 +110,8 @@ export async function GET(request: Request) {
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmMembers(store, repos, firmId)
       const memberships = listFirmMemberships(
         store,
         actorId,
@@ -125,6 +139,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const store = getRuntimeStore()
+  const repos = await getRuntimeRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -174,6 +189,8 @@ export async function POST(request: Request) {
   }
 
   try {
+    await syncFirmUsers(store, repos, parsed.firmId)
+    await syncFirmMembers(store, repos, parsed.firmId)
     const updated = updateUserRole(store, {
       actorId: parsed.actorId,
       firmId: parsed.firmId,
@@ -182,6 +199,7 @@ export async function POST(request: Request) {
       nextClearance: parsed.nextClearance,
       reason: parsed.reason,
     })
+    await repos.users.upsert(updated)
     const payload = {
       action: "update_role",
       user: {

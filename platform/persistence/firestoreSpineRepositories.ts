@@ -18,6 +18,7 @@ import type {
   MatterMember,
   DocumentWorkflow,
   WorkflowEvent,
+  User,
 } from "@/platform/spine/store"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 
@@ -70,6 +71,17 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<Matter>(db, "matters", firmId)
+      },
+    },
+    users: {
+      async upsert(row) {
+        await setById(db, "users", row)
+      },
+      async get(id) {
+        return getById<User>(db, "users", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<User>(db, "users", firmId)
       },
     },
     members: {
