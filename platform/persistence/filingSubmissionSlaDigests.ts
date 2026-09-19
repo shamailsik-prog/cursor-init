@@ -50,7 +50,8 @@ export function buildSubmissionSlaDigestRow(
   if (
     input.exception &&
     input.exception.status !== "resolved" &&
-    input.exception.source === "dispatch_transport_blocked"
+    (input.exception.source === "dispatch_transport_blocked" ||
+      input.exception.source === "dispatch_retry_plan")
   ) {
     reasons.push("transport_blocked")
   }
