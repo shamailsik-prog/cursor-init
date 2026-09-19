@@ -116,6 +116,19 @@ export type EmbeddingRow = {
   vector: number[]
 }
 
+export type DraftRecord = {
+  id: string
+  firmId: string
+  matterId: string
+  templateId: string
+  title: string
+  body: string
+  classification: Classification
+  createdBy: string
+  createdAt: number
+  status: "draft"
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, { matterId: string; userId: string; firmId: string }>()
@@ -132,6 +145,7 @@ export class SpineStore {
   judgments = new Map<string, Judgment>()
   treatments: TreatmentRow[] = []
   embeddings: EmbeddingRow[] = []
+  drafts = new Map<string, DraftRecord>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",
