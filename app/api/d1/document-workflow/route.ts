@@ -10,6 +10,7 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import {
   applyReviewDecision,
   assignReviewer,
@@ -240,6 +241,7 @@ export async function POST(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new Error("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = transitionWorkflowStatus(store, {
         actorId: parsed.actorId,
@@ -249,6 +251,7 @@ export async function POST(request: Request) {
       })
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents)
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "transition", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -264,6 +267,7 @@ export async function POST(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new Error("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = assignReviewer(store, {
         actorId: parsed.actorId,
@@ -272,6 +276,7 @@ export async function POST(request: Request) {
       })
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents)
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "assign_reviewer", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -287,6 +292,7 @@ export async function POST(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new Error("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = applyReviewDecision(store, {
         actorId: parsed.actorId,
@@ -297,6 +303,7 @@ export async function POST(request: Request) {
       })
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents)
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const updatedDoc = store.documents.get(parsed.documentId)
       if (updatedDoc) {
         const persistedDoc = await repos.documents.get(updatedDoc.id)

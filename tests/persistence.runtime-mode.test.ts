@@ -718,6 +718,157 @@ describe("Runtime persistence mode", () => {
     })
   })
 
+  it("persists non-tenancy audit actions and rehydrates them through tenancy audit view", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const matterId = await createMatterViaRoute(
+        "Persisted audit parity matter",
+        "eb14e3d6-c2dc-4c38-8bc7-e97f6bc22009"
+      )
+
+      const ingestRes = await documentsPost(
+        new Request("http://127.0.0.1/api/d1/documents", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "9a67f7a3-3e58-4ae6-b3ff-4af127d59f0a",
+          },
+          body: JSON.stringify({
+            action: "ingest",
+            actorId: "partner_a",
+            firmId: "firmA",
+            matterId,
+            contentBase64: Buffer.from("%PDF-audit-parity%").toString("base64"),
+            sourceChannel: "web",
+            classification: "internal",
+          }),
+        })
+      )
+      expect(ingestRes.status).toBe(200)
+      const ingestJson = (await ingestRes.json()) as { result: { doc: { id: string } } }
+
+      const template = getDocumentTypes()[0]
+      if (!template) throw new Error("missing template seed")
+      const composeRes = await draftsPost(
+        new Request("http://127.0.0.1/api/d4/drafts", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "5936b7f9-5f28-40e1-bf43-b98dc4e4e47b",
+          },
+          body: JSON.stringify({
+            action: "compose",
+            actorId: "associate_a",
+            matterId,
+            templateId: template.id,
+            title: "Audit parity draft",
+            body: "Body",
+            classification: "internal",
+            citedJudgmentIds: [],
+            temporalCitations: [],
+          }),
+        })
+      )
+      expect(composeRes.status).toBe(200)
+      const composeJson = (await composeRes.json()) as { result: { draft: { id: string } } }
+
+      const createPkgRes = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f91fd182-2edf-42f2-abdb-7550fb9a58bf",
+          },
+          body: JSON.stringify({
+            action: "create_package",
+            actorId: "associate_a",
+            matterId,
+            draftId: composeJson.result.draft.id,
+            classification: "internal",
+            citedJudgmentIds: [],
+            temporalCitations: [],
+          }),
+        })
+      )
+      expect(createPkgRes.status).toBe(200)
+
+      const caseRejectRes = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "832e2b95-5f33-4744-af4f-f393d4ca95c4",
+          },
+          body: JSON.stringify({
+            action: "record_case_number",
+            actorId: "partner_a",
+            matterId,
+            raw: "CP 1234",
+            courtId: "SHC",
+          }),
+        })
+      )
+      expect(caseRejectRes.status).toBe(200)
+
+      const queueRes = await courtOpsGet(
+        new Request(
+          `http://127.0.0.1/api/d2/court-ops?userId=associate_a&matterId=${matterId}&limit=10&cursor=0`
+        )
+      )
+      expect(queueRes.status).toBe(200)
+      const queueJson = (await queueRes.json()) as {
+        items: Array<{ queueType: string; id: string }>
+      }
+      const followUpItem = queueJson.items.find((item) => item.queueType === "follow_up")
+      if (!followUpItem) throw new Error("expected follow_up queue item")
+
+      const resolveRes = await courtOpsPost(
+        new Request("http://127.0.0.1/api/d2/court-ops", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "c5ddcfcb-8538-4be0-ba90-11c0de5c8f42",
+          },
+          body: JSON.stringify({
+            action: "resolve_follow_up",
+            actorId: "partner_a",
+            followUpId: followUpItem.id,
+            reason: "Audit parity resolution",
+          }),
+        })
+      )
+      expect(resolveRes.status).toBe(200)
+
+      // Simulate fresh runtime cycle without in-memory audit cache.
+      getRuntimeStore().audit = []
+      const auditViewRes = await tenancyGet(
+        new Request(
+          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=100&cursor=0"
+        )
+      )
+      expect(auditViewRes.status).toBe(200)
+      const auditJson = (await auditViewRes.json()) as {
+        items: Array<{ action: string; target: string }>
+      }
+      const actions = new Set(auditJson.items.map((row) => row.action))
+      expect(actions.has("matter_create")).toBe(true)
+      expect(actions.has("document_ingest")).toBe(true)
+      expect(actions.has("draft_compose")).toBe(true)
+      expect(actions.has("filing_package_create")).toBe(true)
+      expect(actions.has("court_ops_resolve_follow_up")).toBe(true)
+
+      const persistedAudit = await getDocs(collection(ctx.firestore(), "audit_log"))
+      expect(
+        persistedAudit.docs.some(
+          (entry) =>
+            entry.data()?.action === "document_ingest" &&
+            entry.data()?.target === ingestJson.result.doc.id &&
+            entry.data()?.firmId === "firmA"
+        )
+      ).toBe(true)
+    })
+  })
+
   it("hydrates tenancy membership, roles, and audit views from persisted repositories after reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())

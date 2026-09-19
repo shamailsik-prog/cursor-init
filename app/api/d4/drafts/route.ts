@@ -9,6 +9,7 @@ import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   composeDraft,
@@ -209,6 +210,7 @@ export async function POST(request: Request) {
       const actor = store.users.get(preflightInput.actorId)
       if (!actor) throw new Error("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      const priorAuditCount = store.audit.length
       const gate = runDraftPreflight(store, preflightInput)
       if (!gate.ok) {
         return NextResponse.json(
@@ -231,6 +233,7 @@ export async function POST(request: Request) {
         target: draft.id,
         classification: draft.classification,
       })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       await repos.drafts.create(draft)
       const payload = {
         action: "compose",

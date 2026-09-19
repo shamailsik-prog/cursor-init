@@ -9,6 +9,7 @@ import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmEntities } from "@/platform/persistence/entitySync"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { conflictCheck, createClient } from "@/services/d1-1/clients"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -152,6 +153,7 @@ export async function POST(request: Request) {
       }
 
       await syncFirmEntities(store, repos, parsed.firmId)
+      const priorAuditCount = store.audit.length
       const existingLinkKeys = new Set(
         store.links
           .filter((row) => row.firmId === parsed.firmId)
@@ -178,6 +180,7 @@ export async function POST(request: Request) {
         classification: entity.classification,
         firmId: entity.firmId,
       })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "create",
         entity,

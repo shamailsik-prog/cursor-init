@@ -10,6 +10,7 @@ import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import {
   addMember,
   confirmEngagement,
@@ -182,6 +183,7 @@ export async function POST(request: Request) {
       if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification as Classification)) {
         return deny("actor clearance is below requested matter classification")
       }
+      const priorAuditCount = store.audit.length
       const matter = {
         id: store.id("mat"),
         firmId: parsed.firmId,
@@ -207,6 +209,7 @@ export async function POST(request: Request) {
         target: matter.id,
         classification: matter.classification,
       })
+      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "create",
         matter,
@@ -222,6 +225,7 @@ export async function POST(request: Request) {
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = ensureMatterAccess(parsed.actorId, parsed.matterId)
+      const priorAuditCount = store.audit.length
       const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
       const updatedMatter = store.matters.get(parsed.matterId)
@@ -242,6 +246,7 @@ export async function POST(request: Request) {
         target: parsed.matterId,
         classification: matter.classification,
       })
+      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "confirm_engagement",
         matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
@@ -260,6 +265,7 @@ export async function POST(request: Request) {
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = ensureMatterAccess(parsed.actorId, parsed.matterId)
+      const priorAuditCount = store.audit.length
       const priorFollowUpIds = new Set(store.followUps.map((row) => row.id))
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)
       const updatedMatter = store.matters.get(parsed.matterId)
@@ -280,6 +286,7 @@ export async function POST(request: Request) {
         classification: matter.classification,
         reason: result.status,
       })
+      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "record_case_number",
         result,
