@@ -4,7 +4,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
-import { doc, getDoc } from "firebase/firestore"
+import { collection, doc, getDoc, getDocs } from "firebase/firestore"
 import { GET as mattersGet, POST as mattersPost } from "@/app/api/d1/matters/route"
 import { GET as documentsGet, POST as documentsPost } from "@/app/api/d1/documents/route"
 import {
@@ -165,12 +165,44 @@ describe("Runtime persistence mode", () => {
       const queueItem = queueJson.items.find((item) => item.documentId === docId)
       expect(queueItem?.status).toBe("processing")
 
+      const timelineRes = await workflowGet(
+        new Request(
+          `http://127.0.0.1/api/d1/document-workflow?view=timeline&userId=associate_a&matterId=${matterId}&limit=10&cursor=0`
+        )
+      )
+      expect(timelineRes.status).toBe(200)
+      const timelineJson = (await timelineRes.json()) as {
+        items: Array<{ documentId: string; action: string }>
+      }
+      expect(
+        timelineJson.items.some(
+          (item) => item.documentId === docId && item.action === "status_transition"
+        )
+      ).toBe(true)
+
       const dbDoc = await getDoc(doc(ctx.firestore(), "documents", docId))
       expect(dbDoc.exists()).toBe(true)
 
       const dbWorkflow = await getDoc(doc(ctx.firestore(), "document_workflow", docId))
       expect(dbWorkflow.exists()).toBe(true)
       expect(dbWorkflow.data()?.status).toBe("processing")
+
+      const dbJobs = await getDocs(collection(ctx.firestore(), "jobs"))
+      expect(
+        dbJobs.docs.some(
+          (entry) =>
+            entry.data()?.documentId === docId && entry.data()?.jobType === "ocr"
+        )
+      ).toBe(true)
+
+      const dbEvents = await getDocs(collection(ctx.firestore(), "workflow_events"))
+      expect(
+        dbEvents.docs.some(
+          (entry) =>
+            entry.data()?.documentId === docId &&
+            entry.data()?.action === "status_transition"
+        )
+      ).toBe(true)
     })
   })
 

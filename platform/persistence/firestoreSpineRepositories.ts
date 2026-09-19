@@ -11,8 +11,10 @@ import type {
   DocumentRecord,
   DraftRecord,
   FilingPackage,
+  Job,
   Matter,
   DocumentWorkflow,
+  WorkflowEvent,
 } from "@/platform/spine/store"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 
@@ -115,6 +117,28 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<FilingPackage>(db, "filing_packages", firmId)
+      },
+    },
+    jobs: {
+      async create(row) {
+        await setById(db, "jobs", row)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<Job>(db, "jobs", firmId)
+      },
+      async listByDocument(documentId) {
+        const rows = await getDocs(collection(db, "jobs"))
+        return rows.docs
+          .map((entry) => entry.data() as Job)
+          .filter((row) => row.documentId === documentId)
+      },
+    },
+    workflowEvents: {
+      async append(row) {
+        await setById(db, "workflow_events", row)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowEvent>(db, "workflow_events", firmId)
       },
     },
   }
