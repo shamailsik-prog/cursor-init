@@ -445,7 +445,7 @@ describe("Runtime persistence mode", () => {
       ).toBe(true)
       const rehydratedDispatch = await filingsGet(
         new Request(
-          `http://127.0.0.1/api/d4/filings?view=dispatch&userId=associate_a&matterId=${matterId}&dispatchStatus=handoff_ready&assigneeId=clerk_a&limit=10&cursor=0`
+          `http://127.0.0.1/api/d4/filings?view=dispatch&userId=associate_a&matterId=${matterId}&dispatchStatus=retry_pending&assigneeId=clerk_a&limit=10&cursor=0`
         )
       )
       expect(rehydratedDispatch.status).toBe(200)
@@ -456,7 +456,7 @@ describe("Runtime persistence mode", () => {
         rehydratedDispatchJson.items.some(
           (item) =>
             item.packageId === packageId &&
-            item.status === "handoff_ready" &&
+            item.status === "retry_pending" &&
             item.assigneeId === "clerk_a" &&
             item.retryCount >= 1
         )
@@ -565,7 +565,7 @@ describe("Runtime persistence mode", () => {
           (entry) =>
             entry.data()?.firmId === "firmA" &&
             entry.data()?.packageId === packageId &&
-            entry.data()?.status === "handoff_ready" &&
+            entry.data()?.status === "retry_pending" &&
             entry.data()?.assigneeId === "clerk_a"
         )
       ).toBe(true)

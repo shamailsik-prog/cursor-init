@@ -305,16 +305,24 @@ export async function GET(request: Request) {
         const computed = buildFilingSubmissionReconciliationRow(filingPackage, receipts, {
           notes: existing?.notes ?? [],
         })
+        const hasNewAttempt =
+          !existing ||
+          existing.totalAttempts !== computed.totalAttempts ||
+          existing.latestReceiptId !== computed.latestReceiptId
         const changed =
           !existing ||
           existing.totalAttempts !== computed.totalAttempts ||
           existing.latestReceiptId !== computed.latestReceiptId ||
           existing.latestSubmissionReference !== computed.latestSubmissionReference ||
-          existing.latestDispatchOutcome !== computed.latestDispatchOutcome ||
-          existing.status !== computed.status
+          existing.latestDispatchOutcome !== computed.latestDispatchOutcome
         const next = changed
           ? existing
-            ? { ...computed, notes: existing.notes, updatedAt: Date.now() }
+            ? {
+                ...computed,
+                status: hasNewAttempt ? computed.status : existing.status,
+                notes: existing.notes,
+                updatedAt: Date.now(),
+              }
             : computed
           : existing
         if (changed || !existing) {
