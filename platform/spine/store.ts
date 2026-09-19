@@ -190,6 +190,28 @@ export type FilingPackage = {
   approvalReason: string | null
 }
 
+export type FilingPacketArtifactComponent = {
+  componentId: string
+  label: string
+  required: boolean
+  status: "ready" | "missing"
+  sourceRef: string | null
+  note?: string
+}
+
+export type FilingPacketArtifactRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  draftId: string
+  classification: Classification
+  readiness: "ready" | "blocked"
+  blockedReasons: string[]
+  components: FilingPacketArtifactComponent[]
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -278,6 +300,7 @@ export class SpineStore {
   documentWorkflow = new Map<string, DocumentWorkflow>()
   workflowEvents: WorkflowEvent[] = []
   filingPackages = new Map<string, FilingPackage>()
+  filingPacketArtifacts = new Map<string, FilingPacketArtifactRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

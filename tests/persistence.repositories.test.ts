@@ -295,6 +295,32 @@ describe("Firestore repository adapters", () => {
       expect(filing?.status).toBe("pending_partner_approval")
       const filings = await repos.filings.listByFirm("firmA")
       expect(filings.some((row) => row.id === "pkg_1")).toBe(true)
+      await repos.filingPacketArtifacts.upsert({
+        id: "packet:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        draftId: "drf_1",
+        classification: "internal",
+        readiness: "blocked",
+        blockedReasons: ["partner_approval_pending"],
+        components: [
+          {
+            componentId: "draft_body",
+            label: "Draft body",
+            required: true,
+            status: "ready",
+            sourceRef: "drf_1",
+          },
+        ],
+        updatedAt: 20,
+      })
+      const packetArtifact = await repos.filingPacketArtifacts.get("packet:pkg_1")
+      expect(packetArtifact?.packageId).toBe("pkg_1")
+      const packetArtifactsByFirm = await repos.filingPacketArtifacts.listByFirm("firmA")
+      expect(packetArtifactsByFirm.some((row) => row.id === "packet:pkg_1")).toBe(true)
+      const packetArtifactsByPackage = await repos.filingPacketArtifacts.listByPackageId("pkg_1")
+      expect(packetArtifactsByPackage.some((row) => row.id === "packet:pkg_1")).toBe(true)
     })
   })
 })

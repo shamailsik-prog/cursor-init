@@ -97,9 +97,14 @@ describe("GET/POST /api/d4/filings", () => {
     )
     expect(created.status).toBe(200)
     const createJson = (await created.json()) as {
-      result: { filingPackage: { id: string; status: string } }
+      result: {
+        filingPackage: { id: string; status: string }
+        packetArtifact: { readiness: string; blockedReasons: string[] }
+      }
     }
     expect(createJson.result.filingPackage.status).toBe("pending_partner_approval")
+    expect(createJson.result.packetArtifact.readiness).toBe("blocked")
+    expect(createJson.result.packetArtifact.blockedReasons).toContain("partner_approval_pending")
     const packageId = createJson.result.filingPackage.id
 
     const denied = await post(
@@ -126,10 +131,15 @@ describe("GET/POST /api/d4/filings", () => {
     )
     expect(approved.status).toBe(200)
     const approvedJson = (await approved.json()) as {
-      result: { filingPackage: { status: string; approvedBy: string } }
+      result: {
+        filingPackage: { status: string; approvedBy: string }
+        packetArtifact: { readiness: string; blockedReasons: string[] }
+      }
     }
     expect(approvedJson.result.filingPackage.status).toBe("approved")
     expect(approvedJson.result.filingPackage.approvedBy).toBe("partner_a")
+    expect(approvedJson.result.packetArtifact.readiness).toBe("ready")
+    expect(approvedJson.result.packetArtifact.blockedReasons).toHaveLength(0)
   })
 
   it("lists filing packages with pagination and matter scoping", async () => {
@@ -167,6 +177,7 @@ describe("GET/POST /api/d4/filings", () => {
       new URLSearchParams({
         userId: "associate_a",
         matterId,
+        readiness: "blocked",
         limit: "1",
         cursor: "0",
       })
@@ -190,6 +201,56 @@ describe("GET/POST /api/d4/filings", () => {
       )
       expect(second.status).toBe(200)
     }
+  })
+
+  it("filters filing packages by readiness after partner approval", async () => {
+    const { matterId, draftId } = seedMatterAndDraft()
+    const created = await post(
+      {
+        action: "create_package",
+        actorId: "associate_a",
+        matterId,
+        draftId,
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+      },
+      "8b675329-eddd-4f3a-b6d2-7b1f6c5c6c5f"
+    )
+    expect(created.status).toBe(200)
+    const createdJson = (await created.json()) as {
+      result: { filingPackage: { id: string } }
+    }
+    const packageId = createdJson.result.filingPackage.id
+    const approved = await post(
+      {
+        action: "decide_package",
+        actorId: "partner_a",
+        packageId,
+        decision: "approve",
+        reason: "Ready for filing submission packet",
+      },
+      "6558d5d7-17b4-4f64-99e7-7f76f5c987b0"
+    )
+    expect(approved.status).toBe(200)
+
+    const readyList = await get(
+      new URLSearchParams({
+        userId: "associate_a",
+        readiness: "ready",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(readyList.status).toBe(200)
+    const readyJson = (await readyList.json()) as {
+      items: Array<{ id: string; packetArtifact: { readiness: string } | null }>
+    }
+    expect(
+      readyJson.items.some(
+        (row) => row.id === packageId && row.packetArtifact?.readiness === "ready"
+      )
+    ).toBe(true)
   })
 
   it("replays idempotent create package requests and rejects conflicts", async () => {
