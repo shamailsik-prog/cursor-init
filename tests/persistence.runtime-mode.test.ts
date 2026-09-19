@@ -298,7 +298,46 @@ describe("Runtime persistence mode", () => {
       expect(row?.packetArtifact?.readiness).toBe("ready")
       expect(row?.packetArtifact?.blockedReasons).toHaveLength(0)
 
+      const dispatchQueue = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=dispatch&userId=associate_a&matterId=${matterId}&dispatchStatus=queued&limit=10&cursor=0`
+        )
+      )
+      expect(dispatchQueue.status).toBe(200)
+      const dispatchQueueJson = (await dispatchQueue.json()) as {
+        items: Array<{ packageId: string; status: string; externalDispatchState: string }>
+      }
+      expect(
+        dispatchQueueJson.items.some(
+          (item) =>
+            item.packageId === packageId &&
+            item.status === "queued" &&
+            item.externalDispatchState === "blocked_todo_firm"
+        )
+      ).toBe(true)
+
+      const dispatchUpdate = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "6fb8a348-3852-4d32-9af7-c8ba07f31f4e",
+          },
+          body: JSON.stringify({
+            action: "dispatch_update",
+            actorId: "partner_a",
+            packageId,
+            nextStatus: "handoff_ready",
+            assigneeId: "clerk_a",
+            markAttempt: true,
+            note: "Runtime dispatch handoff",
+          }),
+        })
+      )
+      expect(dispatchUpdate.status).toBe(200)
+
       getRuntimeStore().filingPacketArtifacts = new Map()
+      getRuntimeStore().filingDispatchQueue = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -313,6 +352,40 @@ describe("Runtime persistence mode", () => {
           (item) => item.id === packageId && item.packetArtifact?.readiness === "ready"
         )
       ).toBe(true)
+      const rehydratedDispatch = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=dispatch&userId=associate_a&matterId=${matterId}&dispatchStatus=handoff_ready&assigneeId=clerk_a&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedDispatch.status).toBe(200)
+      const rehydratedDispatchJson = (await rehydratedDispatch.json()) as {
+        items: Array<{ packageId: string; status: string; assigneeId: string | null; retryCount: number }>
+      }
+      expect(
+        rehydratedDispatchJson.items.some(
+          (item) =>
+            item.packageId === packageId &&
+            item.status === "handoff_ready" &&
+            item.assigneeId === "clerk_a" &&
+            item.retryCount >= 1
+        )
+      ).toBe(true)
+      getRuntimeStore().audit = []
+      const auditView = await tenancyGet(
+        new Request(
+          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=50&cursor=0"
+        )
+      )
+      expect(auditView.status).toBe(200)
+      const auditViewJson = (await auditView.json()) as {
+        items: Array<{ action: string; target: string }>
+      }
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_dispatch_update" && item.target === `dispatch:${packageId}`
+        )
+      ).toBe(true)
 
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
@@ -324,6 +397,16 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.packageId === packageId &&
             entry.data()?.readiness === "ready"
+        )
+      ).toBe(true)
+      const dbDispatchQueue = await getDocs(collection(ctx.firestore(), "filing_submission_dispatch_queue"))
+      expect(
+        dbDispatchQueue.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.packageId === packageId &&
+            entry.data()?.status === "handoff_ready" &&
+            entry.data()?.assigneeId === "clerk_a"
         )
       ).toBe(true)
     })

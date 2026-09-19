@@ -253,6 +253,109 @@ describe("GET/POST /api/d4/filings", () => {
     ).toBe(true)
   })
 
+  it("lists and updates filing dispatch queue after partner approval", async () => {
+    const { matterId, draftId } = seedMatterAndDraft()
+    const created = await post(
+      {
+        action: "create_package",
+        actorId: "associate_a",
+        matterId,
+        draftId,
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+      },
+      "e7d878b9-8f87-4fac-8d73-1f72fcb0ce41"
+    )
+    expect(created.status).toBe(200)
+    const createdJson = (await created.json()) as {
+      result: { filingPackage: { id: string } }
+    }
+    const packageId = createdJson.result.filingPackage.id
+    const approved = await post(
+      {
+        action: "decide_package",
+        actorId: "partner_a",
+        packageId,
+        decision: "approve",
+        reason: "Ready for dispatch queue",
+      },
+      "fce7cd7a-9174-4f3d-b5ca-962565f13cff"
+    )
+    expect(approved.status).toBe(200)
+
+    const initialQueue = await get(
+      new URLSearchParams({
+        view: "dispatch",
+        userId: "associate_a",
+        dispatchStatus: "queued",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(initialQueue.status).toBe(200)
+    const initialJson = (await initialQueue.json()) as {
+      items: Array<{ packageId: string; status: string; externalDispatchState: string }>
+    }
+    expect(
+      initialJson.items.some(
+        (row) =>
+          row.packageId === packageId &&
+          row.status === "queued" &&
+          row.externalDispatchState === "blocked_todo_firm"
+      )
+    ).toBe(true)
+
+    const update = await post(
+      {
+        action: "dispatch_update",
+        actorId: "partner_a",
+        packageId,
+        nextStatus: "handoff_ready",
+        assigneeId: "clerk_a",
+        markAttempt: true,
+        note: "Partner handed off package to filing clerk",
+      },
+      "1e84b07b-cff9-4db7-81f8-fd57a69ce474"
+    )
+    expect(update.status).toBe(200)
+    const updateJson = (await update.json()) as {
+      result: {
+        dispatchQueue: {
+          status: string
+          assigneeId: string | null
+          retryCount: number
+          externalDispatchState: string
+        }
+      }
+    }
+    expect(updateJson.result.dispatchQueue.status).toBe("handoff_ready")
+    expect(updateJson.result.dispatchQueue.assigneeId).toBe("clerk_a")
+    expect(updateJson.result.dispatchQueue.retryCount).toBe(1)
+    expect(updateJson.result.dispatchQueue.externalDispatchState).toBe("ready_for_firm_dispatch")
+
+    const handoffList = await get(
+      new URLSearchParams({
+        view: "dispatch",
+        userId: "associate_a",
+        dispatchStatus: "handoff_ready",
+        assigneeId: "clerk_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(handoffList.status).toBe(200)
+    const handoffJson = (await handoffList.json()) as {
+      items: Array<{ packageId: string; status: string; assigneeId: string | null }>
+    }
+    expect(
+      handoffJson.items.some(
+        (row) =>
+          row.packageId === packageId && row.status === "handoff_ready" && row.assigneeId === "clerk_a"
+      )
+    ).toBe(true)
+  })
+
   it("replays idempotent create package requests and rejects conflicts", async () => {
     const { matterId, draftId } = seedMatterAndDraft()
     const key = "fee8efdf-d8ca-4115-a978-a91ddeb03684"
