@@ -135,7 +135,11 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
     },
     workflowEvents: {
       async append(row) {
-        await setById(db, "workflow_events", row)
+        const payload: Record<string, unknown> = { ...row }
+        if (payload.reason === undefined) {
+          delete payload.reason
+        }
+        await setDoc(doc(db, "workflow_events", row.id), payload)
       },
       async listByFirm(firmId) {
         return listByFirm<WorkflowEvent>(db, "workflow_events", firmId)
