@@ -7,6 +7,7 @@ import type {
   Job,
   MatterClientSearchIndexRow,
   DraftTemplateAnalyticsRow,
+  WorkflowOpsActivityRow,
   AuditEntry,
   CommitteeBrainOutput,
   Entity,
@@ -123,6 +124,12 @@ export type DraftTemplateAnalyticsRepository = {
   listByFirm(firmId: string): Promise<DraftTemplateAnalyticsRow[]>
 }
 
+export type WorkflowOpsActivityRepository = {
+  upsert(row: WorkflowOpsActivityRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsActivityRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsActivityRow[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -141,6 +148,7 @@ export type SpineRepositories = {
   committeeOutputs: CommitteeBrainOutputRepository
   reportingIndex: MatterClientSearchIndexRepository
   draftTemplateAnalytics: DraftTemplateAnalyticsRepository
+  workflowOpsActivity: WorkflowOpsActivityRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -382,6 +390,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.draftTemplateAnalytics.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    workflowOpsActivity: {
+      async upsert(row) {
+        store.workflowOpsActivity.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsActivity.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsActivity.values()].filter((row) => row.firmId === firmId)
       },
     },
   }

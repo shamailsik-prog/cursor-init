@@ -118,6 +118,26 @@ describe("Firestore repository adapters", () => {
           (row) => row.templateId === "motion_template" && row.templateSearchCount === 7
         )
       ).toBe(true)
+      await repos.workflowOpsActivity.upsert({
+        id: "ops:workflow_event:wfe_1",
+        firmId: "firmA",
+        source: "workflow_event",
+        action: "workflow_transition",
+        actorId: "associate_a",
+        classification: "internal",
+        matterId: "mat_1",
+        documentId: "doc_1",
+        followUpId: null,
+        queueType: null,
+        status: "processing",
+        detail: "moved to processing",
+        tags: ["workflow", "processing", "mat_1"],
+        createdAt: 44,
+      })
+      const opsRow = await repos.workflowOpsActivity.get("ops:workflow_event:wfe_1")
+      expect(opsRow?.action).toBe("workflow_transition")
+      const opsRows = await repos.workflowOpsActivity.listByFirm("firmA")
+      expect(opsRows.some((row) => row.id === "ops:workflow_event:wfe_1")).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

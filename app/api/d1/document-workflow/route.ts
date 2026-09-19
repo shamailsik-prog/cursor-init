@@ -11,6 +11,7 @@ import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import {
   applyReviewDecision,
   assignReviewer,
@@ -82,11 +83,15 @@ function canViewWorkflowDocument(
 async function persistWorkflowEventsSince(
   repos: Awaited<ReturnType<typeof getRuntimeRepositories>>,
   store: SpineStore,
-  startIndex: number
+  startIndex: number,
+  sourceAction?: string
 ): Promise<void> {
   const newEvents = store.workflowEvents.slice(startIndex)
   for (const event of newEvents) {
     await repos.workflowEvents.append(event)
+    await repos.workflowOpsActivity.upsert(
+      buildWorkflowEventActivityRow(event, { sourceAction })
+    )
   }
 }
 
@@ -250,7 +255,7 @@ export async function POST(request: Request) {
         reason: parsed.reason,
       })
       await repos.workflow.createOrUpdate(row)
-      await persistWorkflowEventsSince(repos, store, priorEvents)
+      await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_transition")
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "transition", row }
       idempotency.set(key, payload, fingerprint)
@@ -275,7 +280,7 @@ export async function POST(request: Request) {
         reviewerId: parsed.reviewerId,
       })
       await repos.workflow.createOrUpdate(row)
-      await persistWorkflowEventsSince(repos, store, priorEvents)
+      await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_assign_reviewer")
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "assign_reviewer", row }
       idempotency.set(key, payload, fingerprint)
@@ -302,7 +307,7 @@ export async function POST(request: Request) {
         reason: parsed.reason,
       })
       await repos.workflow.createOrUpdate(row)
-      await persistWorkflowEventsSince(repos, store, priorEvents)
+      await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_review_decision")
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const updatedDoc = store.documents.get(parsed.documentId)
       if (updatedDoc) {

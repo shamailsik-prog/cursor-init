@@ -36,6 +36,7 @@ const baseStore = {
   filingPackages: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
+  workflowOpsActivity: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -221,6 +222,28 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
     },
+    workflowOpsActivity: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "ops_repo",
+          firmId: "firmA",
+          source: "workflow_event",
+          action: "workflow_transition",
+          actorId: "associate_a",
+          classification: "internal",
+          matterId: "mat_1",
+          documentId: "doc_repo",
+          followUpId: null,
+          queueType: null,
+          status: "processing",
+          detail: "repo transition",
+          tags: ["repo", "workflow"],
+          createdAt: 3,
+        },
+      ]),
+    },
   })),
 }))
 
@@ -287,5 +310,15 @@ describe("Route wiring uses repository adapters", () => {
       items: Array<{ analytics?: { templateSearchCount?: number } }>
     }
     expect(json.items.some((item) => (item.analytics?.templateSearchCount ?? 0) >= 5)).toBe(true)
+  })
+
+  it("ops reporting route GET uses repository workflowOpsActivity listByFirm", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request("http://127.0.0.1/api/d2/ops-reporting?actorId=associate_a&limit=10&cursor=0")
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("ops_repo")
   })
 })

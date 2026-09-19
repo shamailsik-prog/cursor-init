@@ -16,6 +16,7 @@ import type {
   Job,
   MatterClientSearchIndexRow,
   DraftTemplateAnalyticsRow,
+  WorkflowOpsActivityRow,
   AuditEntry,
   CommitteeBrainOutput,
   Entity,
@@ -308,6 +309,17 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<DraftTemplateAnalyticsRow>(db, "draft_template_analytics", firmId)
+      },
+    },
+    workflowOpsActivity: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_activity", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsActivityRow>(db, "workflow_ops_activity", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsActivityRow>(db, "workflow_ops_activity", firmId)
       },
     },
   }
