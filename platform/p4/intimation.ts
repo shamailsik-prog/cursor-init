@@ -41,6 +41,9 @@ export function escalateSilence(
         courtId: matter.courtId,
         raw: "accounts-silence-24h",
         kind: "l4_10_silence",
+        status: "open",
+        resolvedBy: null,
+        resolvedAt: null,
       })
       return
     }

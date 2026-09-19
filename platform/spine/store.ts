@@ -71,6 +71,9 @@ export type FollowUp = {
   courtId: string
   raw: string
   kind: "case_number_reject" | "l4_10_silence"
+  status?: "open" | "resolved"
+  resolvedBy?: string | null
+  resolvedAt?: number | null
 }
 
 export type Intimation = {
