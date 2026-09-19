@@ -484,6 +484,9 @@ export async function GET(request: Request) {
         }
       }
       const reconciliationRows = await repos.filingSubmissionReconciliation.listByFirm(user.firmId)
+      const reconciliationByPackage = new Map(
+        reconciliationRows.map((row) => [row.packageId, row])
+      )
       const needsRetryReconciliationByPackage = new Map(
         reconciliationRows
           .filter((row) => row.status === "needs_retry")
@@ -521,6 +524,7 @@ export async function GET(request: Request) {
       }
       for (const [pkgId, receipt] of latestFailingReceiptByPackage.entries()) {
         if (needsRetryReconciliationByPackage.has(pkgId)) continue
+        if (reconciliationByPackage.get(pkgId)?.status === "reconciled") continue
         const filingPackage = packageById.get(pkgId)
         if (!filingPackage) continue
         const existing = rowsByPackage.get(pkgId) ?? null
