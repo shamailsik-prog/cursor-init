@@ -206,7 +206,22 @@ export async function POST(request: Request) {
       idempotencyKey: key,
     })
 
-    const doc = (await repos.documents.get(write.docId)) ?? store.documents.get(write.docId)
+    const inMemoryDoc = store.documents.get(write.docId)
+    if (!inMemoryDoc) {
+      return NextResponse.json({ error: "document write failed" }, { status: 500 })
+    }
+    const persisted = await repos.documents.get(write.docId)
+    if (persisted) {
+      await repos.documents.update(write.docId, {
+        contentHash: inMemoryDoc.contentHash,
+        classification: inMemoryDoc.classification,
+        sourceChannel: inMemoryDoc.sourceChannel,
+        matterId: inMemoryDoc.matterId,
+      })
+    } else {
+      await repos.documents.create(inMemoryDoc)
+    }
+    const doc = (await repos.documents.get(write.docId)) ?? inMemoryDoc
     if (!doc) {
       return NextResponse.json({ error: "document write failed" }, { status: 500 })
     }

@@ -168,6 +168,7 @@ export async function POST(request: Request) {
           partnerOverride,
         },
       })
+      await repos.filings.create(created.filingPackage)
       const payload = {
         action: "create_package",
         filingPackage:
@@ -191,6 +192,16 @@ export async function POST(request: Request) {
         decision: parsed.decision,
         reason: parsed.reason,
       })
+      const persisted = await repos.filings.get(filingPackage.id)
+      if (persisted) {
+        await repos.filings.update(filingPackage.id, {
+          status: filingPackage.status,
+          approvedBy: filingPackage.approvedBy,
+          approvalReason: filingPackage.approvalReason,
+        })
+      } else {
+        await repos.filings.create(filingPackage)
+      }
       const payload = {
         action: "decide_package",
         filingPackage: (await repos.filings.get(filingPackage.id)) ?? filingPackage,
