@@ -800,6 +800,72 @@ export type FilingEscalationClosureFollowupQueueRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureSlaWindowStatus =
+  | "within_window"
+  | "ack_breached"
+  | "clear_breached"
+  | "auto_escalation_due"
+  | "cleared"
+
+export type FilingEscalationClosureSlaPressureLevel = "baseline" | "elevated" | "critical"
+
+export type FilingEscalationClosureSlaWindowScope = "firm_default" | "owner_override"
+
+export type FilingEscalationClosureSlaWindowConfigRow = {
+  id: string
+  firmId: string
+  ownerId: string | null
+  classification: Classification
+  scope: FilingEscalationClosureSlaWindowScope
+  ackDeadlineMs: number
+  clearDeadlineMs: number
+  autoEscalationMs: number
+  setBy: string
+  setAt: number
+  notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationClosureAutoAssignmentMode = "owner_rota" | "workload_aware_claim"
+
+export type FilingEscalationClosureAutoAssignmentRuleRow = {
+  id: string
+  firmId: string
+  ownerId: string | null
+  classification: Classification
+  mode: FilingEscalationClosureAutoAssignmentMode
+  enabled: boolean
+  maxActiveClaimsPerPartner: number
+  setBy: string
+  setAt: number
+  notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationClosureSlaWindowRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  digestId: string
+  queueId: string
+  classification: Classification
+  status: FilingEscalationClosureSlaWindowStatus
+  pressureLevel: FilingEscalationClosureSlaPressureLevel
+  openedAt: number | null
+  acknowledgedAt: number | null
+  clearedAt: number | null
+  ackDeadlineAt: number | null
+  clearDeadlineAt: number | null
+  autoEscalateAt: number | null
+  breachedAt: number | null
+  autoEscalationTriggeredAt: number | null
+  autoEscalatedToPartnerId: string | null
+  linkedConfigId: string | null
+  linkedAutoAssignmentRuleId: string | null
+  notes: string[]
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -916,6 +982,12 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureComplianceDigestRow>()
   filingEscalationClosureFollowupQueues =
     new Map<string, FilingEscalationClosureFollowupQueueRow>()
+  filingEscalationClosureSlaWindowConfigs =
+    new Map<string, FilingEscalationClosureSlaWindowConfigRow>()
+  filingEscalationClosureAutoAssignmentRules =
+    new Map<string, FilingEscalationClosureAutoAssignmentRuleRow>()
+  filingEscalationClosureSlaWindows =
+    new Map<string, FilingEscalationClosureSlaWindowRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

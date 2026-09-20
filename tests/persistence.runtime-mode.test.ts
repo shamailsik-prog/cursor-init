@@ -889,6 +889,41 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(acknowledgeRolloverReaffirmationSla.status).toBe(200)
+      const setClosureSlaWindowConfig = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f46a7ec3-6f0c-4d2a-8b9d-f22bc4a4bb95",
+          },
+          body: JSON.stringify({
+            action: "set_closure_sla_window_config",
+            actorId: "partner_a",
+            ackDeadlineHours: 1,
+            clearDeadlineHours: 2,
+            autoEscalationHours: 3,
+            note: "runtime closure SLA window config update",
+          }),
+        })
+      )
+      expect(setClosureSlaWindowConfig.status).toBe(200)
+      const setClosureAutoAssignmentRule = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1ff2f024-5f7e-42d6-95cd-bf45fa5b4ef0",
+          },
+          body: JSON.stringify({
+            action: "set_closure_auto_assignment_rule",
+            actorId: "partner_a",
+            mode: "workload_aware_claim",
+            maxActiveClaimsPerPartner: 4,
+            note: "runtime closure auto-assignment rule update",
+          }),
+        })
+      )
+      expect(setClosureAutoAssignmentRule.status).toBe(200)
       const assignClosureFollowup = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -906,6 +941,22 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(assignClosureFollowup.status).toBe(200)
+      const autoAssignClosureFollowup = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "6e0ce08a-0337-43ea-8585-cae641f88585",
+          },
+          body: JSON.stringify({
+            action: "auto_assign_closure_followup",
+            actorId: "partner_a",
+            ownerId: "partner_a",
+            note: "runtime auto-assign closure queue",
+          }),
+        })
+      )
+      expect([200, 422]).toContain(autoAssignClosureFollowup.status)
       const claimClosureFollowup = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -1061,6 +1112,9 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingEscalationRolloverReaffirmationSlas = new Map()
       getRuntimeStore().filingEscalationClosureComplianceDigests = new Map()
       getRuntimeStore().filingEscalationClosureFollowupQueues = new Map()
+      getRuntimeStore().filingEscalationClosureSlaWindowConfigs = new Map()
+      getRuntimeStore().filingEscalationClosureAutoAssignmentRules = new Map()
+      getRuntimeStore().filingEscalationClosureSlaWindows = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -1392,6 +1446,53 @@ describe("Runtime persistence mode", () => {
         rehydratedClosureQueueJson.items.some(
           (item) =>
             item.ownerId === "partner_a" && ["open", "claimed", "resolved"].includes(item.status)
+        )
+      ).toBe(true)
+      const rehydratedClosureSlaConfigs = await filingsGet(
+        new Request(
+          "http://127.0.0.1/api/d4/filings?view=closure_sla_window_configs&userId=partner_a&limit=10&cursor=0"
+        )
+      )
+      expect(rehydratedClosureSlaConfigs.status).toBe(200)
+      const rehydratedClosureSlaConfigsJson = (await rehydratedClosureSlaConfigs.json()) as {
+        items: Array<{ scope: string }>
+      }
+      expect(
+        rehydratedClosureSlaConfigsJson.items.some((item) =>
+          ["firm_default", "owner_override"].includes(item.scope)
+        )
+      ).toBe(true)
+      const rehydratedClosureAutoRules = await filingsGet(
+        new Request(
+          "http://127.0.0.1/api/d4/filings?view=closure_auto_assignment_rules&userId=partner_a&limit=10&cursor=0"
+        )
+      )
+      expect(rehydratedClosureAutoRules.status).toBe(200)
+      const rehydratedClosureAutoRulesJson = (await rehydratedClosureAutoRules.json()) as {
+        items: Array<{ mode: string }>
+      }
+      expect(
+        rehydratedClosureAutoRulesJson.items.some((item) =>
+          ["owner_rota", "workload_aware_claim"].includes(item.mode)
+        )
+      ).toBe(true)
+      const rehydratedClosureSlaWindows = await filingsGet(
+        new Request(
+          "http://127.0.0.1/api/d4/filings?view=closure_sla_windows&userId=partner_a&ownerId=partner_a&limit=10&cursor=0"
+        )
+      )
+      expect(rehydratedClosureSlaWindows.status).toBe(200)
+      const rehydratedClosureSlaWindowsJson = (await rehydratedClosureSlaWindows.json()) as {
+        items: Array<{ ownerId: string; status: string; pressureLevel: string }>
+      }
+      expect(
+        rehydratedClosureSlaWindowsJson.items.some(
+          (item) =>
+            item.ownerId === "partner_a" &&
+            ["within_window", "ack_breached", "clear_breached", "auto_escalation_due", "cleared"].includes(
+              item.status
+            ) &&
+            ["baseline", "elevated", "critical"].includes(item.pressureLevel)
         )
       ).toBe(true)
       await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
@@ -1777,6 +1878,77 @@ describe("Runtime persistence mode", () => {
           updatedAt: Date.now(),
         }
       )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_closure_sla_window_configs",
+          "closure-sla-window-config:firmB:default"
+        ),
+        {
+          id: "closure-sla-window-config:firmB:default",
+          firmId: "firmB",
+          ownerId: null,
+          classification: "internal",
+          scope: "firm_default",
+          ackDeadlineMs: 2 * 60 * 60 * 1000,
+          clearDeadlineMs: 8 * 60 * 60 * 1000,
+          autoEscalationMs: 12 * 60 * 60 * 1000,
+          setBy: "partner_b",
+          setAt: Date.now(),
+          notes: ["firmB closure SLA config row"],
+          updatedAt: Date.now(),
+        }
+      )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_closure_auto_assignment_rules",
+          "closure-auto-assignment-rule:firmB:default"
+        ),
+        {
+          id: "closure-auto-assignment-rule:firmB:default",
+          firmId: "firmB",
+          ownerId: null,
+          classification: "internal",
+          mode: "owner_rota",
+          enabled: true,
+          maxActiveClaimsPerPartner: 6,
+          setBy: "partner_b",
+          setAt: Date.now(),
+          notes: ["firmB closure auto-assignment rule row"],
+          updatedAt: Date.now(),
+        }
+      )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_closure_sla_windows",
+          "closure-sla-window:closure-compliance:firmB:partner_b"
+        ),
+        {
+          id: "closure-sla-window:closure-compliance:firmB:partner_b",
+          firmId: "firmB",
+          ownerId: "partner_b",
+          digestId: "closure-compliance:firmB:partner_b",
+          queueId: "closure-followup:closure-compliance:firmB:partner_b",
+          classification: "internal",
+          status: "ack_breached",
+          pressureLevel: "critical",
+          openedAt: Date.now() - 3 * 60 * 60 * 1000,
+          acknowledgedAt: null,
+          clearedAt: null,
+          ackDeadlineAt: Date.now() - 60 * 60 * 1000,
+          clearDeadlineAt: Date.now() + 2 * 60 * 60 * 1000,
+          autoEscalateAt: Date.now() + 4 * 60 * 60 * 1000,
+          breachedAt: Date.now() - 60 * 60 * 1000,
+          autoEscalationTriggeredAt: null,
+          autoEscalatedToPartnerId: null,
+          linkedConfigId: "closure-sla-window-config:firmB:default",
+          linkedAutoAssignmentRuleId: "closure-auto-assignment-rule:firmB:default",
+          notes: ["firmB closure SLA window row"],
+          updatedAt: Date.now(),
+        }
+      )
       const firmAScopeEvidence = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
@@ -1953,6 +2125,38 @@ describe("Runtime persistence mode", () => {
         items: Array<{ ownerId: string }>
       }
       expect(firmAScopeClosureQueueJson.items.some((item) => item.ownerId === "partner_b")).toBe(
+        false
+      )
+      const firmAScopeClosureSlaConfig = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_sla_window_configs&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeClosureSlaConfig.status).toBe(200)
+      const firmAScopeClosureSlaConfigJson = (await firmAScopeClosureSlaConfig.json()) as {
+        items: Array<{ firmId: string }>
+      }
+      expect(firmAScopeClosureSlaConfigJson.items.some((item) => item.firmId === "firmB")).toBe(false)
+      const firmAScopeClosureAutoRule = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_auto_assignment_rules&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeClosureAutoRule.status).toBe(200)
+      const firmAScopeClosureAutoRuleJson = (await firmAScopeClosureAutoRule.json()) as {
+        items: Array<{ firmId: string }>
+      }
+      expect(firmAScopeClosureAutoRuleJson.items.some((item) => item.firmId === "firmB")).toBe(false)
+      const firmAScopeClosureSlaWindows = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_sla_windows&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeClosureSlaWindows.status).toBe(200)
+      const firmAScopeClosureSlaWindowsJson = (await firmAScopeClosureSlaWindows.json()) as {
+        items: Array<{ ownerId: string }>
+      }
+      expect(firmAScopeClosureSlaWindowsJson.items.some((item) => item.ownerId === "partner_b")).toBe(
         false
       )
       getRuntimeStore().audit = []
@@ -2216,6 +2420,20 @@ describe("Runtime persistence mode", () => {
           (item) =>
             item.action === "filing_rollover_reaffirmation_sla_acknowledge" &&
             item.target === `rollover-reaffirmation-sla:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_closure_sla_window_config_set" &&
+            item.target === "closure-sla-window-config:firmA:default"
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_closure_auto_assignment_rule_set" &&
+            item.target === "closure-auto-assignment-rule:firmA:default"
         )
       ).toBe(true)
       expect(
@@ -2485,6 +2703,41 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.id === "closure-followup:closure-compliance:firmA:partner_a" &&
             ["open", "claimed", "resolved"].includes(String(entry.data()?.status ?? ""))
+        )
+      ).toBe(true)
+      const dbClosureSlaConfigs = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_closure_sla_window_configs")
+      )
+      expect(
+        dbClosureSlaConfigs.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === "closure-sla-window-config:firmA:default" &&
+            entry.data()?.scope === "firm_default"
+        )
+      ).toBe(true)
+      const dbClosureAutoRules = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_closure_auto_assignment_rules")
+      )
+      expect(
+        dbClosureAutoRules.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === "closure-auto-assignment-rule:firmA:default" &&
+            ["owner_rota", "workload_aware_claim"].includes(String(entry.data()?.mode ?? ""))
+        )
+      ).toBe(true)
+      const dbClosureSlaWindows = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_closure_sla_windows")
+      )
+      expect(
+        dbClosureSlaWindows.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === "closure-sla-window:closure-compliance:firmA:partner_a" &&
+            ["within_window", "ack_breached", "clear_breached", "auto_escalation_due", "cleared"].includes(
+              String(entry.data()?.status ?? "")
+            )
         )
       ).toBe(true)
     })
