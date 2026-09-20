@@ -7,7 +7,7 @@ import type {
 } from "@/platform/spine/store"
 
 export const DEFAULT_ESCALATION_OWNER_LOAD_THRESHOLD = 3
-export const DEFAULT_ESCALATION_HANDOFF_SLA_MS = 4 * 60 * 60 * 1000
+export const DEFAULT_ESCALATION_HANDOFF_SLA_MS = 0
 export const DEFAULT_ESCALATION_WAIVER_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export function filingEscalationPolicyBaselineId(input: {

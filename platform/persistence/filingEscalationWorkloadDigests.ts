@@ -61,7 +61,7 @@ export function buildFilingEscalationWorkloadDigestRow(
   }
   const handoffLagMs =
     input.rota && input.rota.handoffRequired ? now - input.rota.updatedAt : null
-  if (input.rota?.handoffRequired && handoffLagMs !== null && handoffLagMs > handoffSlaMs) {
+  if (input.rota?.handoffRequired && handoffLagMs !== null && handoffLagMs >= handoffSlaMs) {
     reasons.push("handoff_lag")
   }
   const alertReasons = [...new Set(reasons)].sort((a, b) => a.localeCompare(b))
