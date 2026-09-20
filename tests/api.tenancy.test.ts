@@ -508,4 +508,87 @@ describe("GET/POST /api/p5/tenancy", () => {
     expect(drifted?.driftReason).toBe("clearance_changed")
     expect(drifted?.driftToClearance).toBe("public")
   })
+
+  it("acknowledges drift telemetry and exposes a drift report view", async () => {
+    const targetSession = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "associate_a",
+        firmId: "firmA",
+      })
+    )
+    expect(targetSession.status).toBe(200)
+    const targetSessionJson = (await targetSession.json()) as { sessionReference: { id: string } }
+
+    const actorSession = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "partner_a",
+        firmId: "firmA",
+      })
+    )
+    expect(actorSession.status).toBe(200)
+    const actorSessionJson = (await actorSession.json()) as { sessionReference: { id: string } }
+
+    const roleUpdate = await post(
+      {
+        action: "update_role",
+        actorId: "partner_a",
+        firmId: "firmA",
+        targetUserId: "associate_a",
+        nextRole: "associate",
+        nextClearance: "public",
+        reason: "drift report check",
+        sessionReferenceId: actorSessionJson.sessionReference.id,
+      },
+      "95d5c935-bfd8-49c9-b138-aa86a762f738"
+    )
+    expect(roleUpdate.status).toBe(200)
+
+    const acknowledge = await post(
+      {
+        action: "acknowledge_session_drift",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: targetSessionJson.sessionReference.id,
+        note: "reviewed and accepted",
+      },
+      "67095a4a-e596-4df4-9ce9-daf34064f1d8"
+    )
+    expect(acknowledge.status).toBe(200)
+    const acknowledgeJson = (await acknowledge.json()) as {
+      result: {
+        sessionReference: {
+          state: string
+          driftAcknowledgedBy: string | null
+          driftAcknowledgedNote: string | null
+        }
+      }
+    }
+    expect(acknowledgeJson.result.sessionReference.state).toBe("drifted")
+    expect(acknowledgeJson.result.sessionReference.driftAcknowledgedBy).toBe("partner_a")
+    expect(acknowledgeJson.result.sessionReference.driftAcknowledgedNote).toBe(
+      "reviewed and accepted"
+    )
+
+    const report = await get(
+      new URLSearchParams({
+        view: "session_drift_report",
+        actorId: "partner_a",
+        firmId: "firmA",
+        userId: "associate_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(report.status).toBe(200)
+    const reportJson = (await report.json()) as {
+      summary: { driftedTotal: number; acknowledged: number; unacknowledged: number }
+      items: Array<{ id: string; driftAcknowledgedBy: string | null }>
+    }
+    expect(reportJson.summary.driftedTotal).toBeGreaterThan(0)
+    expect(reportJson.summary.acknowledged).toBeGreaterThan(0)
+    const acknowledgedRow = reportJson.items.find((item) => item.id === targetSessionJson.sessionReference.id)
+    expect(acknowledgedRow?.driftAcknowledgedBy).toBe("partner_a")
+  })
 })

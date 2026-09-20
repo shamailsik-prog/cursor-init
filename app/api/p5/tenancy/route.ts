@@ -13,6 +13,7 @@ import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { syncFirmAudit } from "@/platform/persistence/auditSync"
 import { syncFirmTenancySessionReferences } from "@/platform/persistence/tenancySessionReferenceSync"
 import {
+  acknowledgeTenancySessionReferenceDrift,
   assertPartnerInFirm,
   assertUsableTenancySessionReference,
   buildSessionContext,
@@ -58,7 +59,19 @@ type EnforceSessionExpiryBody = {
   now?: number
 }
 
-type Body = UpdateRoleBody | RevokeSessionReferenceBody | EnforceSessionExpiryBody
+type AcknowledgeSessionDriftBody = {
+  action: "acknowledge_session_drift"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  note?: string
+}
+
+type Body =
+  | UpdateRoleBody
+  | RevokeSessionReferenceBody
+  | EnforceSessionExpiryBody
+  | AcknowledgeSessionDriftBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -132,6 +145,9 @@ function sessionReferencePayload(
     driftFromClearance: row.driftFromClearance,
     driftToClearance: row.driftToClearance,
     driftAuditEntryId: row.driftAuditEntryId,
+    driftAcknowledgedAt: row.driftAcknowledgedAt,
+    driftAcknowledgedBy: row.driftAcknowledgedBy,
+    driftAcknowledgedNote: row.driftAcknowledgedNote,
   }
 }
 
@@ -299,6 +315,59 @@ export async function GET(request: Request) {
         limit,
         cursor,
         nextCursor: refs.nextCursor,
+      })
+    }
+
+    if (view === "session_drift_report") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const userId = normalizeOptionalString(url.searchParams.get("userId"))
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      assertPartnerInFirm(store, actorId, firmId)
+      const allRows = [...store.tenancySessionReferences.values()]
+        .filter((row) => row.firmId === firmId)
+        .filter((row) => (userId ? row.userId === userId : true))
+      const decorated = allRows
+        .map((row) => {
+          const currentUser = store.users.get(row.userId)
+          const state = currentUser ? getTenancySessionReferenceState(row, currentUser) : "drifted"
+          return {
+            row,
+            state,
+          }
+        })
+        .filter((entry) => entry.state === "drifted")
+        .sort((a, b) => (b.row.driftedAt ?? 0) - (a.row.driftedAt ?? 0) || a.row.id.localeCompare(b.row.id))
+      const page = decorated.slice(cursor, cursor + limit)
+      const items = page.map((entry) => sessionReferencePayload(entry.row, entry.state))
+      const summary = decorated.reduce(
+        (acc, entry) => {
+          if (entry.row.driftAcknowledgedAt) {
+            acc.acknowledged += 1
+          } else {
+            acc.unacknowledged += 1
+          }
+          return acc
+        },
+        {
+          driftedTotal: decorated.length,
+          acknowledged: 0,
+          unacknowledged: 0,
+        }
+      )
+      const nextCursor = cursor + page.length < decorated.length ? String(cursor + page.length) : null
+      return NextResponse.json({
+        view: "session_drift_report",
+        summary,
+        items,
+        total: decorated.length,
+        limit,
+        cursor,
+        nextCursor,
       })
     }
 
@@ -517,6 +586,37 @@ export async function POST(request: Request) {
         action: "enforce_session_expiry",
         firmId: parsed.firmId,
         revokedSessionReferenceIds: revokedIds,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "acknowledge_session_drift") {
+      if (!parsed.actorId || !parsed.firmId || !parsed.sessionReferenceId) {
+        return NextResponse.json(
+          { error: "actorId, firmId, and sessionReferenceId are required" },
+          { status: 400 }
+        )
+      }
+      await syncFirmUsers(store, repos, parsed.firmId)
+      await syncFirmTenancySessionReferences(store, repos, parsed.firmId)
+      assertPartnerInFirm(store, parsed.actorId, parsed.firmId)
+      const existing = store.tenancySessionReferences.get(parsed.sessionReferenceId)
+      if (!existing) throw new Error("unknown session reference")
+      if (existing.firmId !== parsed.firmId) throw new Error("cross-firm session reference denied")
+      const currentUser = await loadUser(store, repos, existing.userId)
+      if (!currentUser) throw new Error("unknown user")
+      const state = getTenancySessionReferenceState(existing, currentUser)
+      if (state !== "drifted") throw new Error("session reference has no drift to acknowledge")
+      const acknowledged = acknowledgeTenancySessionReferenceDrift(store, {
+        row: existing,
+        actorId: parsed.actorId,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancySessionReferences.upsert(acknowledged)
+      const payload = {
+        action: "acknowledge_session_drift",
+        sessionReference: sessionReferencePayload(acknowledged, state),
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

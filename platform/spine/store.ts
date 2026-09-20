@@ -129,6 +129,9 @@ export type TenancySessionReferenceRow = {
   driftFromClearance: Classification | null
   driftToClearance: Classification | null
   driftAuditEntryId: string | null
+  driftAcknowledgedAt: number | null
+  driftAcknowledgedBy: string | null
+  driftAcknowledgedNote: string | null
 }
 
 export type StatuteSectionVersion = {

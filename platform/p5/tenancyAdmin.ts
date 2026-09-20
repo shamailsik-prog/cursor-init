@@ -281,6 +281,28 @@ export function revokeTenancySessionReference(
   return row
 }
 
+export function acknowledgeTenancySessionReferenceDrift(
+  store: SpineStore,
+  input: {
+    row: TenancySessionReferenceRow
+    actorId: string
+    note?: string
+    now?: number
+  }
+): TenancySessionReferenceRow {
+  if (!input.row.driftedAt) {
+    throw new Error("session reference has no drift to acknowledge")
+  }
+  const row: TenancySessionReferenceRow = {
+    ...input.row,
+    driftAcknowledgedAt: input.row.driftAcknowledgedAt ?? (input.now ?? Date.now()),
+    driftAcknowledgedBy: input.row.driftAcknowledgedBy ?? input.actorId,
+    driftAcknowledgedNote: input.note ?? input.row.driftAcknowledgedNote ?? null,
+  }
+  store.tenancySessionReferences.set(row.id, row)
+  return row
+}
+
 export function invalidateSessionReferencesForPrivilegeDrift(
   store: SpineStore,
   input: {
@@ -313,6 +335,9 @@ export function invalidateSessionReferencesForPrivilegeDrift(
       driftFromClearance: row.driftFromClearance ?? row.clearanceSnapshot,
       driftToClearance: input.updatedUser.clearanceLevel,
       driftAuditEntryId: input.auditEntryId,
+      driftAcknowledgedAt: row.driftAcknowledgedAt ?? null,
+      driftAcknowledgedBy: row.driftAcknowledgedBy ?? null,
+      driftAcknowledgedNote: row.driftAcknowledgedNote ?? null,
     }
     store.tenancySessionReferences.set(next.id, next)
     invalidated.push({ id: next.id, driftReason })
@@ -397,6 +422,9 @@ export function upsertTenancySessionReference(
     driftFromClearance: existing?.driftFromClearance ?? null,
     driftToClearance: existing?.driftToClearance ?? null,
     driftAuditEntryId: existing?.driftAuditEntryId ?? null,
+    driftAcknowledgedAt: existing?.driftAcknowledgedAt ?? null,
+    driftAcknowledgedBy: existing?.driftAcknowledgedBy ?? null,
+    driftAcknowledgedNote: existing?.driftAcknowledgedNote ?? null,
   }
   store.tenancySessionReferences.set(row.id, row)
   return row

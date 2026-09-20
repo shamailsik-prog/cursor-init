@@ -73,6 +73,9 @@ describe("Firestore repository adapters", () => {
         driftFromClearance: null,
         driftToClearance: null,
         driftAuditEntryId: null,
+        driftAcknowledgedAt: null,
+        driftAcknowledgedBy: null,
+        driftAcknowledgedNote: null,
       })
       const sessionRef = await repos.tenancySessionReferences.get("tsr_1")
       expect(sessionRef?.userId).toBe("partner_a")

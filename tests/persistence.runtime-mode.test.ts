@@ -7835,12 +7835,43 @@ describe("Runtime persistence mode", () => {
       expect(driftRow?.state).toBe("drifted")
       expect(driftRow?.driftReason).toBe("clearance_changed")
 
+      const acknowledgeDrift = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "2ad61ca0-460d-4a82-bb88-0c08792811fa",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_session_drift",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: targetSessionJson.sessionReference.id,
+            note: "drift review completed",
+          }),
+        })
+      )
+      expect(acknowledgeDrift.status).toBe(200)
+
+      const driftReportRes = await tenancyGet(
+        new Request(
+          "http://127.0.0.1/api/p5/tenancy?view=session_drift_report&actorId=partner_a&firmId=firmA&userId=associate_a&limit=10&cursor=0"
+        )
+      )
+      expect(driftReportRes.status).toBe(200)
+      const driftReportJson = (await driftReportRes.json()) as {
+        summary: { driftedTotal: number; acknowledged: number }
+      }
+      expect(driftReportJson.summary.driftedTotal).toBeGreaterThan(0)
+      expect(driftReportJson.summary.acknowledged).toBeGreaterThan(0)
+
       const persistedDriftRef = await getDoc(
         doc(ctx.firestore(), "tenancy_session_references", targetSessionJson.sessionReference.id)
       )
       expect(persistedDriftRef.exists()).toBe(true)
       expect(persistedDriftRef.data()?.driftReason).toBe("clearance_changed")
       expect(persistedDriftRef.data()?.revocationReason).toBe("privileged_boundary_drift")
+      expect(persistedDriftRef.data()?.driftAcknowledgedBy).toBe("partner_a")
 
       const expiryCandidate = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=clerk_a&firmId=firmA")
