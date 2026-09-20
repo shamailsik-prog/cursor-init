@@ -19,7 +19,9 @@ import {
   listFirmAudit,
   listFirmMemberships,
   listFirmSessionReferences,
+  listSessionReferenceLineage,
   listFirmUsers,
+  reissueTenancySessionReference,
   revokeTenancySessionReference,
   upsertTenancySessionReference,
   updateUserRole,
@@ -48,7 +50,17 @@ type RevokeSessionReferenceBody = {
   reason?: string
 }
 
-type Body = UpdateRoleBody | RevokeSessionReferenceBody
+type ReissueSessionReferenceBody = {
+  action: "reissue_session_reference"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  authBoundary?: string
+  externalSessionId?: string
+  reason?: string
+}
+
+type Body = UpdateRoleBody | RevokeSessionReferenceBody | ReissueSessionReferenceBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -60,6 +72,10 @@ function parseCursor(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 0
   if (!Number.isFinite(parsed) || parsed < 0) return 0
   return parsed
+}
+
+function parseBoolean(value: string | null): boolean {
+  return value === "1" || value === "true" || value === "yes"
 }
 
 function isRole(value: unknown): value is Role {
@@ -194,11 +210,25 @@ export async function GET(request: Request) {
           id: sessionReference.id,
           firmId: sessionReference.firmId,
           userId: sessionReference.userId,
+          parentSessionReferenceId: sessionReference.parentSessionReferenceId,
+          lineageRootSessionReferenceId: sessionReference.lineageRootSessionReferenceId,
+          lineageDepth: sessionReference.lineageDepth,
           authBoundary: sessionReference.authBoundary,
           externalSessionId: sessionReference.externalSessionId,
+          delegatedBoundaryComparedSessionReferenceId:
+            sessionReference.delegatedBoundaryComparedSessionReferenceId,
+          delegatedBoundaryReconciliationStatus:
+            sessionReference.delegatedBoundaryReconciliationStatus,
+          delegatedBoundaryDivergenceReasons:
+            sessionReference.delegatedBoundaryDivergenceReasons,
+          delegatedBoundaryReconciledAt: sessionReference.delegatedBoundaryReconciledAt,
+          delegatedBoundaryReconciledBy: sessionReference.delegatedBoundaryReconciledBy,
           issuedAt: sessionReference.issuedAt,
           lastSeenAt: sessionReference.lastSeenAt,
           expiresAt: sessionReference.expiresAt,
+          revokedAt: sessionReference.revokedAt,
+          revokedBy: sessionReference.revokedBy,
+          revokedReason: sessionReference.revokedReason,
         },
         limit,
         cursor,
@@ -290,6 +320,38 @@ export async function GET(request: Request) {
       })
     }
 
+    if (view === "session_lineage") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const rootSessionReferenceId = normalizeOptionalString(url.searchParams.get("rootSessionRefId"))
+      const delegatedDivergedOnly = parseBoolean(url.searchParams.get("delegatedDivergedOnly"))
+      if (!actorId || !firmId || !rootSessionReferenceId) {
+        return NextResponse.json(
+          { error: "actorId, firmId, and rootSessionRefId are required" },
+          { status: 400 }
+        )
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      const lineage = listSessionReferenceLineage(
+        store,
+        actorId,
+        firmId,
+        rootSessionReferenceId,
+        delegatedDivergedOnly,
+        limit,
+        cursor
+      )
+      return NextResponse.json({
+        view: "session_lineage",
+        items: lineage.items,
+        total: lineage.total,
+        limit,
+        cursor,
+        nextCursor: lineage.nextCursor,
+      })
+    }
+
     return NextResponse.json({ error: "unknown view" }, { status: 400 })
   } catch (err) {
     const message = err instanceof Error ? err.message : "tenancy read failed"
@@ -316,7 +378,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
   }
 
-  if (parsed.action !== "update_role" && parsed.action !== "revoke_session_reference") {
+  if (
+    parsed.action !== "update_role" &&
+    parsed.action !== "revoke_session_reference" &&
+    parsed.action !== "reissue_session_reference"
+  ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
 
@@ -383,6 +449,48 @@ export async function POST(request: Request) {
           revokedAt: revoked.reference.revokedAt,
           revokedBy: revoked.reference.revokedBy,
           revokedReason: revoked.reference.revokedReason,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "reissue_session_reference") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const parentSessionReferenceId = parsed.sessionReferenceId
+      if (!actorId || !firmId || !parentSessionReferenceId) {
+        throw new Error("actorId, firmId, and sessionReferenceId are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      const reissued = reissueTenancySessionReference(store, {
+        actorId,
+        firmId,
+        parentSessionReferenceId,
+        authBoundary: parseAuthBoundary(parsed.authBoundary),
+        externalSessionId: normalizeOptionalString(parsed.externalSessionId),
+        reason: normalizeOptionalString(parsed.reason),
+      })
+      await repos.tenancySessionReferences.upsert(reissued.reference)
+      await repos.audit.append(reissued.auditEntry)
+      const payload = {
+        action: "reissue_session_reference",
+        sessionReference: {
+          id: reissued.reference.id,
+          userId: reissued.reference.userId,
+          firmId: reissued.reference.firmId,
+          parentSessionReferenceId: reissued.reference.parentSessionReferenceId,
+          lineageRootSessionReferenceId: reissued.reference.lineageRootSessionReferenceId,
+          lineageDepth: reissued.reference.lineageDepth,
+          delegatedBoundaryComparedSessionReferenceId:
+            reissued.reference.delegatedBoundaryComparedSessionReferenceId,
+          delegatedBoundaryReconciliationStatus:
+            reissued.reference.delegatedBoundaryReconciliationStatus,
+          delegatedBoundaryDivergenceReasons:
+            reissued.reference.delegatedBoundaryDivergenceReasons,
+          delegatedBoundaryReconciledAt: reissued.reference.delegatedBoundaryReconciledAt,
+          delegatedBoundaryReconciledBy: reissued.reference.delegatedBoundaryReconciledBy,
         },
       }
       idempotency.set(key, payload, fingerprint)
@@ -462,6 +570,13 @@ export async function POST(request: Request) {
       ...updated.auditEntry,
       privilegedBoundaryDriftCount: driftedReferences.length,
       privilegedBoundaryDriftSessionReferenceIds: driftedReferences.map((row) => row.id),
+      delegatedBoundaryLineageRootSessionReferenceId:
+        sessionReference.lineageRootSessionReferenceId,
+      delegatedBoundaryComparedSessionReferenceId:
+        sessionReference.delegatedBoundaryComparedSessionReferenceId,
+      delegatedBoundaryReconciliationStatus:
+        sessionReference.delegatedBoundaryReconciliationStatus,
+      delegatedBoundaryDivergenceReasons: sessionReference.delegatedBoundaryDivergenceReasons,
     }
     const auditIdx = store.audit.findIndex((row) => row.id === updated.auditEntry.id)
     if (auditIdx >= 0) {
@@ -494,6 +609,14 @@ export async function POST(request: Request) {
       privilegedBoundaryDriftCount: enrichedAuditEntry.privilegedBoundaryDriftCount ?? 0,
       privilegedBoundaryDriftSessionReferenceIds:
         enrichedAuditEntry.privilegedBoundaryDriftSessionReferenceIds ?? [],
+      delegatedBoundaryLineageRootSessionReferenceId:
+        enrichedAuditEntry.delegatedBoundaryLineageRootSessionReferenceId ?? null,
+      delegatedBoundaryComparedSessionReferenceId:
+        enrichedAuditEntry.delegatedBoundaryComparedSessionReferenceId ?? null,
+      delegatedBoundaryReconciliationStatus:
+        enrichedAuditEntry.delegatedBoundaryReconciliationStatus ?? "aligned",
+      delegatedBoundaryDivergenceReasons:
+        enrichedAuditEntry.delegatedBoundaryDivergenceReasons ?? [],
     }
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

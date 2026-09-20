@@ -7650,6 +7650,63 @@ describe("Runtime persistence mode", () => {
         sessionReference: { id: string }
       }
 
+      const reissueAligned = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "ce662a54-71f1-4f1d-a145-f88df3b6f8d1",
+          },
+          body: JSON.stringify({
+            action: "reissue_session_reference",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: actorSessionJson.sessionReference.id,
+          }),
+        })
+      )
+      expect(reissueAligned.status).toBe(200)
+      const reissueAlignedJson = (await reissueAligned.json()) as {
+        result: { sessionReference: { id: string; lineageDepth: number } }
+      }
+      expect(reissueAlignedJson.result.sessionReference.lineageDepth).toBe(1)
+
+      const reissueDiverged = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "df26594f-34e5-4a72-bf8c-cf9f7eb36d56",
+          },
+          body: JSON.stringify({
+            action: "reissue_session_reference",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueAlignedJson.result.sessionReference.id,
+            authBoundary: "external_session_hint",
+            externalSessionId: "ext-runtime-lineage-diverged",
+          }),
+        })
+      )
+      expect(reissueDiverged.status).toBe(200)
+      const reissueDivergedJson = (await reissueDiverged.json()) as {
+        result: {
+          sessionReference: {
+            id: string
+            lineageDepth: number
+            delegatedBoundaryReconciliationStatus: string
+            delegatedBoundaryDivergenceReasons: string[]
+          }
+        }
+      }
+      expect(reissueDivergedJson.result.sessionReference.lineageDepth).toBe(2)
+      expect(
+        reissueDivergedJson.result.sessionReference.delegatedBoundaryReconciliationStatus
+      ).toBe("diverged")
+      expect(reissueDivergedJson.result.sessionReference.delegatedBoundaryDivergenceReasons).toContain(
+        "external_session_hint_changed"
+      )
+
       const roleUpdate = await tenancyPost(
         new Request("http://127.0.0.1/api/p5/tenancy", {
           method: "POST",
@@ -7727,6 +7784,53 @@ describe("Runtime persistence mode", () => {
       )
       expect(staleReplayRes.status).toBe(410)
 
+      const lineageFirstRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&limit=2&cursor=0`
+        )
+      )
+      expect(lineageFirstRes.status).toBe(200)
+      const lineageFirstJson = (await lineageFirstRes.json()) as {
+        items: Array<{ id: string }>
+        nextCursor: string | null
+        total: number
+      }
+      expect(lineageFirstJson.total).toBeGreaterThanOrEqual(3)
+      expect(lineageFirstJson.items.length).toBe(2)
+      expect(lineageFirstJson.nextCursor).not.toBeNull()
+
+      const lineageSecondRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&limit=2&cursor=${lineageFirstJson.nextCursor ?? "0"}`
+        )
+      )
+      expect(lineageSecondRes.status).toBe(200)
+      const lineageSecondJson = (await lineageSecondRes.json()) as {
+        items: Array<{ id: string; delegatedBoundaryReconciliationStatus: string }>
+      }
+      expect(
+        lineageSecondJson.items.some(
+          (row) =>
+            row.id === reissueDivergedJson.result.sessionReference.id &&
+            row.delegatedBoundaryReconciliationStatus === "diverged"
+        )
+      ).toBe(true)
+
+      const lineageDivergedOnlyRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&delegatedDivergedOnly=true&limit=10&cursor=0`
+        )
+      )
+      expect(lineageDivergedOnlyRes.status).toBe(200)
+      const lineageDivergedOnlyJson = (await lineageDivergedOnlyRes.json()) as {
+        items: Array<{ id: string }>
+      }
+      expect(
+        lineageDivergedOnlyJson.items.some(
+          (row) => row.id === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
+
       const sessionRes = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
       )
@@ -7797,6 +7901,10 @@ describe("Runtime persistence mode", () => {
           externalSessionId?: string | null
           privilegedBoundaryDriftCount?: number
           privilegedBoundaryDriftSessionReferenceIds?: string[]
+          delegatedBoundaryLineageRootSessionReferenceId?: string | null
+          delegatedBoundaryComparedSessionReferenceId?: string | null
+          delegatedBoundaryReconciliationStatus?: string
+          delegatedBoundaryDivergenceReasons?: string[]
         }>
       }
       const roleAudit = auditJson.items.find(
@@ -7812,6 +7920,20 @@ describe("Runtime persistence mode", () => {
       )
       expect(
         auditJson.items.some((row) => row.action === "tenant_revoke_session_reference")
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_reissue_session_reference" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id &&
+            row.delegatedBoundaryComparedSessionReferenceId ===
+              reissueAlignedJson.result.sessionReference.id &&
+            row.delegatedBoundaryReconciliationStatus === "diverged" &&
+            (row.delegatedBoundaryDivergenceReasons ?? []).includes(
+              "external_session_hint_changed"
+            )
+        )
       ).toBe(true)
 
       const persistedClerk = await getDoc(doc(ctx.firestore(), "users", "clerk_a"))
@@ -7837,6 +7959,38 @@ describe("Runtime persistence mode", () => {
       expect(persistedSessionRef.exists()).toBe(true)
       expect(persistedSessionRef.data()?.firmId).toBe("firmA")
       expect(persistedSessionRef.data()?.authBoundary).toBe("external_session_hint")
+
+      const persistedLineageAligned = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_session_references",
+          reissueAlignedJson.result.sessionReference.id
+        )
+      )
+      expect(persistedLineageAligned.exists()).toBe(true)
+      expect(persistedLineageAligned.data()?.parentSessionReferenceId).toBe(
+        actorSessionJson.sessionReference.id
+      )
+      expect(persistedLineageAligned.data()?.lineageRootSessionReferenceId).toBe(
+        actorSessionJson.sessionReference.id
+      )
+
+      const persistedLineageDiverged = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_session_references",
+          reissueDivergedJson.result.sessionReference.id
+        )
+      )
+      expect(persistedLineageDiverged.exists()).toBe(true)
+      expect(persistedLineageDiverged.data()?.delegatedBoundaryReconciliationStatus).toBe(
+        "diverged"
+      )
+      expect(
+        (persistedLineageDiverged.data()?.delegatedBoundaryDivergenceReasons as string[]).includes(
+          "external_session_hint_changed"
+        )
+      ).toBe(true)
 
       const persistedClerkSessionRef = await getDoc(
         doc(ctx.firestore(), "tenancy_session_references", clerkSessionJson.sessionReference.id)

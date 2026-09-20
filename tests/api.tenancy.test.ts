@@ -347,6 +347,138 @@ describe("GET/POST /api/p5/tenancy", () => {
     )
     expect(revokeCrossFirm.status).toBe(400)
 
+    const lineageAligned = await post(
+      {
+        action: "reissue_session_reference",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: actorSessionJson.sessionReference.id,
+      },
+      "45ad2f5e-bd4e-401f-9018-b99a46f41489"
+    )
+    expect(lineageAligned.status).toBe(200)
+    const lineageAlignedJson = (await lineageAligned.json()) as {
+      result: {
+        sessionReference: {
+          id: string
+          lineageRootSessionReferenceId: string
+          lineageDepth: number
+          delegatedBoundaryReconciliationStatus: string
+        }
+      }
+    }
+    expect(lineageAlignedJson.result.sessionReference.lineageRootSessionReferenceId).toBe(
+      actorSessionJson.sessionReference.id
+    )
+    expect(lineageAlignedJson.result.sessionReference.lineageDepth).toBe(1)
+    expect(lineageAlignedJson.result.sessionReference.delegatedBoundaryReconciliationStatus).toBe(
+      "aligned"
+    )
+
+    const lineageDiverged = await post(
+      {
+        action: "reissue_session_reference",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: lineageAlignedJson.result.sessionReference.id,
+        authBoundary: "external_session_hint",
+        externalSessionId: "ext-lineage-diverged",
+      },
+      "0569db7a-e67b-4649-8be5-a98d41baa611"
+    )
+    expect(lineageDiverged.status).toBe(200)
+    const lineageDivergedJson = (await lineageDiverged.json()) as {
+      result: {
+        sessionReference: {
+          id: string
+          lineageDepth: number
+          delegatedBoundaryReconciliationStatus: string
+          delegatedBoundaryDivergenceReasons: string[]
+        }
+      }
+    }
+    expect(lineageDivergedJson.result.sessionReference.lineageDepth).toBe(2)
+    expect(lineageDivergedJson.result.sessionReference.delegatedBoundaryReconciliationStatus).toBe(
+      "diverged"
+    )
+    expect(lineageDivergedJson.result.sessionReference.delegatedBoundaryDivergenceReasons).toContain(
+      "auth_boundary_changed"
+    )
+
+    const lineageViewFirst = await get(
+      new URLSearchParams({
+        view: "session_lineage",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        limit: "2",
+        cursor: "0",
+      })
+    )
+    expect(lineageViewFirst.status).toBe(200)
+    const lineageFirstJson = (await lineageViewFirst.json()) as {
+      items: Array<{ id: string; lineageDepth: number }>
+      nextCursor: string | null
+      total: number
+    }
+    expect(lineageFirstJson.total).toBeGreaterThanOrEqual(3)
+    expect(lineageFirstJson.items.length).toBe(2)
+    expect(lineageFirstJson.nextCursor).not.toBeNull()
+
+    const lineageViewSecond = await get(
+      new URLSearchParams({
+        view: "session_lineage",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        limit: "2",
+        cursor: lineageFirstJson.nextCursor ?? "0",
+      })
+    )
+    expect(lineageViewSecond.status).toBe(200)
+    const lineageSecondJson = (await lineageViewSecond.json()) as {
+      items: Array<{
+        id: string
+        delegatedBoundaryReconciliationStatus: string
+        delegatedBoundaryDivergenceReasons: string[]
+      }>
+    }
+    expect(
+      lineageSecondJson.items.some(
+        (row) =>
+          row.id === lineageDivergedJson.result.sessionReference.id &&
+          row.delegatedBoundaryReconciliationStatus === "diverged"
+      )
+    ).toBe(true)
+
+    const lineageDivergedOnly = await get(
+      new URLSearchParams({
+        view: "session_lineage",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        delegatedDivergedOnly: "true",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(lineageDivergedOnly.status).toBe(200)
+    const divergedOnlyJson = (await lineageDivergedOnly.json()) as {
+      items: Array<{ id: string }>
+    }
+    expect(divergedOnlyJson.items.some((row) => row.id === lineageDivergedJson.result.sessionReference.id)).toBe(true)
+
+    const lineageCrossFirmDenied = await post(
+      {
+        action: "reissue_session_reference",
+        actorId: "partner_a",
+        firmId: "firmB",
+        sessionReferenceId: actorSessionJson.sessionReference.id,
+      },
+      "d972db42-5a75-462f-a2b4-4e56f1f5e4da"
+    )
+    expect(lineageCrossFirmDenied.status).toBe(400)
+
     const revokedReplay = await get(
       new URLSearchParams({
         view: "session",
@@ -372,6 +504,10 @@ describe("GET/POST /api/p5/tenancy", () => {
         sessionReferenceId?: string | null
         privilegedBoundaryDriftCount?: number
         privilegedBoundaryDriftSessionReferenceIds?: string[]
+        delegatedBoundaryLineageRootSessionReferenceId?: string | null
+        delegatedBoundaryComparedSessionReferenceId?: string | null
+        delegatedBoundaryReconciliationStatus?: string
+        delegatedBoundaryDivergenceReasons?: string[]
       }>
     }
     const driftAudit = auditJson.items.find(
@@ -386,6 +522,18 @@ describe("GET/POST /api/p5/tenancy", () => {
         (row) =>
           row.action === "tenant_revoke_session_reference" &&
           row.sessionReferenceId === associateSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_reissue_session_reference" &&
+          row.sessionReferenceId === lineageDivergedJson.result.sessionReference.id &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id &&
+          row.delegatedBoundaryComparedSessionReferenceId ===
+            lineageAlignedJson.result.sessionReference.id &&
+          row.delegatedBoundaryReconciliationStatus === "diverged" &&
+          (row.delegatedBoundaryDivergenceReasons ?? []).includes("auth_boundary_changed")
       )
     ).toBe(true)
   })
