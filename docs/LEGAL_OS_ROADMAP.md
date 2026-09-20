@@ -15,6 +15,13 @@ Snapshot basis: current `main` as of this branch cut plus repository contents in
 | Gates G-0 / G-1 and CI | DONE (for foundations) | Gate scripts `ci_gates/gate_g0.sh`, `ci_gates/gate_g1.py` + guard scripts; tests under `tests/`; CI workflow `.github/workflows/gate-g0.yml`. | Future layers must keep extending tests while preserving current fail-closed guard posture. |
 | Deploy path | PARTIAL | Local run + gate instructions in `README.md`; standard Next scripts in `package.json`; CI automation in `.github/workflows/gate-g0.yml`. | No explicit production deployment manifests/runbooks (environment promotion, secrets management, service topology, recovery). |
 
+### Filing escalation parity progress (latest)
+
+- Added durable closure-compliance digest + partner closure follow-up queue parity across memory/Firestore repositories and `firestore.rules`.
+- Extended `app/api/d4/filings/route.ts` with new governance views/actions: `view=closure_compliance_digests`, `view=closure_followup_queue`, `assign_closure_followup`, `claim_closure_followup`, and `resolve_closure_followup`.
+- Correlated closure-compliance follow-up pressure into workload digest unsnooze/severity handling via `closure_compliance_pressure`.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage (including firm isolation and audit write-through assertions).
+
 ## Recommended immediate slice (Phase B)
 
 Ship a first-class **Matters/Cases operational API slice** on top of existing D1/D6 service primitives:
@@ -28,9 +35,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure compliance digest + partner follow-up queue parity**:
+Build **filing escalation closure compliance SLA windows + auto-assignment parity**:
 
-1. Add durable closure-compliance digest rows that aggregate pending remediation-closure attestations and breached reaffirmation SLAs per escalation owner.
-2. Add partner follow-up queue rows for closure-compliance digests with assignment, claim, and resolution lifecycle.
-3. Feed closure-compliance queue pressure into workload-digest alert severity/unsnooze logic.
-4. Extend emulator/runtime + route-wiring coverage for closure-compliance digest + follow-up queue rows, including audit write-through and firm isolation under resets.
+1. Add durable closure-compliance SLA window rows tracking owner response/claim/resolution deadlines for each follow-up queue item.
+2. Add automatic partner backup-assignment flow for breached closure-compliance follow-up windows (with attestation notes + second-review metadata).
+3. Feed closure-compliance SLA-window breaches into workload-digest critical escalation and partner drift indicators.
+4. Extend emulator/runtime + route-wiring coverage for closure-compliance SLA windows and auto-assignment rows, including audit write-through and firm isolation under resets.

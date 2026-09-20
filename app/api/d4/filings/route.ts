@@ -6,6 +6,11 @@ import {
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
 import { rankOf } from "@/platform/spine/store"
+import type {
+  Classification,
+  FilingEscalationClosureComplianceDigestRow,
+  FilingEscalationClosureFollowupQueueRow,
+} from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -92,6 +97,14 @@ import {
   remediationStatusFromClosureOutcome,
   requiresSecondApproverForRemediationDecision,
 } from "@/platform/persistence/filingEscalationLifecycleAndReaffirmation"
+import {
+  buildFilingEscalationClosureComplianceDigestRow,
+  buildFilingEscalationClosureFollowupQueueRow,
+  filingEscalationClosureComplianceDigestId,
+  filingEscalationClosureFollowupQueueId,
+  isFilingEscalationClosureComplianceDigestStatus,
+  isFilingEscalationClosureFollowupQueueStatus,
+} from "@/platform/persistence/filingEscalationClosureCompliance"
 import {
   buildFilingEscalationRemediationExpiryDigestRow,
   buildFilingEscalationRolloverBreachWatchRow,
@@ -450,6 +463,31 @@ type AcknowledgeRolloverReaffirmationSlaBody = {
   note?: string
 }
 
+type AssignClosureFollowupBody = {
+  action: "assign_closure_followup"
+  actorId?: string
+  queueId?: string
+  ownerId?: string
+  assigneeId?: string
+  note?: string
+}
+
+type ClaimClosureFollowupBody = {
+  action: "claim_closure_followup"
+  actorId?: string
+  queueId?: string
+  ownerId?: string
+  note?: string
+}
+
+type ResolveClosureFollowupBody = {
+  action: "resolve_closure_followup"
+  actorId?: string
+  queueId?: string
+  ownerId?: string
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -488,6 +526,9 @@ type Body =
   | ReaffirmRolloverAttestationBody
   | AttestRemediationClosureBody
   | AcknowledgeRolloverReaffirmationSlaBody
+  | AssignClosureFollowupBody
+  | ClaimClosureFollowupBody
+  | ResolveClosureFollowupBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -528,7 +569,9 @@ function parseFilingsView(
   | "remediation_expiry_digests"
   | "rollover_breach_watches"
   | "remediation_lifecycle"
-  | "rollover_reaffirmation_sla" {
+  | "rollover_reaffirmation_sla"
+  | "closure_compliance_digests"
+  | "closure_followup_queue" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -548,6 +591,8 @@ function parseFilingsView(
   if (value === "rollover_breach_watches") return "rollover_breach_watches"
   if (value === "remediation_lifecycle") return "remediation_lifecycle"
   if (value === "rollover_reaffirmation_sla") return "rollover_reaffirmation_sla"
+  if (value === "closure_compliance_digests") return "closure_compliance_digests"
+  if (value === "closure_followup_queue") return "closure_followup_queue"
   return "packages"
 }
 
@@ -702,6 +747,145 @@ function latestOpenRemediationLifecycleByPackage<
     }
   }
   return result
+}
+
+function sameStringArray(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((value, index) => value === b[index])
+}
+
+async function recomputeClosureComplianceState(
+  store: ReturnType<typeof getRuntimeStore>,
+  repos: Awaited<ReturnType<typeof getRuntimeRepositories>>,
+  input: {
+    firmId: string
+    packageById: Map<string, { id: string; classification: Classification }>
+    now: number
+  }
+): Promise<{
+  digestByOwner: Map<string, FilingEscalationClosureComplianceDigestRow>
+  queueByOwner: Map<string, FilingEscalationClosureFollowupQueueRow>
+}> {
+  const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(input.firmId)
+  const ownerByPackage = new Map<string, string>()
+  for (const row of rotaRows) {
+    if (row.status === "revoked") continue
+    if (!row.primaryOwnerId) continue
+    ownerByPackage.set(row.packageId, row.primaryOwnerId)
+  }
+  const openLifecycles = (await repos.filingEscalationRemediationLifecycles.listByFirm(input.firmId)).filter(
+    (row) => row.status === "open"
+  )
+  const breachedReaffirmations = (
+    await repos.filingEscalationRolloverReaffirmationSlas.listByFirm(input.firmId)
+  ).filter(
+    (row) =>
+      row.status === "breached" ||
+      row.reasons.includes("cap_crossed_reaffirmation_breached")
+  )
+  type Aggregate = {
+    classifications: Classification[]
+    packageIds: string[]
+    lifecycleIds: string[]
+    reaffirmationIds: string[]
+  }
+  const aggregateByOwner = new Map<string, Aggregate>()
+  const ensureAggregate = (owner: string): Aggregate => {
+    const existing = aggregateByOwner.get(owner)
+    if (existing) return existing
+    const created: Aggregate = {
+      classifications: [],
+      packageIds: [],
+      lifecycleIds: [],
+      reaffirmationIds: [],
+    }
+    aggregateByOwner.set(owner, created)
+    return created
+  }
+  for (const row of openLifecycles) {
+    const owner = ownerByPackage.get(row.packageId)
+    if (!owner) continue
+    const aggregate = ensureAggregate(owner)
+    aggregate.packageIds.push(row.packageId)
+    aggregate.lifecycleIds.push(row.id)
+    aggregate.classifications.push(input.packageById.get(row.packageId)?.classification ?? row.classification)
+  }
+  for (const row of breachedReaffirmations) {
+    const owner = ownerByPackage.get(row.packageId)
+    if (!owner) continue
+    const aggregate = ensureAggregate(owner)
+    aggregate.packageIds.push(row.packageId)
+    aggregate.reaffirmationIds.push(row.id)
+    aggregate.classifications.push(input.packageById.get(row.packageId)?.classification ?? row.classification)
+  }
+  const existingDigests = await repos.filingEscalationClosureComplianceDigests.listByFirm(input.firmId)
+  const existingDigestByOwner = new Map(existingDigests.map((row) => [row.ownerId, row]))
+  const existingQueues = await repos.filingEscalationClosureFollowupQueues.listByFirm(input.firmId)
+  const existingQueueByDigestId = new Map(existingQueues.map((row) => [row.digestId, row]))
+  const ownerIds = new Set<string>([...aggregateByOwner.keys(), ...existingDigestByOwner.keys()])
+  const digestByOwner = new Map<string, (typeof existingDigests)[number]>()
+  const queueByOwner = new Map<string, (typeof existingQueues)[number]>()
+  for (const owner of ownerIds) {
+    const aggregate = aggregateByOwner.get(owner)
+    const digestExisting = existingDigestByOwner.get(owner) ?? null
+    const digestComputed = buildFilingEscalationClosureComplianceDigestRow({
+      firmId: input.firmId,
+      ownerId: owner,
+      classifications: aggregate?.classifications ?? [digestExisting?.classification ?? "internal"],
+      linkedPackageIds: aggregate?.packageIds ?? [],
+      linkedLifecycleIds: aggregate?.lifecycleIds ?? [],
+      linkedReaffirmationSlaIds: aggregate?.reaffirmationIds ?? [],
+      existing: digestExisting,
+      linkedFollowupQueueId: filingEscalationClosureFollowupQueueId(
+        filingEscalationClosureComplianceDigestId(input.firmId, owner)
+      ),
+      now: input.now,
+    })
+    const queueExisting = existingQueueByDigestId.get(digestComputed.id) ?? null
+    const queueComputed = buildFilingEscalationClosureFollowupQueueRow(digestComputed, {
+      existing: queueExisting,
+      now: input.now,
+    })
+    const digestNext = { ...digestComputed, linkedFollowupQueueId: queueComputed.id }
+    const digestChanged =
+      !digestExisting ||
+      digestExisting.status !== digestNext.status ||
+      digestExisting.pendingLifecycleCount !== digestNext.pendingLifecycleCount ||
+      digestExisting.breachedReaffirmationCount !== digestNext.breachedReaffirmationCount ||
+      digestExisting.linkedFollowupQueueId !== digestNext.linkedFollowupQueueId ||
+      !sameStringArray(digestExisting.linkedPackageIds, digestNext.linkedPackageIds) ||
+      !sameStringArray(digestExisting.linkedLifecycleIds, digestNext.linkedLifecycleIds) ||
+      !sameStringArray(
+        digestExisting.linkedReaffirmationSlaIds,
+        digestNext.linkedReaffirmationSlaIds
+      )
+    if (digestChanged) {
+      await repos.filingEscalationClosureComplianceDigests.upsert(digestNext)
+    }
+    store.filingEscalationClosureComplianceDigests.set(digestNext.id, digestNext)
+    digestByOwner.set(owner, digestNext)
+    const queueChanged =
+      !queueExisting ||
+      queueExisting.status !== queueComputed.status ||
+      queueExisting.assignedPartnerId !== queueComputed.assignedPartnerId ||
+      queueExisting.claimedBy !== queueComputed.claimedBy ||
+      queueExisting.claimedAt !== queueComputed.claimedAt ||
+      queueExisting.resolvedBy !== queueComputed.resolvedBy ||
+      queueExisting.resolvedAt !== queueComputed.resolvedAt ||
+      queueExisting.resolutionNote !== queueComputed.resolutionNote ||
+      queueExisting.pendingLifecycleCount !== queueComputed.pendingLifecycleCount ||
+      queueExisting.breachedReaffirmationCount !== queueComputed.breachedReaffirmationCount ||
+      !sameStringArray(queueExisting.packageIds, queueComputed.packageIds)
+    if (queueChanged) {
+      await repos.filingEscalationClosureFollowupQueues.upsert(queueComputed)
+    }
+    store.filingEscalationClosureFollowupQueues.set(queueComputed.id, queueComputed)
+    queueByOwner.set(owner, queueComputed)
+  }
+  return {
+    digestByOwner,
+    queueByOwner,
+  }
 }
 
 export async function GET(request: Request) {
@@ -1242,6 +1426,90 @@ export async function GET(request: Request) {
         nextCursor,
       })
     }
+    if (view === "closure_compliance_digests") {
+      const packageId = url.searchParams.get("packageId")
+      const ownerId = url.searchParams.get("ownerId")
+      const digestStatus = url.searchParams.get("digestStatus")
+      const now = Date.now()
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const { digestByOwner } = await recomputeClosureComplianceState(store, repos, {
+        firmId: user.firmId,
+        packageById,
+        now,
+      })
+      const visible = [...digestByOwner.values()]
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (packageId ? row.linkedPackageIds.includes(packageId) : true))
+        .filter((row) => {
+          if (!isFilingEscalationClosureComplianceDigestStatus(digestStatus)) return true
+          return row.status === digestStatus
+        })
+        .filter((row) => {
+          if (row.linkedPackageIds.length === 0) return user.role === "partner"
+          return row.linkedPackageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_followup_queue") {
+      const packageId = url.searchParams.get("packageId")
+      const ownerId = url.searchParams.get("ownerId")
+      const queueStatus = url.searchParams.get("queueStatus")
+      const assigneeId = url.searchParams.get("assigneeId")
+      const now = Date.now()
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const { queueByOwner } = await recomputeClosureComplianceState(store, repos, {
+        firmId: user.firmId,
+        packageById,
+        now,
+      })
+      const visible = [...queueByOwner.values()]
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (assigneeId ? row.assignedPartnerId === assigneeId : true))
+        .filter((row) => (packageId ? row.packageIds.includes(packageId) : true))
+        .filter((row) => {
+          if (!isFilingEscalationClosureFollowupQueueStatus(queueStatus)) return true
+          return row.status === queueStatus
+        })
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
     if (view === "escalation_workload_digests") {
       const packageId = url.searchParams.get("packageId")
       const ownerId = url.searchParams.get("ownerId")
@@ -1250,6 +1518,15 @@ export async function GET(request: Request) {
       const handoffLagBucket = url.searchParams.get("handoffLagBucket")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const { queueByOwner: closureQueueByOwner } = await recomputeClosureComplianceState(
+        store,
+        repos,
+        {
+          firmId: user.firmId,
+          packageById,
+          now,
+        }
+      )
       const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(user.firmId)
       const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(rotaRows)
@@ -1518,6 +1795,29 @@ export async function GET(request: Request) {
           now,
           existing,
         })
+        const ownerClosureQueue = rota?.primaryOwnerId
+          ? closureQueueByOwner.get(rota.primaryOwnerId) ?? null
+          : null
+        const closureQueueElevated =
+          !!ownerClosureQueue &&
+          ownerClosureQueue.status !== "resolved" &&
+          (ownerClosureQueue.pendingLifecycleCount > 0 ||
+            ownerClosureQueue.breachedReaffirmationCount > 0)
+        const closureQueueCritical =
+          closureQueueElevated && !!ownerClosureQueue && ownerClosureQueue.breachedReaffirmationCount > 0
+        const computedBaseWithQueue =
+          closureQueueElevated &&
+          !computedBase.alertReasons.includes("closure_compliance_pressure")
+            ? {
+                ...computedBase,
+                status: computedBase.status === "cleared" ? ("open_alert" as const) : computedBase.status,
+                alertReasons: [...computedBase.alertReasons, "closure_compliance_pressure"].sort((a, b) =>
+                  a.localeCompare(b)
+                ),
+                updatedAt: now,
+                lastEvaluatedAt: now,
+              }
+            : computedBase
         const waiverExpiringCritical =
           !!nextWaiverExpiry &&
           nextWaiverExpiry.status !== "cleared" &&
@@ -1559,25 +1859,29 @@ export async function GET(request: Request) {
           activeRemediation.decision === "temporary_override" &&
           activeRemediation.expiresAt - activeRemediation.decidedAt > policy.waiverWindowMs
         const severityTier: "baseline" | "elevated" | "critical" =
+          closureQueueCritical ||
           reaffirmationSlaBreachCritical ||
           rolloverBreachCritical ||
           remediationExpiryCritical ||
           longLivedTemporaryOverride ||
           noActiveRemediationForVariance
             ? "critical"
-            : waiverExpiringCritical || policyVarianceCritical || reaffirmationSlaWarning
+            : waiverExpiringCritical ||
+                policyVarianceCritical ||
+                reaffirmationSlaWarning ||
+                closureQueueElevated
               ? "elevated"
               : "baseline"
         let computed =
-          activeWaiver && computedBase.alertReasons.length > 0
+          activeWaiver && computedBaseWithQueue.alertReasons.length > 0
             ? {
-                ...computedBase,
+                ...computedBaseWithQueue,
                 status: "snoozed" as const,
                 snoozeUntil: activeWaiver.expiresAt,
                 updatedAt: now,
                 lastEvaluatedAt: now,
               }
-            : computedBase
+            : computedBaseWithQueue
         if (severityTier === "critical" && computed.status !== "open_alert") {
           computed = {
             ...computed,
@@ -5684,6 +5988,192 @@ export async function POST(request: Request) {
         action: "acknowledge_rollover_reaffirmation_sla",
         rolloverReaffirmationSla:
           (await repos.filingEscalationRolloverReaffirmationSlas.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "assign_closure_followup") {
+      if (!parsed.actorId || !parsed.assigneeId || (!parsed.queueId && !parsed.ownerId)) {
+        return NextResponse.json(
+          { error: "actorId, assigneeId, and queueId or ownerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "assign_closure_followup requires partner role" }, { status: 403 })
+      }
+      const assignee = store.users.get(parsed.assigneeId)
+      if (!assignee || assignee.firmId !== actor.firmId || assignee.role !== "partner") {
+        return NextResponse.json({ error: "assignee must be a partner in the same firm" }, { status: 422 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const { queueByOwner } = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const queue =
+        (parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? queueByOwner.get(parsed.ownerId) ?? null
+            : null) ?? null
+      if (!queue || queue.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
+      }
+      const note = parsed.note?.trim() || `closure follow-up assigned to ${assignee.id}`
+      const updated = {
+        ...queue,
+        assignedPartnerId: assignee.id,
+        notes: [...queue.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationClosureFollowupQueues.upsert(updated)
+      store.filingEscalationClosureFollowupQueues.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_closure_followup_assign",
+        actorId: actor.id,
+        target: updated.id,
+        classification: updated.classification,
+        reason: assignee.id,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "assign_closure_followup",
+        closureFollowupQueue:
+          (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "claim_closure_followup") {
+      if (!parsed.actorId || (!parsed.queueId && !parsed.ownerId)) {
+        return NextResponse.json(
+          { error: "actorId and queueId or ownerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "claim_closure_followup requires partner role" }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const { queueByOwner } = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const queue =
+        (parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? queueByOwner.get(parsed.ownerId) ?? null
+            : null) ?? null
+      if (!queue || queue.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
+      }
+      if (queue.status === "resolved") {
+        return NextResponse.json({ error: "closure follow-up queue is already resolved" }, { status: 422 })
+      }
+      if (queue.assignedPartnerId && queue.assignedPartnerId !== actor.id) {
+        return NextResponse.json({ error: "queue is assigned to a different partner" }, { status: 403 })
+      }
+      const note = parsed.note?.trim() || "closure follow-up claimed"
+      const updated = {
+        ...queue,
+        status: "claimed" as const,
+        claimedBy: actor.id,
+        claimedAt: now,
+        notes: [...queue.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationClosureFollowupQueues.upsert(updated)
+      store.filingEscalationClosureFollowupQueues.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_closure_followup_claim",
+        actorId: actor.id,
+        target: updated.id,
+        classification: updated.classification,
+        reason: updated.ownerId,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "claim_closure_followup",
+        closureFollowupQueue:
+          (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_closure_followup") {
+      if (!parsed.actorId || !parsed.note?.trim() || (!parsed.queueId && !parsed.ownerId)) {
+        return NextResponse.json(
+          { error: "actorId, note, and queueId or ownerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "resolve_closure_followup requires partner role" }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const { queueByOwner } = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const queue =
+        (parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? queueByOwner.get(parsed.ownerId) ?? null
+            : null) ?? null
+      if (!queue || queue.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
+      }
+      if (queue.status === "resolved") {
+        return NextResponse.json({ error: "closure follow-up queue is already resolved" }, { status: 422 })
+      }
+      const resolution = parsed.note.trim()
+      const updated = {
+        ...queue,
+        status: "resolved" as const,
+        resolvedBy: actor.id,
+        resolvedAt: now,
+        resolutionNote: resolution,
+        notes: [...queue.notes, `${new Date(now).toISOString()} ${actor.id}: ${resolution}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationClosureFollowupQueues.upsert(updated)
+      store.filingEscalationClosureFollowupQueues.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_closure_followup_resolve",
+        actorId: actor.id,
+        target: updated.id,
+        classification: updated.classification,
+        reason: updated.ownerId,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "resolve_closure_followup",
+        closureFollowupQueue:
+          (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

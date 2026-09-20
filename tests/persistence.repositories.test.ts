@@ -840,6 +840,74 @@ describe("Firestore repository adapters", () => {
       expect(
         reaffirmationByPackage.some((row) => row.id === "rollover-reaffirmation-sla:pkg_1")
       ).toBe(true)
+      await repos.filingEscalationClosureComplianceDigests.upsert({
+        id: "closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        classification: "internal",
+        status: "open_alert",
+        pendingLifecycleCount: 1,
+        breachedReaffirmationCount: 1,
+        linkedPackageIds: ["pkg_1"],
+        linkedLifecycleIds: ["remediation-lifecycle:remediation:pkg_1:1"],
+        linkedReaffirmationSlaIds: ["rollover-reaffirmation-sla:pkg_1"],
+        linkedFollowupQueueId: "closure-followup:closure-compliance:firmA:partner_a",
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        notes: ["closure compliance digest row"],
+        lastEvaluatedAt: 47,
+        updatedAt: 47,
+      })
+      const closureDigest = await repos.filingEscalationClosureComplianceDigests.get(
+        "closure-compliance:firmA:partner_a"
+      )
+      expect(closureDigest?.status).toBe("open_alert")
+      const closureDigestsByFirm =
+        await repos.filingEscalationClosureComplianceDigests.listByFirm("firmA")
+      expect(
+        closureDigestsByFirm.some((row) => row.id === "closure-compliance:firmA:partner_a")
+      ).toBe(true)
+      const closureDigestsByOwner =
+        await repos.filingEscalationClosureComplianceDigests.listByOwnerId("partner_a")
+      expect(
+        closureDigestsByOwner.some((row) => row.id === "closure-compliance:firmA:partner_a")
+      ).toBe(true)
+      await repos.filingEscalationClosureFollowupQueues.upsert({
+        id: "closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        digestId: "closure-compliance:firmA:partner_a",
+        classification: "internal",
+        status: "claimed",
+        packageIds: ["pkg_1"],
+        pendingLifecycleCount: 1,
+        breachedReaffirmationCount: 1,
+        assignedPartnerId: "partner_a",
+        claimedBy: "partner_a",
+        claimedAt: 48,
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNote: null,
+        notes: ["closure follow-up queue row"],
+        updatedAt: 48,
+      })
+      const closureQueue = await repos.filingEscalationClosureFollowupQueues.get(
+        "closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureQueue?.status).toBe("claimed")
+      const closureQueueByFirm = await repos.filingEscalationClosureFollowupQueues.listByFirm("firmA")
+      expect(
+        closureQueueByFirm.some(
+          (row) => row.id === "closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
+      const closureQueueByOwner =
+        await repos.filingEscalationClosureFollowupQueues.listByOwnerId("partner_a")
+      expect(
+        closureQueueByOwner.some(
+          (row) => row.id === "closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
     })
   })
 })
