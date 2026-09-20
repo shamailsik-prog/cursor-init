@@ -7821,7 +7821,6 @@ describe("Runtime persistence mode", () => {
       expect(driftReplayDenied.status).toBe(400)
 
       getRuntimeStore().tenancySessionReferences = new Map()
-      getRuntimeStore().users = new Map()
 
       const refsRes = await tenancyGet(
         new Request(
