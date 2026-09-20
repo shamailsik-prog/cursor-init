@@ -18,6 +18,8 @@ import type {
   FilingEscalationOwnerRotaRow,
   FilingEscalationPolicyBaselineRow,
   FilingEscalationBreachWaiverLedgerRow,
+  FilingEscalationPolicyVarianceDigestRow,
+  FilingEscalationWaiverExpiryDigestRow,
   FilingEscalationWorkloadDigestRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
@@ -425,6 +427,56 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_breach_waivers"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationBreachWaiverLedgerRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationPolicyVarianceDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_policy_variance_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationPolicyVarianceDigestRow>(
+          db,
+          "filing_escalation_policy_variance_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationPolicyVarianceDigestRow>(
+          db,
+          "filing_escalation_policy_variance_digests",
+          firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_policy_variance_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationPolicyVarianceDigestRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationWaiverExpiryDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_waiver_expiry_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationWaiverExpiryDigestRow>(
+          db,
+          "filing_escalation_waiver_expiry_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationWaiverExpiryDigestRow>(
+          db,
+          "filing_escalation_waiver_expiry_digests",
+          firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_waiver_expiry_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationWaiverExpiryDigestRow)
           .filter((row) => row.packageId === packageId)
       },
     },

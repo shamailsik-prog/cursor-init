@@ -9,6 +9,8 @@ import type {
   FilingEscalationOwnerRotaRow,
   FilingEscalationPolicyBaselineRow,
   FilingEscalationBreachWaiverLedgerRow,
+  FilingEscalationPolicyVarianceDigestRow,
+  FilingEscalationWaiverExpiryDigestRow,
   FilingEscalationWorkloadDigestRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
@@ -173,6 +175,20 @@ export type FilingEscalationBreachWaiverLedgerRepository = {
   listByPackageId(packageId: string): Promise<FilingEscalationBreachWaiverLedgerRow[]>
 }
 
+export type FilingEscalationPolicyVarianceDigestRepository = {
+  upsert(row: FilingEscalationPolicyVarianceDigestRow): Promise<void>
+  get(id: string): Promise<FilingEscalationPolicyVarianceDigestRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationPolicyVarianceDigestRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationPolicyVarianceDigestRow[]>
+}
+
+export type FilingEscalationWaiverExpiryDigestRepository = {
+  upsert(row: FilingEscalationWaiverExpiryDigestRow): Promise<void>
+  get(id: string): Promise<FilingEscalationWaiverExpiryDigestRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationWaiverExpiryDigestRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationWaiverExpiryDigestRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -248,6 +264,8 @@ export type SpineRepositories = {
   filingEscalationWorkloadDigests: FilingEscalationWorkloadDigestRepository
   filingEscalationPolicyBaselines: FilingEscalationPolicyBaselineRepository
   filingEscalationBreachWaivers: FilingEscalationBreachWaiverLedgerRepository
+  filingEscalationPolicyVarianceDigests: FilingEscalationPolicyVarianceDigestRepository
+  filingEscalationWaiverExpiryDigests: FilingEscalationWaiverExpiryDigestRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -564,6 +582,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingEscalationBreachWaivers.values()].filter(
+          (row) => row.packageId === packageId
+        )
+      },
+    },
+    filingEscalationPolicyVarianceDigests: {
+      async upsert(row) {
+        store.filingEscalationPolicyVarianceDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationPolicyVarianceDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationPolicyVarianceDigests.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationPolicyVarianceDigests.values()].filter(
+          (row) => row.packageId === packageId
+        )
+      },
+    },
+    filingEscalationWaiverExpiryDigests: {
+      async upsert(row) {
+        store.filingEscalationWaiverExpiryDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationWaiverExpiryDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationWaiverExpiryDigests.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationWaiverExpiryDigests.values()].filter(
           (row) => row.packageId === packageId
         )
       },

@@ -514,6 +514,73 @@ export type FilingEscalationBreachWaiverLedgerRow = {
   updatedAt: number
 }
 
+export type FilingEscalationPolicyVarianceDigestStatus =
+  | "open_alert"
+  | "acknowledged"
+  | "snoozed"
+  | "cleared"
+
+export type FilingEscalationPolicyVarianceReason =
+  | "owner_load_threshold_override"
+  | "handoff_sla_override"
+  | "waiver_window_override"
+
+export type FilingEscalationPolicyVarianceDigestRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingEscalationPolicyVarianceDigestStatus
+  varianceReasons: FilingEscalationPolicyVarianceReason[]
+  firmDefaultPolicyId: string | null
+  packagePolicyId: string | null
+  ownerLoadThresholdDefault: number
+  ownerLoadThresholdEffective: number
+  handoffSlaMsDefault: number
+  handoffSlaMsEffective: number
+  waiverWindowMsDefault: number
+  waiverWindowMsEffective: number
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  snoozeUntil: number | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationWaiverExpiryDigestStatus =
+  | "open_expiry"
+  | "acknowledged"
+  | "extended"
+  | "cleared"
+
+export type FilingEscalationWaiverExpiryReason =
+  | "expires_lte_24h"
+  | "expires_lte_4h"
+  | "already_expired"
+
+export type FilingEscalationWaiverExpiryDigestRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingEscalationWaiverExpiryDigestStatus
+  reasons: FilingEscalationWaiverExpiryReason[]
+  linkedWaiverId: string | null
+  linkedPolicyId: string | null
+  waiverExpiresAt: number | null
+  msUntilExpiry: number | null
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  extendedBy: string | null
+  extendedAt: number | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -614,6 +681,8 @@ export class SpineStore {
   filingEscalationWorkloadDigests = new Map<string, FilingEscalationWorkloadDigestRow>()
   filingEscalationPolicyBaselines = new Map<string, FilingEscalationPolicyBaselineRow>()
   filingEscalationBreachWaivers = new Map<string, FilingEscalationBreachWaiverLedgerRow>()
+  filingEscalationPolicyVarianceDigests = new Map<string, FilingEscalationPolicyVarianceDigestRow>()
+  filingEscalationWaiverExpiryDigests = new Map<string, FilingEscalationWaiverExpiryDigestRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
