@@ -134,6 +134,15 @@ import {
   isFilingEscalationClosureSlaExceptionEnforcementStatus,
 } from "@/platform/persistence/filingEscalationClosureAttestationDisputes"
 import {
+  buildFilingEscalationClosureAdjudicationQueueRow,
+  buildFilingEscalationClosureEnforcementRebalanceRow,
+  filingEscalationClosureAdjudicationQueueId,
+  filingEscalationClosureEnforcementRebalanceId,
+  isFilingEscalationClosureAdjudicationStatus,
+  isFilingEscalationClosureAdjudicationVerdict,
+  isFilingEscalationClosureEnforcementRebalanceStatus,
+} from "@/platform/persistence/filingEscalationClosureExceptionAdjudication"
+import {
   buildFilingEscalationRemediationExpiryDigestRow,
   buildFilingEscalationRolloverBreachWatchRow,
   filingEscalationRemediationExpiryDigestId,
@@ -597,6 +606,36 @@ type TickClosureSlaExceptionEnforcementBody = {
   note?: string
 }
 
+type EscalateClosureDisputeToPanelBody = {
+  action: "escalate_closure_dispute_to_panel"
+  actorId?: string
+  disputeId?: string
+  panelMemberIds?: string[]
+  dissentNote?: string
+  note?: string
+}
+
+type RecordClosureAdjudicationVerdictBody = {
+  action: "record_closure_adjudication_verdict"
+  actorId?: string
+  adjudicationId?: string
+  verdict?: "uphold_dispute" | "override_dispute"
+  dissentNote?: string
+  note?: string
+}
+
+type RebalanceClosureEnforcementQueueBody = {
+  action: "rebalance_closure_enforcement_queue"
+  actorId?: string
+  queueId?: string
+  ownerId?: string
+  status?: "none" | "cooldown_scheduled" | "owner_reassignment_recommended" | "throttle_active"
+  recommendedOwnerId?: string
+  cooldownHours?: number
+  throttleHours?: number
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -647,6 +686,9 @@ type Body =
   | OpenClosureAttestationDisputeBody
   | ResolveClosureAttestationDisputeBody
   | TickClosureSlaExceptionEnforcementBody
+  | EscalateClosureDisputeToPanelBody
+  | RecordClosureAdjudicationVerdictBody
+  | RebalanceClosureEnforcementQueueBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -696,7 +738,9 @@ function parseFilingsView(
   | "closure_attestations"
   | "closure_sla_exception_digests"
   | "closure_attestation_disputes"
-  | "closure_sla_exception_enforcement" {
+  | "closure_sla_exception_enforcement"
+  | "closure_adjudication_queue"
+  | "closure_enforcement_rebalance" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -725,6 +769,8 @@ function parseFilingsView(
   if (value === "closure_sla_exception_digests") return "closure_sla_exception_digests"
   if (value === "closure_attestation_disputes") return "closure_attestation_disputes"
   if (value === "closure_sla_exception_enforcement") return "closure_sla_exception_enforcement"
+  if (value === "closure_adjudication_queue") return "closure_adjudication_queue"
+  if (value === "closure_enforcement_rebalance") return "closure_enforcement_rebalance"
   return "packages"
 }
 
@@ -1165,6 +1211,28 @@ async function recomputeClosureComplianceState(
     msUntilExpiry: number | null
     linkedAttestationDisputeId: string | null
   }>
+  adjudicationByOwner: Map<string, {
+    id: string
+    status:
+      | "pending_panel_assignment"
+      | "panel_in_review"
+      | "resolved_upheld"
+      | "resolved_overturned"
+    disputeId: string
+    panelMemberIds: string[]
+    dissentNotes: string[]
+    verdict: "uphold_dispute" | "override_dispute" | null
+    updatedAt: number
+  }>
+  rebalanceByOwner: Map<string, {
+    id: string
+    status: "none" | "cooldown_scheduled" | "owner_reassignment_recommended" | "throttle_active"
+    triggeredByEscalationCount: number
+    cooldownUntil: number | null
+    recommendedOwnerId: string | null
+    reopenThrottleUntil: number | null
+    linkedAdjudicationQueueId: string | null
+  }>
 }> {
   const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(input.firmId)
   const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
@@ -1256,6 +1324,16 @@ async function recomputeClosureComplianceState(
   const existingEnforcementByQueueId = new Map(
     existingEnforcementRows.map((row) => [row.queueId, row])
   )
+  const existingAdjudicationRows = await repos.filingEscalationClosureAdjudicationQueue.listByFirm(
+    input.firmId
+  )
+  const existingAdjudicationByDisputeId = new Map(
+    existingAdjudicationRows.map((row) => [row.disputeId, row])
+  )
+  const existingRebalanceRows = await repos.filingEscalationClosureEnforcementRebalance.listByFirm(
+    input.firmId
+  )
+  const existingRebalanceByQueueId = new Map(existingRebalanceRows.map((row) => [row.queueId, row]))
   let closureSlaConfigRows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm(input.firmId)
   if (!closureSlaConfigRows.some((row) => row.ownerId === null && row.scope === "firm_default")) {
     const seededDefaultConfig = buildFilingEscalationClosureSlaWindowConfigRow({
@@ -1379,6 +1457,34 @@ async function recomputeClosureComplianceState(
       waiverExpiresAt: number | null
       msUntilExpiry: number | null
       linkedAttestationDisputeId: string | null
+    }
+  >()
+  const adjudicationByOwner = new Map<
+    string,
+    {
+      id: string
+      status:
+        | "pending_panel_assignment"
+        | "panel_in_review"
+        | "resolved_upheld"
+        | "resolved_overturned"
+      disputeId: string
+      panelMemberIds: string[]
+      dissentNotes: string[]
+      verdict: "uphold_dispute" | "override_dispute" | null
+      updatedAt: number
+    }
+  >()
+  const rebalanceByOwner = new Map<
+    string,
+    {
+      id: string
+      status: "none" | "cooldown_scheduled" | "owner_reassignment_recommended" | "throttle_active"
+      triggeredByEscalationCount: number
+      cooldownUntil: number | null
+      recommendedOwnerId: string | null
+      reopenThrottleUntil: number | null
+      linkedAdjudicationQueueId: string | null
     }
   >()
   for (const owner of ownerIds) {
@@ -1647,6 +1753,70 @@ async function recomputeClosureComplianceState(
       msUntilExpiry: enforcementComputed.msUntilExpiry,
       linkedAttestationDisputeId: enforcementComputed.linkedAttestationDisputeId,
     })
+    const existingAdjudication = latestDispute
+      ? (existingAdjudicationByDisputeId.get(latestDispute.id) ?? null)
+      : null
+    if (latestDispute) {
+      const adjudicationComputed = buildFilingEscalationClosureAdjudicationQueueRow({
+        dispute: latestDispute,
+        queue: queueComputed,
+        enforcement: enforcementComputed,
+        existing: existingAdjudication,
+        now: input.now,
+      })
+      const adjudicationChanged =
+        !existingAdjudication ||
+        existingAdjudication.status !== adjudicationComputed.status ||
+        existingAdjudication.verdict !== adjudicationComputed.verdict ||
+        existingAdjudication.verdictBy !== adjudicationComputed.verdictBy ||
+        existingAdjudication.verdictAt !== adjudicationComputed.verdictAt ||
+        !sameStringArray(existingAdjudication.panelMemberIds, adjudicationComputed.panelMemberIds) ||
+        !sameStringArray(existingAdjudication.dissentNotes, adjudicationComputed.dissentNotes) ||
+        existingAdjudication.linkedEnforcementRebalanceId !==
+          adjudicationComputed.linkedEnforcementRebalanceId
+      if (adjudicationChanged) {
+        await repos.filingEscalationClosureAdjudicationQueue.upsert(adjudicationComputed)
+      }
+      store.filingEscalationClosureAdjudicationQueue.set(adjudicationComputed.id, adjudicationComputed)
+      adjudicationByOwner.set(owner, {
+        id: adjudicationComputed.id,
+        status: adjudicationComputed.status,
+        disputeId: adjudicationComputed.disputeId,
+        panelMemberIds: adjudicationComputed.panelMemberIds,
+        dissentNotes: adjudicationComputed.dissentNotes,
+        verdict: adjudicationComputed.verdict,
+        updatedAt: adjudicationComputed.updatedAt,
+      })
+      const existingRebalance = existingRebalanceByQueueId.get(queueComputed.id) ?? null
+      const rebalanceComputed = buildFilingEscalationClosureEnforcementRebalanceRow({
+        queue: queueComputed,
+        enforcement: enforcementComputed,
+        adjudication: adjudicationComputed,
+        existing: existingRebalance,
+        now: input.now,
+      })
+      const rebalanceChanged =
+        !existingRebalance ||
+        existingRebalance.status !== rebalanceComputed.status ||
+        existingRebalance.triggeredByEscalationCount !== rebalanceComputed.triggeredByEscalationCount ||
+        existingRebalance.cooldownUntil !== rebalanceComputed.cooldownUntil ||
+        existingRebalance.recommendedOwnerId !== rebalanceComputed.recommendedOwnerId ||
+        existingRebalance.reopenThrottleUntil !== rebalanceComputed.reopenThrottleUntil ||
+        existingRebalance.linkedAdjudicationQueueId !== rebalanceComputed.linkedAdjudicationQueueId
+      if (rebalanceChanged) {
+        await repos.filingEscalationClosureEnforcementRebalance.upsert(rebalanceComputed)
+      }
+      store.filingEscalationClosureEnforcementRebalance.set(rebalanceComputed.id, rebalanceComputed)
+      rebalanceByOwner.set(owner, {
+        id: rebalanceComputed.id,
+        status: rebalanceComputed.status,
+        triggeredByEscalationCount: rebalanceComputed.triggeredByEscalationCount,
+        cooldownUntil: rebalanceComputed.cooldownUntil,
+        recommendedOwnerId: rebalanceComputed.recommendedOwnerId,
+        reopenThrottleUntil: rebalanceComputed.reopenThrottleUntil,
+        linkedAdjudicationQueueId: rebalanceComputed.linkedAdjudicationQueueId,
+      })
+    }
   }
   return {
     digestByOwner,
@@ -1656,6 +1826,8 @@ async function recomputeClosureComplianceState(
     exceptionDigestByOwner,
     attestationDisputeByOwner,
     exceptionEnforcementByOwner,
+    adjudicationByOwner,
+    rebalanceByOwner,
   }
 }
 
@@ -2209,6 +2381,8 @@ export async function GET(request: Request) {
         exceptionDigestByOwner,
         attestationDisputeByOwner,
         exceptionEnforcementByOwner,
+        adjudicationByOwner,
+        rebalanceByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
@@ -2237,6 +2411,8 @@ export async function GET(request: Request) {
           const exceptionDigest = exceptionDigestByOwner.get(row.ownerId)
           const dispute = attestationDisputeByOwner.get(row.ownerId)
           const enforcement = exceptionEnforcementByOwner.get(row.ownerId)
+          const adjudication = adjudicationByOwner.get(row.ownerId)
+          const rebalance = rebalanceByOwner.get(row.ownerId)
           return {
             ...row,
             slaWindowStatus: window?.status ?? "cleared",
@@ -2253,6 +2429,18 @@ export async function GET(request: Request) {
             slaExceptionEnforcementStatus: enforcement?.status ?? "closed",
             slaExceptionReminderCount: enforcement?.reminderCount ?? 0,
             slaExceptionEscalationCount: enforcement?.escalationCount ?? 0,
+            closureAdjudicationStatus: adjudication?.status ?? null,
+            closureAdjudicationVerdict: adjudication?.verdict ?? null,
+            closureAdjudicationPanelBacklog: adjudication
+              ? Math.max(0, adjudication.panelMemberIds.length - 1)
+              : 0,
+            closureEnforcementRebalanceStatus: rebalance?.status ?? "none",
+            closureEnforcementRebalanceCooldownUntil: rebalance?.cooldownUntil ?? null,
+            closureEnforcementRebalanceReopenThrottleUntil: rebalance?.reopenThrottleUntil ?? null,
+            closureCriticalPath:
+              (adjudication?.status === "panel_in_review" &&
+                (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
+              rebalance?.status === "throttle_active",
           }
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -2281,6 +2469,8 @@ export async function GET(request: Request) {
         exceptionDigestByOwner,
         attestationDisputeByOwner,
         exceptionEnforcementByOwner,
+        adjudicationByOwner,
+        rebalanceByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
@@ -2310,6 +2500,8 @@ export async function GET(request: Request) {
           const exceptionDigest = exceptionDigestByOwner.get(row.ownerId)
           const dispute = attestationDisputeByOwner.get(row.ownerId)
           const enforcement = exceptionEnforcementByOwner.get(row.ownerId)
+          const adjudication = adjudicationByOwner.get(row.ownerId)
+          const rebalance = rebalanceByOwner.get(row.ownerId)
           return {
             ...row,
             slaWindowStatus: window?.status ?? "cleared",
@@ -2326,6 +2518,15 @@ export async function GET(request: Request) {
             slaExceptionEnforcementStatus: enforcement?.status ?? "closed",
             slaExceptionReminderCount: enforcement?.reminderCount ?? 0,
             slaExceptionEscalationCount: enforcement?.escalationCount ?? 0,
+            closureAdjudicationStatus: adjudication?.status ?? null,
+            closureAdjudicationVerdict: adjudication?.verdict ?? null,
+            closureEnforcementRebalanceStatus: rebalance?.status ?? "none",
+            closureEnforcementRebalanceCooldownUntil: rebalance?.cooldownUntil ?? null,
+            closureEnforcementRebalanceReopenThrottleUntil: rebalance?.reopenThrottleUntil ?? null,
+            closureCriticalPath:
+              (adjudication?.status === "panel_in_review" &&
+                (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
+              rebalance?.status === "throttle_active",
           }
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -2395,6 +2596,8 @@ export async function GET(request: Request) {
         exceptionDigestByOwner,
         attestationDisputeByOwner,
         exceptionEnforcementByOwner,
+        adjudicationByOwner,
+        rebalanceByOwner,
       } =
         await recomputeClosureComplianceState(
         store,
@@ -2438,6 +2641,8 @@ export async function GET(request: Request) {
           const exceptionDigest = exceptionDigestByOwner.get(row.ownerId)
           const dispute = attestationDisputeByOwner.get(row.ownerId)
           const enforcement = exceptionEnforcementByOwner.get(row.ownerId)
+          const adjudication = adjudicationByOwner.get(row.ownerId)
+          const rebalance = rebalanceByOwner.get(row.ownerId)
           return {
             ...row,
             digestId: digest?.id ?? null,
@@ -2453,6 +2658,15 @@ export async function GET(request: Request) {
             exceptionEnforcementStatus: enforcement?.status ?? "closed",
             exceptionReminderCount: enforcement?.reminderCount ?? 0,
             exceptionEscalationCount: enforcement?.escalationCount ?? 0,
+            closureAdjudicationStatus: adjudication?.status ?? null,
+            closureAdjudicationVerdict: adjudication?.verdict ?? null,
+            closureEnforcementRebalanceStatus: rebalance?.status ?? "none",
+            closureEnforcementRebalanceCooldownUntil: rebalance?.cooldownUntil ?? null,
+            closureEnforcementRebalanceReopenThrottleUntil: rebalance?.reopenThrottleUntil ?? null,
+            closureCriticalPath:
+              (adjudication?.status === "panel_in_review" &&
+                (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
+              rebalance?.status === "throttle_active",
           }
         })
         .sort((a, b) => {
@@ -2644,6 +2858,80 @@ export async function GET(request: Request) {
         nextCursor,
       })
     }
+    if (view === "closure_adjudication_queue") {
+      const ownerId = url.searchParams.get("ownerId")
+      const queueId = url.searchParams.get("queueId")
+      const disputeId = url.searchParams.get("disputeId")
+      const adjudicationStatus = url.searchParams.get("adjudicationStatus")
+      const rows = await repos.filingEscalationClosureAdjudicationQueue.listByFirm(user.firmId)
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (queueId ? row.queueId === queueId : true))
+        .filter((row) => (disputeId ? row.disputeId === disputeId : true))
+        .filter((row) =>
+          isFilingEscalationClosureAdjudicationStatus(adjudicationStatus)
+            ? row.status === adjudicationStatus
+            : true
+        )
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_enforcement_rebalance") {
+      const ownerId = url.searchParams.get("ownerId")
+      const queueId = url.searchParams.get("queueId")
+      const rebalanceStatus = url.searchParams.get("rebalanceStatus")
+      const rows = await repos.filingEscalationClosureEnforcementRebalance.listByFirm(user.firmId)
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (queueId ? row.queueId === queueId : true))
+        .filter((row) =>
+          isFilingEscalationClosureEnforcementRebalanceStatus(rebalanceStatus)
+            ? row.status === rebalanceStatus
+            : true
+        )
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
     if (view === "escalation_workload_digests") {
       const packageId = url.searchParams.get("packageId")
       const ownerId = url.searchParams.get("ownerId")
@@ -2658,6 +2946,8 @@ export async function GET(request: Request) {
         exceptionDigestByOwner,
         attestationDisputeByOwner,
         exceptionEnforcementByOwner,
+        adjudicationByOwner,
+        rebalanceByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
           firmId: user.firmId,
@@ -2947,6 +3237,12 @@ export async function GET(request: Request) {
         const ownerExceptionEnforcement = rota?.primaryOwnerId
           ? exceptionEnforcementByOwner.get(rota.primaryOwnerId) ?? null
           : null
+        const ownerAdjudication = rota?.primaryOwnerId
+          ? adjudicationByOwner.get(rota.primaryOwnerId) ?? null
+          : null
+        const ownerRebalance = rota?.primaryOwnerId
+          ? rebalanceByOwner.get(rota.primaryOwnerId) ?? null
+          : null
         const closureQueueElevated =
           !!ownerClosureQueue &&
           ownerClosureQueue.status !== "resolved" &&
@@ -2984,19 +3280,37 @@ export async function GET(request: Request) {
             ownerExceptionEnforcement.status === "escalated")
         const exceptionEnforcementCritical =
           !!ownerExceptionEnforcement && ownerExceptionEnforcement.status === "escalated"
+        const adjudicationBacklogCritical =
+          !!ownerAdjudication &&
+          ownerAdjudication.status === "panel_in_review" &&
+          (ownerAdjudication.panelMemberIds.length < 2 || ownerAdjudication.dissentNotes.length > 0)
+        const adjudicationBacklogElevated =
+          !!ownerAdjudication &&
+          (ownerAdjudication.status === "pending_panel_assignment" ||
+            ownerAdjudication.status === "panel_in_review")
+        const rebalancePressureCritical =
+          !!ownerRebalance && ownerRebalance.status === "throttle_active"
+        const rebalancePressureElevated =
+          !!ownerRebalance &&
+          (ownerRebalance.status === "cooldown_scheduled" ||
+            ownerRebalance.status === "owner_reassignment_recommended")
         const closureQueueCritical =
           (closureQueueElevated && !!ownerClosureQueue && ownerClosureQueue.breachedReaffirmationCount > 0) ||
           closureSlaCritical ||
           closureExceptionCritical ||
           closureDisputeCritical ||
-          exceptionEnforcementCritical
+          exceptionEnforcementCritical ||
+          adjudicationBacklogCritical ||
+          rebalancePressureCritical
         const computedBaseWithQueue =
           (
             closureQueueElevated ||
             closureSlaElevated ||
             closureExceptionElevated ||
             closureDisputeElevated ||
-            exceptionEnforcementElevated
+            exceptionEnforcementElevated ||
+            adjudicationBacklogElevated ||
+            rebalancePressureElevated
           ) &&
           !computedBase.alertReasons.includes("closure_compliance_pressure")
             ? {
@@ -3064,7 +3378,9 @@ export async function GET(request: Request) {
                 closureSlaElevated ||
                 closureExceptionElevated ||
                 closureDisputeElevated ||
-                exceptionEnforcementElevated
+                exceptionEnforcementElevated ||
+                adjudicationBacklogElevated ||
+                rebalancePressureElevated
               ? "elevated"
               : "baseline"
         let computed =
@@ -8099,6 +8415,369 @@ export async function POST(request: Request) {
         closureSlaExceptionEnforcement: enforcementRef
           ? (await repos.filingEscalationClosureSlaExceptionEnforcement.get(enforcementRef.id)) ?? null
           : null,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "escalate_closure_dispute_to_panel") {
+      if (!parsed.actorId || !parsed.disputeId || !parsed.panelMemberIds?.length) {
+        return NextResponse.json(
+          { error: "actorId, disputeId, and panelMemberIds are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "escalate_closure_dispute_to_panel requires partner role" },
+          { status: 403 }
+        )
+      }
+      const dispute = await repos.filingEscalationClosureAttestationDisputes.get(parsed.disputeId)
+      if (!dispute) {
+        return NextResponse.json({ error: "closure attestation dispute not found" }, { status: 404 })
+      }
+      if (dispute.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm closure dispute denied" }, { status: 403 })
+      }
+      if (dispute.status === "resolved_upheld" || dispute.status === "resolved_overturned") {
+        return NextResponse.json({ error: "closure attestation dispute is already resolved" }, { status: 422 })
+      }
+      const panelMemberIds = [...new Set(parsed.panelMemberIds)]
+      if (panelMemberIds.some((candidate) => {
+        const member = store.users.get(candidate)
+        return !member || member.firmId !== actor.firmId || member.role !== "partner"
+      })) {
+        return NextResponse.json(
+          { error: "panelMemberIds must be partner users from same firm" },
+          { status: 422 }
+        )
+      }
+      const queue = await repos.filingEscalationClosureFollowupQueues.get(dispute.queueId)
+      if (!queue) {
+        return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const existingAdjudication = await repos.filingEscalationClosureAdjudicationQueue.get(
+        filingEscalationClosureAdjudicationQueueId(dispute.id)
+      )
+      const enforcement = await repos.filingEscalationClosureSlaExceptionEnforcement.get(
+        filingEscalationClosureSlaExceptionEnforcementId(queue.id)
+      )
+      const adjudicationUpdated = buildFilingEscalationClosureAdjudicationQueueRow({
+        dispute,
+        queue,
+        enforcement,
+        existing: existingAdjudication,
+        panelMemberIds,
+        actorId: actor.id,
+        dissentNote: parsed.dissentNote,
+        note: parsed.note ?? "dispute escalated to adjudication panel",
+        now,
+      })
+      await repos.filingEscalationClosureAdjudicationQueue.upsert(adjudicationUpdated)
+      store.filingEscalationClosureAdjudicationQueue.set(adjudicationUpdated.id, adjudicationUpdated)
+      const disputeUpdated = {
+        ...dispute,
+        status: "under_review" as const,
+        underReviewBy: actor.id,
+        underReviewAt: dispute.underReviewAt ?? now,
+        notes: [...dispute.notes, `${new Date(now).toISOString()} ${actor.id}: escalated to panel`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationClosureAttestationDisputes.upsert(disputeUpdated)
+      store.filingEscalationClosureAttestationDisputes.set(disputeUpdated.id, disputeUpdated)
+      store.audit.push({
+        action: "filing_closure_adjudication_panel_escalate",
+        actorId: actor.id,
+        target: adjudicationUpdated.id,
+        classification: adjudicationUpdated.classification,
+        reason: panelMemberIds.join(","),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const refreshed = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const rebalanceRef = refreshed.rebalanceByOwner.get(queue.ownerId)
+      const payload = {
+        action: "escalate_closure_dispute_to_panel",
+        closureAttestationDispute:
+          (await repos.filingEscalationClosureAttestationDisputes.get(disputeUpdated.id)) ??
+          disputeUpdated,
+        closureAdjudicationQueue:
+          (await repos.filingEscalationClosureAdjudicationQueue.get(adjudicationUpdated.id)) ??
+          adjudicationUpdated,
+        closureEnforcementRebalance: rebalanceRef
+          ? (await repos.filingEscalationClosureEnforcementRebalance.get(rebalanceRef.id)) ?? null
+          : null,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "record_closure_adjudication_verdict") {
+      if (!parsed.actorId || !parsed.adjudicationId || !parsed.verdict) {
+        return NextResponse.json(
+          { error: "actorId, adjudicationId, and verdict are required" },
+          { status: 400 }
+        )
+      }
+      if (!isFilingEscalationClosureAdjudicationVerdict(parsed.verdict)) {
+        return NextResponse.json(
+          { error: "verdict must be uphold_dispute or override_dispute" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "record_closure_adjudication_verdict requires partner role" },
+          { status: 403 }
+        )
+      }
+      const adjudication = await repos.filingEscalationClosureAdjudicationQueue.get(parsed.adjudicationId)
+      if (!adjudication) {
+        return NextResponse.json({ error: "closure adjudication row not found" }, { status: 404 })
+      }
+      if (adjudication.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm closure adjudication denied" }, { status: 403 })
+      }
+      if (adjudication.verdict) {
+        return NextResponse.json({ error: "closure adjudication verdict already recorded" }, { status: 422 })
+      }
+      const dispute = await repos.filingEscalationClosureAttestationDisputes.get(adjudication.disputeId)
+      if (!dispute) {
+        return NextResponse.json({ error: "linked closure attestation dispute not found" }, { status: 404 })
+      }
+      const attestation = await repos.filingEscalationClosureAttestations.get(adjudication.attestationId)
+      if (!attestation) {
+        return NextResponse.json({ error: "linked closure attestation not found" }, { status: 404 })
+      }
+      const queue = await repos.filingEscalationClosureFollowupQueues.get(adjudication.queueId)
+      if (!queue) {
+        return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const enforcement = await repos.filingEscalationClosureSlaExceptionEnforcement.get(
+        filingEscalationClosureSlaExceptionEnforcementId(queue.id)
+      )
+      const adjudicationUpdated = buildFilingEscalationClosureAdjudicationQueueRow({
+        dispute,
+        queue,
+        enforcement,
+        existing: adjudication,
+        panelMemberIds: adjudication.panelMemberIds,
+        actorId: actor.id,
+        verdict: parsed.verdict,
+        dissentNote: parsed.dissentNote,
+        note: parsed.note ?? `panel verdict ${parsed.verdict}`,
+        now,
+      })
+      await repos.filingEscalationClosureAdjudicationQueue.upsert(adjudicationUpdated)
+      store.filingEscalationClosureAdjudicationQueue.set(adjudicationUpdated.id, adjudicationUpdated)
+      const disputeStatus =
+        parsed.verdict === "uphold_dispute"
+          ? ("resolved_upheld" as const)
+          : ("resolved_overturned" as const)
+      const disputeUpdated = {
+        ...dispute,
+        status: disputeStatus,
+        underReviewBy: dispute.underReviewBy ?? actor.id,
+        underReviewAt: dispute.underReviewAt ?? now,
+        resolvedBy: actor.id,
+        resolvedAt: now,
+        resolutionNote: parsed.note?.trim() ?? `panel verdict ${parsed.verdict}`,
+        notes: [...dispute.notes, `${new Date(now).toISOString()} ${actor.id}: panel verdict ${parsed.verdict}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationClosureAttestationDisputes.upsert(disputeUpdated)
+      store.filingEscalationClosureAttestationDisputes.set(disputeUpdated.id, disputeUpdated)
+      const attestationUpdated = {
+        ...attestation,
+        status: parsed.verdict === "uphold_dispute" ? ("attested" as const) : ("rejected" as const),
+        secondReviewedBy: actor.id,
+        secondReviewedAt: now,
+        notes: [...attestation.notes, `${new Date(now).toISOString()} ${actor.id}: panel verdict ${parsed.verdict}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationClosureAttestations.upsert(attestationUpdated)
+      store.filingEscalationClosureAttestations.set(attestationUpdated.id, attestationUpdated)
+      const queueUpdated =
+        parsed.verdict === "uphold_dispute"
+          ? {
+              ...queue,
+              status: "resolved" as const,
+              resolvedBy: queue.resolvedBy ?? actor.id,
+              resolvedAt: queue.resolvedAt ?? now,
+              resolutionNote: queue.resolutionNote ?? "closure adjudication upheld dispute",
+              notes: [...queue.notes, `${new Date(now).toISOString()} ${actor.id}: queue resolved by panel verdict`],
+              updatedAt: now,
+            }
+          : {
+              ...queue,
+              status: "open" as const,
+              resolvedBy: null,
+              resolvedAt: null,
+              resolutionNote: null,
+              notes: [...queue.notes, `${new Date(now).toISOString()} ${actor.id}: queue reopened by panel verdict`],
+              updatedAt: now,
+            }
+      await repos.filingEscalationClosureFollowupQueues.upsert(queueUpdated)
+      store.filingEscalationClosureFollowupQueues.set(queueUpdated.id, queueUpdated)
+      store.audit.push({
+        action: "filing_closure_adjudication_verdict_record",
+        actorId: actor.id,
+        target: adjudicationUpdated.id,
+        classification: adjudicationUpdated.classification,
+        reason: parsed.verdict,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const refreshed = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const rebalanceRef = refreshed.rebalanceByOwner.get(queueUpdated.ownerId)
+      const payload = {
+        action: "record_closure_adjudication_verdict",
+        closureAdjudicationQueue:
+          (await repos.filingEscalationClosureAdjudicationQueue.get(adjudicationUpdated.id)) ??
+          adjudicationUpdated,
+        closureAttestationDispute:
+          (await repos.filingEscalationClosureAttestationDisputes.get(disputeUpdated.id)) ??
+          disputeUpdated,
+        closureAttestation:
+          (await repos.filingEscalationClosureAttestations.get(attestationUpdated.id)) ??
+          attestationUpdated,
+        closureFollowupQueue:
+          (await repos.filingEscalationClosureFollowupQueues.get(queueUpdated.id)) ?? queueUpdated,
+        closureEnforcementRebalance: rebalanceRef
+          ? (await repos.filingEscalationClosureEnforcementRebalance.get(rebalanceRef.id)) ?? null
+          : null,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "rebalance_closure_enforcement_queue") {
+      if (!parsed.actorId || (!parsed.queueId && !parsed.ownerId) || !parsed.status) {
+        return NextResponse.json(
+          { error: "actorId, status, and queueId or ownerId are required" },
+          { status: 400 }
+        )
+      }
+      if (!isFilingEscalationClosureEnforcementRebalanceStatus(parsed.status)) {
+        return NextResponse.json(
+          { error: "status must be a valid closure enforcement rebalance status" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "rebalance_closure_enforcement_queue requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const queue =
+        (parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null) ?? null
+      if (!queue || queue.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
+      }
+      const enforcementRef = closureState.exceptionEnforcementByOwner.get(queue.ownerId)
+      if (!enforcementRef) {
+        return NextResponse.json({ error: "closure SLA exception enforcement not found" }, { status: 404 })
+      }
+      const enforcement = await repos.filingEscalationClosureSlaExceptionEnforcement.get(enforcementRef.id)
+      if (!enforcement) {
+        return NextResponse.json({ error: "closure SLA exception enforcement not found" }, { status: 404 })
+      }
+      let recommendedOwnerId = parsed.recommendedOwnerId?.trim() || null
+      if (recommendedOwnerId) {
+        const recommendedOwner = store.users.get(recommendedOwnerId)
+        if (!recommendedOwner || recommendedOwner.firmId !== actor.firmId || recommendedOwner.role !== "partner") {
+          return NextResponse.json(
+            { error: "recommendedOwnerId must be a partner in the same firm" },
+            { status: 422 }
+          )
+        }
+      }
+      if (parsed.status !== "owner_reassignment_recommended") {
+        recommendedOwnerId = null
+      }
+      const priorAuditCount = store.audit.length
+      const existingRebalance = await repos.filingEscalationClosureEnforcementRebalance.get(
+        filingEscalationClosureEnforcementRebalanceId(queue.id)
+      )
+      const adjudicationRef = closureState.adjudicationByOwner.get(queue.ownerId)
+      const adjudication = adjudicationRef
+        ? await repos.filingEscalationClosureAdjudicationQueue.get(adjudicationRef.id)
+        : null
+      const rebalanceUpdated = buildFilingEscalationClosureEnforcementRebalanceRow({
+        queue,
+        enforcement,
+        adjudication,
+        existing: existingRebalance,
+        statusOverride: parsed.status,
+        recommendedOwnerId,
+        cooldownHours: parsed.cooldownHours,
+        throttleHours: parsed.throttleHours,
+        actorId: actor.id,
+        note:
+          parsed.note ??
+          `manual rebalance ${parsed.status}${
+            recommendedOwnerId ? ` -> ${recommendedOwnerId}` : ""
+          }`,
+        now,
+      })
+      await repos.filingEscalationClosureEnforcementRebalance.upsert(rebalanceUpdated)
+      store.filingEscalationClosureEnforcementRebalance.set(rebalanceUpdated.id, rebalanceUpdated)
+      store.audit.push({
+        action: "filing_closure_enforcement_rebalance_set",
+        actorId: actor.id,
+        target: rebalanceUpdated.id,
+        classification: rebalanceUpdated.classification,
+        reason: rebalanceUpdated.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const refreshed = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const refreshedRef = refreshed.rebalanceByOwner.get(queue.ownerId)
+      const payload = {
+        action: "rebalance_closure_enforcement_queue",
+        closureEnforcementRebalance: refreshedRef
+          ? (await repos.filingEscalationClosureEnforcementRebalance.get(refreshedRef.id)) ??
+            rebalanceUpdated
+          : rebalanceUpdated,
+        closureFollowupQueue:
+          (await repos.filingEscalationClosureFollowupQueues.get(queue.id)) ?? queue,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

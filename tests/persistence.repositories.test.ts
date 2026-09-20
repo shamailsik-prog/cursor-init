@@ -1132,6 +1132,73 @@ describe("Firestore repository adapters", () => {
             "closure-sla-exception-enforcement:closure-followup:closure-compliance:firmA:partner_a"
         )
       ).toBe(true)
+      await repos.filingEscalationClosureAdjudicationQueue.upsert({
+        id: "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        disputeId:
+          "closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        attestationId: "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1",
+        exceptionDigestId: "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "panel_in_review",
+        panelMemberIds: ["partner_a", "partner_b"],
+        escalatedBy: "partner_b",
+        escalatedAt: 58,
+        verdict: null,
+        verdictBy: null,
+        verdictAt: null,
+        dissentNotes: ["panel note immutable"],
+        linkedEnforcementRebalanceId:
+          "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        notes: ["adjudication escalated"],
+        updatedAt: 58,
+      })
+      const closureAdjudication = await repos.filingEscalationClosureAdjudicationQueue.get(
+        "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureAdjudication?.status).toBe("panel_in_review")
+      const closureAdjudicationByFirm =
+        await repos.filingEscalationClosureAdjudicationQueue.listByFirm("firmA")
+      expect(closureAdjudicationByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureEnforcementRebalance.upsert({
+        id: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        digestId: "closure-compliance:firmA:partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        enforcementId: "closure-sla-exception-enforcement:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "owner_reassignment_recommended",
+        triggeredByEscalationCount: 2,
+        cooldownUntil: null,
+        recommendedOwnerId: "partner_b",
+        reopenThrottleUntil: null,
+        lastRebalancedBy: "partner_a",
+        lastRebalancedAt: 59,
+        linkedAdjudicationQueueId:
+          "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        notes: ["owner reassignment hint"],
+        lastEvaluatedAt: 59,
+        updatedAt: 59,
+      })
+      const closureRebalance = await repos.filingEscalationClosureEnforcementRebalance.get(
+        "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureRebalance?.status).toBe("owner_reassignment_recommended")
+      const closureRebalanceByFirm = await repos.filingEscalationClosureEnforcementRebalance.listByFirm(
+        "firmA"
+      )
+      expect(
+        closureRebalanceByFirm.some(
+          (row) =>
+            row.id ===
+            "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
     })
   })
 })

@@ -997,6 +997,67 @@ export type FilingEscalationClosureSlaExceptionEnforcementRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureAdjudicationStatus =
+  | "pending_panel_assignment"
+  | "panel_in_review"
+  | "resolved_upheld"
+  | "resolved_overturned"
+
+export type FilingEscalationClosureAdjudicationVerdict =
+  | "uphold_dispute"
+  | "override_dispute"
+
+export type FilingEscalationClosureAdjudicationQueueRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  disputeId: string
+  attestationId: string
+  exceptionDigestId: string | null
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureAdjudicationStatus
+  panelMemberIds: string[]
+  escalatedBy: string
+  escalatedAt: number
+  verdict: FilingEscalationClosureAdjudicationVerdict | null
+  verdictBy: string | null
+  verdictAt: number | null
+  dissentNotes: string[]
+  linkedEnforcementRebalanceId: string | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationClosureEnforcementRebalanceStatus =
+  | "none"
+  | "cooldown_scheduled"
+  | "owner_reassignment_recommended"
+  | "throttle_active"
+
+export type FilingEscalationClosureEnforcementRebalanceRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  digestId: string
+  queueId: string
+  enforcementId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureEnforcementRebalanceStatus
+  triggeredByEscalationCount: number
+  cooldownUntil: number | null
+  recommendedOwnerId: string | null
+  reopenThrottleUntil: number | null
+  lastRebalancedBy: string | null
+  lastRebalancedAt: number | null
+  linkedAdjudicationQueueId: string | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -1127,6 +1188,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureAttestationDisputeRow>()
   filingEscalationClosureSlaExceptionEnforcement =
     new Map<string, FilingEscalationClosureSlaExceptionEnforcementRow>()
+  filingEscalationClosureAdjudicationQueue =
+    new Map<string, FilingEscalationClosureAdjudicationQueueRow>()
+  filingEscalationClosureEnforcementRebalance =
+    new Map<string, FilingEscalationClosureEnforcementRebalanceRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
