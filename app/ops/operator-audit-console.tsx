@@ -35,6 +35,8 @@ type ApiCallResult = {
   body: unknown
 }
 
+type FilingMutation = Record<string, unknown>
+
 const DEFAULT_FILE_TEXT =
   "%PDF-ops-audit% this payload proves ingest + workflow + court-ops + filing governance wiring."
 
@@ -119,6 +121,23 @@ export function OperatorAuditConsole() {
           ? result.body.error
           : `${options.step} failed with ${result.status}`
       throw new Error(message)
+    }
+    return result.body
+  }
+
+  async function runFilingAction(
+    step: string,
+    body: FilingMutation,
+    expectedStatuses: number[] = [200]
+  ) {
+    const result = await runApiCallWithStatus({
+      step,
+      method: "POST",
+      path: "/api/d4/filings",
+      body,
+    })
+    if (!expectedStatuses.includes(result.status)) {
+      throw new Error(`${step} failed with ${result.status}`)
     }
     return result.body
   }
@@ -935,6 +954,568 @@ export function OperatorAuditConsole() {
     })
   }
 
+  async function runBatchEFilingEscalationActions() {
+    if (!packageId) throw new Error("Create and approve a filing package first.")
+    await runFilingAction("Annexure checkpoint: partner signoff", {
+      action: "annexure_checkpoint",
+      actorId: partnerId,
+      packageId,
+      checkpoint: "record_partner_signoff",
+      note: "Ops Batch E: partner signoff checkpoint",
+    })
+    await runFilingAction("Annexure checkpoint: clerk verification", {
+      action: "annexure_checkpoint",
+      actorId: clerkId,
+      packageId,
+      checkpoint: "record_clerk_verification",
+      note: "Ops Batch E: clerk verification checkpoint",
+    })
+    await runFilingAction("Annexure checkpoint: ready for transport", {
+      action: "annexure_checkpoint",
+      actorId: partnerId,
+      packageId,
+      checkpoint: "mark_ready_for_transport",
+      note: "Ops Batch E: annexure ready for transport",
+    })
+    await runFilingAction("Record submission receipt", {
+      action: "record_submission_receipt",
+      actorId: clerkId,
+      packageId,
+      courtChannel: "efiling_portal_stub",
+      dispatchOutcome: "retry_scheduled",
+      submissionReference: "OPS-BATCH-E-SUB-001",
+      failureReason: "timeout",
+      retryHint: "retry after clerk callback",
+      note: "Ops Batch E: deterministic submission receipt",
+    })
+    await runFilingAction("Reconcile submission", {
+      action: "reconcile_submission",
+      actorId: partnerId,
+      packageId,
+      status: "needs_retry",
+      note: "Ops Batch E: partner reconciliation",
+    })
+    await runFilingAction("Claim submission exception", {
+      action: "claim_submission_exception",
+      actorId: clerkId,
+      packageId,
+      note: "Ops Batch E: clerk claimed exception",
+    })
+    await runFilingAction("Escalate submission exception", {
+      action: "escalate_submission_exception",
+      actorId: clerkId,
+      packageId,
+      escalationOwnerId: partnerId,
+      severity: "critical",
+      slaHours: 4,
+      note: "Ops Batch E: escalated to partner",
+    })
+    await runFilingAction("Resolve submission exception", {
+      action: "resolve_submission_exception",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: partner approved retry plan",
+    })
+    await runFilingAction("Reopen submission exception", {
+      action: "reopen_submission_exception",
+      actorId: partnerId,
+      packageId,
+      severity: "high",
+      note: "Ops Batch E: reopened after follow-up feedback",
+    })
+    await runFilingAction("Mark transport blocked", {
+      action: "mark_transport_blocked",
+      actorId: clerkId,
+      packageId,
+      transportChannel: "efiling_portal_stub",
+      channelPayloadHash: `ops-batch-e-blocked-${crypto.randomUUID()}`,
+      blockerTags: ["portal_timeout", "token_expired"],
+      attachmentPointers: ["ops://batch-e/retry-window-note"],
+      severity: "critical",
+      note: "Ops Batch E: fail-closed transport block",
+    })
+    await runFilingAction("Attach retry plan evidence", {
+      action: "attach_retry_plan",
+      actorId: partnerId,
+      packageId,
+      transportChannel: "operator_followup_stub",
+      channelPayloadHash: `ops-batch-e-retry-${crypto.randomUUID()}`,
+      attachmentPointers: ["ops://batch-e/retry-plan-v2"],
+      note: "Ops Batch E: partner retry plan attached",
+    })
+    await runFilingAction("Acknowledge SLA breach digest", {
+      action: "acknowledge_breach",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: SLA breach acknowledged",
+    })
+    await runFilingAction("Defer SLA breach window", {
+      action: "defer_window",
+      actorId: partnerId,
+      packageId,
+      deferHours: 6,
+      note: "Ops Batch E: deferred breach window",
+    })
+    await runFilingAction("Assign primary escalation owner", {
+      action: "assign_primary_owner",
+      actorId: partnerId,
+      packageId,
+      primaryOwnerId: partnerId,
+      activeWindowHours: 12,
+      note: "Ops Batch E: primary owner assigned",
+    })
+    await runFilingAction("Set backup escalation owner", {
+      action: "set_backup_owner",
+      actorId: partnerId,
+      packageId,
+      backupOwnerId: partnerId,
+      note: "Ops Batch E: backup owner assigned",
+    })
+    await runFilingAction("Acknowledge owner drift", {
+      action: "acknowledge_owner_drift",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: owner drift acknowledged",
+    })
+    await runFilingAction("Snooze workload alert", {
+      action: "snooze_workload_alert",
+      actorId: partnerId,
+      packageId,
+      snoozeHours: 4,
+      note: "Ops Batch E: workload alert snoozed",
+    })
+    await runFilingAction("Rebalance escalation assignment", {
+      action: "rebalance_assignment",
+      actorId: partnerId,
+      packageId,
+      newPrimaryOwnerId: partnerId,
+      note: "Ops Batch E: assignment rebalanced",
+    })
+    await runFilingAction("Set firm policy baseline", {
+      action: "set_policy_baseline",
+      actorId: partnerId,
+      ownerLoadThreshold: 2,
+      handoffSlaHours: 2,
+      waiverWindowHours: 12,
+      note: "Ops Batch E: firm policy baseline set",
+    })
+    await runFilingAction("Set package policy baseline", {
+      action: "set_policy_baseline",
+      actorId: partnerId,
+      packageId,
+      ownerLoadThreshold: 1,
+      handoffSlaHours: 1,
+      waiverWindowHours: 6,
+      note: "Ops Batch E: package policy baseline set",
+    })
+    await runFilingAction("Grant breach waiver", {
+      action: "grant_breach_waiver",
+      actorId: partnerId,
+      packageId,
+      durationHours: 2,
+      reason: "Ops Batch E planned handoff coverage",
+      note: "Ops Batch E: waiver granted",
+    })
+    await runFilingAction("Acknowledge policy variance", {
+      action: "acknowledge_policy_variance",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: policy variance acknowledged",
+    })
+    await runFilingAction("Snooze policy variance", {
+      action: "snooze_policy_variance",
+      actorId: partnerId,
+      packageId,
+      snoozeHours: 3,
+      note: "Ops Batch E: policy variance snoozed",
+    })
+    await runFilingAction("Record variance remediation", {
+      action: "record_variance_remediation",
+      actorId: partnerId,
+      packageId,
+      decision: "temporary_override",
+      justification: "Ops Batch E controlled override while transport remains firm-gated",
+      expiresInHours: 4,
+      secondApproverId: partnerId,
+      note: "Ops Batch E: remediation ledger entry",
+    })
+    await runFilingAction("Acknowledge remediation expiry digest", {
+      action: "acknowledge_remediation_expiry",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: remediation expiry acknowledged",
+    })
+    await runFilingAction("Snooze remediation expiry digest", {
+      action: "snooze_remediation_expiry",
+      actorId: partnerId,
+      packageId,
+      snoozeHours: 2,
+      note: "Ops Batch E: remediation expiry snoozed",
+    })
+    await runFilingAction("Attest remediation closure", {
+      action: "attest_remediation_closure",
+      actorId: partnerId,
+      packageId,
+      closureOutcome: "accepted_risk_retired",
+      note: "Ops Batch E: remediation closure attested",
+    })
+    await runFilingAction("Acknowledge waiver expiry digest", {
+      action: "acknowledge_waiver_expiry",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: waiver expiry acknowledged",
+    })
+    await runFilingAction("Extend breach waiver", {
+      action: "extend_breach_waiver",
+      actorId: partnerId,
+      packageId,
+      extendHours: 8,
+      secondApproverId: partnerId,
+      rolloverJustification: "Ops Batch E rollover required while transport remains fail-closed",
+      rolloverNote: "Ops Batch E rollover attestation generated",
+      note: "Ops Batch E: waiver extended",
+    })
+    await runFilingAction(
+      "Acknowledge waiver rollover breach watch",
+      {
+        action: "acknowledge_rollover_breach",
+        actorId: partnerId,
+        packageId,
+        note: "Ops Batch E: rollover breach acknowledged",
+      },
+      [200, 422]
+    )
+    await runFilingAction(
+      "Reaffirm waiver rollover attestation",
+      {
+        action: "reaffirm_rollover_attestation",
+        actorId: partnerId,
+        packageId,
+        note: "Ops Batch E: reaffirm rollover governance state",
+      },
+      [200, 404]
+    )
+    await runFilingAction(
+      "Acknowledge rollover reaffirmation SLA",
+      {
+        action: "acknowledge_rollover_reaffirmation_sla",
+        actorId: partnerId,
+        packageId,
+        note: "Ops Batch E: reaffirmation SLA acknowledged",
+      },
+      [200, 422]
+    )
+    await runFilingAction("Revoke breach waiver", {
+      action: "revoke_breach_waiver",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: waiver revoked",
+    })
+    await runFilingAction("Acknowledge escalation handoff", {
+      action: "acknowledge_handoff",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: escalation handoff acknowledged",
+    })
+    await runFilingAction("Confirm transport delivered evidence", {
+      action: "confirm_delivered",
+      actorId: partnerId,
+      packageId,
+      transportChannel: "courier_stub",
+      channelPayloadHash: `ops-batch-e-delivered-${crypto.randomUUID()}`,
+      attachmentPointers: ["ops://batch-e/proof-of-delivery"],
+      relatedReceiptId: `receipt:${packageId}:1`,
+      note: "Ops Batch E: deterministic delivery evidence confirmed",
+    })
+    await runFilingAction("Clear submission SLA digest", {
+      action: "clear_digest",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: digest cleared",
+    })
+    await runFilingAction("Revoke escalation assignment", {
+      action: "revoke_assignment",
+      actorId: partnerId,
+      packageId,
+      note: "Ops Batch E: assignment revoked",
+    })
+  }
+
+  async function readBatchEFilingEscalationViews() {
+    if (!matterId || !packageId) {
+      throw new Error("Run Batch E action chain first so matterId and packageId are available.")
+    }
+    await runApiCall({
+      step: "Read Batch E dispatch view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "dispatch",
+        userId: operatorId,
+        matterId,
+        packageId,
+        dispatchStatus: "handoff_ready",
+        assigneeId: clerkId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E annexures view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "annexures",
+        userId: operatorId,
+        matterId,
+        packageId,
+        annexureStatus: "ready",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E submission receipts view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "submission_receipts",
+        userId: operatorId,
+        matterId,
+        packageId,
+        dispatchOutcome: "retry_scheduled",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E submission reconciliation view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "submission_reconciliation",
+        userId: operatorId,
+        matterId,
+        packageId,
+        reconciliationStatus: "reconciled",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E submission exceptions view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "submission_exceptions",
+        userId: operatorId,
+        matterId,
+        packageId,
+        exceptionStatus: "resolved",
+        severity: "high",
+        escalationOwnerId: partnerId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E transport execution evidence view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "transport_execution",
+        userId: operatorId,
+        matterId,
+        packageId,
+        outcome: "confirm_delivered",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E submission SLA digest view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "submission_sla_digests",
+        userId: operatorId,
+        matterId,
+        packageId,
+        digestStatus: "cleared",
+        ownerId: partnerId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E escalation owner rota view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "escalation_owner_rota",
+        userId: operatorId,
+        matterId,
+        packageId,
+        rotaStatus: "revoked",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E workload digest view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "escalation_workload_digests",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E policy baseline view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "escalation_policy_baselines",
+        userId: operatorId,
+        packageId,
+        scope: "package_override",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E breach waiver ledger view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "breach_waiver_ledger",
+        userId: operatorId,
+        matterId,
+        packageId,
+        waiverStatus: "revoked",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E policy variance digest view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "policy_variance_digests",
+        userId: operatorId,
+        matterId,
+        packageId,
+        varianceStatus: "snoozed",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E waiver expiry digest view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "waiver_expiry_digests",
+        userId: operatorId,
+        matterId,
+        packageId,
+        expiryStatus: "cleared",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E variance remediation ledger view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "variance_remediation_ledger",
+        userId: operatorId,
+        matterId,
+        packageId,
+        remediationStatus: "closure_attested",
+        decision: "temporary_override",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E waiver rollover attestation view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "waiver_rollover_attestations",
+        userId: operatorId,
+        matterId,
+        packageId,
+        rolloverStatus: "attested",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E remediation expiry digest view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "remediation_expiry_digests",
+        userId: operatorId,
+        matterId,
+        packageId,
+        expiryStatus: "cleared",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E remediation lifecycle view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "remediation_lifecycle",
+        userId: operatorId,
+        matterId,
+        packageId,
+        lifecycleStatus: "closure_attested",
+        closureOutcome: "accepted_risk_retired",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E rollover breach watch view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "rollover_breach_watches",
+        userId: operatorId,
+        matterId,
+        packageId,
+        watchStatus: "cleared",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Read Batch E rollover reaffirmation SLA view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "rollover_reaffirmation_sla",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 md:px-8">
       <header className="space-y-3">
@@ -1113,6 +1694,12 @@ export function OperatorAuditConsole() {
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement attestation view read", readClosureSettlementAttestationView)}>
               22) View: closure_settlement_attestation
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch E filing/escalation actions executed", runBatchEFilingEscalationActions)}>
+              23) Batch E actions (#48-#59): filing + escalation chain
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch E filing/escalation views read", readBatchEFilingEscalationViews)}>
+              24) Batch E views (#48-#59): filings + digests + remediation + rollover
             </Button>
           </CardContent>
         </Card>
