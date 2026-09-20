@@ -1,7 +1,7 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
 Last updated: 2026-09-20  
-Primary source: `docs/audits/phase-reaudit-after-helper-99.md`.
+Primary source: `docs/audits/phase-reaudit-after-helper-99.md` plus `docs/audits/phase-reaudit-48-59-after-stream2.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
 
@@ -39,6 +39,7 @@ Because `transport_stub=true`, final status remains **PARTIAL** for all sampled 
 - PR #99 tip `8ba7dbaa804f` (helper fix) is now merged and at current `origin/main` tip.
 - #70-#73 satisfy frontend call-site requirements in `/ops` with phase-specific actions + views.
 - Batch D/E/F action lattices are now executable in `/ops`: `runApiCallAllowingStatuses` is defined, imported from `app/ops/api-call-helpers.ts`, and wired through action paths.
+- Stream 2 follow-up extends Batch E remediation/rollover `/ops` call sites and governance reads; independent re-audit is recorded in `docs/audits/phase-reaudit-48-59-after-stream2.md`.
 - COMPLETE claim hard-fail remains enforced while transport stubs exist via:
   - `ci_gates/check_pr_phase_claims.py`
   - `.github/workflows/pr-phase-claim-gate.yml`
@@ -86,7 +87,9 @@ The gate fails when either condition is true:
 
 ## Batch E ledger — PR #48-#59 (independent audit)
 
-- Audit file: `docs/audits/phase-sample-48-59-findings.md`
+- Audit files:
+  - `docs/audits/phase-sample-48-59-findings.md` (baseline forensic sample)
+  - `docs/audits/phase-reaudit-48-59-after-stream2.md` (post-`/ops` frontend wiring re-audit)
 - Verdict: **NOT COMPLETE / PARTIAL only**
 - Date: 2026-09-20
 

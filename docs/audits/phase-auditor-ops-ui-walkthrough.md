@@ -97,8 +97,14 @@ Route under test: `/ops`
       - `acknowledge_policy_variance`
       - `snooze_policy_variance`
       - `record_variance_remediation`
+      - `acknowledge_remediation_expiry`
+      - `snooze_remediation_expiry`
+      - `attest_remediation_closure`
       - `acknowledge_waiver_expiry`
       - `extend_breach_waiver`
+      - `acknowledge_rollover_breach`
+      - `reaffirm_rollover_attestation`
+      - `acknowledge_rollover_reaffirmation_sla`
       - `acknowledge_handoff`
       - `confirm_delivered`
       - `clear_digest`
@@ -120,6 +126,10 @@ Route under test: `/ops`
       - `view=waiver_expiry_digests`
       - `view=variance_remediation_ledger`
       - `view=waiver_rollover_attestations`
+      - `view=remediation_expiry_digests`
+      - `view=remediation_lifecycle`
+      - `view=rollover_breach_watches`
+      - `view=rollover_reaffirmation_sla`
 25. Click `Batch F actions (#60-#69 governance lattice)`.
     - Expected APIs (POST `/api/d4/filings`):
       - `set_closure_sla_window_config`
