@@ -35,6 +35,8 @@ import type {
   FilingEscalationClosureRebalanceSafeguardRow,
   FilingEscalationClosureAdjudicationSloDebtRemediationRow,
   FilingEscalationClosureRebalanceSafeguardExpiryRow,
+  FilingEscalationClosureAdjudicationDebtBurndownRow,
+  FilingEscalationClosureSafeguardExpiryAttestationRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -1201,6 +1203,80 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_closure_rebalance_safeguard_expiry"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationClosureRebalanceSafeguardExpiryRow)
+          .filter((row) => row.rebalanceId === rebalanceId)
+      },
+    },
+    filingEscalationClosureAdjudicationDebtBurndown: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_adjudication_debt_burndown", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureAdjudicationDebtBurndownRow>(
+          db,
+          "filing_escalation_closure_adjudication_debt_burndown",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureAdjudicationDebtBurndownRow>(
+          db,
+          "filing_escalation_closure_adjudication_debt_burndown",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_adjudication_debt_burndown"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAdjudicationDebtBurndownRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_adjudication_debt_burndown"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAdjudicationDebtBurndownRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByAdjudicationId(adjudicationId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_adjudication_debt_burndown"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAdjudicationDebtBurndownRow)
+          .filter((row) => row.adjudicationId === adjudicationId)
+      },
+    },
+    filingEscalationClosureSafeguardExpiryAttestations: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_safeguard_expiry_attestations", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureSafeguardExpiryAttestationRow>(
+          db,
+          "filing_escalation_closure_safeguard_expiry_attestations",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureSafeguardExpiryAttestationRow>(
+          db,
+          "filing_escalation_closure_safeguard_expiry_attestations",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_safeguard_expiry_attestations"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSafeguardExpiryAttestationRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_safeguard_expiry_attestations"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSafeguardExpiryAttestationRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByRebalanceId(rebalanceId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_safeguard_expiry_attestations"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSafeguardExpiryAttestationRow)
           .filter((row) => row.rebalanceId === rebalanceId)
       },
     },

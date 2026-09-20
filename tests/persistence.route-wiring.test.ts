@@ -71,6 +71,8 @@ const baseStore = {
   filingEscalationClosureRebalanceSafeguards: new Map(),
   filingEscalationClosureAdjudicationSloDebtRemediation: new Map(),
   filingEscalationClosureRebalanceSafeguardExpiry: new Map(),
+  filingEscalationClosureAdjudicationDebtBurndown: new Map(),
+  filingEscalationClosureSafeguardExpiryAttestations: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -1217,6 +1219,73 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       listByQueueId: vi.fn().mockResolvedValue([]),
       listByRebalanceId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationClosureAdjudicationDebtBurndown: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          adjudicationId:
+            "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          remediationId:
+            "closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "burndown_checkpoint_due",
+          retirementTargetAt: Date.now() - 60 * 60 * 1000,
+          checkpointAt: Date.now() - 60 * 60 * 1000,
+          backlogAttestedBy: "partner_a",
+          backlogAttestedAt: Date.now() - 30 * 60 * 1000,
+          tierNormalizedBy: "partner_a",
+          tierNormalizedAt: Date.now() - 15 * 60 * 1000,
+          tierNormalizedTo: "tier_1_partner_watch",
+          debtVelocityPerDay: 2.5,
+          projectedBurndownHours: 3,
+          forecastBreachHours: 1,
+          notes: ["repo debt burndown row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByAdjudicationId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureSafeguardExpiryAttestations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          expiryId:
+            "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "attestation_overdue",
+          acknowledgedBy: "partner_a",
+          acknowledgedAt: Date.now() - 45 * 60 * 1000,
+          overdueExceptionQueuedBy: "partner_a",
+          overdueExceptionQueuedAt: Date.now() - 30 * 60 * 1000,
+          overrideReconciledBy: null,
+          overrideReconciledAt: null,
+          latestReconciliationNote: null,
+          openBacklogHours: 2,
+          notes: ["repo safeguard attestation row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByRebalanceId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -1821,6 +1890,34 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain(
       "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+    )
+  })
+
+  it("filings closure adjudication debt burndown view GET uses repository filingEscalationClosureAdjudicationDebtBurndown listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_debt_burndown&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+    )
+  })
+
+  it("filings closure safeguard expiry attestations view GET uses repository filingEscalationClosureSafeguardExpiryAttestations listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_safeguard_expiry_attestations&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
     )
   })
 

@@ -1453,6 +1453,50 @@ describe("GET/POST /api/d4/filings", () => {
         "2b090814-1605-479f-bdb9-3c6fbe7ee374"
       )
       expect([200, 422]).toContain(attestBreachClosure.status)
+      const setBurndownTargetPayload = {
+        action: "set_closure_adjudication_debt_burndown_target" as const,
+        actorId: "partner_a",
+        adjudicationId,
+        targetHours: 2,
+        note: "Set debt burndown retirement target for checkpoint forecasting",
+      }
+      const setBurndownTarget = await post(
+        setBurndownTargetPayload,
+        "d6de4e94-a45b-43d6-858f-ecb3378be845"
+      )
+      expect([200, 404, 422]).toContain(setBurndownTarget.status)
+      if (setBurndownTarget.status === 200) {
+        const setBurndownTargetReplay = await post(
+          setBurndownTargetPayload,
+          "d6de4e94-a45b-43d6-858f-ecb3378be845"
+        )
+        expect(setBurndownTargetReplay.status).toBe(200)
+        const setBurndownTargetReplayJson = (await setBurndownTargetReplay.json()) as {
+          reused: boolean
+        }
+        expect(setBurndownTargetReplayJson.reused).toBe(true)
+      }
+      const attestDebtBacklog = await post(
+        {
+          action: "attest_closure_adjudication_debt_backlog",
+          actorId: "partner_a",
+          adjudicationId,
+          note: "Attest outstanding debt backlog before normalization checkpoint",
+        },
+        "f07335da-62f8-4ea0-aa63-ac6debf1e772"
+      )
+      expect([200, 404, 422]).toContain(attestDebtBacklog.status)
+      const checkpointTierNormalization = await post(
+        {
+          action: "checkpoint_closure_adjudication_tier_normalization",
+          actorId: "partner_a",
+          adjudicationId,
+          escalationTier: "tier_1_partner_watch",
+          note: "Checkpoint tier normalization after debt backlog attestation",
+        },
+        "bbf5f2c0-5b5f-4d43-94f1-7e1f2ca0f64a"
+      )
+      expect([200, 404, 422]).toContain(checkpointTierNormalization.status)
     }
     if (disputeId) {
       const resolveClosureDispute = await post(
@@ -1582,6 +1626,37 @@ describe("GET/POST /api/d4/filings", () => {
         "652ec257-cf84-4c30-a58c-bbef8812dab8"
       )
       expect([200, 404, 422]).toContain(cleanupStaleSafeguardLock.status)
+      const acknowledgeExpiryAttestation = await post(
+        {
+          action: "acknowledge_closure_safeguard_expiry_attestation",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Acknowledge safeguard expiry attestation backlog",
+        },
+        "4cf6514d-c0bb-43f2-b4f7-52904004035f"
+      )
+      expect([200, 404, 422]).toContain(acknowledgeExpiryAttestation.status)
+      const queueOverdueExpiryException = await post(
+        {
+          action: "queue_closure_safeguard_overdue_expiry_exception",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Queue overdue safeguard expiry exception for governance queue",
+        },
+        "8ac4e6db-0510-484c-a59a-c4390506dd1a"
+      )
+      expect([200, 404, 422]).toContain(queueOverdueExpiryException.status)
+      const reconcileExpiryOverride = await post(
+        {
+          action: "reconcile_closure_safeguard_expiry_override",
+          actorId: "partner_a",
+          rebalanceId,
+          reconciliationNote: "Override expiry reconciled with follow-up governance notes",
+          note: "Reconcile expiry override notes for audit trail",
+        },
+        "dbe4a3c4-b760-46f4-933a-d28435055907"
+      )
+      expect([200, 404, 422]).toContain(reconcileExpiryOverride.status)
       if (executeOwnerTransfer.status === 200) {
         const executeOwnerTransferReplay = await post(
           executeOwnerTransferPayload,
@@ -2137,6 +2212,11 @@ describe("GET/POST /api/d4/filings", () => {
         closureAdjudicationSloDebtAgeHours?: number
         closureRebalanceSafeguardExpiryStatus?: string
         closureRebalanceSafeguardExpiryDebtHours?: number
+        closureAdjudicationDebtBurndownStatus?: string
+        closureAdjudicationDebtBurndownForecastBreachHours?: number
+        closureAdjudicationDebtBurndownVelocityPerDay?: number
+        closureSafeguardExpiryAttestationStatus?: string
+        closureSafeguardExpiryAttestationBacklogHours?: number
         closureCriticalPath?: boolean
       }>
     }
@@ -2253,6 +2333,33 @@ describe("GET/POST /api/d4/filings", () => {
             row.closureRebalanceSafeguardExpiryDebtHours === undefined ||
             (Number.isFinite(row.closureRebalanceSafeguardExpiryDebtHours) &&
               row.closureRebalanceSafeguardExpiryDebtHours >= 0)
+          const debtBurndownStatusOk =
+            row.closureAdjudicationDebtBurndownStatus === undefined ||
+            [
+              "burndown_tracking",
+              "burndown_checkpoint_due",
+              "burndown_attested",
+              "burndown_forecast_breached",
+            ].includes(row.closureAdjudicationDebtBurndownStatus)
+          const debtBurndownForecastOk =
+            row.closureAdjudicationDebtBurndownForecastBreachHours === undefined ||
+            (Number.isFinite(row.closureAdjudicationDebtBurndownForecastBreachHours) &&
+              row.closureAdjudicationDebtBurndownForecastBreachHours >= 0)
+          const debtBurndownVelocityOk =
+            row.closureAdjudicationDebtBurndownVelocityPerDay === undefined ||
+            Number.isFinite(row.closureAdjudicationDebtBurndownVelocityPerDay)
+          const safeguardAttestationStatusOk =
+            row.closureSafeguardExpiryAttestationStatus === undefined ||
+            [
+              "attestation_open",
+              "attestation_acknowledged",
+              "attestation_overdue",
+              "attestation_reconciled",
+            ].includes(row.closureSafeguardExpiryAttestationStatus)
+          const safeguardAttestationBacklogOk =
+            row.closureSafeguardExpiryAttestationBacklogHours === undefined ||
+            (Number.isFinite(row.closureSafeguardExpiryAttestationBacklogHours) &&
+              row.closureSafeguardExpiryAttestationBacklogHours >= 0)
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -2281,6 +2388,11 @@ describe("GET/POST /api/d4/filings", () => {
             debtAgeHoursOk &&
             safeguardExpiryStatusOk &&
             safeguardExpiryDebtOk &&
+            debtBurndownStatusOk &&
+            debtBurndownForecastOk &&
+            debtBurndownVelocityOk &&
+            safeguardAttestationStatusOk &&
+            safeguardAttestationBacklogOk &&
             criticalPathOk
           )
         }
@@ -2618,6 +2730,52 @@ describe("GET/POST /api/d4/filings", () => {
         ["expiry_pending", "auto_cleared", "override_expired", "stale_lock_cleaned"].includes(
           row.status
         )
+      )
+    ).toBe(true)
+    const closureDebtBurndownView = await get(
+      new URLSearchParams({
+        view: "closure_adjudication_debt_burndown",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureDebtBurndownView.status).toBe(200)
+    const closureDebtBurndownViewJson = (await closureDebtBurndownView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureDebtBurndownViewJson.items.every((row) =>
+        [
+          "burndown_tracking",
+          "burndown_checkpoint_due",
+          "burndown_attested",
+          "burndown_forecast_breached",
+        ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureSafeguardAttestationView = await get(
+      new URLSearchParams({
+        view: "closure_safeguard_expiry_attestations",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSafeguardAttestationView.status).toBe(200)
+    const closureSafeguardAttestationViewJson = (await closureSafeguardAttestationView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureSafeguardAttestationViewJson.items.every((row) =>
+        [
+          "attestation_open",
+          "attestation_acknowledged",
+          "attestation_overdue",
+          "attestation_reconciled",
+        ].includes(row.status)
       )
     ).toBe(true)
   })
