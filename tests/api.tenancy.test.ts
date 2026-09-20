@@ -530,6 +530,177 @@ describe("GET/POST /api/p5/tenancy", () => {
       )
     ).toBe(true)
 
+    const queueViewQueued = await get(
+      new URLSearchParams({
+        view: "session_lineage_reconciliation_queue",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "queued",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(queueViewQueued.status).toBe(200)
+    const queueQueuedJson = (await queueViewQueued.json()) as {
+      items: Array<{ id: string; status: string }>
+    }
+    expect(
+      queueQueuedJson.items.some(
+        (row) =>
+          row.id === `tenancy-lineage-arbitration:${actorSessionJson.sessionReference.id}` &&
+          row.status === "queued"
+      )
+    ).toBe(true)
+
+    const assignQueuePayload = {
+      action: "assign_lineage_reconciliation_queue",
+      actorId: "partner_a",
+      firmId: "firmA",
+      lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+      assignedPartnerId: "partner_a",
+      slaWindowMinutes: 90,
+      note: "Assign reconciliation queue for attestation follow-up",
+    }
+    const assignQueue = await post(assignQueuePayload, "f45e6d8f-b8ab-4ab3-a1f5-0ef4e097fb55")
+    expect(assignQueue.status).toBe(200)
+    const assignQueueJson = (await assignQueue.json()) as {
+      result: { queue: { status: string; assignedPartnerId: string | null } }
+    }
+    expect(assignQueueJson.result.queue.status).toBe("assigned")
+    expect(assignQueueJson.result.queue.assignedPartnerId).toBe("partner_a")
+
+    const queueViewAssigned = await get(
+      new URLSearchParams({
+        view: "session_lineage_reconciliation_queue",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "assigned",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(queueViewAssigned.status).toBe(200)
+    const queueAssignedJson = (await queueViewAssigned.json()) as {
+      items: Array<{ status: string; assignedPartnerId: string | null }>
+    }
+    expect(
+      queueAssignedJson.items.some(
+        (row) => row.status === "assigned" && row.assignedPartnerId === "partner_a"
+      )
+    ).toBe(true)
+
+    const arbitrateQueuePayload = {
+      action: "arbitrate_lineage_reconciliation_queue",
+      actorId: "partner_a",
+      firmId: "firmA",
+      lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+      disposition: "confirm_needs_review",
+      note: "Arbitration confirms review pressure",
+    }
+    const arbitrateQueue = await post(arbitrateQueuePayload, "f4d508f6-1fdf-4cd0-8f35-fd8e89e81175")
+    expect(arbitrateQueue.status).toBe(200)
+    const arbitrateQueueJson = (await arbitrateQueue.json()) as {
+      result: { queue: { status: string; disposition: string | null } }
+    }
+    expect(arbitrateQueueJson.result.queue.status).toBe("arbitrated")
+    expect(arbitrateQueueJson.result.queue.disposition).toBe("confirm_needs_review")
+
+    const queueViewArbitrated = await get(
+      new URLSearchParams({
+        view: "session_lineage_reconciliation_queue",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "arbitrated",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(queueViewArbitrated.status).toBe(200)
+
+    const closureAttestPayload = {
+      action: "attest_lineage_digest_closure",
+      actorId: "partner_a",
+      firmId: "firmA",
+      lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+      closureReason: "Digest reconciled for closure attestation",
+      note: "Checkpoint closure before reopen simulation",
+    }
+    const closureAttestFirst = await post(
+      closureAttestPayload,
+      "b9f0f0a0-70cd-4e38-bc1a-766b2e326f10"
+    )
+    const closureAttestReplay = await post(
+      closureAttestPayload,
+      "b9f0f0a0-70cd-4e38-bc1a-766b2e326f10"
+    )
+    expect(closureAttestFirst.status).toBe(200)
+    expect(closureAttestReplay.status).toBe(200)
+    const closureAttestFirstJson = (await closureAttestFirst.json()) as {
+      reused: boolean
+      result: { checkpoint: { status: string; attestedBy: string | null } }
+    }
+    const closureAttestReplayJson = (await closureAttestReplay.json()) as { reused: boolean }
+    expect(closureAttestFirstJson.reused).toBe(false)
+    expect(closureAttestReplayJson.reused).toBe(true)
+    expect(closureAttestFirstJson.result.checkpoint.status).toBe("closed_attested")
+    expect(closureAttestFirstJson.result.checkpoint.attestedBy).toBe("partner_a")
+
+    const closureViewClosed = await get(
+      new URLSearchParams({
+        view: "session_lineage_digest_closure_checkpoints",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "closed_attested",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureViewClosed.status).toBe(200)
+
+    const reopenClosurePayload = {
+      action: "reopen_lineage_digest_closure",
+      actorId: "partner_a",
+      firmId: "firmA",
+      lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+      reopenTrigger: "new divergence signal after closure",
+      note: "Reopen checkpoint for parity validation",
+    }
+    const reopenClosure = await post(reopenClosurePayload, "f6e10c06-94a6-4d66-9f5c-d20f7b6f1476")
+    expect(reopenClosure.status).toBe(200)
+    const reopenClosureJson = (await reopenClosure.json()) as {
+      result: { checkpoint: { status: string; reopenTrigger: string | null } }
+    }
+    expect(reopenClosureJson.result.checkpoint.status).toBe("reopened")
+    expect(reopenClosureJson.result.checkpoint.reopenTrigger).toBe(
+      "new divergence signal after closure"
+    )
+
+    const closureViewReopened = await get(
+      new URLSearchParams({
+        view: "session_lineage_digest_closure_checkpoints",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "reopened",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureViewReopened.status).toBe(200)
+    const closureReopenedJson = (await closureViewReopened.json()) as {
+      items: Array<{ status: string; reopenTrigger: string | null }>
+    }
+    expect(
+      closureReopenedJson.items.some(
+        (row) =>
+          row.status === "reopened" && row.reopenTrigger === "new divergence signal after closure"
+      )
+    ).toBe(true)
+
     const resolvePayload = {
       action: "resolve_session_lineage_dispute",
       actorId: "partner_a",
@@ -669,6 +840,34 @@ describe("GET/POST /api/p5/tenancy", () => {
           row.action === "tenant_resolve_lineage_dispute" &&
           row.sessionReferenceId === lineageDivergedJson.result.sessionReference.id &&
           row.delegatedBoundaryReconciliationStatus === "aligned"
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_assign_lineage_reconciliation_queue" &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_arbitrate_lineage_reconciliation_queue" &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_attest_lineage_digest_closure" &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_reopen_lineage_digest_closure" &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
       )
     ).toBe(true)
   })

@@ -22,3 +22,25 @@ export async function syncFirmTenancyLineageReconciliationDigests(
     store.tenancyLineageReconciliationDigests.set(row.id, row)
   }
 }
+
+export async function syncFirmTenancyLineageReconciliationQueueArbitrations(
+  store: SpineStore,
+  repos: SpineRepositories,
+  firmId: string
+): Promise<void> {
+  const rows = await repos.tenancyLineageReconciliationQueueArbitrations.listByFirm(firmId)
+  for (const row of rows) {
+    store.tenancyLineageReconciliationQueueArbitrations.set(row.id, row)
+  }
+}
+
+export async function syncFirmTenancyLineageDigestClosureCheckpoints(
+  store: SpineStore,
+  repos: SpineRepositories,
+  firmId: string
+): Promise<void> {
+  const rows = await repos.tenancyLineageDigestClosureCheckpoints.listByFirm(firmId)
+  for (const row of rows) {
+    store.tenancyLineageDigestClosureCheckpoints.set(row.id, row)
+  }
+}
