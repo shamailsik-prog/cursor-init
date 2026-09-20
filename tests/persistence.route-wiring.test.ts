@@ -46,6 +46,8 @@ const baseStore = {
   filingEscalationWorkloadDigests: new Map(),
   filingEscalationPolicyBaselines: new Map(),
   filingEscalationBreachWaivers: new Map(),
+  filingEscalationPolicyVarianceDigests: new Map(),
+  filingEscalationWaiverExpiryDigests: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -467,6 +469,63 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationPolicyVarianceDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "policy-variance:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "open_alert",
+          varianceReasons: ["owner_load_threshold_override"],
+          firmDefaultPolicyId: "policy:firmA:default",
+          packagePolicyId: "policy:pkg_repo:override",
+          ownerLoadThresholdDefault: 3,
+          ownerLoadThresholdEffective: 1,
+          handoffSlaMsDefault: 0,
+          handoffSlaMsEffective: 0,
+          waiverWindowMsDefault: 24 * 60 * 60 * 1000,
+          waiverWindowMsEffective: 6 * 60 * 60 * 1000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          snoozeUntil: null,
+          notes: ["repo policy variance row"],
+          lastEvaluatedAt: 16,
+          updatedAt: 16,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationWaiverExpiryDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "waiver-expiry:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "open_expiry",
+          reasons: ["expires_lte_4h"],
+          linkedWaiverId: "waiver:pkg_repo:1",
+          linkedPolicyId: "policy:firmA:default",
+          waiverExpiresAt: Date.now() + 2 * 60 * 60 * 1000,
+          msUntilExpiry: 2 * 60 * 60 * 1000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          extendedBy: null,
+          extendedAt: null,
+          notes: ["repo waiver expiry row"],
+          lastEvaluatedAt: 17,
+          updatedAt: 17,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -744,6 +803,30 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("waiver:pkg_repo:1")
+  })
+
+  it("filings policy variance digests view GET uses repository filingEscalationPolicyVarianceDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=policy_variance_digests&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("policy-variance:pkg_repo")
+  })
+
+  it("filings waiver expiry digests view GET uses repository filingEscalationWaiverExpiryDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=waiver_expiry_digests&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("waiver-expiry:pkg_repo")
   })
 
   it("clients route GET uses repository entities listByFirm", async () => {

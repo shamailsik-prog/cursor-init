@@ -704,6 +704,72 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(grantWaiver.status).toBe(200)
+      const acknowledgeVariance = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "2045d154-e52c-4e03-8d8b-5e0c48373487",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_policy_variance",
+            actorId: "partner_a",
+            packageId,
+            note: "runtime policy variance acknowledged",
+          }),
+        })
+      )
+      expect(acknowledgeVariance.status).toBe(200)
+      const snoozeVariance = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8ef2cb35-cd5f-4cc8-a3ec-49e71f0b61e8",
+          },
+          body: JSON.stringify({
+            action: "snooze_policy_variance",
+            actorId: "partner_a",
+            packageId,
+            snoozeHours: 3,
+            note: "runtime policy variance snoozed",
+          }),
+        })
+      )
+      expect(snoozeVariance.status).toBe(200)
+      const acknowledgeExpiry = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "0ce7106e-57a9-4ec7-8921-66bf9179f86d",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_waiver_expiry",
+            actorId: "partner_a",
+            packageId,
+            note: "runtime waiver expiry acknowledged",
+          }),
+        })
+      )
+      expect(acknowledgeExpiry.status).toBe(200)
+      const extendWaiver = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "5fcc1f5f-1e8d-4f49-b595-aad95ad73ee8",
+          },
+          body: JSON.stringify({
+            action: "extend_breach_waiver",
+            actorId: "partner_a",
+            packageId,
+            extendHours: 8,
+            note: "runtime waiver extended",
+          }),
+        })
+      )
+      expect(extendWaiver.status).toBe(200)
       const revokeWaiver = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -801,6 +867,8 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingEscalationWorkloadDigests = new Map()
       getRuntimeStore().filingEscalationPolicyBaselines = new Map()
       getRuntimeStore().filingEscalationBreachWaivers = new Map()
+      getRuntimeStore().filingEscalationPolicyVarianceDigests = new Map()
+      getRuntimeStore().filingEscalationWaiverExpiryDigests = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -984,6 +1052,34 @@ describe("Runtime persistence mode", () => {
           (item) => item.packageId === packageId && item.status === "revoked"
         )
       ).toBe(true)
+      const rehydratedPolicyVariance = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=policy_variance_digests&userId=associate_a&matterId=${matterId}&packageId=${packageId}&varianceStatus=snoozed&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedPolicyVariance.status).toBe(200)
+      const rehydratedPolicyVarianceJson = (await rehydratedPolicyVariance.json()) as {
+        items: Array<{ packageId: string; status: string }>
+      }
+      expect(
+        rehydratedPolicyVarianceJson.items.some(
+          (item) => item.packageId === packageId && item.status === "snoozed"
+        )
+      ).toBe(true)
+      const rehydratedWaiverExpiry = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=waiver_expiry_digests&userId=associate_a&matterId=${matterId}&packageId=${packageId}&expiryStatus=cleared&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedWaiverExpiry.status).toBe(200)
+      const rehydratedWaiverExpiryJson = (await rehydratedWaiverExpiry.json()) as {
+        items: Array<{ packageId: string; status: string }>
+      }
+      expect(
+        rehydratedWaiverExpiryJson.items.some(
+          (item) => item.packageId === packageId && item.status === "cleared"
+        )
+      ).toBe(true)
       await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
         id: "transport:pkg_firmB:1",
         firmId: "firmB",
@@ -1108,6 +1204,55 @@ describe("Runtime persistence mode", () => {
         notes: ["firmB waiver row"],
         updatedAt: Date.now(),
       })
+      await setDoc(
+        doc(ctx.firestore(), "filing_escalation_policy_variance_digests", "policy-variance:pkg_firmB"),
+        {
+          id: "policy-variance:pkg_firmB",
+          firmId: "firmB",
+          packageId: "pkg_firmB",
+          matterId: "mat_firmB",
+          classification: "internal",
+          status: "open_alert",
+          varianceReasons: ["owner_load_threshold_override"],
+          firmDefaultPolicyId: "policy:firmB:default",
+          packagePolicyId: "policy:pkg_firmB:override",
+          ownerLoadThresholdDefault: 3,
+          ownerLoadThresholdEffective: 1,
+          handoffSlaMsDefault: 0,
+          handoffSlaMsEffective: 60 * 60 * 1000,
+          waiverWindowMsDefault: 24 * 60 * 60 * 1000,
+          waiverWindowMsEffective: 2 * 60 * 60 * 1000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          snoozeUntil: null,
+          notes: ["firmB policy variance row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+      )
+      await setDoc(
+        doc(ctx.firestore(), "filing_escalation_waiver_expiry_digests", "waiver-expiry:pkg_firmB"),
+        {
+          id: "waiver-expiry:pkg_firmB",
+          firmId: "firmB",
+          packageId: "pkg_firmB",
+          matterId: "mat_firmB",
+          classification: "internal",
+          status: "open_expiry",
+          reasons: ["expires_lte_4h"],
+          linkedWaiverId: "waiver:pkg_firmB:1",
+          linkedPolicyId: "policy:pkg_firmB:override",
+          waiverExpiresAt: Date.now() + 60 * 60 * 1000,
+          msUntilExpiry: 60 * 60 * 1000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          extendedBy: null,
+          extendedAt: null,
+          notes: ["firmB waiver expiry row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+      )
       const firmAScopeEvidence = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
@@ -1168,6 +1313,30 @@ describe("Runtime persistence mode", () => {
         items: Array<{ packageId: string }>
       }
       expect(firmAScopeWaiversJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
+      const firmAScopeVarianceDigests = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=policy_variance_digests&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeVarianceDigests.status).toBe(200)
+      const firmAScopeVarianceDigestsJson = (await firmAScopeVarianceDigests.json()) as {
+        items: Array<{ packageId: string }>
+      }
+      expect(
+        firmAScopeVarianceDigestsJson.items.some((item) => item.packageId === "pkg_firmB")
+      ).toBe(false)
+      const firmAScopeWaiverExpiryDigests = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=waiver_expiry_digests&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeWaiverExpiryDigests.status).toBe(200)
+      const firmAScopeWaiverExpiryDigestsJson = (await firmAScopeWaiverExpiryDigests.json()) as {
+        items: Array<{ packageId: string }>
+      }
+      expect(
+        firmAScopeWaiverExpiryDigestsJson.items.some((item) => item.packageId === "pkg_firmB")
+      ).toBe(false)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -1347,6 +1516,34 @@ describe("Runtime persistence mode", () => {
             item.target === `waiver:${packageId}:1`
         )
       ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_policy_variance_acknowledge" &&
+            item.target === `policy-variance:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_policy_variance_snooze" &&
+            item.target === `policy-variance:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_waiver_expiry_acknowledge" &&
+            item.target === `waiver-expiry:${packageId}`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_escalation_waiver_extend" &&
+            item.target === `waiver:${packageId}:1`
+        )
+      ).toBe(true)
 
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
@@ -1474,6 +1671,28 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.id === `waiver:${packageId}:1` &&
             entry.data()?.status === "revoked"
+        )
+      ).toBe(true)
+      const dbPolicyVarianceDigests = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_policy_variance_digests")
+      )
+      expect(
+        dbPolicyVarianceDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === `policy-variance:${packageId}` &&
+            entry.data()?.status === "snoozed"
+        )
+      ).toBe(true)
+      const dbWaiverExpiryDigests = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_waiver_expiry_digests")
+      )
+      expect(
+        dbWaiverExpiryDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === `waiver-expiry:${packageId}` &&
+            entry.data()?.status === "cleared"
         )
       ).toBe(true)
     })

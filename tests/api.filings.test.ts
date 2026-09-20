@@ -989,11 +989,130 @@ describe("GET/POST /api/d4/filings", () => {
     )
     expect(grantWaiver.status).toBe(200)
     const grantWaiverJson = (await grantWaiver.json()) as {
-      result: { waiver: { status: string; packageId: string }; workloadDigest: { status: string } }
+      result: {
+        waiver: { status: string; packageId: string }
+        workloadDigest: { status: string }
+        waiverExpiryDigest: { status: string }
+      }
     }
     expect(grantWaiverJson.result.waiver.status).toBe("active")
     expect(grantWaiverJson.result.waiver.packageId).toBe(packageId)
     expect(["snoozed", "cleared"]).toContain(grantWaiverJson.result.workloadDigest.status)
+    expect(["open_expiry", "extended", "cleared"]).toContain(
+      grantWaiverJson.result.waiverExpiryDigest.status
+    )
+
+    const policyVarianceViewBefore = await get(
+      new URLSearchParams({
+        view: "policy_variance_digests",
+        userId: "associate_a",
+        matterId,
+        packageId,
+        varianceStatus: "open_alert",
+        reason: "owner_load_threshold_override",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(policyVarianceViewBefore.status).toBe(200)
+    const policyVarianceViewBeforeJson = (await policyVarianceViewBefore.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      policyVarianceViewBeforeJson.items.some(
+        (row) => row.packageId === packageId && row.status === "open_alert"
+      )
+    ).toBe(true)
+
+    const acknowledgeVariance = await post(
+      {
+        action: "acknowledge_policy_variance",
+        actorId: "partner_a",
+        packageId,
+        note: "Policy variance acknowledged while override remains intentional",
+      },
+      "dfc4ed32-4d59-43c2-b735-c4bd6ec13cee"
+    )
+    expect(acknowledgeVariance.status).toBe(200)
+    const acknowledgeVarianceJson = (await acknowledgeVariance.json()) as {
+      result: { policyVarianceDigest: { status: string } }
+    }
+    expect(acknowledgeVarianceJson.result.policyVarianceDigest.status).toBe("acknowledged")
+
+    const snoozeVariance = await post(
+      {
+        action: "snooze_policy_variance",
+        actorId: "partner_a",
+        packageId,
+        snoozeHours: 3,
+        note: "Snooze variance while partner baseline exception remains",
+      },
+      "41f21d74-18c8-4766-93a8-2faaf59ca138"
+    )
+    expect(snoozeVariance.status).toBe(200)
+    const snoozeVarianceJson = (await snoozeVariance.json()) as {
+      result: { policyVarianceDigest: { status: string; snoozeUntil: number | null } }
+    }
+    expect(snoozeVarianceJson.result.policyVarianceDigest.status).toBe("snoozed")
+    expect(typeof snoozeVarianceJson.result.policyVarianceDigest.snoozeUntil).toBe("number")
+
+    const waiverExpiryViewBefore = await get(
+      new URLSearchParams({
+        view: "waiver_expiry_digests",
+        userId: "associate_a",
+        matterId,
+        packageId,
+        expiryStatus: "open_expiry",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverExpiryViewBefore.status).toBe(200)
+    const waiverExpiryViewBeforeJson = (await waiverExpiryViewBefore.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      waiverExpiryViewBeforeJson.items.some(
+        (row) => row.packageId === packageId && row.status === "open_expiry"
+      )
+    ).toBe(true)
+
+    const acknowledgeWaiverExpiry = await post(
+      {
+        action: "acknowledge_waiver_expiry",
+        actorId: "partner_a",
+        packageId,
+        note: "Waiver expiry risk acknowledged and extension queued",
+      },
+      "d9815d63-ab37-48fa-9e40-f0912a02b2b9"
+    )
+    expect(acknowledgeWaiverExpiry.status).toBe(200)
+    const acknowledgeWaiverExpiryJson = (await acknowledgeWaiverExpiry.json()) as {
+      result: { waiverExpiryDigest: { status: string } }
+    }
+    expect(acknowledgeWaiverExpiryJson.result.waiverExpiryDigest.status).toBe("acknowledged")
+
+    const extendWaiver = await post(
+      {
+        action: "extend_breach_waiver",
+        actorId: "partner_a",
+        packageId,
+        extendHours: 8,
+        note: "Extending waiver pending registry reopening",
+      },
+      "0b2da76f-47d7-4902-b5cd-faf6c2af9a56"
+    )
+    expect(extendWaiver.status).toBe(200)
+    const extendWaiverJson = (await extendWaiver.json()) as {
+      result: {
+        waiver: { status: string }
+        waiverExpiryDigest: { status: string }
+      }
+    }
+    expect(extendWaiverJson.result.waiver.status).toBe("active")
+    expect(["extended", "open_expiry", "cleared"]).toContain(
+      extendWaiverJson.result.waiverExpiryDigest.status
+    )
 
     const revokeWaiver = await post(
       {
@@ -1166,6 +1285,26 @@ describe("GET/POST /api/d4/filings", () => {
       workloadViewJson.items.some((row) => row.packageId === packageId && row.status === "cleared")
     ).toBe(true)
 
+    const policyVarianceView = await get(
+      new URLSearchParams({
+        view: "policy_variance_digests",
+        userId: "associate_a",
+        packageId,
+        varianceStatus: "snoozed",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(policyVarianceView.status).toBe(200)
+    const policyVarianceViewJson = (await policyVarianceView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      policyVarianceViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "snoozed"
+      )
+    ).toBe(true)
+
     const policyView = await get(
       new URLSearchParams({
         view: "escalation_policy_baselines",
@@ -1202,6 +1341,26 @@ describe("GET/POST /api/d4/filings", () => {
     }
     expect(
       waiverViewJson.items.some((row) => row.packageId === packageId && row.status === "revoked")
+    ).toBe(true)
+
+    const waiverExpiryView = await get(
+      new URLSearchParams({
+        view: "waiver_expiry_digests",
+        userId: "associate_a",
+        packageId,
+        expiryStatus: "cleared",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverExpiryView.status).toBe(200)
+    const waiverExpiryViewJson = (await waiverExpiryView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      waiverExpiryViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "cleared"
+      )
     ).toBe(true)
   })
 

@@ -603,6 +603,62 @@ describe("Firestore repository adapters", () => {
       expect(waiversByFirm.some((row) => row.id === "waiver:pkg_1:1")).toBe(true)
       const waiversByPackage = await repos.filingEscalationBreachWaivers.listByPackageId("pkg_1")
       expect(waiversByPackage.some((row) => row.id === "waiver:pkg_1:1")).toBe(true)
+      await repos.filingEscalationPolicyVarianceDigests.upsert({
+        id: "policy-variance:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "open_alert",
+        varianceReasons: ["owner_load_threshold_override"],
+        firmDefaultPolicyId: "policy:firmA:default",
+        packagePolicyId: "policy:pkg_1:override",
+        ownerLoadThresholdDefault: 3,
+        ownerLoadThresholdEffective: 1,
+        handoffSlaMsDefault: 0,
+        handoffSlaMsEffective: 0,
+        waiverWindowMsDefault: 24 * 60 * 60 * 1000,
+        waiverWindowMsEffective: 6 * 60 * 60 * 1000,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        snoozeUntil: null,
+        notes: ["variance detected"],
+        lastEvaluatedAt: 40,
+        updatedAt: 40,
+      })
+      const policyVariance = await repos.filingEscalationPolicyVarianceDigests.get("policy-variance:pkg_1")
+      expect(policyVariance?.status).toBe("open_alert")
+      const varianceByFirm = await repos.filingEscalationPolicyVarianceDigests.listByFirm("firmA")
+      expect(varianceByFirm.some((row) => row.id === "policy-variance:pkg_1")).toBe(true)
+      const varianceByPackage =
+        await repos.filingEscalationPolicyVarianceDigests.listByPackageId("pkg_1")
+      expect(varianceByPackage.some((row) => row.id === "policy-variance:pkg_1")).toBe(true)
+      await repos.filingEscalationWaiverExpiryDigests.upsert({
+        id: "waiver-expiry:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "open_expiry",
+        reasons: ["expires_lte_4h"],
+        linkedWaiverId: "waiver:pkg_1:1",
+        linkedPolicyId: "policy:firmA:default",
+        waiverExpiresAt: 41,
+        msUntilExpiry: 2 * 60 * 60 * 1000,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        extendedBy: null,
+        extendedAt: null,
+        notes: ["expiry approaching"],
+        lastEvaluatedAt: 41,
+        updatedAt: 41,
+      })
+      const expiry = await repos.filingEscalationWaiverExpiryDigests.get("waiver-expiry:pkg_1")
+      expect(expiry?.status).toBe("open_expiry")
+      const expiryByFirm = await repos.filingEscalationWaiverExpiryDigests.listByFirm("firmA")
+      expect(expiryByFirm.some((row) => row.id === "waiver-expiry:pkg_1")).toBe(true)
+      const expiryByPackage = await repos.filingEscalationWaiverExpiryDigests.listByPackageId("pkg_1")
+      expect(expiryByPackage.some((row) => row.id === "waiver-expiry:pkg_1")).toBe(true)
     })
   })
 })
