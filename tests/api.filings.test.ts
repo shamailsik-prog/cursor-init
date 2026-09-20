@@ -1531,6 +1531,37 @@ describe("GET/POST /api/d4/filings", () => {
         "a20adbaa-a4cb-4708-aa9e-e74b7f5cc9f0"
       )
       expect([200, 404, 422]).toContain(annotateBurndownRollback.status)
+      const acknowledgeSettlementDrift = await post(
+        {
+          action: "acknowledge_closure_burndown_settlement_drift",
+          actorId: "partner_a",
+          adjudicationId,
+          note: "Acknowledge settlement drift prior to target lock",
+        },
+        "63b7cbad-52b4-4bd3-853f-1f0ca972c2be"
+      )
+      expect([200, 404, 422]).toContain(acknowledgeSettlementDrift.status)
+      const attestSettlementTargetLock = await post(
+        {
+          action: "attest_closure_burndown_settlement_target_lock",
+          actorId: "partner_a",
+          adjudicationId,
+          note: "Attest target lock to freeze settlement baseline",
+        },
+        "ce88f9cd-1810-439e-b392-f58655bcb3ef"
+      )
+      expect([200, 404, 422]).toContain(attestSettlementTargetLock.status)
+      const closeRollbackResolution = await post(
+        {
+          action: "close_closure_burndown_rollback_resolution",
+          actorId: "partner_a",
+          adjudicationId,
+          resolutionNote: "Rollback resolution finalized after panel attestation convergence",
+          note: "Close rollback resolution for settlement governance trace",
+        },
+        "6f53ecfd-3c6d-4991-85f3-b492a0fae09e"
+      )
+      expect([200, 404, 422]).toContain(closeRollbackResolution.status)
     }
     if (disputeId) {
       const resolveClosureDispute = await post(
@@ -1723,6 +1754,38 @@ describe("GET/POST /api/d4/filings", () => {
         "2f84da37-88ca-4f4d-8444-f6efdaed55c2"
       )
       expect([200, 404, 422]).toContain(checkpointExpiryQueueAutoDrain.status)
+      const escalateQueueHandoffTimeout = await post(
+        {
+          action: "escalate_closure_expiry_attestation_queue_handoff_timeout",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Escalate queue handoff timeout before stale reassignment",
+        },
+        "f9ba2201-27d5-4eeb-bdb2-5ef7cc5f013a"
+      )
+      expect([200, 404, 422]).toContain(escalateQueueHandoffTimeout.status)
+      const attestQueueStaleReassignment = await post(
+        {
+          action: "attest_closure_expiry_attestation_queue_stale_reassignment",
+          actorId: "partner_a",
+          rebalanceId,
+          reassignedOwnerId: "partner_b",
+          note: "Attest stale queue reassignment for drain governance",
+        },
+        "889fdde8-df3b-43d4-aee4-6ce36cb6f194"
+      )
+      expect([200, 404, 422]).toContain(attestQueueStaleReassignment.status)
+      const checkpointQueueForcedDrain = await post(
+        {
+          action: "checkpoint_closure_expiry_attestation_queue_forced_drain_override",
+          actorId: "partner_a",
+          rebalanceId,
+          overrideNote: "Forced drain override approved after reassignment timeout",
+          note: "Checkpoint forced queue drain override",
+        },
+        "f8cf4d6e-6812-42f7-87d7-5fd292f47353"
+      )
+      expect([200, 404, 422]).toContain(checkpointQueueForcedDrain.status)
       if (executeOwnerTransfer.status === 200) {
         const executeOwnerTransferReplay = await post(
           executeOwnerTransferPayload,
@@ -2288,6 +2351,10 @@ describe("GET/POST /api/d4/filings", () => {
         closureExpiryAttestationQueueStatus?: string
         closureExpiryAttestationQueueAgingHours?: number
         closureExpiryAttestationQueueOpenExceptions?: number
+        closureBurndownSettlementStatus?: string
+        closureBurndownSettlementLatencyHours?: number
+        closureExpiryAttestationQueueDrainStatus?: string
+        closureExpiryAttestationQueueDrainThroughputPerDay?: number
         closureCriticalPath?: boolean
       }>
     }
@@ -2456,6 +2523,30 @@ describe("GET/POST /api/d4/filings", () => {
             row.closureExpiryAttestationQueueOpenExceptions === undefined ||
             (Number.isFinite(row.closureExpiryAttestationQueueOpenExceptions) &&
               row.closureExpiryAttestationQueueOpenExceptions >= 0)
+          const burndownSettlementStatusOk =
+            row.closureBurndownSettlementStatus === undefined ||
+            [
+              "settlement_pending",
+              "drift_acknowledged",
+              "target_lock_attested",
+              "rollback_resolution_closed",
+            ].includes(row.closureBurndownSettlementStatus)
+          const burndownSettlementLatencyOk =
+            row.closureBurndownSettlementLatencyHours === undefined ||
+            (Number.isFinite(row.closureBurndownSettlementLatencyHours) &&
+              row.closureBurndownSettlementLatencyHours >= 0)
+          const queueDrainStatusOk =
+            row.closureExpiryAttestationQueueDrainStatus === undefined ||
+            [
+              "drain_pending",
+              "handoff_timeout_escalated",
+              "stale_reassignment_attested",
+              "forced_drain_checkpointed",
+            ].includes(row.closureExpiryAttestationQueueDrainStatus)
+          const queueDrainThroughputOk =
+            row.closureExpiryAttestationQueueDrainThroughputPerDay === undefined ||
+            (Number.isFinite(row.closureExpiryAttestationQueueDrainThroughputPerDay) &&
+              row.closureExpiryAttestationQueueDrainThroughputPerDay >= 0)
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -2494,6 +2585,10 @@ describe("GET/POST /api/d4/filings", () => {
             expiryQueueStatusOk &&
             expiryQueueAgingOk &&
             expiryQueueOpenExceptionsOk &&
+            burndownSettlementStatusOk &&
+            burndownSettlementLatencyOk &&
+            queueDrainStatusOk &&
+            queueDrainThroughputOk &&
             criticalPathOk
           )
         }
@@ -2918,6 +3013,52 @@ describe("GET/POST /api/d4/filings", () => {
     expect(
       closureExpiryAttestationQueueViewJson.items.every((row) =>
         ["queue_open", "queue_triaged", "handoff_attested", "queue_auto_drained"].includes(row.status)
+      )
+    ).toBe(true)
+    const closureBurndownSettlementView = await get(
+      new URLSearchParams({
+        view: "closure_burndown_settlement",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureBurndownSettlementView.status).toBe(200)
+    const closureBurndownSettlementViewJson = (await closureBurndownSettlementView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureBurndownSettlementViewJson.items.every((row) =>
+        [
+          "settlement_pending",
+          "drift_acknowledged",
+          "target_lock_attested",
+          "rollback_resolution_closed",
+        ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureExpiryQueueDrainView = await get(
+      new URLSearchParams({
+        view: "closure_expiry_attestation_queue_drain",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureExpiryQueueDrainView.status).toBe(200)
+    const closureExpiryQueueDrainViewJson = (await closureExpiryQueueDrainView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureExpiryQueueDrainViewJson.items.every((row) =>
+        [
+          "drain_pending",
+          "handoff_timeout_escalated",
+          "stale_reassignment_attested",
+          "forced_drain_checkpointed",
+        ].includes(row.status)
       )
     ).toBe(true)
   })
