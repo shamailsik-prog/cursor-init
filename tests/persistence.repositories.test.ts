@@ -51,6 +51,24 @@ describe("Firestore repository adapters", () => {
       expect(auditRows.some((row) => row.id === "aud_1" && row.action === "tenant_update_role")).toBe(
         true
       )
+      await repos.tenancySessionReferences.upsert({
+        id: "tsr_1",
+        firmId: "firmA",
+        userId: "partner_a",
+        roleSnapshot: "partner",
+        clearanceSnapshot: "privileged-restricted",
+        authBoundary: "external_session_hint",
+        externalSessionId: "ext-repo-1",
+        issuedAt: 101,
+        lastSeenAt: 102,
+        expiresAt: 103,
+      })
+      const sessionRef = await repos.tenancySessionReferences.get("tsr_1")
+      expect(sessionRef?.userId).toBe("partner_a")
+      const firmSessionRefs = await repos.tenancySessionReferences.listByFirm("firmA")
+      expect(firmSessionRefs.some((row) => row.id === "tsr_1")).toBe(true)
+      const userSessionRefs = await repos.tenancySessionReferences.listByUserId("partner_a")
+      expect(userSessionRefs.some((row) => row.id === "tsr_1")).toBe(true)
       await repos.committeeOutputs.create({
         id: "cbo_1",
         firmId: "firmA",
