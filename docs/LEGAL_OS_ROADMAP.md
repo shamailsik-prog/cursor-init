@@ -100,12 +100,18 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `app/api/p5/tenancy/route.ts` to mint and refresh session references during `view=session`, accept session-reference replay, expose partner-admin `view=session_refs`, and deny cross-firm/session-mismatch reference reuse.
 - Enriched tenancy audit provenance with explicit auth-boundary metadata (`runtime_local` vs `external_session_hint`) plus session-reference/external-session hints on `tenant_update_role` writes and reads.
 - Extended API + runtime persistence tests for session replay/idempotency semantics, cross-firm reference denial, session-reference durability, and audit provenance visibility while keeping scope as internal scaffolding (no external IdP claims).
+- Added durable tenancy session-reference revocation + privileged-boundary drift metadata (revocation markers, drift deltas, audit linkage, and acknowledgment fields) across in-memory + Firestore persistence paths.
+- Extended `app/api/p5/tenancy/route.ts` with admin-only controls/views: `revoke_session_reference`, `enforce_session_expiry`, `acknowledge_session_drift`, and `view=session_drift_report`, while preserving partner-admin boundaries.
+- Enforced stale-session denial for revoked/expired/drift-invalidated session references on both replay (`view=session&sessionRefId`) and privileged writes (`update_role` with `sessionReferenceId`).
+- Propagated drift invalidation telemetry on role/clearance mutations by revoking prior target-user session references, capturing role/clearance before→after deltas, and exposing deterministic `driftInvalidations` in route responses.
+- Extended tenancy API, repository, and Firestore runtime-mode coverage for revocation replay denial, expiry enforcement, drift telemetry visibility, and drift acknowledgment durability while keeping scope as internal scaffolding (no external IdP claims).
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy session revocation controls + privileged-boundary drift reporting**:
+Build **tenancy external-session hint assertion ledger + issuer mismatch digest**:
 
-1. Add explicit session-reference revocation and expiry enforcement surfaces (admin-only), including durable revocation markers.
-2. Propagate privileged-boundary drift metadata when role/clearance mutations invalidate previously-issued session references.
-3. Extend tenancy route + runtime tests for revocation replay behavior, stale-session denial, and drift telemetry visibility.
-4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.
+1. Add durable external-session assertion metadata (issuer/subject hash + assertion timestamp) for `external_session_hint` session references, with deterministic nulling when the boundary is `runtime_local`.
+2. Extend tenancy admin surfaces with an issuer-mismatch digest view and admin attestation action for unresolved external-session assertion drift.
+3. Deny privileged replay when external-session assertion policy is active and the referenced assertion is missing/mismatched for the same user/firm boundary.
+4. Extend tenancy route + runtime persistence tests for assertion durability, mismatch digest visibility, and policy-enforced replay denial.
+5. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.
