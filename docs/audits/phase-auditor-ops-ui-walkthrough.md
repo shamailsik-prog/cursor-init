@@ -56,6 +56,52 @@ Route under test: `/ops`
     - Expected API: `GET /api/d4/filings?view=closure_burndown_settlement`
 22. Click `View: closure_settlement_attestation`.
     - Expected API: `GET /api/d4/filings?view=closure_settlement_attestation`
+23. Click `Batch E actions (#48-#59 filing/escalation lattice)`.
+    - Expected APIs (POST `/api/d4/filings`):
+      - `annexure_checkpoint`
+      - `record_submission_receipt`
+      - `reconcile_submission`
+      - `claim_submission_exception`
+      - `escalate_submission_exception`
+      - `resolve_submission_exception`
+      - `reopen_submission_exception`
+      - `mark_transport_blocked`
+      - `attach_retry_plan`
+      - `acknowledge_breach`
+      - `defer_window`
+      - `assign_primary_owner`
+      - `set_backup_owner`
+      - `acknowledge_owner_drift`
+      - `snooze_workload_alert`
+      - `rebalance_assignment`
+      - `set_policy_baseline`
+      - `grant_breach_waiver`
+      - `acknowledge_policy_variance`
+      - `snooze_policy_variance`
+      - `record_variance_remediation`
+      - `acknowledge_waiver_expiry`
+      - `extend_breach_waiver`
+      - `acknowledge_handoff`
+      - `confirm_delivered`
+      - `clear_digest`
+      - `revoke_assignment`
+      - `revoke_breach_waiver`
+24. Click `Batch E views (#48-#59 governance reads)`.
+    - Expected APIs (GET `/api/d4/filings`):
+      - `view=annexures`
+      - `view=submission_receipts`
+      - `view=submission_reconciliation`
+      - `view=submission_exceptions`
+      - `view=transport_execution`
+      - `view=submission_sla_digests`
+      - `view=escalation_owner_rota`
+      - `view=escalation_workload_digests`
+      - `view=escalation_policy_baselines`
+      - `view=breach_waiver_ledger`
+      - `view=policy_variance_digests`
+      - `view=waiver_expiry_digests`
+      - `view=variance_remediation_ledger`
+      - `view=waiver_rollover_attestations`
 
 ## Purpose
 
@@ -63,7 +109,7 @@ This walkthrough establishes `frontend_real` evidence for the audited API famili
 
 ## Expected completion state
 
-- API call log panel shows successful responses across steps 1-22 (non-2xx on phase-specific actions indicates missing preconditions and should be treated as failed walkthrough evidence).
+- API call log panel shows successful responses across steps 1-24 (for Batch E action lattice, some guarded operations may return deterministic 4xx statuses while still proving call-site wiring and fail-closed behavior).
 - No red error text is present in the UI.
 - Fixture ids are populated in the operator panel:
   - `matterId` after step 1

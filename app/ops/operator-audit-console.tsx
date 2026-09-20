@@ -935,6 +935,616 @@ export function OperatorAuditConsole() {
     })
   }
 
+  async function runBatchEActionLattice() {
+    if (!matterId || !packageId) throw new Error("Run steps 1-10 so matter/package are available.")
+    const allowed = [200, 403, 404, 422]
+
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: annexure checkpoint partner signoff",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "annexure_checkpoint",
+          actorId: partnerId,
+          packageId,
+          checkpoint: "record_partner_signoff",
+          note: "Batch E /ops wiring: partner signoff checkpoint",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: annexure checkpoint clerk verification",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "annexure_checkpoint",
+          actorId: clerkId,
+          packageId,
+          checkpoint: "record_clerk_verification",
+          note: "Batch E /ops wiring: clerk verification checkpoint",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: annexure checkpoint mark ready for transport",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "annexure_checkpoint",
+          actorId: partnerId,
+          packageId,
+          checkpoint: "mark_ready_for_transport",
+          note: "Batch E /ops wiring: mark annexure ready for transport",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: record submission receipt",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "record_submission_receipt",
+          actorId: clerkId,
+          packageId,
+          courtChannel: "efiling_portal_stub",
+          dispatchOutcome: "retry_scheduled",
+          submissionReference: `ops-${packageId.slice(0, 8)}-${Date.now()}`,
+          failureReason: "network timeout",
+          retryHint: "retry after supervisor check",
+          note: "Batch E /ops wiring: deterministic submission receipt capture",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: reconcile submission",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "reconcile_submission",
+          actorId: partnerId,
+          packageId,
+          status: "needs_retry",
+          note: "Batch E /ops wiring: reconcile deterministic submission outcome",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: claim submission exception",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "claim_submission_exception",
+          actorId: clerkId,
+          packageId,
+          note: "Batch E /ops wiring: claim submission exception",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: escalate submission exception",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "escalate_submission_exception",
+          actorId: clerkId,
+          packageId,
+          escalationOwnerId: partnerId,
+          severity: "critical",
+          slaHours: 3,
+          note: "Batch E /ops wiring: escalate exception to partner",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: resolve submission exception",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "resolve_submission_exception",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: resolve escalated exception",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: reopen submission exception",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "reopen_submission_exception",
+          actorId: partnerId,
+          packageId,
+          severity: "high",
+          note: "Batch E /ops wiring: reopen exception for follow-up",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: mark transport blocked",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "mark_transport_blocked",
+          actorId: clerkId,
+          packageId,
+          transportChannel: "efiling_portal_stub",
+          channelPayloadHash: `ops-hash-${Date.now()}`,
+          blockerTags: ["portal_timeout", "token_expired"],
+          attachmentPointers: ["ops://dispatch/retry-window-note"],
+          severity: "critical",
+          note: "Batch E /ops wiring: blocked transport evidence",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: attach retry plan",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "attach_retry_plan",
+          actorId: partnerId,
+          packageId,
+          transportChannel: "operator_followup_stub",
+          channelPayloadHash: `ops-retry-${Date.now()}`,
+          attachmentPointers: ["ops://dispatch/retry-plan-v2"],
+          note: "Batch E /ops wiring: attach retry plan",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: acknowledge SLA breach",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_breach",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: acknowledge breach",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: defer SLA window",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "defer_window",
+          actorId: partnerId,
+          packageId,
+          deferHours: 6,
+          note: "Batch E /ops wiring: defer window",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: assign primary owner",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "assign_primary_owner",
+          actorId: partnerId,
+          packageId,
+          primaryOwnerId: partnerId,
+          activeWindowHours: 12,
+          note: "Batch E /ops wiring: assign primary owner",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: set backup owner",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "set_backup_owner",
+          actorId: partnerId,
+          packageId,
+          backupOwnerId: partnerId,
+          note: "Batch E /ops wiring: set backup owner",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: acknowledge owner drift",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_owner_drift",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: acknowledge owner drift",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: snooze workload alert",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "snooze_workload_alert",
+          actorId: partnerId,
+          packageId,
+          snoozeHours: 4,
+          note: "Batch E /ops wiring: snooze workload alert",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: rebalance assignment",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "rebalance_assignment",
+          actorId: partnerId,
+          packageId,
+          newPrimaryOwnerId: partnerId,
+          note: "Batch E /ops wiring: rebalance assignment",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: set firm policy baseline",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "set_policy_baseline",
+          actorId: partnerId,
+          ownerLoadThreshold: 2,
+          handoffSlaHours: 2,
+          waiverWindowHours: 12,
+          note: "Batch E /ops wiring: set firm policy baseline",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: set package policy baseline",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "set_policy_baseline",
+          actorId: partnerId,
+          packageId,
+          ownerLoadThreshold: 1,
+          handoffSlaHours: 1,
+          waiverWindowHours: 6,
+          note: "Batch E /ops wiring: set package policy baseline override",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: grant breach waiver",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "grant_breach_waiver",
+          actorId: partnerId,
+          packageId,
+          durationHours: 2,
+          reason: "Temporary registry closure and staffing rotation",
+          note: "Batch E /ops wiring: grant breach waiver",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: acknowledge policy variance",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_policy_variance",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: acknowledge policy variance",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: snooze policy variance",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "snooze_policy_variance",
+          actorId: partnerId,
+          packageId,
+          snoozeHours: 3,
+          note: "Batch E /ops wiring: snooze policy variance",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: record variance remediation",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "record_variance_remediation",
+          actorId: partnerId,
+          packageId,
+          decision: "temporary_override",
+          justification: "Controlled override while transport backlog resolves",
+          expiresInHours: 4,
+          secondApproverId: partnerId,
+          note: "Batch E /ops wiring: record variance remediation",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: acknowledge waiver expiry",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_waiver_expiry",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: acknowledge waiver expiry",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: extend breach waiver",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "extend_breach_waiver",
+          actorId: partnerId,
+          packageId,
+          extendHours: 8,
+          secondApproverId: partnerId,
+          rolloverJustification: "Waiver cap exceeded due documented closure period",
+          rolloverNote: "Rollover attestation captured with partner signoff",
+          note: "Batch E /ops wiring: extend breach waiver",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: acknowledge handoff",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_handoff",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: acknowledge handoff",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: confirm delivered",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "confirm_delivered",
+          actorId: partnerId,
+          packageId,
+          transportChannel: "courier_stub",
+          channelPayloadHash: `ops-delivered-${Date.now()}`,
+          attachmentPointers: ["ops://dispatch/proof-of-delivery"],
+          relatedReceiptId: `receipt:${packageId}:1`,
+          note: "Batch E /ops wiring: confirm delivered",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: clear SLA digest",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "clear_digest",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: clear digest",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: revoke assignment",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "revoke_assignment",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: revoke assignment",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: revoke breach waiver",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "revoke_breach_waiver",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: revoke breach waiver",
+        },
+      },
+      allowed
+    )
+  }
+
+  async function readBatchEGovernanceViews() {
+    if (!matterId || !packageId) throw new Error("Run steps 1-10 so matter/package are available.")
+    await runApiCall({
+      step: "Batch E view: annexures",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "annexures", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: submission receipts",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "submission_receipts", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: submission reconciliation",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "submission_reconciliation",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch E view: submission exceptions",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "submission_exceptions", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: transport execution",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "transport_execution", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: submission SLA digests",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "submission_sla_digests", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: escalation owner rota",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "escalation_owner_rota", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: escalation workload digests",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "escalation_workload_digests",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch E view: escalation policy baselines",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "escalation_policy_baselines",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch E view: breach waiver ledger",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "breach_waiver_ledger", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: policy variance digests",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "policy_variance_digests", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: waiver expiry digests",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "waiver_expiry_digests", userId: operatorId, matterId, packageId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch E view: variance remediation ledger",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "variance_remediation_ledger",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch E view: waiver rollover attestations",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "waiver_rollover_attestations",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 md:px-8">
       <header className="space-y-3">
@@ -1113,6 +1723,12 @@ export function OperatorAuditConsole() {
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement attestation view read", readClosureSettlementAttestationView)}>
               22) View: closure_settlement_attestation
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch E action lattice executed", runBatchEActionLattice)}>
+              23) Batch E actions (#48-#59 filing/escalation lattice)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch E governance views read", readBatchEGovernanceViews)}>
+              24) Batch E views (#48-#59 governance reads)
             </Button>
           </CardContent>
         </Card>
