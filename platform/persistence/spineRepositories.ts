@@ -24,6 +24,8 @@ import type {
   FilingEscalationClosureRebalanceExecutionRow,
   FilingEscalationClosureAdjudicationSloRow,
   FilingEscalationClosureRebalanceSafeguardRow,
+  FilingEscalationClosureAdjudicationSloDebtRemediationRow,
+  FilingEscalationClosureRebalanceSafeguardExpiryRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -373,6 +375,28 @@ export type FilingEscalationClosureRebalanceSafeguardRepository = {
   listByRebalanceId(rebalanceId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow[]>
 }
 
+export type FilingEscalationClosureAdjudicationSloDebtRemediationRepository = {
+  upsert(row: FilingEscalationClosureAdjudicationSloDebtRemediationRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
+  listByQueueId(queueId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
+  listByAdjudicationId(
+    adjudicationId: string
+  ): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
+}
+
+export type FilingEscalationClosureRebalanceSafeguardExpiryRepository = {
+  upsert(row: FilingEscalationClosureRebalanceSafeguardExpiryRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
+  listByQueueId(queueId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
+  listByRebalanceId(
+    rebalanceId: string
+  ): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -471,6 +495,8 @@ export type SpineRepositories = {
   filingEscalationClosureRebalanceExecution: FilingEscalationClosureRebalanceExecutionRepository
   filingEscalationClosureAdjudicationSlo: FilingEscalationClosureAdjudicationSloRepository
   filingEscalationClosureRebalanceSafeguards: FilingEscalationClosureRebalanceSafeguardRepository
+  filingEscalationClosureAdjudicationSloDebtRemediation: FilingEscalationClosureAdjudicationSloDebtRemediationRepository
+  filingEscalationClosureRebalanceSafeguardExpiry: FilingEscalationClosureRebalanceSafeguardExpiryRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -1281,6 +1307,62 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByRebalanceId(rebalanceId) {
         return [...store.filingEscalationClosureRebalanceSafeguards.values()].filter(
+          (row) => row.rebalanceId === rebalanceId
+        )
+      },
+    },
+    filingEscalationClosureAdjudicationSloDebtRemediation: {
+      async upsert(row) {
+        store.filingEscalationClosureAdjudicationSloDebtRemediation.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureAdjudicationSloDebtRemediation.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureAdjudicationSloDebtRemediation.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureAdjudicationSloDebtRemediation.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+      async listByQueueId(queueId) {
+        return [...store.filingEscalationClosureAdjudicationSloDebtRemediation.values()].filter(
+          (row) => row.queueId === queueId
+        )
+      },
+      async listByAdjudicationId(adjudicationId) {
+        return [...store.filingEscalationClosureAdjudicationSloDebtRemediation.values()].filter(
+          (row) => row.adjudicationId === adjudicationId
+        )
+      },
+    },
+    filingEscalationClosureRebalanceSafeguardExpiry: {
+      async upsert(row) {
+        store.filingEscalationClosureRebalanceSafeguardExpiry.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureRebalanceSafeguardExpiry.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureRebalanceSafeguardExpiry.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureRebalanceSafeguardExpiry.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+      async listByQueueId(queueId) {
+        return [...store.filingEscalationClosureRebalanceSafeguardExpiry.values()].filter(
+          (row) => row.queueId === queueId
+        )
+      },
+      async listByRebalanceId(rebalanceId) {
+        return [...store.filingEscalationClosureRebalanceSafeguardExpiry.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
       },

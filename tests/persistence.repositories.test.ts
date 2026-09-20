@@ -1317,6 +1317,66 @@ describe("Firestore repository adapters", () => {
       const closureSafeguardByFirm =
         await repos.filingEscalationClosureRebalanceSafeguards.listByFirm("firmA")
       expect(closureSafeguardByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureAdjudicationSloDebtRemediation.upsert({
+        id: "closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        adjudicationId:
+          "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        adjudicationSloId:
+          "closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "debt_retirement_pending",
+        debtAgeHours: 2,
+        debtRetiredHours: 0,
+        retirementNotedBy: "partner_a",
+        retirementNotedAt: 66,
+        tierDownshiftedTo: "tier_1_partner_watch",
+        tierDownshiftedBy: "partner_a",
+        tierDownshiftedAt: 67,
+        breachClosureAttestedBy: null,
+        breachClosureAttestedAt: null,
+        notes: ["debt remediation noted"],
+        lastEvaluatedAt: 67,
+        updatedAt: 67,
+      })
+      const closureDebtRemediation = await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get(
+        "closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureDebtRemediation?.status).toBe("debt_retirement_pending")
+      const closureDebtRemediationByFirm =
+        await repos.filingEscalationClosureAdjudicationSloDebtRemediation.listByFirm("firmA")
+      expect(closureDebtRemediationByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureRebalanceSafeguardExpiry.upsert({
+        id: "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        safeguardId:
+          "closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "override_expired",
+        suppressionExpiresAt: 68,
+        overrideExpiresAt: 69,
+        autoClearedAt: 69,
+        staleLockCleanedBy: null,
+        staleLockCleanedAt: null,
+        expiryDebtHours: 1,
+        notes: ["override expiry recorded"],
+        lastEvaluatedAt: 69,
+        updatedAt: 69,
+      })
+      const closureSafeguardExpiry = await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(
+        "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureSafeguardExpiry?.status).toBe("override_expired")
+      const closureSafeguardExpiryByFirm =
+        await repos.filingEscalationClosureRebalanceSafeguardExpiry.listByFirm("firmA")
+      expect(closureSafeguardExpiryByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   })
 })

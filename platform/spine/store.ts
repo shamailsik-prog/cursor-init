@@ -1192,6 +1192,63 @@ export type FilingEscalationClosureRebalanceSafeguardRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureAdjudicationSloDebtRemediationStatus =
+  | "debt_open"
+  | "debt_retirement_pending"
+  | "debt_retired"
+  | "breach_closure_attested"
+
+export type FilingEscalationClosureAdjudicationSloDebtRemediationRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  adjudicationId: string
+  adjudicationSloId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureAdjudicationSloDebtRemediationStatus
+  debtAgeHours: number
+  debtRetiredHours: number
+  retirementNotedBy: string | null
+  retirementNotedAt: number | null
+  tierDownshiftedTo: FilingEscalationClosureAdjudicationSloEscalationTier | null
+  tierDownshiftedBy: string | null
+  tierDownshiftedAt: number | null
+  breachClosureAttestedBy: string | null
+  breachClosureAttestedAt: number | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationClosureRebalanceSafeguardExpiryStatus =
+  | "expiry_pending"
+  | "auto_cleared"
+  | "override_expired"
+  | "stale_lock_cleaned"
+
+export type FilingEscalationClosureRebalanceSafeguardExpiryRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  rebalanceId: string
+  safeguardId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureRebalanceSafeguardExpiryStatus
+  suppressionExpiresAt: number | null
+  overrideExpiresAt: number | null
+  autoClearedAt: number | null
+  staleLockCleanedBy: string | null
+  staleLockCleanedAt: number | null
+  expiryDebtHours: number
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -1334,6 +1391,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureAdjudicationSloRow>()
   filingEscalationClosureRebalanceSafeguards =
     new Map<string, FilingEscalationClosureRebalanceSafeguardRow>()
+  filingEscalationClosureAdjudicationSloDebtRemediation =
+    new Map<string, FilingEscalationClosureAdjudicationSloDebtRemediationRow>()
+  filingEscalationClosureRebalanceSafeguardExpiry =
+    new Map<string, FilingEscalationClosureRebalanceSafeguardExpiryRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
