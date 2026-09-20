@@ -1410,6 +1410,27 @@ describe("GET/POST /api/d4/filings", () => {
         "9083a071-dae7-43ce-ac22-1092a7ddfac2"
       )
       expect([200, 422]).toContain(escalateSloTier.status)
+      const recordSloDebtRemediation = await post(
+        {
+          action: "record_closure_adjudication_slo_debt_remediation",
+          actorId: "partner_a",
+          adjudicationId,
+          note: "Record closure adjudication SLO debt remediation entry",
+        },
+        "6e6d84ab-c6ca-4e84-bce7-28b442228e4b"
+      )
+      expect([200, 422]).toContain(recordSloDebtRemediation.status)
+      const downshiftSloTier = await post(
+        {
+          action: "downshift_closure_adjudication_slo_tier",
+          actorId: "partner_a",
+          adjudicationId,
+          escalationTier: "tier_1_partner_watch",
+          note: "Downshift adjudication SLO tier after remediation review",
+        },
+        "ad890797-fd51-4336-a043-85b96dc09f7e"
+      )
+      expect([200, 422]).toContain(downshiftSloTier.status)
       const recordAdjudicationVerdict = await post(
         {
           action: "record_closure_adjudication_verdict",
@@ -1422,6 +1443,16 @@ describe("GET/POST /api/d4/filings", () => {
         "b1279536-680b-46d8-a0a0-f329d3507f04"
       )
       expect([200, 422]).toContain(recordAdjudicationVerdict.status)
+      const attestBreachClosure = await post(
+        {
+          action: "attest_closure_adjudication_slo_breach_closure",
+          actorId: "partner_a",
+          adjudicationId,
+          note: "Attest adjudication SLO breach closure after verdict",
+        },
+        "2b090814-1605-479f-bdb9-3c6fbe7ee374"
+      )
+      expect([200, 422]).toContain(attestBreachClosure.status)
     }
     if (disputeId) {
       const resolveClosureDispute = await post(
@@ -1504,6 +1535,17 @@ describe("GET/POST /api/d4/filings", () => {
         }
         expect(configureSafeguardReplayJson.reused).toBe(true)
       }
+      const setSafeguardOverrideExpiry = await post(
+        {
+          action: "set_closure_rebalance_safeguard_override_expiry",
+          actorId: "partner_a",
+          rebalanceId,
+          overrideExpiryHours: 1,
+          note: "Set safeguard override expiry timer for governance traceability",
+        },
+        "0495edf2-c325-4e18-a029-f894856c5f4d"
+      )
+      expect([200, 404, 422]).toContain(setSafeguardOverrideExpiry.status)
       const executeOwnerTransfer = await post(
         executeOwnerTransferPayload,
         "ca6a53fa-12d5-445a-a6a8-73e68d852bb8"
@@ -1520,6 +1562,26 @@ describe("GET/POST /api/d4/filings", () => {
         "f1db66f6-2e22-43fd-912a-4c6832388745"
       )
       expect([200, 404, 422]).toContain(attestOverride.status)
+      const autoClearSafeguardSuppression = await post(
+        {
+          action: "auto_clear_closure_rebalance_safeguard_suppression",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Auto-clear safeguard suppression after override attestation",
+        },
+        "9f4d75d5-0da3-4cf9-93ff-c4ecf4ea8850"
+      )
+      expect([200, 404, 422]).toContain(autoClearSafeguardSuppression.status)
+      const cleanupStaleSafeguardLock = await post(
+        {
+          action: "cleanup_stale_closure_rebalance_safeguard_lock",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Clean stale safeguard locks after suppression clear path",
+        },
+        "652ec257-cf84-4c30-a58c-bbef8812dab8"
+      )
+      expect([200, 404, 422]).toContain(cleanupStaleSafeguardLock.status)
       if (executeOwnerTransfer.status === 200) {
         const executeOwnerTransferReplay = await post(
           executeOwnerTransferPayload,
@@ -2071,6 +2133,10 @@ describe("GET/POST /api/d4/filings", () => {
         closureRebalanceSafeguardStatus?: string
         closureRebalanceAutoExecutionEligible?: boolean
         closureRebalanceSuppressionReasons?: string[]
+        closureAdjudicationSloDebtRemediationStatus?: string
+        closureAdjudicationSloDebtAgeHours?: number
+        closureRebalanceSafeguardExpiryStatus?: string
+        closureRebalanceSafeguardExpiryDebtHours?: number
         closureCriticalPath?: boolean
       }>
     }
@@ -2169,6 +2235,24 @@ describe("GET/POST /api/d4/filings", () => {
                 reason
               )
             )
+          const debtRemediationStatusOk =
+            row.closureAdjudicationSloDebtRemediationStatus === undefined ||
+            ["debt_open", "debt_retirement_pending", "debt_retired", "breach_closure_attested"].includes(
+              row.closureAdjudicationSloDebtRemediationStatus
+            )
+          const debtAgeHoursOk =
+            row.closureAdjudicationSloDebtAgeHours === undefined ||
+            (Number.isFinite(row.closureAdjudicationSloDebtAgeHours) &&
+              row.closureAdjudicationSloDebtAgeHours >= 0)
+          const safeguardExpiryStatusOk =
+            row.closureRebalanceSafeguardExpiryStatus === undefined ||
+            ["expiry_pending", "auto_cleared", "override_expired", "stale_lock_cleaned"].includes(
+              row.closureRebalanceSafeguardExpiryStatus
+            )
+          const safeguardExpiryDebtOk =
+            row.closureRebalanceSafeguardExpiryDebtHours === undefined ||
+            (Number.isFinite(row.closureRebalanceSafeguardExpiryDebtHours) &&
+              row.closureRebalanceSafeguardExpiryDebtHours >= 0)
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -2193,6 +2277,10 @@ describe("GET/POST /api/d4/filings", () => {
             safeguardStatusOk &&
             autoExecEligibleOk &&
             safeguardReasonsOk &&
+            debtRemediationStatusOk &&
+            debtAgeHoursOk &&
+            safeguardExpiryStatusOk &&
+            safeguardExpiryDebtOk &&
             criticalPathOk
           )
         }
@@ -2490,6 +2578,46 @@ describe("GET/POST /api/d4/filings", () => {
               reason
             )
           )
+      )
+    ).toBe(true)
+    const closureDebtRemediationView = await get(
+      new URLSearchParams({
+        view: "closure_adjudication_slo_debt_remediation",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureDebtRemediationView.status).toBe(200)
+    const closureDebtRemediationViewJson = (await closureDebtRemediationView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureDebtRemediationViewJson.items.every((row) =>
+        ["debt_open", "debt_retirement_pending", "debt_retired", "breach_closure_attested"].includes(
+          row.status
+        )
+      )
+    ).toBe(true)
+    const closureSafeguardExpiryView = await get(
+      new URLSearchParams({
+        view: "closure_rebalance_safeguard_expiry",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSafeguardExpiryView.status).toBe(200)
+    const closureSafeguardExpiryViewJson = (await closureSafeguardExpiryView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureSafeguardExpiryViewJson.items.every((row) =>
+        ["expiry_pending", "auto_cleared", "override_expired", "stale_lock_cleaned"].includes(
+          row.status
+        )
       )
     ).toBe(true)
   })

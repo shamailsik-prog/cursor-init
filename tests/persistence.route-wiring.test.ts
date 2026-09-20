@@ -69,6 +69,8 @@ const baseStore = {
   filingEscalationClosureRebalanceExecution: new Map(),
   filingEscalationClosureAdjudicationSlo: new Map(),
   filingEscalationClosureRebalanceSafeguards: new Map(),
+  filingEscalationClosureAdjudicationSloDebtRemediation: new Map(),
+  filingEscalationClosureRebalanceSafeguardExpiry: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -1151,6 +1153,70 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       listByQueueId: vi.fn().mockResolvedValue([]),
       listByRebalanceId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationClosureAdjudicationSloDebtRemediation: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          adjudicationId:
+            "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          adjudicationSloId:
+            "closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "debt_retirement_pending",
+          debtAgeHours: 2,
+          debtRetiredHours: 0,
+          retirementNotedBy: "partner_a",
+          retirementNotedAt: Date.now() - 30 * 60 * 1000,
+          tierDownshiftedTo: "tier_1_partner_watch",
+          tierDownshiftedBy: "partner_a",
+          tierDownshiftedAt: Date.now() - 30 * 60 * 1000,
+          breachClosureAttestedBy: null,
+          breachClosureAttestedAt: null,
+          notes: ["repo debt remediation row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByAdjudicationId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureRebalanceSafeguardExpiry: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          safeguardId:
+            "closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "override_expired",
+          suppressionExpiresAt: Date.now() - 30 * 60 * 1000,
+          overrideExpiresAt: Date.now() - 5 * 60 * 1000,
+          autoClearedAt: Date.now() - 30 * 60 * 1000,
+          staleLockCleanedBy: null,
+          staleLockCleanedAt: null,
+          expiryDebtHours: 1,
+          notes: ["repo safeguard expiry row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByRebalanceId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -1727,6 +1793,34 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain(
       "closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+    )
+  })
+
+  it("filings closure adjudication slo debt remediation view GET uses repository filingEscalationClosureAdjudicationSloDebtRemediation listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_slo_debt_remediation&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+    )
+  })
+
+  it("filings closure rebalance safeguard expiry view GET uses repository filingEscalationClosureRebalanceSafeguardExpiry listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_safeguard_expiry&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
     )
   })
 
