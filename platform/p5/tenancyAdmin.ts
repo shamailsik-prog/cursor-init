@@ -863,35 +863,29 @@ export function ensureLineageReconciliationMonitoringRows(
   const now = input.now ?? Date.now()
   const queueId = lineageArbitrationQueueId(input.digest.lineageRootSessionReferenceId)
   const existingQueue = store.tenancyLineageReconciliationQueueArbitrations.get(queueId)
+  const digestRegressedToNeedsReview =
+    existingQueue?.digestStatus !== "needs_review" && input.digest.status === "needs_review"
   const queue: TenancyLineageReconciliationQueueArbitrationRow = existingQueue
     ? {
         ...existingQueue,
         digestId: input.digest.id,
         digestStatus: input.digest.status,
         status:
-          input.digest.status === "needs_review" &&
-          existingQueue.status === "arbitrated" &&
-          existingQueue.disposition === "mark_reconciled"
+          digestRegressedToNeedsReview && existingQueue.status === "arbitrated"
             ? existingQueue.assignedPartnerId
               ? "assigned"
               : "queued"
             : existingQueue.status,
         disposition:
-          input.digest.status === "needs_review" &&
-          existingQueue.status === "arbitrated" &&
-          existingQueue.disposition === "mark_reconciled"
+          digestRegressedToNeedsReview && existingQueue.status === "arbitrated"
             ? null
             : existingQueue.disposition,
         dispositionBy:
-          input.digest.status === "needs_review" &&
-          existingQueue.status === "arbitrated" &&
-          existingQueue.disposition === "mark_reconciled"
+          digestRegressedToNeedsReview && existingQueue.status === "arbitrated"
             ? null
             : existingQueue.dispositionBy,
         dispositionAt:
-          input.digest.status === "needs_review" &&
-          existingQueue.status === "arbitrated" &&
-          existingQueue.disposition === "mark_reconciled"
+          digestRegressedToNeedsReview && existingQueue.status === "arbitrated"
             ? null
             : existingQueue.dispositionAt,
         updatedAt: now,
