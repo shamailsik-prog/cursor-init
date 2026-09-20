@@ -174,7 +174,7 @@ describe("GET/POST /api/p5/tenancy", () => {
         sessionRefId: sessionJson.sessionReference.id,
       })
     )
-    expect(replayDenied.status).toBe(400)
+    expect(replayDenied.status).toBe(410)
     const deniedJson = (await replayDenied.json()) as { error: string }
     expect(deniedJson.error).toContain("revoked session reference")
   })
@@ -215,7 +215,7 @@ describe("GET/POST /api/p5/tenancy", () => {
         sessionRefId: sessionJson.sessionReference.id,
       })
     )
-    expect(replayDenied.status).toBe(400)
+    expect(replayDenied.status).toBe(410)
     const deniedJson = (await replayDenied.json()) as { error: string }
     expect(deniedJson.error).toContain("expired session reference")
 
@@ -360,6 +360,145 @@ describe("GET/POST /api/p5/tenancy", () => {
     expect(deniedAudit.status).toBe(400)
   })
 
+  it("revokes session references and blocks stale replay after privilege drift", async () => {
+    const clerkSession = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "clerk_a",
+        firmId: "firmA",
+        authBoundary: "external_session_hint",
+        externalSessionId: "ext-clerk-session",
+      })
+    )
+    expect(clerkSession.status).toBe(200)
+    const clerkSessionJson = (await clerkSession.json()) as {
+      sessionReference: { id: string }
+    }
+
+    const actorSession = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "partner_a",
+        firmId: "firmA",
+      })
+    )
+    expect(actorSession.status).toBe(200)
+    const actorSessionJson = (await actorSession.json()) as {
+      sessionReference: { id: string }
+    }
+
+    const driftUpdate = await post(
+      {
+        action: "update_role",
+        actorId: "partner_a",
+        firmId: "firmA",
+        targetUserId: "clerk_a",
+        nextRole: "clerk",
+        nextClearance: "internal",
+        reason: "Privilege drift invalidation check",
+        sessionReferenceId: actorSessionJson.sessionReference.id,
+      },
+      "556fcac3-ebf8-4474-92a9-583003648f18"
+    )
+    expect(driftUpdate.status).toBe(200)
+    const driftJson = (await driftUpdate.json()) as {
+      result: {
+        privilegedBoundaryDriftCount: number
+        privilegedBoundaryDriftSessionReferenceIds: string[]
+      }
+    }
+    expect(driftJson.result.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
+    expect(driftJson.result.privilegedBoundaryDriftSessionReferenceIds).toContain(
+      clerkSessionJson.sessionReference.id
+    )
+
+    const staleReplay = await get(
+      new URLSearchParams({
+        view: "session",
+        sessionRefId: clerkSessionJson.sessionReference.id,
+      })
+    )
+    expect(staleReplay.status).toBe(410)
+    const staleReplayJson = (await staleReplay.json()) as { error: string }
+    expect(staleReplayJson.error).toContain("revoked")
+
+    const associateSession = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "associate_a",
+        firmId: "firmA",
+      })
+    )
+    expect(associateSession.status).toBe(200)
+    const associateSessionJson = (await associateSession.json()) as {
+      sessionReference: { id: string }
+    }
+
+    const revokePayload = {
+      action: "revoke_session_reference",
+      actorId: "partner_a",
+      firmId: "firmA",
+      sessionReferenceId: associateSessionJson.sessionReference.id,
+      reason: "Manual revocation check",
+    }
+    const revokeFirst = await post(revokePayload, "180cc68b-bf6a-41ec-aef5-e9a3d5239651")
+    const revokeReplay = await post(revokePayload, "180cc68b-bf6a-41ec-aef5-e9a3d5239651")
+    expect(revokeFirst.status).toBe(200)
+    expect(revokeReplay.status).toBe(200)
+    const revokeFirstJson = (await revokeFirst.json()) as { reused: boolean }
+    const revokeReplayJson = (await revokeReplay.json()) as { reused: boolean }
+    expect(revokeFirstJson.reused).toBe(false)
+    expect(revokeReplayJson.reused).toBe(true)
+
+    const revokeCrossFirm = await post(
+      { ...revokePayload, firmId: "firmB" },
+      "f9e349fc-65e2-4299-8f8e-ae8d9ca56046"
+    )
+    expect(revokeCrossFirm.status).toBe(400)
+
+    const revokedReplay = await get(
+      new URLSearchParams({
+        view: "session",
+        sessionRefId: associateSessionJson.sessionReference.id,
+      })
+    )
+    expect(revokedReplay.status).toBe(410)
+
+    const auditRes = await get(
+      new URLSearchParams({
+        view: "audit",
+        actorId: "partner_a",
+        firmId: "firmA",
+        limit: "25",
+        cursor: "0",
+      })
+    )
+    expect(auditRes.status).toBe(200)
+    const auditJson = (await auditRes.json()) as {
+      items: Array<{
+        action: string
+        target: string
+        sessionReferenceId?: string | null
+        privilegedBoundaryDriftCount?: number
+        privilegedBoundaryDriftSessionReferenceIds?: string[]
+      }>
+    }
+    const driftAudit = auditJson.items.find(
+      (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
+    )
+    expect(driftAudit?.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
+    expect(driftAudit?.privilegedBoundaryDriftSessionReferenceIds).toContain(
+      clerkSessionJson.sessionReference.id
+    )
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_revoke_session_reference" &&
+          row.sessionReferenceId === associateSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+  })
+
   it("blocks role escalation and cross-firm role changes", async () => {
     const promotePartner = await post(
       {
@@ -480,7 +619,7 @@ describe("GET/POST /api/p5/tenancy", () => {
         sessionRefId: targetSessionJson.sessionReference.id,
       })
     )
-    expect(replayDenied.status).toBe(400)
+    expect(replayDenied.status).toBe(410)
     const deniedJson = (await replayDenied.json()) as { error: string }
     expect(deniedJson.error).toContain("privileged-boundary drift")
 

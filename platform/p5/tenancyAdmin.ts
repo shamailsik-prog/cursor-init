@@ -133,6 +133,8 @@ export function listFirmAudit(
     authBoundary?: TenancyAuthBoundary
     sessionReferenceId?: string | null
     externalSessionId?: string | null
+    privilegedBoundaryDriftCount?: number
+    privilegedBoundaryDriftSessionReferenceIds?: string[]
     at: number
   }>
   total: number
@@ -152,6 +154,8 @@ export function listFirmAudit(
       authBoundary: entry.authBoundary,
       sessionReferenceId: entry.sessionReferenceId ?? null,
       externalSessionId: entry.externalSessionId ?? null,
+      privilegedBoundaryDriftCount: entry.privilegedBoundaryDriftCount,
+      privilegedBoundaryDriftSessionReferenceIds: entry.privilegedBoundaryDriftSessionReferenceIds,
       at: entry.at ?? 0,
     }))
     .sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))
@@ -238,7 +242,7 @@ export function getTenancySessionReferenceState(
   user: User,
   now = Date.now()
 ): TenancySessionReferenceState {
-  if (row.driftedAt) return "drifted"
+  if (row.driftedAt || row.privilegedBoundaryDriftedAt) return "drifted"
   if (inferDriftReason(row.roleSnapshot, row.clearanceSnapshot, user)) return "drifted"
   if (row.expiresAt != null && row.expiresAt <= now) return "expired"
   if (row.revokedAt) return "revoked"
@@ -258,7 +262,7 @@ export function assertUsableTenancySessionReference(
   if (state === "revoked") {
     throw new Error("revoked session reference")
   }
-  throw new Error("privileged-boundary drift invalidated session reference")
+  throw new Error("revoked session reference due privileged-boundary drift")
 }
 
 export function revokeTenancySessionReference(
@@ -276,6 +280,7 @@ export function revokeTenancySessionReference(
     revokedAt: input.row.revokedAt ?? now,
     revokedBy: input.row.revokedBy ?? input.actorId,
     revocationReason: input.reason ?? input.row.revocationReason ?? "admin_revocation",
+    revokedReason: input.reason ?? input.row.revokedReason ?? "admin_revocation",
   }
   store.tenancySessionReferences.set(row.id, row)
   return row
@@ -327,9 +332,13 @@ export function invalidateSessionReferencesForPrivilegeDrift(
       revokedAt: row.revokedAt ?? now,
       revokedBy: row.revokedBy ?? input.actorId,
       revocationReason: row.revocationReason ?? SESSION_REFERENCE_DRIFT_REASON,
+      revokedReason: row.revokedReason ?? SESSION_REFERENCE_DRIFT_REASON,
       driftedAt: row.driftedAt ?? now,
       driftedBy: input.actorId,
       driftReason,
+      privilegedBoundaryDriftedAt: row.privilegedBoundaryDriftedAt ?? now,
+      privilegedBoundaryDriftedBy: input.actorId,
+      privilegedBoundaryDriftReason: row.privilegedBoundaryDriftReason ?? driftReason,
       driftFromRole: row.driftFromRole ?? row.roleSnapshot,
       driftToRole: input.updatedUser.role,
       driftFromClearance: row.driftFromClearance ?? row.clearanceSnapshot,
@@ -414,9 +423,16 @@ export function upsertTenancySessionReference(
     revokedAt: existing?.revokedAt ?? null,
     revokedBy: existing?.revokedBy ?? null,
     revocationReason: existing?.revocationReason ?? null,
+    revokedReason: existing?.revokedReason ?? existing?.revocationReason ?? null,
     driftedAt: existing?.driftedAt ?? null,
     driftedBy: existing?.driftedBy ?? null,
     driftReason: existing?.driftReason ?? null,
+    privilegedBoundaryDriftedAt:
+      existing?.privilegedBoundaryDriftedAt ?? existing?.driftedAt ?? null,
+    privilegedBoundaryDriftedBy:
+      existing?.privilegedBoundaryDriftedBy ?? existing?.driftedBy ?? null,
+    privilegedBoundaryDriftReason:
+      existing?.privilegedBoundaryDriftReason ?? existing?.driftReason ?? null,
     driftFromRole: existing?.driftFromRole ?? null,
     driftToRole: existing?.driftToRole ?? null,
     driftFromClearance: existing?.driftFromClearance ?? null,

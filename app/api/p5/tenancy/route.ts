@@ -137,9 +137,13 @@ function sessionReferencePayload(
     revokedAt: row.revokedAt,
     revokedBy: row.revokedBy,
     revocationReason: row.revocationReason,
+    revokedReason: row.revokedReason,
     driftedAt: row.driftedAt,
     driftedBy: row.driftedBy,
     driftReason: row.driftReason,
+    privilegedBoundaryDriftedAt: row.privilegedBoundaryDriftedAt,
+    privilegedBoundaryDriftedBy: row.privilegedBoundaryDriftedBy,
+    privilegedBoundaryDriftReason: row.privilegedBoundaryDriftReason,
     driftFromRole: row.driftFromRole,
     driftToRole: row.driftToRole,
     driftFromClearance: row.driftFromClearance,
@@ -205,7 +209,12 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: "firm scope mismatch" }, { status: 400 })
       }
       if (existingReference) {
-        assertUsableTenancySessionReference(existingReference, user)
+        try {
+          assertUsableTenancySessionReference(existingReference, user)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "stale session reference"
+          return NextResponse.json({ error: message }, { status: 410 })
+        }
       }
       await syncFirmUsers(store, repos, user.firmId)
       await syncFirmMembers(store, repos, user.firmId)
@@ -477,6 +486,21 @@ export async function POST(request: Request) {
         updatedUser: updated.user,
         auditEntryId: updated.auditEntry.id ?? "",
       })
+      const enrichedAuditEntry =
+        driftInvalidations.length > 0
+          ? {
+              ...updated.auditEntry,
+              privilegedBoundaryDriftCount: driftInvalidations.length,
+              privilegedBoundaryDriftSessionReferenceIds: driftInvalidations.map((item) => item.id),
+            }
+          : updated.auditEntry
+      if (enrichedAuditEntry !== updated.auditEntry) {
+        const auditIdx = store.audit.findIndex((entry) => entry.id === updated.auditEntry.id)
+        if (auditIdx >= 0) {
+          store.audit[auditIdx] = enrichedAuditEntry
+        }
+        await repos.audit.append(enrichedAuditEntry)
+      }
       for (const invalidated of driftInvalidations) {
         const row = store.tenancySessionReferences.get(invalidated.id)
         if (row) {
@@ -519,14 +543,17 @@ export async function POST(request: Request) {
           role: updated.user.role,
           clearanceLevel: updated.user.clearanceLevel,
         },
-        authBoundary: updated.auditEntry.authBoundary ?? "runtime_local",
-        sessionReferenceId: updated.auditEntry.sessionReferenceId ?? null,
-        externalSessionId: updated.auditEntry.externalSessionId ?? null,
+        authBoundary: enrichedAuditEntry.authBoundary ?? "runtime_local",
+        sessionReferenceId: enrichedAuditEntry.sessionReferenceId ?? null,
+        externalSessionId: enrichedAuditEntry.externalSessionId ?? null,
         activeSessionReference: sessionReferencePayload(
           responseReference,
           getTenancySessionReferenceState(responseReference, updated.user)
         ),
         driftInvalidations,
+        privilegedBoundaryDriftCount: enrichedAuditEntry.privilegedBoundaryDriftCount ?? 0,
+        privilegedBoundaryDriftSessionReferenceIds:
+          enrichedAuditEntry.privilegedBoundaryDriftSessionReferenceIds ?? [],
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -540,7 +567,7 @@ export async function POST(request: Request) {
         )
       }
       await syncFirmUsers(store, repos, parsed.firmId)
-      assertPartnerInFirm(store, parsed.actorId, parsed.firmId)
+      const actor = assertPartnerInFirm(store, parsed.actorId, parsed.firmId)
       const existing = await repos.tenancySessionReferences.get(parsed.sessionReferenceId)
       if (!existing) throw new Error("unknown session reference")
       if (existing.firmId !== parsed.firmId) throw new Error("cross-firm session reference denied")
@@ -551,6 +578,21 @@ export async function POST(request: Request) {
         reason: normalizeOptionalString(parsed.reason) ?? "admin_revocation",
       })
       await repos.tenancySessionReferences.upsert(revoked)
+      const revokeAuditEntry = {
+        id: store.id("aud"),
+        firmId: parsed.firmId,
+        action: "tenant_revoke_session_reference",
+        actorId: actor.id,
+        target: revoked.userId,
+        classification: actor.clearanceLevel,
+        reason: normalizeOptionalString(parsed.reason),
+        authBoundary: revoked.authBoundary,
+        sessionReferenceId: revoked.id,
+        externalSessionId: revoked.externalSessionId,
+        at: Date.now(),
+      }
+      store.audit.push(revokeAuditEntry)
+      await repos.audit.append(revokeAuditEntry)
       const user = await loadUser(store, repos, revoked.userId)
       if (!user) throw new Error("unknown user")
       const payload = {

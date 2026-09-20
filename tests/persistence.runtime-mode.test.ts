@@ -7630,6 +7630,16 @@ describe("Runtime persistence mode", () => {
         "fdccf93b-c5d5-43fe-9445-3573b526c5a6"
       )
 
+      const clerkSession = await tenancyGet(
+        new Request(
+          "http://127.0.0.1/api/p5/tenancy?view=session&userId=clerk_a&firmId=firmA&authBoundary=external_session_hint&externalSessionId=ext-runtime-clerk"
+        )
+      )
+      expect(clerkSession.status).toBe(200)
+      const clerkSessionJson = (await clerkSession.json()) as {
+        sessionReference: { id: string }
+      }
+
       const actorSession = await tenancyGet(
         new Request(
           "http://127.0.0.1/api/p5/tenancy?view=session&userId=partner_a&firmId=firmA&authBoundary=external_session_hint&externalSessionId=ext-runtime-actor"
@@ -7662,6 +7672,41 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(roleUpdate.status).toBe(200)
+      const roleUpdateJson = (await roleUpdate.json()) as {
+        result: {
+          privilegedBoundaryDriftCount: number
+          privilegedBoundaryDriftSessionReferenceIds: string[]
+        }
+      }
+      expect(roleUpdateJson.result.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
+      expect(roleUpdateJson.result.privilegedBoundaryDriftSessionReferenceIds).toContain(
+        clerkSessionJson.sessionReference.id
+      )
+
+      const associateSession = await tenancyGet(
+        new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
+      )
+      expect(associateSession.status).toBe(200)
+      const associateSessionJson = (await associateSession.json()) as {
+        sessionReference: { id: string }
+      }
+      const revokeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f365f818-4c0d-4224-96aa-34182725cdca",
+          },
+          body: JSON.stringify({
+            action: "revoke_session_reference",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: associateSessionJson.sessionReference.id,
+            reason: "Runtime revocation persistence check",
+          }),
+        })
+      )
+      expect(revokeRes.status).toBe(200)
 
       // Simulate a fresh cycle with stale in-memory role + memberships.
       const staleUser = getRuntimeStore().users.get("clerk_a")
@@ -7674,6 +7719,13 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().members = new Map()
       getRuntimeStore().audit = []
       getRuntimeStore().tenancySessionReferences = new Map()
+
+      const staleReplayRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session&sessionRefId=${clerkSessionJson.sessionReference.id}`
+        )
+      )
+      expect(staleReplayRes.status).toBe(410)
 
       const sessionRes = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
@@ -7695,6 +7747,13 @@ describe("Runtime persistence mode", () => {
         session: { accessibleMatterIds: string[] }
       }
       expect(replayJson.session.accessibleMatterIds).toContain(matterId)
+
+      const revokedReplay = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session&sessionRefId=${associateSessionJson.sessionReference.id}`
+        )
+      )
+      expect(revokedReplay.status).toBe(410)
 
       const usersRes = await tenancyGet(
         new Request(
@@ -7736,6 +7795,8 @@ describe("Runtime persistence mode", () => {
           authBoundary?: string
           sessionReferenceId?: string | null
           externalSessionId?: string | null
+          privilegedBoundaryDriftCount?: number
+          privilegedBoundaryDriftSessionReferenceIds?: string[]
         }>
       }
       const roleAudit = auditJson.items.find(
@@ -7745,6 +7806,13 @@ describe("Runtime persistence mode", () => {
       expect(roleAudit?.authBoundary).toBe("external_session_hint")
       expect(roleAudit?.sessionReferenceId).toBe(actorSessionJson.sessionReference.id)
       expect(roleAudit?.externalSessionId).toBe("ext-runtime-actor")
+      expect(roleAudit?.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
+      expect(roleAudit?.privilegedBoundaryDriftSessionReferenceIds).toContain(
+        clerkSessionJson.sessionReference.id
+      )
+      expect(
+        auditJson.items.some((row) => row.action === "tenant_revoke_session_reference")
+      ).toBe(true)
 
       const persistedClerk = await getDoc(doc(ctx.firestore(), "users", "clerk_a"))
       expect(persistedClerk.exists()).toBe(true)
@@ -7769,6 +7837,20 @@ describe("Runtime persistence mode", () => {
       expect(persistedSessionRef.exists()).toBe(true)
       expect(persistedSessionRef.data()?.firmId).toBe("firmA")
       expect(persistedSessionRef.data()?.authBoundary).toBe("external_session_hint")
+
+      const persistedClerkSessionRef = await getDoc(
+        doc(ctx.firestore(), "tenancy_session_references", clerkSessionJson.sessionReference.id)
+      )
+      expect(persistedClerkSessionRef.exists()).toBe(true)
+      expect(persistedClerkSessionRef.data()?.revokedReason).toBe("privileged_boundary_drift")
+
+      const persistedAssociateSessionRef = await getDoc(
+        doc(ctx.firestore(), "tenancy_session_references", associateSessionJson.sessionReference.id)
+      )
+      expect(persistedAssociateSessionRef.exists()).toBe(true)
+      expect(persistedAssociateSessionRef.data()?.revokedReason).toBe(
+        "Runtime revocation persistence check"
+      )
     })
   })
 
@@ -7818,7 +7900,7 @@ describe("Runtime persistence mode", () => {
           `http://127.0.0.1/api/p5/tenancy?view=session&sessionRefId=${targetSessionJson.sessionReference.id}`
         )
       )
-      expect(driftReplayDenied.status).toBe(400)
+      expect(driftReplayDenied.status).toBe(410)
 
       getRuntimeStore().tenancySessionReferences = new Map()
 
@@ -7907,7 +7989,7 @@ describe("Runtime persistence mode", () => {
           `http://127.0.0.1/api/p5/tenancy?view=session&sessionRefId=${expiryCandidateJson.sessionReference.id}`
         )
       )
-      expect(expiredReplayDenied.status).toBe(400)
+      expect(expiredReplayDenied.status).toBe(410)
       const expiredReplayJson = (await expiredReplayDenied.json()) as { error: string }
       expect(expiredReplayJson.error).toContain("expired session reference")
 
