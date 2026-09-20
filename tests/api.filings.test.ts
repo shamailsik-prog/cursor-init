@@ -1073,11 +1073,13 @@ describe("GET/POST /api/d4/filings", () => {
     const remediationJson = (await recordRemediation.json()) as {
       result: {
         remediation: { decision: string; status: string }
+        remediationLifecycle: { status: string }
         policyVarianceDigest: { status: string }
       }
     }
     expect(remediationJson.result.remediation.decision).toBe("temporary_override")
     expect(remediationJson.result.remediation.status).toBe("active")
+    expect(remediationJson.result.remediationLifecycle.status).toBe("open")
     expect(remediationJson.result.policyVarianceDigest.status).toBe("snoozed")
 
     const acknowledgeRemediationExpiry = await post(
@@ -1115,6 +1117,29 @@ describe("GET/POST /api/d4/filings", () => {
     expect(typeof snoozeRemediationExpiryJson.result.remediationExpiryDigest.snoozeUntil).toBe(
       "number"
     )
+
+    const closeRemediation = await post(
+      {
+        action: "attest_remediation_closure",
+        actorId: "partner_a",
+        packageId,
+        closureOutcome: "accepted_risk_retired",
+        note: "Closure attested after managed override period",
+      },
+      "d98d4f7d-c4a0-4f13-a0ae-b1efdb9d206a"
+    )
+    expect(closeRemediation.status).toBe(200)
+    const closeRemediationJson = (await closeRemediation.json()) as {
+      result: {
+        remediationLifecycle: { status: string; closureOutcome: string | null }
+        remediationExpiryDigest: { status: string }
+      }
+    }
+    expect(closeRemediationJson.result.remediationLifecycle.status).toBe("closure_attested")
+    expect(closeRemediationJson.result.remediationLifecycle.closureOutcome).toBe(
+      "accepted_risk_retired"
+    )
+    expect(closeRemediationJson.result.remediationExpiryDigest.status).toBe("cleared")
 
     const waiverExpiryViewBefore = await get(
       new URLSearchParams({
@@ -1208,6 +1233,17 @@ describe("GET/POST /api/d4/filings", () => {
       result: { rolloverBreachWatch: { status: string } }
     }
     expect(reaffirmRolloverAttestationJson.result.rolloverBreachWatch.status).toBe("cleared")
+
+    const acknowledgeReaffirmationSla = await post(
+      {
+        action: "acknowledge_rollover_reaffirmation_sla",
+        actorId: "partner_a",
+        packageId,
+        note: "Acknowledged reaffirmation SLA review",
+      },
+      "388dd8fd-eae8-4603-850f-fda901ac40c5"
+    )
+    expect(acknowledgeReaffirmationSla.status).toBe(422)
 
     const revokeWaiver = await post(
       {
@@ -1429,8 +1465,7 @@ describe("GET/POST /api/d4/filings", () => {
         view: "remediation_expiry_digests",
         userId: "associate_a",
         packageId,
-        expiryStatus: "snoozed",
-        reason: "expires_lte_4h",
+        expiryStatus: "cleared",
         limit: "10",
         cursor: "0",
       })
@@ -1441,7 +1476,28 @@ describe("GET/POST /api/d4/filings", () => {
     }
     expect(
       remediationExpiryViewJson.items.some(
-        (row) => row.packageId === packageId && row.status === "snoozed"
+        (row) => row.packageId === packageId && row.status === "cleared"
+      )
+    ).toBe(true)
+
+    const lifecycleView = await get(
+      new URLSearchParams({
+        view: "remediation_lifecycle",
+        userId: "associate_a",
+        packageId,
+        lifecycleStatus: "closure_attested",
+        closureOutcome: "accepted_risk_retired",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(lifecycleView.status).toBe(200)
+    const lifecycleViewJson = (await lifecycleView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      lifecycleViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "closure_attested"
       )
     ).toBe(true)
 
@@ -1540,6 +1596,26 @@ describe("GET/POST /api/d4/filings", () => {
     expect(
       rolloverWatchViewJson.items.some(
         (row) => row.packageId === packageId && row.status === "cleared"
+      )
+    ).toBe(true)
+
+    const reaffirmationSlaView = await get(
+      new URLSearchParams({
+        view: "rollover_reaffirmation_sla",
+        userId: "associate_a",
+        packageId,
+        status: "within_sla",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(reaffirmationSlaView.status).toBe(200)
+    const reaffirmationSlaViewJson = (await reaffirmationSlaView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      reaffirmationSlaViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "within_sla"
       )
     ).toBe(true)
   })

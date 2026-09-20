@@ -719,6 +719,7 @@ describe("Firestore repository adapters", () => {
         status: "open_expiry",
         reasons: ["expires_lte_4h"],
         linkedRemediationId: "remediation:pkg_1:1",
+        linkedLifecycleId: "remediation-lifecycle:remediation:pkg_1:1",
         linkedPolicyVarianceDigestId: "policy-variance:pkg_1",
         linkedPolicyId: "policy:pkg_1:override",
         remediationExpiresAt: 47,
@@ -769,6 +770,76 @@ describe("Firestore repository adapters", () => {
       const rolloverBreachByPackage =
         await repos.filingEscalationRolloverBreachWatches.listByPackageId("pkg_1")
       expect(rolloverBreachByPackage.some((row) => row.id === "rollover-breach:pkg_1")).toBe(true)
+      await repos.filingEscalationRemediationLifecycles.upsert({
+        id: "remediation-lifecycle:remediation:pkg_1:1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        remediationId: "remediation:pkg_1:1",
+        remediationDecision: "temporary_override",
+        status: "open",
+        linkedPolicyVarianceDigestId: "policy-variance:pkg_1",
+        linkedPolicyId: "policy:pkg_1:override",
+        expiresAt: 48,
+        openedBy: "partner_a",
+        openedAt: 42,
+        closureOutcome: null,
+        closureAttestedBy: null,
+        closureAttestedAt: null,
+        notes: ["lifecycle opened"],
+        updatedAt: 42,
+      })
+      const lifecycle = await repos.filingEscalationRemediationLifecycles.get(
+        "remediation-lifecycle:remediation:pkg_1:1"
+      )
+      expect(lifecycle?.status).toBe("open")
+      const lifecycleByFirm = await repos.filingEscalationRemediationLifecycles.listByFirm("firmA")
+      expect(
+        lifecycleByFirm.some((row) => row.id === "remediation-lifecycle:remediation:pkg_1:1")
+      ).toBe(true)
+      const lifecycleByPackage = await repos.filingEscalationRemediationLifecycles.listByPackageId("pkg_1")
+      expect(
+        lifecycleByPackage.some((row) => row.id === "remediation-lifecycle:remediation:pkg_1:1")
+      ).toBe(true)
+      await repos.filingEscalationRolloverReaffirmationSlas.upsert({
+        id: "rollover-reaffirmation-sla:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "warning",
+        reasons: ["cap_crossed_reaffirmation_warning"],
+        linkedWaiverId: "waiver:pkg_1:1",
+        linkedAttestationId: "rollover:pkg_1:1",
+        linkedPolicyId: "policy:pkg_1:override",
+        policyCapExpiresAt: 47,
+        waiverExpiresAt: 51,
+        lastReaffirmedAt: 44,
+        elapsedSinceReaffirmationMs: 5 * 60 * 60 * 1000,
+        warningThresholdMs: 3 * 60 * 60 * 1000,
+        breachThresholdMs: 6 * 60 * 60 * 1000,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        notes: ["reaffirmation warning"],
+        lastEvaluatedAt: 46,
+        updatedAt: 46,
+      })
+      const reaffirmation = await repos.filingEscalationRolloverReaffirmationSlas.get(
+        "rollover-reaffirmation-sla:pkg_1"
+      )
+      expect(reaffirmation?.status).toBe("warning")
+      const reaffirmationByFirm = await repos.filingEscalationRolloverReaffirmationSlas.listByFirm(
+        "firmA"
+      )
+      expect(
+        reaffirmationByFirm.some((row) => row.id === "rollover-reaffirmation-sla:pkg_1")
+      ).toBe(true)
+      const reaffirmationByPackage =
+        await repos.filingEscalationRolloverReaffirmationSlas.listByPackageId("pkg_1")
+      expect(
+        reaffirmationByPackage.some((row) => row.id === "rollover-reaffirmation-sla:pkg_1")
+      ).toBe(true)
     })
   })
 })

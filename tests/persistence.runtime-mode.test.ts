@@ -790,6 +790,23 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(snoozeRemediationExpiry.status).toBe(200)
+      const closeRemediation = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "7d8f1aa7-b379-40b8-9170-1f1907fe0537",
+          },
+          body: JSON.stringify({
+            action: "attest_remediation_closure",
+            actorId: "partner_a",
+            packageId,
+            closureOutcome: "accepted_risk_retired",
+            note: "runtime remediation closure attested",
+          }),
+        })
+      )
+      expect(closeRemediation.status).toBe(200)
       const acknowledgeExpiry = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -826,6 +843,20 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(extendWaiver.status).toBe(200)
+      const rolloverAttestationDoc = await getDoc(
+        doc(ctx.firestore(), "filing_escalation_waiver_rollover_attestations", `rollover:${packageId}:1`)
+      )
+      expect(rolloverAttestationDoc.exists()).toBe(true)
+      const rolloverAttestationData = rolloverAttestationDoc.data() as Record<string, unknown>
+      await setDoc(
+        doc(ctx.firestore(), "filing_escalation_waiver_rollover_attestations", `rollover:${packageId}:1`),
+        {
+          ...rolloverAttestationData,
+          attestedAt: Date.now() - 7 * 60 * 60 * 1000,
+          updatedAt: Date.now() - 7 * 60 * 60 * 1000,
+          notes: ["runtime stale rollover attestation row"],
+        }
+      )
       const acknowledgeRolloverBreach = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -842,6 +873,22 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(acknowledgeRolloverBreach.status).toBe(200)
+      const acknowledgeRolloverReaffirmationSla = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "5256440e-15e0-41ca-8bc1-1c5d91da4b2f",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_rollover_reaffirmation_sla",
+            actorId: "partner_a",
+            packageId,
+            note: "runtime reaffirmation SLA acknowledged",
+          }),
+        })
+      )
+      expect(acknowledgeRolloverReaffirmationSla.status).toBe(200)
       const reaffirmRolloverAttestation = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -961,6 +1008,8 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingEscalationWaiverRolloverAttestations = new Map()
       getRuntimeStore().filingEscalationRemediationExpiryDigests = new Map()
       getRuntimeStore().filingEscalationRolloverBreachWatches = new Map()
+      getRuntimeStore().filingEscalationRemediationLifecycles = new Map()
+      getRuntimeStore().filingEscalationRolloverReaffirmationSlas = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -1174,7 +1223,7 @@ describe("Runtime persistence mode", () => {
       ).toBe(true)
       const rehydratedRemediation = await filingsGet(
         new Request(
-          `http://127.0.0.1/api/d4/filings?view=variance_remediation_ledger&userId=associate_a&matterId=${matterId}&packageId=${packageId}&remediationStatus=active&decision=temporary_override&limit=10&cursor=0`
+          `http://127.0.0.1/api/d4/filings?view=variance_remediation_ledger&userId=associate_a&matterId=${matterId}&packageId=${packageId}&remediationStatus=expired&decision=temporary_override&limit=10&cursor=0`
         )
       )
       expect(rehydratedRemediation.status).toBe(200)
@@ -1185,7 +1234,7 @@ describe("Runtime persistence mode", () => {
         rehydratedRemediationJson.items.some(
           (item) =>
             item.packageId === packageId &&
-            item.status === "active" &&
+            item.status === "expired" &&
             item.decision === "temporary_override"
         )
       ).toBe(true)
@@ -1205,7 +1254,7 @@ describe("Runtime persistence mode", () => {
       ).toBe(true)
       const rehydratedRemediationExpiry = await filingsGet(
         new Request(
-          `http://127.0.0.1/api/d4/filings?view=remediation_expiry_digests&userId=associate_a&matterId=${matterId}&packageId=${packageId}&expiryStatus=snoozed&reason=expires_lte_4h&limit=10&cursor=0`
+          `http://127.0.0.1/api/d4/filings?view=remediation_expiry_digests&userId=associate_a&matterId=${matterId}&packageId=${packageId}&expiryStatus=cleared&limit=10&cursor=0`
         )
       )
       expect(rehydratedRemediationExpiry.status).toBe(200)
@@ -1214,7 +1263,21 @@ describe("Runtime persistence mode", () => {
       }
       expect(
         rehydratedRemediationExpiryJson.items.some(
-          (item) => item.packageId === packageId && item.status === "snoozed"
+          (item) => item.packageId === packageId && item.status === "cleared"
+        )
+      ).toBe(true)
+      const rehydratedLifecycle = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=remediation_lifecycle&userId=associate_a&matterId=${matterId}&packageId=${packageId}&lifecycleStatus=closure_attested&closureOutcome=accepted_risk_retired&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedLifecycle.status).toBe(200)
+      const rehydratedLifecycleJson = (await rehydratedLifecycle.json()) as {
+        items: Array<{ packageId: string; status: string }>
+      }
+      expect(
+        rehydratedLifecycleJson.items.some(
+          (item) => item.packageId === packageId && item.status === "closure_attested"
         )
       ).toBe(true)
       const rehydratedRolloverWatch = await filingsGet(
@@ -1229,6 +1292,20 @@ describe("Runtime persistence mode", () => {
       expect(
         rehydratedRolloverWatchJson.items.some(
           (item) => item.packageId === packageId && item.status === "cleared"
+        )
+      ).toBe(true)
+      const rehydratedReaffirmationSla = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=rollover_reaffirmation_sla&userId=associate_a&matterId=${matterId}&packageId=${packageId}&status=within_sla&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedReaffirmationSla.status).toBe(200)
+      const rehydratedReaffirmationSlaJson = (await rehydratedReaffirmationSla.json()) as {
+        items: Array<{ packageId: string; status: string }>
+      }
+      expect(
+        rehydratedReaffirmationSlaJson.items.some(
+          (item) => item.packageId === packageId && item.status === "within_sla"
         )
       ).toBe(true)
       await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
@@ -1466,6 +1543,7 @@ describe("Runtime persistence mode", () => {
           status: "open_expiry",
           reasons: ["expires_lte_4h"],
           linkedRemediationId: "remediation:pkg_firmB:1",
+          linkedLifecycleId: "remediation-lifecycle:remediation:pkg_firmB:1",
           linkedPolicyVarianceDigestId: "policy-variance:pkg_firmB",
           linkedPolicyId: "policy:pkg_firmB:override",
           remediationExpiresAt: Date.now() + 60 * 60 * 1000,
@@ -1501,6 +1579,63 @@ describe("Runtime persistence mode", () => {
           acknowledgedBy: null,
           acknowledgedAt: null,
           notes: ["firmB rollover watch row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+      )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_remediation_lifecycles",
+          "remediation-lifecycle:remediation:pkg_firmB:1"
+        ),
+        {
+          id: "remediation-lifecycle:remediation:pkg_firmB:1",
+          firmId: "firmB",
+          packageId: "pkg_firmB",
+          matterId: "mat_firmB",
+          classification: "internal",
+          remediationId: "remediation:pkg_firmB:1",
+          remediationDecision: "accepted_risk",
+          status: "open",
+          linkedPolicyVarianceDigestId: "policy-variance:pkg_firmB",
+          linkedPolicyId: "policy:pkg_firmB:override",
+          expiresAt: Date.now() + 2 * 60 * 60 * 1000,
+          openedBy: "partner_b",
+          openedAt: Date.now(),
+          closureOutcome: null,
+          closureAttestedBy: null,
+          closureAttestedAt: null,
+          notes: ["firmB lifecycle row"],
+          updatedAt: Date.now(),
+        }
+      )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_rollover_reaffirmation_sla",
+          "rollover-reaffirmation-sla:pkg_firmB"
+        ),
+        {
+          id: "rollover-reaffirmation-sla:pkg_firmB",
+          firmId: "firmB",
+          packageId: "pkg_firmB",
+          matterId: "mat_firmB",
+          classification: "internal",
+          status: "warning",
+          reasons: ["cap_crossed_reaffirmation_warning"],
+          linkedWaiverId: "waiver:pkg_firmB:1",
+          linkedAttestationId: "rollover:pkg_firmB:1",
+          linkedPolicyId: "policy:pkg_firmB:override",
+          policyCapExpiresAt: Date.now() + 2 * 60 * 60 * 1000,
+          waiverExpiresAt: Date.now() + 9 * 60 * 60 * 1000,
+          lastReaffirmedAt: Date.now() - 4 * 60 * 60 * 1000,
+          elapsedSinceReaffirmationMs: 4 * 60 * 60 * 1000,
+          warningThresholdMs: 3 * 60 * 60 * 1000,
+          breachThresholdMs: 6 * 60 * 60 * 1000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          notes: ["firmB reaffirmation SLA row"],
           lastEvaluatedAt: Date.now(),
           updatedAt: Date.now(),
         }
@@ -1636,6 +1771,28 @@ describe("Runtime persistence mode", () => {
       }
       expect(
         firmAScopeRolloverBreachJson.items.some((item) => item.packageId === "pkg_firmB")
+      ).toBe(false)
+      const firmAScopeLifecycle = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=remediation_lifecycle&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeLifecycle.status).toBe(200)
+      const firmAScopeLifecycleJson = (await firmAScopeLifecycle.json()) as {
+        items: Array<{ packageId: string }>
+      }
+      expect(firmAScopeLifecycleJson.items.some((item) => item.packageId === "pkg_firmB")).toBe(false)
+      const firmAScopeReaffirmationSla = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=rollover_reaffirmation_sla&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeReaffirmationSla.status).toBe(200)
+      const firmAScopeReaffirmationSlaJson = (await firmAScopeReaffirmationSla.json()) as {
+        items: Array<{ packageId: string }>
+      }
+      expect(
+        firmAScopeReaffirmationSlaJson.items.some((item) => item.packageId === "pkg_firmB")
       ).toBe(false)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
@@ -1847,6 +2004,13 @@ describe("Runtime persistence mode", () => {
       expect(
         auditViewJson.items.some(
           (item) =>
+            item.action === "filing_remediation_closure_attest" &&
+            item.target === `remediation-lifecycle:remediation:${packageId}:1`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
             item.action === "filing_policy_variance_snooze" &&
             item.target === `policy-variance:${packageId}`
         )
@@ -1884,6 +2048,13 @@ describe("Runtime persistence mode", () => {
           (item) =>
             item.action === "filing_rollover_reaffirmation_record" &&
             item.target === `rollover:${packageId}:1`
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_rollover_reaffirmation_sla_acknowledge" &&
+            item.target === `rollover-reaffirmation-sla:${packageId}`
         )
       ).toBe(true)
 
@@ -2046,7 +2217,7 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.id === `remediation:${packageId}:1` &&
             entry.data()?.decision === "temporary_override" &&
-            entry.data()?.status === "active"
+            entry.data()?.status === "expired"
         )
       ).toBe(true)
       const dbRolloverAttestations = await getDocs(
@@ -2060,6 +2231,17 @@ describe("Runtime persistence mode", () => {
             entry.data()?.status === "attested"
         )
       ).toBe(true)
+      const dbRemediationLifecycles = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_remediation_lifecycles")
+      )
+      expect(
+        dbRemediationLifecycles.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === `remediation-lifecycle:remediation:${packageId}:1` &&
+            entry.data()?.status === "closure_attested"
+        )
+      ).toBe(true)
       const dbRemediationExpiryDigests = await getDocs(
         collection(ctx.firestore(), "filing_escalation_remediation_expiry_digests")
       )
@@ -2068,7 +2250,7 @@ describe("Runtime persistence mode", () => {
           (entry) =>
             entry.data()?.firmId === "firmA" &&
             entry.data()?.id === `remediation-expiry:${packageId}` &&
-            entry.data()?.status === "snoozed"
+            entry.data()?.status === "cleared"
         )
       ).toBe(true)
       const dbRolloverBreachWatches = await getDocs(
@@ -2080,6 +2262,17 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.id === `rollover-breach:${packageId}` &&
             entry.data()?.status === "cleared"
+        )
+      ).toBe(true)
+      const dbReaffirmationSlas = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_rollover_reaffirmation_sla")
+      )
+      expect(
+        dbReaffirmationSlas.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === `rollover-reaffirmation-sla:${packageId}` &&
+            entry.data()?.status === "within_sla"
         )
       ).toBe(true)
     })

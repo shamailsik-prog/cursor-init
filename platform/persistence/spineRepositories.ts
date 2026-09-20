@@ -11,7 +11,9 @@ import type {
   FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
+  FilingEscalationRemediationLifecycleRow,
   FilingEscalationRolloverBreachWatchRow,
+  FilingEscalationRolloverReaffirmationSlaRow,
   FilingEscalationVarianceRemediationRow,
   FilingEscalationWaiverRolloverAttestationRow,
   FilingEscalationWaiverExpiryDigestRow,
@@ -221,6 +223,20 @@ export type FilingEscalationRolloverBreachWatchRepository = {
   listByPackageId(packageId: string): Promise<FilingEscalationRolloverBreachWatchRow[]>
 }
 
+export type FilingEscalationRemediationLifecycleRepository = {
+  upsert(row: FilingEscalationRemediationLifecycleRow): Promise<void>
+  get(id: string): Promise<FilingEscalationRemediationLifecycleRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationRemediationLifecycleRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationRemediationLifecycleRow[]>
+}
+
+export type FilingEscalationRolloverReaffirmationSlaRepository = {
+  upsert(row: FilingEscalationRolloverReaffirmationSlaRow): Promise<void>
+  get(id: string): Promise<FilingEscalationRolloverReaffirmationSlaRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationRolloverReaffirmationSlaRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationRolloverReaffirmationSlaRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -302,6 +318,8 @@ export type SpineRepositories = {
   filingEscalationWaiverRolloverAttestations: FilingEscalationWaiverRolloverAttestationRepository
   filingEscalationRemediationExpiryDigests: FilingEscalationRemediationExpiryDigestRepository
   filingEscalationRolloverBreachWatches: FilingEscalationRolloverBreachWatchRepository
+  filingEscalationRemediationLifecycles: FilingEscalationRemediationLifecycleRepository
+  filingEscalationRolloverReaffirmationSlas: FilingEscalationRolloverReaffirmationSlaRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -726,6 +744,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingEscalationRolloverBreachWatches.values()].filter(
+          (row) => row.packageId === packageId
+        )
+      },
+    },
+    filingEscalationRemediationLifecycles: {
+      async upsert(row) {
+        store.filingEscalationRemediationLifecycles.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationRemediationLifecycles.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationRemediationLifecycles.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationRemediationLifecycles.values()].filter(
+          (row) => row.packageId === packageId
+        )
+      },
+    },
+    filingEscalationRolloverReaffirmationSlas: {
+      async upsert(row) {
+        store.filingEscalationRolloverReaffirmationSlas.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationRolloverReaffirmationSlas.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationRolloverReaffirmationSlas.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationRolloverReaffirmationSlas.values()].filter(
           (row) => row.packageId === packageId
         )
       },
