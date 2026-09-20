@@ -29,17 +29,29 @@ type ApiCallOptions = {
   body?: unknown
 }
 
+type ApiCallResult = {
+  ok: boolean
+  status: number
+  body: unknown
+}
+
 const DEFAULT_FILE_TEXT =
   "%PDF-ops-audit% this payload proves ingest + workflow + court-ops + filing governance wiring."
 
 export function OperatorAuditConsole() {
   const [partnerId, setPartnerId] = useState("partner_a")
+  const [secondReviewerId, setSecondReviewerId] = useState("partner_b")
   const [operatorId, setOperatorId] = useState("associate_a")
   const [clerkId, setClerkId] = useState("clerk_a")
   const [matterId, setMatterId] = useState("")
   const [documentId, setDocumentId] = useState("")
   const [draftId, setDraftId] = useState("")
   const [packageId, setPackageId] = useState("")
+  const [attestationId, setAttestationId] = useState("")
+  const [disputeId, setDisputeId] = useState("")
+  const [adjudicationId, setAdjudicationId] = useState("")
+  const [burndownTargetHours, setBurndownTargetHours] = useState("2")
+  const [rebaselineTargetHours, setRebaselineTargetHours] = useState("4")
   const [fileText, setFileText] = useState(DEFAULT_FILE_TEXT)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -50,7 +62,7 @@ export function OperatorAuditConsole() {
     setLogs((prev) => [log, ...prev])
   }
 
-  async function runApiCall(options: ApiCallOptions): Promise<unknown> {
+  async function runApiCallWithStatus(options: ApiCallOptions): Promise<ApiCallResult> {
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value === undefined || value === "") continue
@@ -89,17 +101,42 @@ export function OperatorAuditConsole() {
       responseBody: parsed,
       atIso: new Date().toISOString(),
     })
-    if (!response.ok) {
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: parsed,
+    }
+  }
+
+  async function runApiCall(options: ApiCallOptions): Promise<unknown> {
+    const result = await runApiCallWithStatus(options)
+    if (!result.ok) {
       const message =
-        typeof parsed === "object" &&
-        parsed !== null &&
-        "error" in parsed &&
-        typeof parsed.error === "string"
-          ? parsed.error
-          : `${options.step} failed with ${response.status}`
+        typeof result.body === "object" &&
+        result.body !== null &&
+        "error" in result.body &&
+        typeof result.body.error === "string"
+          ? result.body.error
+          : `${options.step} failed with ${result.status}`
       throw new Error(message)
     }
-    return parsed
+    return result.body
+  }
+
+  function firstItemIdFromBody(body: unknown): string {
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      !("items" in body) ||
+      !Array.isArray(body.items) ||
+      !body.items[0] ||
+      typeof body.items[0] !== "object" ||
+      !("id" in body.items[0]) ||
+      typeof body.items[0].id !== "string"
+    ) {
+      return ""
+    }
+    return body.items[0].id
   }
 
   async function runStep(name: string, fn: () => Promise<void>) {
@@ -414,6 +451,291 @@ export function OperatorAuditConsole() {
     })
   }
 
+  async function seedPhase7073AdjudicationContext() {
+    if (!matterId || !packageId) {
+      throw new Error("Run steps 1-10 so matter and approved package exist.")
+    }
+
+    let resolvedAttestationId = attestationId
+    if (!resolvedAttestationId) {
+      const record = await runApiCallWithStatus({
+        step: "Record closure attestation seed for phase #70-#73 actions",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "record_closure_attestation",
+          actorId: partnerId,
+          ownerId: partnerId,
+          secondReviewerId,
+          partnerConcurrence: true,
+          evidenceNote: "Seed attestation from /ops for closure-governance action wiring.",
+          note: "Operator seed for phase 70-73 adjudication context",
+        },
+      })
+      if (
+        record.ok &&
+        typeof record.body === "object" &&
+        record.body !== null &&
+        "result" in record.body &&
+        record.body.result &&
+        typeof record.body.result === "object" &&
+        "closureAttestation" in record.body.result &&
+        record.body.result.closureAttestation &&
+        typeof record.body.result.closureAttestation === "object" &&
+        "id" in record.body.result.closureAttestation &&
+        typeof record.body.result.closureAttestation.id === "string"
+      ) {
+        resolvedAttestationId = record.body.result.closureAttestation.id
+      }
+    }
+    if (!resolvedAttestationId) {
+      const attestationView = await runApiCall({
+        step: "Read closure attestation view for seeded id",
+        method: "GET",
+        path: "/api/d4/filings",
+        query: {
+          view: "closure_attestations",
+          userId: partnerId,
+          matterId,
+          limit: 10,
+          cursor: 0,
+        },
+      })
+      resolvedAttestationId = firstItemIdFromBody(attestationView)
+    }
+    if (!resolvedAttestationId) {
+      throw new Error("Could not resolve attestation id for phase #70-#73 action wiring.")
+    }
+    setAttestationId(resolvedAttestationId)
+
+    let resolvedDisputeId = disputeId
+    if (!resolvedDisputeId) {
+      const openDispute = await runApiCallWithStatus({
+        step: "Open closure attestation dispute seed",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "open_closure_attestation_dispute",
+          actorId: secondReviewerId,
+          attestationId: resolvedAttestationId,
+          conflictReason: "Operator seed conflict for adjudication chain.",
+          note: "Open dispute so adjudication queue can be exercised from /ops",
+        },
+      })
+      if (
+        openDispute.ok &&
+        typeof openDispute.body === "object" &&
+        openDispute.body !== null &&
+        "result" in openDispute.body &&
+        openDispute.body.result &&
+        typeof openDispute.body.result === "object" &&
+        "closureAttestationDispute" in openDispute.body.result &&
+        openDispute.body.result.closureAttestationDispute &&
+        typeof openDispute.body.result.closureAttestationDispute === "object" &&
+        "id" in openDispute.body.result.closureAttestationDispute &&
+        typeof openDispute.body.result.closureAttestationDispute.id === "string"
+      ) {
+        resolvedDisputeId = openDispute.body.result.closureAttestationDispute.id
+      }
+    }
+    if (!resolvedDisputeId) {
+      const disputeView = await runApiCall({
+        step: "Read closure attestation dispute view for seeded id",
+        method: "GET",
+        path: "/api/d4/filings",
+        query: {
+          view: "closure_attestation_disputes",
+          userId: partnerId,
+          matterId,
+          limit: 10,
+          cursor: 0,
+        },
+      })
+      resolvedDisputeId = firstItemIdFromBody(disputeView)
+    }
+    if (!resolvedDisputeId) {
+      throw new Error("Could not resolve dispute id for phase #70-#73 action wiring.")
+    }
+    setDisputeId(resolvedDisputeId)
+
+    let resolvedAdjudicationId = adjudicationId
+    if (!resolvedAdjudicationId) {
+      const escalate = await runApiCallWithStatus({
+        step: "Escalate dispute to panel seed",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "escalate_closure_dispute_to_panel",
+          actorId: secondReviewerId,
+          disputeId: resolvedDisputeId,
+          panelMemberIds: [partnerId, secondReviewerId],
+          dissentNote: "Seed dissent note for phase #70-#73 /ops adjudication flow.",
+          note: "Escalate dispute for /ops phase #70-#73 action path",
+        },
+      })
+      if (
+        escalate.ok &&
+        typeof escalate.body === "object" &&
+        escalate.body !== null &&
+        "result" in escalate.body &&
+        escalate.body.result &&
+        typeof escalate.body.result === "object" &&
+        "closureAdjudicationQueue" in escalate.body.result &&
+        escalate.body.result.closureAdjudicationQueue &&
+        typeof escalate.body.result.closureAdjudicationQueue === "object" &&
+        "id" in escalate.body.result.closureAdjudicationQueue &&
+        typeof escalate.body.result.closureAdjudicationQueue.id === "string"
+      ) {
+        resolvedAdjudicationId = escalate.body.result.closureAdjudicationQueue.id
+      }
+    }
+    if (!resolvedAdjudicationId) {
+      const adjudicationView = await runApiCall({
+        step: "Read closure adjudication queue view for seeded id",
+        method: "GET",
+        path: "/api/d4/filings",
+        query: {
+          view: "closure_adjudication_queue",
+          userId: partnerId,
+          matterId,
+          limit: 10,
+          cursor: 0,
+        },
+      })
+      resolvedAdjudicationId = firstItemIdFromBody(adjudicationView)
+    }
+    if (!resolvedAdjudicationId) {
+      throw new Error("Could not resolve adjudication id for phase #70-#73 action wiring.")
+    }
+    setAdjudicationId(resolvedAdjudicationId)
+  }
+
+  async function setClosureAdjudicationDebtBurndownTarget() {
+    if (!adjudicationId) throw new Error("Seed adjudication context first.")
+    await runApiCall({
+      step: "Set closure adjudication debt burndown target",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "set_closure_adjudication_debt_burndown_target",
+        actorId: partnerId,
+        adjudicationId,
+        targetHours: Number(burndownTargetHours),
+        note: "Set from /ops phase-specific closure governance action wiring.",
+      },
+    })
+  }
+
+  async function rebaselineClosureAdjudicationBurndownForecast() {
+    if (!adjudicationId) throw new Error("Seed adjudication context first.")
+    await runApiCall({
+      step: "Rebaseline closure adjudication burndown forecast",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "rebaseline_closure_adjudication_burndown_forecast",
+        actorId: partnerId,
+        adjudicationId,
+        targetHours: Number(rebaselineTargetHours),
+        note: "Rebaseline from /ops phase-specific closure governance action wiring.",
+      },
+    })
+  }
+
+  async function acknowledgeClosureBurndownSettlementDrift() {
+    if (!adjudicationId) throw new Error("Seed adjudication context first.")
+    await runApiCall({
+      step: "Acknowledge closure burndown settlement drift",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "acknowledge_closure_burndown_settlement_drift",
+        actorId: partnerId,
+        adjudicationId,
+        note: "Settlement drift acknowledgement from /ops for phase-specific action coverage.",
+      },
+    })
+  }
+
+  async function checkpointClosureSettlementPostResolutionVerification() {
+    if (!adjudicationId) throw new Error("Seed adjudication context first.")
+    await runApiCall({
+      step: "Checkpoint closure settlement post-resolution verification",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "checkpoint_closure_settlement_post_resolution_verification",
+        actorId: partnerId,
+        adjudicationId,
+        note: "Post-resolution checkpoint from /ops for phase-specific action coverage.",
+      },
+    })
+  }
+
+  async function readClosureAdjudicationDebtBurndownView() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Read closure adjudication debt burndown view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "closure_adjudication_debt_burndown",
+        userId: partnerId,
+        matterId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
+  async function readClosureBurndownRecalibrationView() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Read closure burndown recalibration view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "closure_burndown_recalibration",
+        userId: partnerId,
+        matterId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
+  async function readClosureBurndownSettlementView() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Read closure burndown settlement view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "closure_burndown_settlement",
+        userId: partnerId,
+        matterId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
+  async function readClosureSettlementAttestationView() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Read closure settlement attestation view",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "closure_settlement_attestation",
+        userId: partnerId,
+        matterId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 md:px-8">
       <header className="space-y-3">
@@ -447,10 +769,14 @@ export function OperatorAuditConsole() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <div>
               <p className="mb-1 text-xs tracking-wide uppercase">Partner actor</p>
               <Input className="rounded-none" value={partnerId} onChange={(e) => setPartnerId(e.target.value)} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">Second reviewer actor</p>
+              <Input className="rounded-none" value={secondReviewerId} onChange={(e) => setSecondReviewerId(e.target.value)} />
             </div>
             <div>
               <p className="mb-1 text-xs tracking-wide uppercase">Operator actor</p>
@@ -485,6 +811,30 @@ export function OperatorAuditConsole() {
             <div>
               <p className="mb-1 text-xs tracking-wide uppercase">packageId</p>
               <Input className="rounded-none font-mono text-xs" value={packageId} onChange={(e) => setPackageId(e.target.value)} />
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">attestationId</p>
+              <Input className="rounded-none font-mono text-xs" value={attestationId} onChange={(e) => setAttestationId(e.target.value)} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">disputeId</p>
+              <Input className="rounded-none font-mono text-xs" value={disputeId} onChange={(e) => setDisputeId(e.target.value)} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">adjudicationId (#70-#73 path)</p>
+              <Input className="rounded-none font-mono text-xs" value={adjudicationId} onChange={(e) => setAdjudicationId(e.target.value)} />
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">Burndown target hours</p>
+              <Input className="rounded-none" value={burndownTargetHours} onChange={(e) => setBurndownTargetHours(e.target.value)} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">Rebaseline target hours</p>
+              <Input className="rounded-none" value={rebaselineTargetHours} onChange={(e) => setRebaselineTargetHours(e.target.value)} />
             </div>
           </div>
           {notice ? <p className="text-sm text-emerald-700">{notice}</p> : null}
@@ -537,6 +887,33 @@ export function OperatorAuditConsole() {
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Closure compliance view read", readClosureComplianceView)}>
               13) Read filings closure compliance view
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Phase #70-#73 adjudication context seeded", seedPhase7073AdjudicationContext)}>
+              14) Seed #70-#73 adjudication context
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Debt burndown target action sent", setClosureAdjudicationDebtBurndownTarget)}>
+              15) Action: set_closure_adjudication_debt_burndown_target
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown rebaseline action sent", rebaselineClosureAdjudicationBurndownForecast)}>
+              16) Action: rebaseline_closure_adjudication_burndown_forecast
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement drift action sent", acknowledgeClosureBurndownSettlementDrift)}>
+              17) Action: acknowledge_closure_burndown_settlement_drift
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement post-resolution action sent", checkpointClosureSettlementPostResolutionVerification)}>
+              18) Action: checkpoint_closure_settlement_post_resolution_verification
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Debt burndown view read", readClosureAdjudicationDebtBurndownView)}>
+              19) View: closure_adjudication_debt_burndown
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown recalibration view read", readClosureBurndownRecalibrationView)}>
+              20) View: closure_burndown_recalibration
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown settlement view read", readClosureBurndownSettlementView)}>
+              21) View: closure_burndown_settlement
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement attestation view read", readClosureSettlementAttestationView)}>
+              22) View: closure_settlement_attestation
             </Button>
           </CardContent>
         </Card>

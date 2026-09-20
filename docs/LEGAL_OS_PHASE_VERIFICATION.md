@@ -8,7 +8,7 @@ Source of truth: forensic audit docs plus post-audit operator UI wiring on `main
 No audited sample phase qualifies as **DONE product**.
 
 - `backend_real`: PASS across #34-#37 and #70-#73.
-- `frontend_real`: now PASS for minimal operator coverage via `/ops`.
+- `frontend_real`: PASS for #34-#37 via `/ops`, but FAIL for #70-#73-specific governance actions/views.
 - `transport_stub`: still true because filing transport remains `TODO(firm)` + `_stub` + `blocked_todo_firm`.
 
 Because `transport_stub=true`, final status remains **PARTIAL** for all sampled phases.
@@ -21,10 +21,25 @@ Because `transport_stub=true`, final status remains **PARTIAL** for all sampled 
 | #35 | Firestore write-path parity (documents/filings/workflow) | `3a60438` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
 | #36 | Workflow timeline + OCR job persistence | `aebefbb` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
 | #37 | Drafts + Court Ops persistence | `45cacaf` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
-| #70 | Debt-burndown forecasting + expiry attestation | `0e2d397` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | blocker |
-| #71 | Burndown recalibration + attestation queue orchestration | `ca564d8` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | blocker |
-| #72 | Burndown settlement + queue drain | `65b1615` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | blocker |
-| #73 | Settlement attestation + queue drain reconciliation | `3a1812c` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | blocker |
+| #70 | Debt-burndown forecasting + expiry attestation | `0e2d397` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added in fix lane) | true | PARTIAL | blocker |
+| #71 | Burndown recalibration + attestation queue orchestration | `ca564d8` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added in fix lane) | true | PARTIAL | blocker |
+| #72 | Burndown settlement + queue drain | `65b1615` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added in fix lane) | true | PARTIAL | blocker |
+| #73 | Settlement attestation + queue drain reconciliation | `3a1812c` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added in fix lane) | true | PARTIAL | blocker |
+
+## Re-audit correction + current lane update (independent, 2026-09-20)
+
+- `/ops` is real and calls audited endpoint families (`/api/d1/documents`, `/api/d1/document-workflow`, `/api/d4/drafts`, `/api/d2/court-ops`, `/api/d4/filings`).
+- Re-audit #78 correctly flagged #70-#73 `frontend_real` as FAIL at that time.
+- This fix lane adds direct `/ops` call sites for #70-#73-specific actions/views:
+  - `set_closure_adjudication_debt_burndown_target`
+  - `rebaseline_closure_adjudication_burndown_forecast`
+  - `acknowledge_closure_burndown_settlement_drift`
+  - `checkpoint_closure_settlement_post_resolution_verification`
+  - and corresponding read views for debt-burndown/recalibration/settlement/settlement-attestation.
+- Final `frontend_real` verdict for #70-#73 remains **PENDING RE-AUDIT** until Phase Auditor confirms execution evidence.
+- COMPLETE claim hard-fail remains enforced while transport stubs exist via:
+  - `ci_gates/check_pr_phase_claims.py`
+  - `.github/workflows/pr-phase-claim-gate.yml`
 
 ## Blocking conditions for DONE classification
 
