@@ -2,6 +2,21 @@
 
 Snapshot basis: current `main` as of this branch cut plus repository contents in `cursor-init`. The related `blueprint` repo was not accessible in this environment (`403`), so this inventory uses in-repo specs (`README.md`, `docs/HANDOVER_MANIFEST.md`, `docs/REPO_AUDIT_blueprint.md`).
 
+## Phase Auditor reclassification (required labels)
+
+The independent Phase Auditor sample for PRs #34-#37 and #70-#73 must not be treated as DONE product phases. Use these release labels on every claim:
+
+- `backend_real`: whether persistence + route behavior is materially implemented and test-backed.
+- `frontend_real`: whether user-facing UI paths exercise the audited APIs.
+- `transport_stub`: whether filing transport remains gated by `TODO(firm)`, `_stub` channels, or `blocked_todo_firm`.
+
+| Sample phases | backend_real | frontend_real | transport_stub | Classification |
+|---|---|---|---|---|
+| #34-#37 | PASS | PASS (minimal operator UI: `/ops`) | true | PARTIAL |
+| #70-#73 | PASS | PASS (minimal operator UI: `/ops`) | true | PARTIAL |
+
+Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be blocked by policy and PR metadata gate checks.
+
 ## Coverage matrix
 
 | Area | Status | Evidence in tree | Gap to complete legal OS |

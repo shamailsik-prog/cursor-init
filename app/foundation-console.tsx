@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -199,6 +200,12 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <Link
+              href="/ops"
+              className="inline-flex h-8 items-center justify-center rounded-none border border-[color:var(--brass)]/50 px-2.5 text-sm"
+            >
+              Open operator audit console
+            </Link>
             <Badge className="rounded-none border-[color:var(--brass)] bg-transparent text-[color:var(--brass)]">
               G-0 PASSED
             </Badge>
