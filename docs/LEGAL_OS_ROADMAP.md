@@ -100,12 +100,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `app/api/p5/tenancy/route.ts` to mint and refresh session references during `view=session`, accept session-reference replay, expose partner-admin `view=session_refs`, and deny cross-firm/session-mismatch reference reuse.
 - Enriched tenancy audit provenance with explicit auth-boundary metadata (`runtime_local` vs `external_session_hint`) plus session-reference/external-session hints on `tenant_update_role` writes and reads.
 - Extended API + runtime persistence tests for session replay/idempotency semantics, cross-firm reference denial, session-reference durability, and audit provenance visibility while keeping scope as internal scaffolding (no external IdP claims).
+- Added admin-scoped tenancy session revocation controls with durable revocation/drift markers (`revokedAt`, `revokedBy`, `revokedReason`, privileged-boundary drift metadata) and repository parity in memory + Firestore.
+- Extended `/api/p5/tenancy` with `revoke_session_reference`, expiry/revocation enforcement on `view=session` replay, and stale-session denial when privilege snapshots drift from current user role/clearance.
+- Propagated privileged-boundary drift telemetry onto `tenant_update_role` audit metadata (`privilegedBoundaryDriftCount` and session-reference IDs) while preserving existing COMPLETE/stub + scaffold-claim guard behavior.
+- Extended API + runtime persistence tests for revocation idempotency replay, cross-firm revocation denial, stale-session rejection, and persisted drift/revocation provenance visibility.
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy session revocation controls + privileged-boundary drift reporting**:
+Build **tenancy session lineage attestation + delegated-boundary reconciliation scaffolding**:
 
-1. Add explicit session-reference revocation and expiry enforcement surfaces (admin-only), including durable revocation markers.
-2. Propagate privileged-boundary drift metadata when role/clearance mutations invalidate previously-issued session references.
-3. Extend tenancy route + runtime tests for revocation replay behavior, stale-session denial, and drift telemetry visibility.
+1. Add session-lineage linkage (parent/child reference graph) so rotated/reissued references can be traced without external IdP assertions.
+2. Introduce delegated-boundary reconciliation metadata to flag when external-session hints and local role snapshots diverge across lineage hops.
+3. Extend tenancy route + runtime tests for lineage traversal pagination, delegated divergence visibility, and reconciliation audit traceability.
 4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.

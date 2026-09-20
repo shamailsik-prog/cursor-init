@@ -62,6 +62,12 @@ describe("Firestore repository adapters", () => {
         issuedAt: 101,
         lastSeenAt: 102,
         expiresAt: 103,
+        revokedAt: null,
+        revokedBy: null,
+        revokedReason: null,
+        privilegedBoundaryDriftedAt: null,
+        privilegedBoundaryDriftedBy: null,
+        privilegedBoundaryDriftReason: null,
       })
       const sessionRef = await repos.tenancySessionReferences.get("tsr_1")
       expect(sessionRef?.userId).toBe("partner_a")
