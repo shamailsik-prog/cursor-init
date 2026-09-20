@@ -1495,6 +1495,9 @@ export type FilingEscalationClosureSettlementArbitrationStatus =
   | "verification_override_petitioned"
   | "panel_confirmation_attested"
   | "reopen_veto_checkpointed"
+  | "final_ruling_issued"
+  | "dissent_memorialized"
+  | "ruling_publication_checkpointed"
 
 export type FilingEscalationClosureSettlementArbitrationRow = {
   id: string
@@ -1513,7 +1516,17 @@ export type FilingEscalationClosureSettlementArbitrationRow = {
   reopenVetoCheckpointedBy: string | null
   reopenVetoCheckpointedAt: number | null
   reopenVetoNote: string | null
+  finalRulingIssuedBy?: string | null
+  finalRulingIssuedAt?: number | null
+  finalRulingSummary?: string | null
+  dissentMemorializedBy?: string | null
+  dissentMemorializedAt?: number | null
+  dissentMemorializedNote?: string | null
+  rulingPublicationCheckpointedBy?: string | null
+  rulingPublicationCheckpointedAt?: number | null
+  rulingPublicationChannel?: string | null
   settlementArbitrationLeadTimeHours: number
+  arbitrationRulingAgingHours?: number
   notes: string[]
   lastEvaluatedAt: number
   updatedAt: number
@@ -1524,6 +1537,9 @@ export type FilingEscalationClosureQueueReentryComplianceStatus =
   | "reentry_exception_attested"
   | "timeout_waiver_checkpointed"
   | "reconciliation_resumed"
+  | "exception_debt_assigned"
+  | "debt_retirement_attested"
+  | "debt_aging_auto_escalated"
 
 export type FilingEscalationClosureQueueReentryComplianceRow = {
   id: string
@@ -1542,7 +1558,17 @@ export type FilingEscalationClosureQueueReentryComplianceRow = {
   timeoutWaiverHours: number | null
   reconciliationResumedBy: string | null
   reconciliationResumedAt: number | null
+  exceptionDebtAssignedBy?: string | null
+  exceptionDebtAssignedAt?: number | null
+  debtAssigneeId?: string | null
+  debtRetirementAttestedBy?: string | null
+  debtRetirementAttestedAt?: number | null
+  debtRetiredCount?: number
+  debtAgingAutoEscalatedBy?: string | null
+  debtAgingAutoEscalatedAt?: number | null
+  debtAgingEscalationHours?: number | null
   queueReentryExceptionDebtCount: number
+  queueReentryRetirementBurnCount?: number
   notes: string[]
   lastEvaluatedAt: number
   updatedAt: number

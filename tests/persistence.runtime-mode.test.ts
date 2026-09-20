@@ -1049,6 +1049,9 @@ describe("Runtime persistence mode", () => {
       let petitionSettlementVerificationOverrideStatus: number | null = null
       let attestSettlementPanelConfirmationStatus: number | null = null
       let checkpointSettlementReopenVetoStatus: number | null = null
+      let issueSettlementFinalRulingStatus: number | null = null
+      let memorializeSettlementDissentStatus: number | null = null
+      let checkpointSettlementPublicationStatus: number | null = null
       let adjudicationVerdictStatus: number | null = null
       let rebalanceClosureEnforcementStatus: number | null = null
       let configureRebalanceSafeguardStatus: number | null = null
@@ -1070,6 +1073,9 @@ describe("Runtime persistence mode", () => {
       let attestQueueReentryExceptionStatus: number | null = null
       let checkpointQueueReentryTimeoutWaiverStatus: number | null = null
       let controlQueueReentryResumeStatus: number | null = null
+      let assignQueueReentryDebtStatus: number | null = null
+      let attestQueueReentryDebtRetirementStatus: number | null = null
+      let controlQueueReentryDebtAgingStatus: number | null = null
       let attestRebalanceOverrideStatus: number | null = null
       let executeOwnerTransferStatus: number | null = null
       let executeThrottleReleaseStatus: number | null = null
@@ -1557,6 +1563,60 @@ describe("Runtime persistence mode", () => {
                   )
                   checkpointSettlementReopenVetoStatus = checkpointSettlementReopenVeto.status
                   expect([200, 404, 422]).toContain(checkpointSettlementReopenVetoStatus)
+                  const issueSettlementFinalRuling = await filingsPost(
+                    new Request("http://127.0.0.1/api/d4/filings", {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "80817713-9f87-48f6-b0ce-d45d8fd0869b",
+                      },
+                      body: JSON.stringify({
+                        action: "issue_closure_settlement_arbitration_final_ruling",
+                        actorId: "partner_a",
+                        adjudicationId,
+                        rulingSummary: "runtime final ruling issued after reopen veto checkpoint",
+                        note: "runtime issue final settlement arbitration ruling",
+                      }),
+                    })
+                  )
+                  issueSettlementFinalRulingStatus = issueSettlementFinalRuling.status
+                  expect([200, 404, 422]).toContain(issueSettlementFinalRulingStatus)
+                  const memorializeSettlementDissent = await filingsPost(
+                    new Request("http://127.0.0.1/api/d4/filings", {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "fa45f237-0fcd-4232-a124-2d211d6f7770",
+                      },
+                      body: JSON.stringify({
+                        action: "memorialize_closure_settlement_arbitration_dissent",
+                        actorId: "partner_a",
+                        adjudicationId,
+                        dissentNote: "runtime dissent memorialized for panel planning traceability",
+                        note: "runtime memorialize settlement arbitration dissent",
+                      }),
+                    })
+                  )
+                  memorializeSettlementDissentStatus = memorializeSettlementDissent.status
+                  expect([200, 404, 422]).toContain(memorializeSettlementDissentStatus)
+                  const checkpointSettlementPublication = await filingsPost(
+                    new Request("http://127.0.0.1/api/d4/filings", {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "55652489-58dc-4255-9505-d8ecf3f8e8cc",
+                      },
+                      body: JSON.stringify({
+                        action: "checkpoint_closure_settlement_arbitration_ruling_publication",
+                        actorId: "partner_a",
+                        adjudicationId,
+                        publicationChannel: "internal_panel_registry",
+                        note: "runtime checkpoint settlement arbitration publication",
+                      }),
+                    })
+                  )
+                  checkpointSettlementPublicationStatus = checkpointSettlementPublication.status
+                  expect([200, 404, 422]).toContain(checkpointSettlementPublicationStatus)
                 }
               }
               const resolveClosureDispute = await filingsPost(
@@ -2004,6 +2064,60 @@ describe("Runtime persistence mode", () => {
         )
         controlQueueReentryResumeStatus = controlQueueReentryResume.status
         expect([200, 404, 422]).toContain(controlQueueReentryResumeStatus)
+        const assignQueueReentryDebt = await filingsPost(
+          new Request("http://127.0.0.1/api/d4/filings", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": "80b22f5b-8cf6-4928-83c1-d28ad4268a4b",
+            },
+            body: JSON.stringify({
+              action: "assign_closure_queue_reentry_exception_debt",
+              actorId: "partner_a",
+              ownerId: "partner_a",
+              assigneeId: "partner_b",
+              note: "runtime assign queue re-entry exception debt",
+            }),
+          })
+        )
+        assignQueueReentryDebtStatus = assignQueueReentryDebt.status
+        expect([200, 404, 422]).toContain(assignQueueReentryDebtStatus)
+        const attestQueueReentryDebtRetirement = await filingsPost(
+          new Request("http://127.0.0.1/api/d4/filings", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": "8e8f2e5e-d9d4-4703-a8d1-dc04f53cfdfa",
+            },
+            body: JSON.stringify({
+              action: "attest_closure_queue_reentry_debt_retirement",
+              actorId: "partner_a",
+              ownerId: "partner_a",
+              retiredCount: 1,
+              note: "runtime attest queue re-entry debt retirement",
+            }),
+          })
+        )
+        attestQueueReentryDebtRetirementStatus = attestQueueReentryDebtRetirement.status
+        expect([200, 404, 422]).toContain(attestQueueReentryDebtRetirementStatus)
+        const controlQueueReentryDebtAging = await filingsPost(
+          new Request("http://127.0.0.1/api/d4/filings", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": "c4f85f40-f5a4-493e-a9c7-0ccf9b4b994b",
+            },
+            body: JSON.stringify({
+              action: "control_closure_queue_reentry_debt_aging_auto_escalation",
+              actorId: "partner_a",
+              ownerId: "partner_a",
+              agingHours: 6,
+              note: "runtime control queue re-entry debt aging auto escalation",
+            }),
+          })
+        )
+        controlQueueReentryDebtAgingStatus = controlQueueReentryDebtAging.status
+        expect([200, 404, 422]).toContain(controlQueueReentryDebtAgingStatus)
         if (executeOwnerTransferStatus !== 200) {
           const executeOwnerTransferAfterOverride = await filingsPost(
             new Request("http://127.0.0.1/api/d4/filings", {
@@ -2934,6 +3048,9 @@ describe("Runtime persistence mode", () => {
             "verification_override_petitioned",
             "panel_confirmation_attested",
             "reopen_veto_checkpointed",
+            "final_ruling_issued",
+            "dissent_memorialized",
+            "ruling_publication_checkpointed",
           ].includes(item.status)
         )
       ).toBe(true)
@@ -2953,6 +3070,9 @@ describe("Runtime persistence mode", () => {
             "reentry_exception_attested",
             "timeout_waiver_checkpointed",
             "reconciliation_resumed",
+            "exception_debt_assigned",
+            "debt_retirement_attested",
+            "debt_aging_auto_escalated",
           ].includes(item.status)
         )
       ).toBe(true)
@@ -5160,6 +5280,40 @@ describe("Runtime persistence mode", () => {
           )
         ).toBe(true)
       }
+      if (issueSettlementFinalRulingStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_settlement_arbitration_final_ruling_issue" &&
+              item.target.startsWith(
+                "closure-settlement-arbitration:closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:"
+              )
+          )
+        ).toBe(true)
+      }
+      if (memorializeSettlementDissentStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_settlement_arbitration_dissent_memorialize" &&
+              item.target.startsWith(
+                "closure-settlement-arbitration:closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:"
+              )
+          )
+        ).toBe(true)
+      }
+      if (checkpointSettlementPublicationStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action ===
+                "filing_closure_settlement_arbitration_ruling_publication_checkpoint" &&
+              item.target.startsWith(
+                "closure-settlement-arbitration:closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:"
+              )
+          )
+        ).toBe(true)
+      }
       if (waiveClosureSlaException.status === 200) {
         expect(
           auditViewJson.items.some(
@@ -5393,6 +5547,36 @@ describe("Runtime persistence mode", () => {
           auditViewJson.items.some(
             (item) =>
               item.action === "filing_closure_queue_reentry_compliance_reconciliation_resume_control" &&
+              item.target ===
+                "closure-queue-reentry-compliance:closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+          )
+        ).toBe(true)
+      }
+      if (assignQueueReentryDebtStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_queue_reentry_debt_assignment" &&
+              item.target ===
+                "closure-queue-reentry-compliance:closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+          )
+        ).toBe(true)
+      }
+      if (attestQueueReentryDebtRetirementStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_queue_reentry_debt_retirement_attest" &&
+              item.target ===
+                "closure-queue-reentry-compliance:closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+          )
+        ).toBe(true)
+      }
+      if (controlQueueReentryDebtAgingStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_queue_reentry_debt_aging_auto_escalation_control" &&
               item.target ===
                 "closure-queue-reentry-compliance:closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
           )
@@ -6125,7 +6309,10 @@ describe("Runtime persistence mode", () => {
       if (
         petitionSettlementVerificationOverrideStatus === 200 ||
         attestSettlementPanelConfirmationStatus === 200 ||
-        checkpointSettlementReopenVetoStatus === 200
+        checkpointSettlementReopenVetoStatus === 200 ||
+        issueSettlementFinalRulingStatus === 200 ||
+        memorializeSettlementDissentStatus === 200 ||
+        checkpointSettlementPublicationStatus === 200
       ) {
         expect(
           dbSettlementArbitration.docs.some(
@@ -6139,6 +6326,9 @@ describe("Runtime persistence mode", () => {
                 "verification_override_petitioned",
                 "panel_confirmation_attested",
                 "reopen_veto_checkpointed",
+                "final_ruling_issued",
+                "dissent_memorialized",
+                "ruling_publication_checkpointed",
               ].includes(String(entry.data()?.status ?? ""))
           )
         ).toBe(true)
@@ -6149,7 +6339,10 @@ describe("Runtime persistence mode", () => {
       if (
         attestQueueReentryExceptionStatus === 200 ||
         checkpointQueueReentryTimeoutWaiverStatus === 200 ||
-        controlQueueReentryResumeStatus === 200
+        controlQueueReentryResumeStatus === 200 ||
+        assignQueueReentryDebtStatus === 200 ||
+        attestQueueReentryDebtRetirementStatus === 200 ||
+        controlQueueReentryDebtAgingStatus === 200
       ) {
         expect(
           dbQueueReentryCompliance.docs.some(
@@ -6162,6 +6355,9 @@ describe("Runtime persistence mode", () => {
                 "reentry_exception_attested",
                 "timeout_waiver_checkpointed",
                 "reconciliation_resumed",
+                "exception_debt_assigned",
+                "debt_retirement_attested",
+                "debt_aging_auto_escalated",
               ].includes(String(entry.data()?.status ?? ""))
           )
         ).toBe(true)

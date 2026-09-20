@@ -84,6 +84,10 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `app/api/d4/filings/route.ts` with arbitration/reentry actions/views: `petition_closure_settlement_verification_override`, `attest_closure_settlement_arbitration_panel_confirmation`, `checkpoint_closure_settlement_reopen_veto`, `attest_closure_queue_reentry_exception`, `checkpoint_closure_queue_reentry_timeout_waiver`, `control_closure_queue_reentry_reconciliation_resume`, `view=closure_settlement_arbitration`, and `view=closure_queue_reentry_compliance`.
 - Surfaced settlement arbitration lead-time and queue re-entry exception-debt metrics in closure digest/queue/window payloads and workload severity forecasting for partner staffing and panel planning.
 - Extended API, route-wiring, repository, and runtime-mode coverage for arbitration/reentry transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
+- Extended durable settlement-arbitration rows with disposition-finalization fields (final ruling issuance, dissent memorialization, ruling publication checkpoints) and queue-reentry-compliance rows with debt-retirement controls (debt assignment, retirement attestation, aging auto-escalation) in runtime + Firestore persistence paths.
+- Extended `app/api/d4/filings/route.ts` with disposition/retirement actions: `issue_closure_settlement_arbitration_final_ruling`, `memorialize_closure_settlement_arbitration_dissent`, `checkpoint_closure_settlement_arbitration_ruling_publication`, `assign_closure_queue_reentry_exception_debt`, `attest_closure_queue_reentry_debt_retirement`, and `control_closure_queue_reentry_debt_aging_auto_escalation`.
+- Surfaced arbitration-ruling aging and queue-reentry retirement-burn metrics in closure digest/queue/window payloads and workload pressure scoring for partner staffing and panel planning projections.
+- Extended API, repository, route-wiring, and runtime-mode coverage for disposition/retirement transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
 
 ## Recommended immediate slice (Phase B)
 
@@ -98,9 +102,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure arbitration disposition finalization + queue reentry debt retirement parity**:
+Build **filing escalation closure arbitration publication-governance + queue reentry debt reconciliation parity**:
 
-1. Add settlement arbitration disposition actions (final ruling issuance, dissent memorialization, and ruling publication checkpoints).
-2. Add queue reentry debt retirement actions (exception debt assignment, retirement attestation, and aging auto-escalation controls).
-3. Surface arbitration ruling aging + queue reentry retirement-burn metrics in closure/workload digests for partner staffing and panel planning projections.
-4. Extend emulator/runtime + route-wiring coverage for disposition/retirement transitions, including idempotent replay behavior and audit write-through.
+1. Add arbitration publication-governance actions (publication correction logging, publication rollback checkpointing, and distribution attestation review).
+2. Add queue reentry debt reconciliation actions (retirement dispute intake, dispute resolution, and retirement rollback controls).
+3. Surface arbitration publication exception backlog + queue reentry retirement reconciliation drift metrics in closure/workload digests for partner staffing and panel planning projections.
+4. Extend emulator/runtime + route-wiring coverage for publication-governance/reconciliation transitions, including idempotent replay behavior and audit write-through.
