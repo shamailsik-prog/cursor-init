@@ -2162,7 +2162,7 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
-          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=50&cursor=0"
+          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=100&cursor=0"
         )
       )
       expect(auditView.status).toBe(200)
