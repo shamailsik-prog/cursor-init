@@ -108,6 +108,9 @@ export type AuditEntry = {
   delegatedBoundaryComparedSessionReferenceId?: string | null
   delegatedBoundaryReconciliationStatus?: "aligned" | "diverged"
   delegatedBoundaryDivergenceReasons?: string[]
+  lineageDisputeAttestationId?: string | null
+  lineageDisputeDisposition?: "pending" | "upheld" | "dismissed"
+  lineageReconciliationDigestId?: string | null
   at?: number
 }
 
@@ -138,6 +141,40 @@ export type TenancySessionReferenceRow = {
   privilegedBoundaryDriftedAt: number | null
   privilegedBoundaryDriftedBy: string | null
   privilegedBoundaryDriftReason: string | null
+}
+
+export type TenancyLineageDisputeDisposition = "pending" | "upheld" | "dismissed"
+
+export type TenancyLineageDisputeAttestationRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  disputedSessionReferenceId: string
+  disputedParentSessionReferenceId: string | null
+  disputedUserId: string
+  reason: string
+  reviewerId: string | null
+  reviewerNote: string | null
+  disposition: TenancyLineageDisputeDisposition
+  openedBy: string
+  openedAt: number
+  resolvedBy: string | null
+  resolvedAt: number | null
+  resolutionNote: string | null
+  updatedAt: number
+}
+
+export type TenancyLineageReconciliationDigestRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  openDisputeCount: number
+  divergedHopCount: number
+  unresolvedRevocationCount: number
+  openDisputeIds: string[]
+  divergedSessionReferenceIds: string[]
+  unresolvedRevocationSessionReferenceIds: string[]
+  updatedAt: number
 }
 
 export type StatuteSectionVersion = {
@@ -1809,6 +1846,8 @@ export class SpineStore {
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
   workflowOpsActivity = new Map<string, WorkflowOpsActivityRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
+  tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
+  tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

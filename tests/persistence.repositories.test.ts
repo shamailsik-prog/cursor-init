@@ -83,6 +83,54 @@ describe("Firestore repository adapters", () => {
       expect(firmSessionRefs.some((row) => row.id === "tsr_1")).toBe(true)
       const userSessionRefs = await repos.tenancySessionReferences.listByUserId("partner_a")
       expect(userSessionRefs.some((row) => row.id === "tsr_1")).toBe(true)
+      await repos.tenancyLineageDisputeAttestations.upsert({
+        id: "tld_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        disputedSessionReferenceId: "tsr_1",
+        disputedParentSessionReferenceId: null,
+        disputedUserId: "partner_a",
+        reason: "lineage disagreement",
+        reviewerId: "partner_a",
+        reviewerNote: "capture for review",
+        disposition: "pending",
+        openedBy: "partner_a",
+        openedAt: 104,
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNote: null,
+        updatedAt: 104,
+      })
+      const lineageDispute = await repos.tenancyLineageDisputeAttestations.get("tld_1")
+      expect(lineageDispute?.disposition).toBe("pending")
+      const lineageDisputesByFirm = await repos.tenancyLineageDisputeAttestations.listByFirm("firmA")
+      expect(lineageDisputesByFirm.some((row) => row.id === "tld_1")).toBe(true)
+      const lineageDisputesByRoot =
+        await repos.tenancyLineageDisputeAttestations.listByLineageRootSessionReferenceId("tsr_1")
+      expect(lineageDisputesByRoot.some((row) => row.id === "tld_1")).toBe(true)
+      await repos.tenancyLineageReconciliationDigests.upsert({
+        id: "tenancy_lineage_digest:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        openDisputeCount: 1,
+        divergedHopCount: 0,
+        unresolvedRevocationCount: 0,
+        openDisputeIds: ["tld_1"],
+        divergedSessionReferenceIds: [],
+        unresolvedRevocationSessionReferenceIds: [],
+        updatedAt: 105,
+      })
+      const lineageDigest = await repos.tenancyLineageReconciliationDigests.get(
+        "tenancy_lineage_digest:tsr_1"
+      )
+      expect(lineageDigest?.openDisputeCount).toBe(1)
+      const lineageDigestsByFirm = await repos.tenancyLineageReconciliationDigests.listByFirm("firmA")
+      expect(lineageDigestsByFirm.some((row) => row.id === "tenancy_lineage_digest:tsr_1")).toBe(true)
+      const lineageDigestsByRoot =
+        await repos.tenancyLineageReconciliationDigests.listByLineageRootSessionReferenceId("tsr_1")
+      expect(lineageDigestsByRoot.some((row) => row.id === "tenancy_lineage_digest:tsr_1")).toBe(
+        true
+      )
       await repos.committeeOutputs.create({
         id: "cbo_1",
         firmId: "firmA",

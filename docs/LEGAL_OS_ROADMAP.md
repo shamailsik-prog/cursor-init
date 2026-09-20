@@ -108,12 +108,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/p5/tenancy` with `reissue_session_reference` and `view=session_lineage` surfaces, including paginated lineage traversal and delegated-divergence filtering for partner-admin tenancy operations.
 - Surfaced delegated-boundary reconciliation status/reason telemetry (`aligned`/`diverged`, compared parent reference, divergence reasons) on reissue payloads and tenancy audit traces.
 - Extended API + runtime persistence tests for lineage pagination traversal, delegated divergence visibility, reissue audit traceability, and Firestore rehydration parity after runtime resets.
+- Added durable tenancy lineage-dispute attestation rows and lineage-reconciliation digest rows across in-memory + Firestore repositories (`tenancy_lineage_disputes`, `tenancy_lineage_reconciliation_digests`) with Firestore-rule coverage.
+- Extended `/api/p5/tenancy` with `attest_lineage_dispute`, `resolve_lineage_dispute`, `view=lineage_disputes`, and `view=lineage_reconciliation_digests` surfaces for partner-admin dispute lifecycle handling.
+- Added digest rollup recomputation per lineage root (open disputes, diverged hops, unresolved revocations) and persisted rollup snapshots on dispute transitions.
+- Extended tenancy API/repository/runtime persistence tests for dispute transition lifecycle, digest filters (`openDisputesOnly` + root scoping), and audit provenance traceability after runtime resets.
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy lineage dispute attestation + reconciliation digest scaffolding**:
+Build **tenancy lineage dispute reviewer assignment + digest acknowledgement scaffolding**:
 
-1. Add lineage-dispute attestation records for contested reissue hops (reason, reviewer, disposition) with durable memory/Firestore persistence.
-2. Introduce tenancy reconciliation digest rollups per lineage root (open disputes, diverged hops, unresolved revocations) for partner-admin monitoring.
-3. Extend tenancy route + runtime tests for dispute lifecycle transitions, digest pagination/filtering, and audit provenance traceability.
+1. Add reviewer-assignment transitions for pending lineage disputes (assign/reassign reviewer, reviewer-note updates) with durable persistence.
+2. Add reconciliation-digest acknowledgement state (acknowledgedBy/At/note) so partner admins can explicitly clear monitored digests.
+3. Extend tenancy route + runtime tests for reviewer assignment idempotency, digest acknowledgement filters, and audit provenance.
 4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.

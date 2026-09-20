@@ -66,6 +66,8 @@ import type {
   WorkflowOpsActivityRow,
   AuditEntry,
   CommitteeBrainOutput,
+  TenancyLineageDisputeAttestationRow,
+  TenancyLineageReconciliationDigestRow,
   TenancySessionReferenceRow,
   Entity,
   EntityLink,
@@ -1718,6 +1720,48 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return rows.docs
           .map((entry) => entry.data() as TenancySessionReferenceRow)
           .filter((row) => row.userId === userId)
+      },
+    },
+    tenancyLineageDisputeAttestations: {
+      async upsert(row) {
+        await setById(db, "tenancy_lineage_disputes", row)
+      },
+      async get(id) {
+        return getById<TenancyLineageDisputeAttestationRow>(db, "tenancy_lineage_disputes", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyLineageDisputeAttestationRow>(db, "tenancy_lineage_disputes", firmId)
+      },
+      async listByLineageRootSessionReferenceId(lineageRootSessionReferenceId) {
+        const rows = await getDocs(collection(db, "tenancy_lineage_disputes"))
+        return rows.docs
+          .map((entry) => entry.data() as TenancyLineageDisputeAttestationRow)
+          .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
+      },
+    },
+    tenancyLineageReconciliationDigests: {
+      async upsert(row) {
+        await setById(db, "tenancy_lineage_reconciliation_digests", row)
+      },
+      async get(id) {
+        return getById<TenancyLineageReconciliationDigestRow>(
+          db,
+          "tenancy_lineage_reconciliation_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyLineageReconciliationDigestRow>(
+          db,
+          "tenancy_lineage_reconciliation_digests",
+          firmId
+        )
+      },
+      async listByLineageRootSessionReferenceId(lineageRootSessionReferenceId) {
+        const rows = await getDocs(collection(db, "tenancy_lineage_reconciliation_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as TenancyLineageReconciliationDigestRow)
+          .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
       },
     },
   }

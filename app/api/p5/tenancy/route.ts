@@ -11,21 +11,29 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { syncFirmAudit } from "@/platform/persistence/auditSync"
+import { syncFirmTenancyLineageDisputeAttestations } from "@/platform/persistence/tenancyLineageDisputeSync"
+import { syncFirmTenancyLineageReconciliationDigests } from "@/platform/persistence/tenancyLineageDigestSync"
 import { syncFirmTenancySessionReferences } from "@/platform/persistence/tenancySessionReferenceSync"
 import {
+  attestSessionReferenceLineageDispute,
   buildSessionContext,
   getTenancySessionReferenceState,
   invalidateSessionReferencesForPrivilegeDrift,
   listFirmAudit,
   listFirmMemberships,
   listFirmSessionReferences,
+  listSessionReferenceLineageDisputes,
+  listSessionReferenceLineageReconciliationDigests,
   listSessionReferenceLineage,
   listFirmUsers,
+  reconcileSessionReferenceLineageDigests,
   reissueTenancySessionReference,
+  resolveSessionReferenceLineageDispute,
   revokeTenancySessionReference,
   upsertTenancySessionReference,
   updateUserRole,
 } from "@/platform/p5/tenancyAdmin"
+import type { TenancyLineageDisputeDisposition } from "@/platform/spine/store"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
@@ -60,7 +68,31 @@ type ReissueSessionReferenceBody = {
   reason?: string
 }
 
-type Body = UpdateRoleBody | RevokeSessionReferenceBody | ReissueSessionReferenceBody
+type AttestLineageDisputeBody = {
+  action: "attest_lineage_dispute"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  reason?: string
+  reviewerId?: string
+  reviewerNote?: string
+}
+
+type ResolveLineageDisputeBody = {
+  action: "resolve_lineage_dispute"
+  actorId?: string
+  firmId?: string
+  disputeId?: string
+  disposition?: string
+  resolutionNote?: string
+}
+
+type Body =
+  | UpdateRoleBody
+  | RevokeSessionReferenceBody
+  | ReissueSessionReferenceBody
+  | AttestLineageDisputeBody
+  | ResolveLineageDisputeBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -98,6 +130,13 @@ function parseAuthBoundary(value: unknown): TenancyAuthBoundary | undefined {
   if (value == null || value === "") return undefined
   if (value === "runtime_local" || value === "external_session_hint") return value
   throw new Error("authBoundary must be runtime_local or external_session_hint")
+}
+
+function parseLineageDisputeDisposition(
+  value: unknown
+): Exclude<TenancyLineageDisputeDisposition, "pending"> {
+  if (value === "upheld" || value === "dismissed") return value
+  throw new Error("disposition must be upheld or dismissed")
 }
 
 async function loadUser(
@@ -352,6 +391,89 @@ export async function GET(request: Request) {
       })
     }
 
+    if (view === "lineage_disputes") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const lineageRootSessionReferenceId = normalizeOptionalString(
+        url.searchParams.get("rootSessionRefId")
+      )
+      const dispositionParam = normalizeOptionalString(url.searchParams.get("disposition"))
+      let disposition: TenancyLineageDisputeDisposition | undefined
+      if (dispositionParam) {
+        if (dispositionParam !== "pending" && dispositionParam !== "upheld" && dispositionParam !== "dismissed") {
+          return NextResponse.json(
+            { error: "disposition must be pending, upheld, or dismissed" },
+            { status: 400 }
+          )
+        }
+        disposition = dispositionParam
+      }
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      const disputes = listSessionReferenceLineageDisputes(
+        store,
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        disposition,
+        limit,
+        cursor
+      )
+      return NextResponse.json({
+        view: "lineage_disputes",
+        items: disputes.items,
+        total: disputes.total,
+        limit,
+        cursor,
+        nextCursor: disputes.nextCursor,
+      })
+    }
+
+    if (view === "lineage_reconciliation_digests") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const lineageRootSessionReferenceId = normalizeOptionalString(
+        url.searchParams.get("rootSessionRefId")
+      )
+      const openDisputesOnly = parseBoolean(url.searchParams.get("openDisputesOnly"))
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      const refreshedDigests = reconcileSessionReferenceLineageDigests(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+      })
+      for (const digest of refreshedDigests) {
+        await repos.tenancyLineageReconciliationDigests.upsert(digest)
+      }
+      const digests = listSessionReferenceLineageReconciliationDigests(
+        store,
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        openDisputesOnly,
+        limit,
+        cursor
+      )
+      return NextResponse.json({
+        view: "lineage_reconciliation_digests",
+        items: digests.items,
+        total: digests.total,
+        limit,
+        cursor,
+        nextCursor: digests.nextCursor,
+      })
+    }
+
     return NextResponse.json({ error: "unknown view" }, { status: 400 })
   } catch (err) {
     const message = err instanceof Error ? err.message : "tenancy read failed"
@@ -381,7 +503,9 @@ export async function POST(request: Request) {
   if (
     parsed.action !== "update_role" &&
     parsed.action !== "revoke_session_reference" &&
-    parsed.action !== "reissue_session_reference"
+    parsed.action !== "reissue_session_reference" &&
+    parsed.action !== "attest_lineage_dispute" &&
+    parsed.action !== "resolve_lineage_dispute"
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -396,6 +520,20 @@ export async function POST(request: Request) {
     if (!isClassification(parsed.nextClearance)) {
       return NextResponse.json(
         { error: "nextClearance must be a rank-0–4 label" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "attest_lineage_dispute") {
+    if (!parsed.actorId || !parsed.firmId || !parsed.sessionReferenceId || !parsed.reason?.trim()) {
+      return NextResponse.json(
+        { error: "actorId, firmId, sessionReferenceId, and reason are required" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "resolve_lineage_dispute") {
+    if (!parsed.actorId || !parsed.firmId || !parsed.disputeId || !parsed.disposition) {
+      return NextResponse.json(
+        { error: "actorId, firmId, disputeId, and disposition are required" },
         { status: 400 }
       )
     }
@@ -492,6 +630,107 @@ export async function POST(request: Request) {
           delegatedBoundaryReconciledAt: reissued.reference.delegatedBoundaryReconciledAt,
           delegatedBoundaryReconciledBy: reissued.reference.delegatedBoundaryReconciledBy,
         },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "attest_lineage_dispute") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const disputedSessionReferenceId = parsed.sessionReferenceId
+      if (!actorId || !firmId || !disputedSessionReferenceId) {
+        throw new Error("actorId, firmId, and sessionReferenceId are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      const attested = attestSessionReferenceLineageDispute(store, {
+        actorId,
+        firmId,
+        disputedSessionReferenceId,
+        reason: parsed.reason?.trim() ?? "",
+        reviewerId: normalizeOptionalString(parsed.reviewerId),
+        reviewerNote: normalizeOptionalString(parsed.reviewerNote) ?? null,
+      })
+      await repos.tenancyLineageDisputeAttestations.upsert(attested.dispute)
+      const refreshedDigests = reconcileSessionReferenceLineageDigests(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId: attested.dispute.lineageRootSessionReferenceId,
+      })
+      for (const digest of refreshedDigests) {
+        await repos.tenancyLineageReconciliationDigests.upsert(digest)
+      }
+      const digest =
+        refreshedDigests.find(
+          (row) =>
+            row.lineageRootSessionReferenceId === attested.dispute.lineageRootSessionReferenceId
+        ) ?? null
+      const auditEntry = {
+        ...attested.auditEntry,
+        lineageReconciliationDigestId: digest?.id ?? null,
+      }
+      const auditIdx = store.audit.findIndex((entry) => entry.id === attested.auditEntry.id)
+      if (auditIdx >= 0) {
+        store.audit[auditIdx] = auditEntry
+      }
+      await repos.audit.append(auditEntry)
+      const payload = {
+        action: "attest_lineage_dispute",
+        dispute: attested.dispute,
+        digest,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_lineage_dispute") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const disputeId = parsed.disputeId
+      if (!actorId || !firmId || !disputeId) {
+        throw new Error("actorId, firmId, and disputeId are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      const resolved = resolveSessionReferenceLineageDispute(store, {
+        actorId,
+        firmId,
+        disputeId,
+        disposition: parseLineageDisputeDisposition(parsed.disposition),
+        resolutionNote: normalizeOptionalString(parsed.resolutionNote) ?? null,
+      })
+      await repos.tenancyLineageDisputeAttestations.upsert(resolved.dispute)
+      const refreshedDigests = reconcileSessionReferenceLineageDigests(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId: resolved.dispute.lineageRootSessionReferenceId,
+      })
+      for (const digest of refreshedDigests) {
+        await repos.tenancyLineageReconciliationDigests.upsert(digest)
+      }
+      const digest =
+        refreshedDigests.find(
+          (row) =>
+            row.lineageRootSessionReferenceId === resolved.dispute.lineageRootSessionReferenceId
+        ) ?? null
+      const auditEntry = {
+        ...resolved.auditEntry,
+        lineageReconciliationDigestId: digest?.id ?? null,
+      }
+      const auditIdx = store.audit.findIndex((entry) => entry.id === resolved.auditEntry.id)
+      if (auditIdx >= 0) {
+        store.audit[auditIdx] = auditEntry
+      }
+      await repos.audit.append(auditEntry)
+      const payload = {
+        action: "resolve_lineage_dispute",
+        dispute: resolved.dispute,
+        digest,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

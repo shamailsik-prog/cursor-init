@@ -4,6 +4,9 @@ import {
   type Role,
   type SpineStore,
   type TenancyAuthBoundary,
+  type TenancyLineageDisputeAttestationRow,
+  type TenancyLineageDisputeDisposition,
+  type TenancyLineageReconciliationDigestRow,
   type TenancySessionReferenceRow,
   type User,
 } from "@/platform/spine/store"
@@ -134,6 +137,9 @@ export function listFirmAudit(
     delegatedBoundaryComparedSessionReferenceId?: string | null
     delegatedBoundaryReconciliationStatus?: TenancyDelegatedBoundaryReconciliationStatus
     delegatedBoundaryDivergenceReasons?: string[]
+    lineageDisputeAttestationId?: string | null
+    lineageDisputeDisposition?: TenancyLineageDisputeDisposition
+    lineageReconciliationDigestId?: string | null
     at: number
   }>
   total: number
@@ -163,6 +169,9 @@ export function listFirmAudit(
       delegatedBoundaryReconciliationStatus:
         entry.delegatedBoundaryReconciliationStatus ?? "aligned",
       delegatedBoundaryDivergenceReasons: entry.delegatedBoundaryDivergenceReasons ?? [],
+      lineageDisputeAttestationId: entry.lineageDisputeAttestationId ?? null,
+      lineageDisputeDisposition: entry.lineageDisputeDisposition ?? "pending",
+      lineageReconciliationDigestId: entry.lineageReconciliationDigestId ?? null,
       at: entry.at ?? 0,
     }))
     .sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))
@@ -575,6 +584,283 @@ export function listSessionReferenceLineage(
       ...row,
       state: getTenancySessionReferenceState(row, now),
     })),
+    total: rows.length,
+    nextCursor,
+  }
+}
+
+function lineageRootForRow(row: TenancySessionReferenceRow): string {
+  return row.lineageRootSessionReferenceId || row.id
+}
+
+function digestIdForRoot(lineageRootSessionReferenceId: string): string {
+  return `tenancy_lineage_digest:${lineageRootSessionReferenceId}`
+}
+
+export function attestSessionReferenceLineageDispute(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    disputedSessionReferenceId: string
+    reason: string
+    reviewerId?: string | null
+    reviewerNote?: string | null
+    now?: number
+  }
+): {
+  dispute: TenancyLineageDisputeAttestationRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const disputedReference = store.tenancySessionReferences.get(input.disputedSessionReferenceId)
+  if (!disputedReference) throw new Error("unknown disputed session reference")
+  if (disputedReference.firmId !== input.firmId) {
+    throw new Error("cross-firm session reference denied")
+  }
+  const reason = input.reason.trim()
+  if (!reason) throw new Error("lineage dispute reason is required")
+  if (input.reviewerId) {
+    const reviewer = store.users.get(input.reviewerId)
+    if (!reviewer) throw new Error("unknown reviewer")
+    if (reviewer.firmId !== input.firmId) throw new Error("cross-firm reviewer denied")
+  }
+  const now = input.now ?? Date.now()
+  const dispute: TenancyLineageDisputeAttestationRow = {
+    id: store.id("tld"),
+    firmId: input.firmId,
+    lineageRootSessionReferenceId: lineageRootForRow(disputedReference),
+    disputedSessionReferenceId: disputedReference.id,
+    disputedParentSessionReferenceId: disputedReference.parentSessionReferenceId,
+    disputedUserId: disputedReference.userId,
+    reason,
+    reviewerId: input.reviewerId ?? null,
+    reviewerNote: input.reviewerNote?.trim() || null,
+    disposition: "pending",
+    openedBy: actor.id,
+    openedAt: now,
+    resolvedBy: null,
+    resolvedAt: null,
+    resolutionNote: null,
+    updatedAt: now,
+  }
+  store.tenancyLineageDisputeAttestations.set(dispute.id, dispute)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_attest_lineage_dispute",
+    actorId: actor.id,
+    target: disputedReference.userId,
+    classification: actor.clearanceLevel,
+    reason,
+    authBoundary: disputedReference.authBoundary,
+    sessionReferenceId: disputedReference.id,
+    externalSessionId: disputedReference.externalSessionId,
+    delegatedBoundaryLineageRootSessionReferenceId: dispute.lineageRootSessionReferenceId,
+    delegatedBoundaryComparedSessionReferenceId: disputedReference.parentSessionReferenceId,
+    delegatedBoundaryReconciliationStatus:
+      disputedReference.delegatedBoundaryReconciliationStatus,
+    delegatedBoundaryDivergenceReasons: disputedReference.delegatedBoundaryDivergenceReasons,
+    lineageDisputeAttestationId: dispute.id,
+    lineageDisputeDisposition: dispute.disposition,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { dispute, auditEntry }
+}
+
+export function resolveSessionReferenceLineageDispute(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    disputeId: string
+    disposition: Exclude<TenancyLineageDisputeDisposition, "pending">
+    resolutionNote?: string | null
+    now?: number
+  }
+): {
+  dispute: TenancyLineageDisputeAttestationRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const existing = store.tenancyLineageDisputeAttestations.get(input.disputeId)
+  if (!existing) throw new Error("unknown lineage dispute")
+  if (existing.firmId !== input.firmId) throw new Error("cross-firm lineage dispute denied")
+  if (existing.disposition !== "pending") throw new Error("lineage dispute already resolved")
+  const now = input.now ?? Date.now()
+  const dispute: TenancyLineageDisputeAttestationRow = {
+    ...existing,
+    disposition: input.disposition,
+    resolvedBy: actor.id,
+    resolvedAt: now,
+    resolutionNote: input.resolutionNote?.trim() || null,
+    updatedAt: now,
+  }
+  store.tenancyLineageDisputeAttestations.set(dispute.id, dispute)
+  const disputedReference = store.tenancySessionReferences.get(dispute.disputedSessionReferenceId)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_resolve_lineage_dispute",
+    actorId: actor.id,
+    target: dispute.disputedUserId,
+    classification: actor.clearanceLevel,
+    reason: dispute.resolutionNote ?? undefined,
+    authBoundary: disputedReference?.authBoundary,
+    sessionReferenceId: dispute.disputedSessionReferenceId,
+    externalSessionId: disputedReference?.externalSessionId ?? null,
+    delegatedBoundaryLineageRootSessionReferenceId: dispute.lineageRootSessionReferenceId,
+    delegatedBoundaryComparedSessionReferenceId: dispute.disputedParentSessionReferenceId,
+    delegatedBoundaryReconciliationStatus:
+      disputedReference?.delegatedBoundaryReconciliationStatus,
+    delegatedBoundaryDivergenceReasons: disputedReference?.delegatedBoundaryDivergenceReasons,
+    lineageDisputeAttestationId: dispute.id,
+    lineageDisputeDisposition: dispute.disposition,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { dispute, auditEntry }
+}
+
+export function listSessionReferenceLineageDisputes(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  lineageRootSessionReferenceId: string | undefined,
+  disposition: TenancyLineageDisputeDisposition | undefined,
+  limit: number,
+  cursor: number
+): {
+  items: TenancyLineageDisputeAttestationRow[]
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const rows = [...store.tenancyLineageDisputeAttestations.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) =>
+      lineageRootSessionReferenceId
+        ? row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        : true
+    )
+    .filter((row) => (disposition ? row.disposition === disposition : true))
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
+    total: rows.length,
+    nextCursor,
+  }
+}
+
+function buildLineageReconciliationDigest(
+  store: SpineStore,
+  firmId: string,
+  lineageRootSessionReferenceId: string,
+  now: number
+): TenancyLineageReconciliationDigestRow {
+  const lineageRows = [...store.tenancySessionReferences.values()].filter(
+    (row) => row.firmId === firmId && lineageRootForRow(row) === lineageRootSessionReferenceId
+  )
+  const lineageDisputes = [...store.tenancyLineageDisputeAttestations.values()].filter(
+    (row) => row.firmId === firmId && row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+  )
+  const openDisputeIds = lineageDisputes
+    .filter((row) => row.disposition === "pending")
+    .map((row) => row.id)
+  const divergedSessionReferenceIds = lineageRows
+    .filter((row) => row.delegatedBoundaryReconciliationStatus === "diverged")
+    .map((row) => row.id)
+  const resolvedDisputedSessionReferenceIds = new Set(
+    lineageDisputes
+      .filter((row) => row.disposition !== "pending")
+      .map((row) => row.disputedSessionReferenceId)
+  )
+  const unresolvedRevocationSessionReferenceIds = lineageRows
+    .filter((row) => row.revokedAt !== null)
+    .filter((row) => !resolvedDisputedSessionReferenceIds.has(row.id))
+    .map((row) => row.id)
+  const digest: TenancyLineageReconciliationDigestRow = {
+    id: digestIdForRoot(lineageRootSessionReferenceId),
+    firmId,
+    lineageRootSessionReferenceId,
+    openDisputeCount: openDisputeIds.length,
+    divergedHopCount: divergedSessionReferenceIds.length,
+    unresolvedRevocationCount: unresolvedRevocationSessionReferenceIds.length,
+    openDisputeIds,
+    divergedSessionReferenceIds,
+    unresolvedRevocationSessionReferenceIds,
+    updatedAt: now,
+  }
+  store.tenancyLineageReconciliationDigests.set(digest.id, digest)
+  return digest
+}
+
+export function reconcileSessionReferenceLineageDigests(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId?: string
+    now?: number
+  }
+): TenancyLineageReconciliationDigestRow[] {
+  requirePartnerInFirm(store, input.actorId, input.firmId)
+  const now = input.now ?? Date.now()
+  const lineageRoots = new Set<string>()
+  for (const row of store.tenancySessionReferences.values()) {
+    if (row.firmId !== input.firmId) continue
+    lineageRoots.add(lineageRootForRow(row))
+  }
+  if (input.lineageRootSessionReferenceId) {
+    if (!lineageRoots.has(input.lineageRootSessionReferenceId)) {
+      throw new Error("unknown root session reference")
+    }
+    return [
+      buildLineageReconciliationDigest(
+        store,
+        input.firmId,
+        input.lineageRootSessionReferenceId,
+        now
+      ),
+    ]
+  }
+  return [...lineageRoots.values()]
+    .sort((a, b) => a.localeCompare(b))
+    .map((lineageRootSessionReferenceId) =>
+      buildLineageReconciliationDigest(store, input.firmId, lineageRootSessionReferenceId, now)
+    )
+}
+
+export function listSessionReferenceLineageReconciliationDigests(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  lineageRootSessionReferenceId: string | undefined,
+  openDisputesOnly: boolean,
+  limit: number,
+  cursor: number
+): {
+  items: TenancyLineageReconciliationDigestRow[]
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const rows = [...store.tenancyLineageReconciliationDigests.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) =>
+      lineageRootSessionReferenceId
+        ? row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        : true
+    )
+    .filter((row) => (openDisputesOnly ? row.openDisputeCount > 0 : true))
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
     total: rows.length,
     nextCursor,
   }

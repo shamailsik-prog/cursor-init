@@ -538,6 +538,177 @@ describe("GET/POST /api/p5/tenancy", () => {
     ).toBe(true)
   })
 
+  it("records lineage dispute attestations and reconciliation digests", async () => {
+    const actorSession = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "partner_a",
+        firmId: "firmA",
+      })
+    )
+    expect(actorSession.status).toBe(200)
+    const actorSessionJson = (await actorSession.json()) as { sessionReference: { id: string } }
+
+    const lineageAligned = await post(
+      {
+        action: "reissue_session_reference",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: actorSessionJson.sessionReference.id,
+      },
+      "97a739f9-9737-49ff-a9c7-64831920bdba"
+    )
+    expect(lineageAligned.status).toBe(200)
+    const lineageAlignedJson = (await lineageAligned.json()) as {
+      result: { sessionReference: { id: string } }
+    }
+
+    const lineageDiverged = await post(
+      {
+        action: "reissue_session_reference",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: lineageAlignedJson.result.sessionReference.id,
+        authBoundary: "external_session_hint",
+        externalSessionId: "ext-lineage-dispute",
+      },
+      "4f5cb025-a305-46f8-ae72-c66d833936dc"
+    )
+    expect(lineageDiverged.status).toBe(200)
+    const lineageDivergedJson = (await lineageDiverged.json()) as {
+      result: { sessionReference: { id: string; lineageRootSessionReferenceId: string } }
+    }
+
+    const attestedDispute = await post(
+      {
+        action: "attest_lineage_dispute",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: lineageDivergedJson.result.sessionReference.id,
+        reason: "delegated boundary diverged from expected runtime boundary",
+        reviewerId: "partner_a",
+        reviewerNote: "capture for reconciliation review",
+      },
+      "6c2f3569-6648-4ddf-9161-c7427260a4ad"
+    )
+    expect(attestedDispute.status).toBe(200)
+    const attestedDisputeJson = (await attestedDispute.json()) as {
+      result: { dispute: { id: string; disposition: string }; digest: { openDisputeCount: number } }
+    }
+    expect(attestedDisputeJson.result.dispute.disposition).toBe("pending")
+    expect(attestedDisputeJson.result.digest.openDisputeCount).toBeGreaterThan(0)
+
+    const disputesView = await get(
+      new URLSearchParams({
+        view: "lineage_disputes",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        disposition: "pending",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(disputesView.status).toBe(200)
+    const disputesJson = (await disputesView.json()) as {
+      items: Array<{ id: string; disputedSessionReferenceId: string; disposition: string }>
+    }
+    expect(
+      disputesJson.items.some(
+        (row) =>
+          row.id === attestedDisputeJson.result.dispute.id &&
+          row.disputedSessionReferenceId === lineageDivergedJson.result.sessionReference.id &&
+          row.disposition === "pending"
+      )
+    ).toBe(true)
+
+    const digestView = await get(
+      new URLSearchParams({
+        view: "lineage_reconciliation_digests",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(digestView.status).toBe(200)
+    const digestJson = (await digestView.json()) as {
+      items: Array<{
+        lineageRootSessionReferenceId: string
+        openDisputeCount: number
+        divergedHopCount: number
+      }>
+    }
+    const digestRow = digestJson.items.find(
+      (row) => row.lineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+    )
+    expect(digestRow?.openDisputeCount).toBeGreaterThan(0)
+    expect(digestRow?.divergedHopCount).toBeGreaterThan(0)
+
+    const resolvedDispute = await post(
+      {
+        action: "resolve_lineage_dispute",
+        actorId: "partner_a",
+        firmId: "firmA",
+        disputeId: attestedDisputeJson.result.dispute.id,
+        disposition: "dismissed",
+        resolutionNote: "divergence acknowledged as expected for delegation path",
+      },
+      "ff2f45b4-a7e3-43b5-8161-bce496a0054b"
+    )
+    expect(resolvedDispute.status).toBe(200)
+
+    const openOnlyDigestView = await get(
+      new URLSearchParams({
+        view: "lineage_reconciliation_digests",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        openDisputesOnly: "true",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(openOnlyDigestView.status).toBe(200)
+    const openOnlyDigestJson = (await openOnlyDigestView.json()) as {
+      items: Array<{ lineageRootSessionReferenceId: string }>
+    }
+    expect(
+      openOnlyDigestJson.items.some(
+        (row) => row.lineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(false)
+
+    const auditRes = await get(
+      new URLSearchParams({
+        view: "audit",
+        actorId: "partner_a",
+        firmId: "firmA",
+        limit: "25",
+        cursor: "0",
+      })
+    )
+    expect(auditRes.status).toBe(200)
+    const auditJson = (await auditRes.json()) as {
+      items: Array<{ action: string; lineageDisputeAttestationId?: string | null }>
+    }
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_attest_lineage_dispute" &&
+          row.lineageDisputeAttestationId === attestedDisputeJson.result.dispute.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_resolve_lineage_dispute" &&
+          row.lineageDisputeAttestationId === attestedDisputeJson.result.dispute.id
+      )
+    ).toBe(true)
+  })
+
   it("blocks role escalation and cross-firm role changes", async () => {
     const promotePartner = await post(
       {
