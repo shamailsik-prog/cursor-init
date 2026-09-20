@@ -43,6 +43,11 @@ export function OperatorAuditConsole() {
   const [secondReviewerId, setSecondReviewerId] = useState("partner_b")
   const [operatorId, setOperatorId] = useState("associate_a")
   const [clerkId, setClerkId] = useState("clerk_a")
+  const [caseNumberRaw, setCaseNumberRaw] = useState("CP 1234")
+  const [committeeBody, setCommitteeBody] = useState(
+    "Summarise operator-risk posture for this matter."
+  )
+  const [committeePurpose, setCommitteePurpose] = useState("ops-audit")
   const [matterId, setMatterId] = useState("")
   const [documentId, setDocumentId] = useState("")
   const [draftId, setDraftId] = useState("")
@@ -218,6 +223,137 @@ export function OperatorAuditConsole() {
         : ""
     if (!ingestedId) throw new Error("Document ingestion succeeded but document id was missing.")
     setDocumentId(ingestedId)
+  }
+
+  async function confirmMatterEngagementAction() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Confirm matter engagement",
+      method: "POST",
+      path: "/api/d1/matters",
+      body: {
+        action: "confirm_engagement",
+        actorId: partnerId,
+        matterId,
+      },
+    })
+  }
+
+  async function recordMatterCaseNumberAction() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Record matter case number",
+      method: "POST",
+      path: "/api/d1/matters",
+      body: {
+        action: "record_case_number",
+        actorId: partnerId,
+        matterId,
+        raw: caseNumberRaw,
+        courtId: "SHC",
+      },
+    })
+  }
+
+  async function readTenancyMemberships() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Read tenancy memberships",
+      method: "GET",
+      path: "/api/p5/tenancy",
+      query: {
+        view: "memberships",
+        actorId: partnerId,
+        firmId: "firmA",
+        matterId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
+  async function readTenancyAudit() {
+    await runApiCall({
+      step: "Read tenancy audit",
+      method: "GET",
+      path: "/api/p5/tenancy",
+      query: {
+        view: "audit",
+        actorId: partnerId,
+        firmId: "firmA",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
+  async function readClientsRegistry() {
+    await runApiCall({
+      step: "Read clients list",
+      method: "GET",
+      path: "/api/d1/clients",
+      query: {
+        userId: operatorId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
+  async function readMatterReporting() {
+    await runApiCall({
+      step: "Read matter-client reporting index",
+      method: "GET",
+      path: "/api/d1/reporting",
+      query: {
+        actorId: partnerId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
+  async function readOpsReporting() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Read ops activity reporting index",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        actorId: operatorId,
+        matterId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+  }
+
+  async function postCommitteeBrainOutput() {
+    await runApiCall({
+      step: "Persist committee brain output",
+      method: "POST",
+      path: "/api/p1/committee-brain",
+      body: {
+        actorId: partnerId,
+        body: committeeBody,
+        classification: "internal",
+        purpose: committeePurpose,
+        partyNames: ["Client A"],
+      },
+    })
+  }
+
+  async function readCommitteeBrainOutputs() {
+    await runApiCall({
+      step: "Hydrate committee brain output list",
+      method: "GET",
+      path: "/api/p1/committee-brain",
+      query: {
+        actorId: partnerId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
   }
 
   async function transitionWorkflow() {
@@ -994,6 +1130,24 @@ export function OperatorAuditConsole() {
               onChange={(e) => setFileText(e.target.value)}
             />
           </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">Case number raw input</p>
+              <Input className="rounded-none" value={caseNumberRaw} onChange={(e) => setCaseNumberRaw(e.target.value)} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">Committee purpose</p>
+              <Input className="rounded-none" value={committeePurpose} onChange={(e) => setCommitteePurpose(e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <p className="mb-1 text-xs tracking-wide uppercase">Committee body</p>
+            <textarea
+              className="border-input bg-background min-h-20 w-full rounded-none border px-3 py-2 text-sm"
+              value={committeeBody}
+              onChange={(e) => setCommitteeBody(e.target.value)}
+            />
+          </div>
           <div className="grid gap-3 md:grid-cols-4">
             <div>
               <p className="mb-1 text-xs tracking-wide uppercase">matterId</p>
@@ -1045,74 +1199,104 @@ export function OperatorAuditConsole() {
         <Card className="rounded-none">
           <CardHeader>
             <CardTitle>Audited flow actions</CardTitle>
-            <CardDescription>Run top-to-bottom for a full auditor walkthrough.</CardDescription>
+            <CardDescription>
+              Run top-to-bottom for a full auditor walkthrough. Batch D probes
+              are additive and keep transport-stub behavior visible.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Matter created", seedMatter)}>
               1) Create matter fixture
             </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Matter engagement confirmed", confirmMatterEngagementAction)}>
+              2) Confirm engagement (/api/d1/matters)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Matter case-number action recorded", recordMatterCaseNumberAction)}>
+              3) Record case number (/api/d1/matters)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Tenancy memberships read", readTenancyMemberships)}>
+              4) Read tenancy memberships (/api/p5/tenancy)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Tenancy audit read", readTenancyAudit)}>
+              5) Read tenancy audit (/api/p5/tenancy)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Clients registry read", readClientsRegistry)}>
+              6) Read clients list (/api/d1/clients)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Matter reporting read", readMatterReporting)}>
+              7) Read reporting index (/api/d1/reporting)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Ops reporting read", readOpsReporting)}>
+              8) Read ops reporting (/api/d2/ops-reporting)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Committee output persisted", postCommitteeBrainOutput)}>
+              9) Persist committee output (/api/p1/committee-brain)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Committee output list hydrated", readCommitteeBrainOutputs)}>
+              10) Hydrate committee output list (/api/p1/committee-brain)
+            </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Document ingested", ingestDocument)}>
-              2) Ingest document
+              11) Ingest document
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Workflow transitioned", transitionWorkflow)}>
-              3) Transition workflow
+              12) Transition workflow
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Workflow queue read", readWorkflowQueue)}>
-              4) Read workflow queue
+              13) Read workflow queue
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Draft composed", composeDraft)}>
-              5) Compose draft
+              14) Compose draft
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Draft list read", readDrafts)}>
-              6) Read drafts view
+              15) Read drafts view
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Court ops queue read", readCourtOpsQueue)}>
-              7) Read court ops queue
+              16) Read court ops queue
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Court ops command sent", runCourtOpsCommand)}>
-              8) Post court ops command
+              17) Post court ops command
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Filing package created", createFilingPackage)}>
-              9) Create filing package
+              18) Create filing package
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Filing package approved", approveFilingPackage)}>
-              10) Approve filing package
+              19) Approve filing package
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Dispatch queue updated", updateDispatchQueue)}>
-              11) Dispatch update
+              20) Dispatch update
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Dispatch view read", readFilingsDispatchView)}>
-              12) Read filings dispatch view
+              21) Read filings dispatch view
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Closure compliance view read", readClosureComplianceView)}>
-              13) Read filings closure compliance view
+              22) Read filings closure compliance view
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Phase #70-#73 adjudication context seeded", seedPhase7073AdjudicationContext)}>
-              14) Seed #70-#73 adjudication context
+              23) Seed #70-#73 adjudication context
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Debt burndown target action sent", setClosureAdjudicationDebtBurndownTarget)}>
-              15) Action: set_closure_adjudication_debt_burndown_target
+              24) Action: set_closure_adjudication_debt_burndown_target
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown rebaseline action sent", rebaselineClosureAdjudicationBurndownForecast)}>
-              16) Action: rebaseline_closure_adjudication_burndown_forecast
+              25) Action: rebaseline_closure_adjudication_burndown_forecast
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement drift action sent", acknowledgeClosureBurndownSettlementDrift)}>
-              17) Action: acknowledge_closure_burndown_settlement_drift
+              26) Action: acknowledge_closure_burndown_settlement_drift
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement post-resolution action sent", checkpointClosureSettlementPostResolutionVerification)}>
-              18) Action: checkpoint_closure_settlement_post_resolution_verification
+              27) Action: checkpoint_closure_settlement_post_resolution_verification
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Debt burndown view read", readClosureAdjudicationDebtBurndownView)}>
-              19) View: closure_adjudication_debt_burndown
+              28) View: closure_adjudication_debt_burndown
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown recalibration view read", readClosureBurndownRecalibrationView)}>
-              20) View: closure_burndown_recalibration
+              29) View: closure_burndown_recalibration
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown settlement view read", readClosureBurndownSettlementView)}>
-              21) View: closure_burndown_settlement
+              30) View: closure_burndown_settlement
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement attestation view read", readClosureSettlementAttestationView)}>
-              22) View: closure_settlement_attestation
+              31) View: closure_settlement_attestation
             </Button>
           </CardContent>
         </Card>

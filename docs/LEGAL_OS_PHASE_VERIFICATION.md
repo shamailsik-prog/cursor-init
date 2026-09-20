@@ -36,6 +36,14 @@ Because `transport_stub=true`, final status remains **PARTIAL** for all sampled 
   - `acknowledge_closure_burndown_settlement_drift`
   - `checkpoint_closure_settlement_post_resolution_verification`
   - and corresponding read views for debt-burndown/recalibration/settlement/settlement-attestation.
+- Batch D UI-stream gaps are now explicitly wired in `/ops` with real fetch call sites:
+  - `GET /api/p5/tenancy?view=memberships`
+  - `GET /api/p5/tenancy?view=audit`
+  - `GET /api/d1/clients`
+  - `GET /api/d1/reporting`
+  - `GET /api/d2/ops-reporting`
+  - `POST /api/d1/matters` (`confirm_engagement` + `record_case_number`)
+  - `POST` + `GET /api/p1/committee-brain` (persist + hydrate list)
 - Final `frontend_real` verdict for #70-#73 remains **PENDING RE-AUDIT** until Phase Auditor confirms execution evidence.
 - COMPLETE claim hard-fail remains enforced while transport stubs exist via:
   - `ci_gates/check_pr_phase_claims.py`
