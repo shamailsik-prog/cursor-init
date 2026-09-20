@@ -124,6 +124,21 @@ export function OperatorAuditConsole() {
     return result.body
   }
 
+  async function runApiCallAllowingStatuses(options: ApiCallOptions, allowedStatuses: number[]): Promise<ApiCallResult> {
+    const result = await runApiCallWithStatus(options)
+    if (allowedStatuses.includes(result.status)) {
+      return result
+    }
+    const message =
+      typeof result.body === "object" &&
+      result.body !== null &&
+      "error" in result.body &&
+      typeof result.body.error === "string"
+        ? result.body.error
+        : `${options.step} failed with ${result.status}`
+    throw new Error(message)
+  }
+
   function firstItemIdFromBody(body: unknown): string {
     if (
       typeof body !== "object" ||
