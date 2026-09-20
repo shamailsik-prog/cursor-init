@@ -149,6 +149,24 @@ export function OperatorAuditConsole() {
     return body.items[0].id
   }
 
+  function resultEntityId(body: unknown, key: string): string {
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      !("result" in body) ||
+      typeof body.result !== "object" ||
+      body.result === null ||
+      !(key in body.result)
+    ) {
+      return ""
+    }
+    const entity = body.result[key]
+    if (typeof entity !== "object" || entity === null || !("id" in entity) || typeof entity.id !== "string") {
+      return ""
+    }
+    return entity.id
+  }
+
   async function runStep(name: string, fn: () => Promise<void>) {
     setBusy(true)
     setError(null)
@@ -948,6 +966,569 @@ export function OperatorAuditConsole() {
         note: "Debt remediation seed for /ops phase 70-73 action path",
       },
     })
+  }
+
+  async function runBatch6069GovernanceLattice() {
+    if (!matterId || !packageId) {
+      throw new Error("Run steps 1-10 so matter and approved package exist.")
+    }
+    const ownerId = partnerId
+    const closureViewsQuery = {
+      userId: partnerId,
+      matterId,
+      limit: 10,
+      cursor: 0,
+    }
+
+    await runApiCallWithStatus({
+      step: "Acknowledge remediation expiry (#60 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "acknowledge_remediation_expiry",
+        actorId: partnerId,
+        packageId,
+        note: "Acknowledge remediation expiry through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Snooze remediation expiry (#60 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "snooze_remediation_expiry",
+        actorId: partnerId,
+        packageId,
+        snoozeHours: 2,
+        note: "Snooze remediation expiry through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Acknowledge rollover breach watch (#60 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "acknowledge_rollover_breach",
+        actorId: partnerId,
+        packageId,
+        note: "Acknowledge rollover breach watch through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Reaffirm rollover attestation (#61 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "reaffirm_rollover_attestation",
+        actorId: partnerId,
+        packageId,
+        note: "Reaffirm rollover attestation through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Acknowledge rollover reaffirmation SLA (#61 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "acknowledge_rollover_reaffirmation_sla",
+        actorId: partnerId,
+        packageId,
+        note: "Acknowledge reaffirmation SLA through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Attest remediation closure (#61 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "attest_remediation_closure",
+        actorId: partnerId,
+        packageId,
+        closureOutcome: "accepted_risk_retired",
+        note: "Attest remediation closure through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Set closure SLA window config (#63 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "set_closure_sla_window_config",
+        actorId: partnerId,
+        ownerId,
+        ackDeadlineHours: 1,
+        clearDeadlineHours: 2,
+        autoEscalationHours: 3,
+        note: "Set closure SLA windows through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Set closure auto-assignment rule (#63 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "set_closure_auto_assignment_rule",
+        actorId: partnerId,
+        ownerId,
+        mode: "workload_aware_claim",
+        maxActiveClaimsPerPartner: 4,
+        note: "Set closure auto-assignment through /ops Batch F lattice.",
+      },
+    })
+
+    const queueView = await runApiCall({
+      step: "Read closure follow-up queue for #60-#69 lattice context",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "closure_followup_queue",
+        ...closureViewsQuery,
+      },
+    })
+    const queueId = firstItemIdFromBody(queueView)
+    const queueSelector = queueId ? { queueId } : { ownerId }
+
+    await runApiCallWithStatus({
+      step: "Assign closure follow-up (#62 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "assign_closure_followup",
+        actorId: partnerId,
+        assigneeId: partnerId,
+        ...queueSelector,
+        note: "Assign closure follow-up through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Auto-assign closure follow-up (#63 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "auto_assign_closure_followup",
+        actorId: partnerId,
+        ...queueSelector,
+        note: "Auto-assign closure follow-up through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Claim closure follow-up (#62 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "claim_closure_followup",
+        actorId: partnerId,
+        ...queueSelector,
+        note: "Claim closure follow-up through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Waive closure SLA exception (#64 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "waive_closure_sla_exception",
+        actorId: partnerId,
+        ...queueSelector,
+        waiverReason: "Temporary closure-governance waiver during Batch F walk",
+        waiverHours: 2,
+        note: "Waive closure SLA exception through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Resolve closure follow-up (#62 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "resolve_closure_followup",
+        actorId: partnerId,
+        ...queueSelector,
+        note: "Resolve closure follow-up through /ops Batch F lattice.",
+      },
+    })
+
+    const attestationResponse = await runApiCallWithStatus({
+      step: "Record closure attestation (#64 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "record_closure_attestation",
+        actorId: partnerId,
+        ...queueSelector,
+        secondReviewerId,
+        partnerConcurrence: true,
+        evidenceNote: "Batch F /ops lattice attestation evidence.",
+        note: "Record closure attestation through /ops Batch F lattice.",
+      },
+    })
+    let resolvedAttestationId =
+      resultEntityId(attestationResponse.body, "closureAttestation") || attestationId.trim()
+    if (!resolvedAttestationId) {
+      const attestationView = await runApiCall({
+        step: "Read closure attestations for #60-#69 lattice context",
+        method: "GET",
+        path: "/api/d4/filings",
+        query: {
+          view: "closure_attestations",
+          ...closureViewsQuery,
+        },
+      })
+      resolvedAttestationId = firstItemIdFromBody(attestationView)
+    }
+    if (resolvedAttestationId) {
+      setAttestationId(resolvedAttestationId)
+      await runApiCallWithStatus({
+        step: "Review closure attestation (#64 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "review_closure_attestation",
+          actorId: secondReviewerId,
+          attestationId: resolvedAttestationId,
+          decision: "approve",
+          note: "Review closure attestation through /ops Batch F lattice.",
+        },
+      })
+    }
+
+    const disputeResponse = resolvedAttestationId
+      ? await runApiCallWithStatus({
+          step: "Open closure attestation dispute (#65 lattice)",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "open_closure_attestation_dispute",
+            actorId: secondReviewerId,
+            attestationId: resolvedAttestationId,
+            conflictReason: "Batch F lattice conflict rehearsal",
+            note: "Open closure attestation dispute through /ops Batch F lattice.",
+          },
+        })
+      : null
+    let resolvedDisputeId =
+      (disputeResponse ? resultEntityId(disputeResponse.body, "closureAttestationDispute") : "") ||
+      disputeId.trim()
+    if (!resolvedDisputeId) {
+      const disputeView = await runApiCall({
+        step: "Read closure attestation disputes for #60-#69 lattice context",
+        method: "GET",
+        path: "/api/d4/filings",
+        query: {
+          view: "closure_attestation_disputes",
+          ...closureViewsQuery,
+        },
+      })
+      resolvedDisputeId = firstItemIdFromBody(disputeView)
+    }
+    if (resolvedDisputeId) {
+      setDisputeId(resolvedDisputeId)
+      await runApiCallWithStatus({
+        step: "Resolve closure attestation dispute (#65 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "resolve_closure_attestation_dispute",
+          actorId: partnerId,
+          disputeId: resolvedDisputeId,
+          resolution: "uphold",
+          note: "Resolve closure attestation dispute through /ops Batch F lattice.",
+        },
+      })
+    }
+    await runApiCallWithStatus({
+      step: "Tick closure SLA exception enforcement (#65 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "tick_closure_sla_exception_enforcement",
+        actorId: partnerId,
+        ...queueSelector,
+        note: "Tick closure SLA exception enforcement through /ops Batch F lattice.",
+      },
+    })
+
+    const escalateResponse = resolvedDisputeId
+      ? await runApiCallWithStatus({
+          step: "Escalate closure dispute to panel (#66 lattice)",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "escalate_closure_dispute_to_panel",
+            actorId: secondReviewerId,
+            disputeId: resolvedDisputeId,
+            panelMemberIds: [partnerId, secondReviewerId],
+            dissentNote: "Batch F lattice dissent checkpoint.",
+            note: "Escalate dispute to panel through /ops Batch F lattice.",
+          },
+        })
+      : null
+    let resolvedAdjudicationId =
+      (escalateResponse ? resultEntityId(escalateResponse.body, "closureAdjudicationQueue") : "") ||
+      adjudicationId.trim()
+    if (!resolvedAdjudicationId) {
+      const adjudicationView = await runApiCall({
+        step: "Read closure adjudication queue for #60-#69 lattice context",
+        method: "GET",
+        path: "/api/d4/filings",
+        query: {
+          view: "closure_adjudication_queue",
+          ...closureViewsQuery,
+        },
+      })
+      resolvedAdjudicationId = firstItemIdFromBody(adjudicationView)
+    }
+    if (resolvedAdjudicationId) {
+      setAdjudicationId(resolvedAdjudicationId)
+      await runApiCallWithStatus({
+        step: "Record closure adjudication verdict (#66 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "record_closure_adjudication_verdict",
+          actorId: partnerId,
+          adjudicationId: resolvedAdjudicationId,
+          verdict: "uphold_dispute",
+          dissentNote: "Batch F lattice verdict with dissent memorialized.",
+          note: "Record closure adjudication verdict through /ops Batch F lattice.",
+        },
+      })
+      await runApiCallWithStatus({
+        step: "Govern closure adjudication quorum (#67 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "govern_closure_adjudication_quorum",
+          actorId: partnerId,
+          adjudicationId: resolvedAdjudicationId,
+          requiredPanelCount: 2,
+          quorumWindowHours: 1,
+          verdictWindowHours: 1,
+          note: "Govern adjudication quorum through /ops Batch F lattice.",
+        },
+      })
+      await runApiCallWithStatus({
+        step: "Acknowledge closure adjudication SLO breach (#68 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_closure_adjudication_slo_breach",
+          actorId: partnerId,
+          adjudicationId: resolvedAdjudicationId,
+          note: "Acknowledge adjudication SLO breach through /ops Batch F lattice.",
+        },
+      })
+      await runApiCallWithStatus({
+        step: "Extend closure adjudication SLO deadline (#68 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "extend_closure_adjudication_slo_deadline",
+          actorId: partnerId,
+          adjudicationId: resolvedAdjudicationId,
+          extensionHours: 2,
+          note: "Extend adjudication SLO deadline through /ops Batch F lattice.",
+        },
+      })
+      await runApiCallWithStatus({
+        step: "Escalate closure adjudication SLO tier (#68 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "escalate_closure_adjudication_slo_tier",
+          actorId: partnerId,
+          adjudicationId: resolvedAdjudicationId,
+          escalationTier: "tier_2_management_escalation",
+          note: "Escalate adjudication SLO tier through /ops Batch F lattice.",
+        },
+      })
+      await runApiCallWithStatus({
+        step: "Record closure adjudication SLO debt remediation (#69 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "record_closure_adjudication_slo_debt_remediation",
+          actorId: partnerId,
+          adjudicationId: resolvedAdjudicationId,
+          note: "Record SLO debt remediation through /ops Batch F lattice.",
+        },
+      })
+      await runApiCallWithStatus({
+        step: "Downshift closure adjudication SLO tier (#69 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "downshift_closure_adjudication_slo_tier",
+          actorId: partnerId,
+          adjudicationId: resolvedAdjudicationId,
+          escalationTier: "tier_1_partner_watch",
+          note: "Downshift adjudication SLO tier through /ops Batch F lattice.",
+        },
+      })
+      await runApiCallWithStatus({
+        step: "Attest closure adjudication SLO breach closure (#69 lattice)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "attest_closure_adjudication_slo_breach_closure",
+          actorId: partnerId,
+          adjudicationId: resolvedAdjudicationId,
+          note: "Attest adjudication SLO breach closure through /ops Batch F lattice.",
+        },
+      })
+    }
+
+    const rebalanceResponse = await runApiCallWithStatus({
+      step: "Rebalance closure enforcement queue (#66 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "rebalance_closure_enforcement_queue",
+        actorId: partnerId,
+        ownerId,
+        status: "owner_reassignment_recommended",
+        recommendedOwnerId: secondReviewerId,
+        note: "Rebalance closure enforcement queue through /ops Batch F lattice.",
+      },
+    })
+    let resolvedRebalanceId =
+      resultEntityId(rebalanceResponse.body, "closureEnforcementRebalance") || rebalanceId.trim()
+    if (!resolvedRebalanceId) {
+      const rebalanceView = await runApiCall({
+        step: "Read closure enforcement rebalance for #60-#69 lattice context",
+        method: "GET",
+        path: "/api/d4/filings",
+        query: {
+          view: "closure_enforcement_rebalance",
+          ...closureViewsQuery,
+        },
+      })
+      resolvedRebalanceId = firstItemIdFromBody(rebalanceView)
+    }
+    if (resolvedRebalanceId) {
+      setRebalanceId(resolvedRebalanceId)
+    }
+    const rebalanceSelector = resolvedRebalanceId ? { rebalanceId: resolvedRebalanceId } : { ownerId }
+
+    await runApiCallWithStatus({
+      step: "Execute closure rebalance owner transfer (#67 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "execute_closure_rebalance_owner_transfer",
+        actorId: partnerId,
+        ...rebalanceSelector,
+        note: "Execute rebalance owner transfer through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Execute closure rebalance throttle release (#67 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "execute_closure_rebalance_throttle_release",
+        actorId: partnerId,
+        ...rebalanceSelector,
+        reopenQueue: true,
+        note: "Execute rebalance throttle release through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Configure closure rebalance safeguards (#68 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "configure_closure_rebalance_auto_execution_safeguard",
+        actorId: partnerId,
+        ...rebalanceSelector,
+        cooldownLockHours: 1,
+        duplicateSuppressionHours: 1,
+        note: "Configure rebalance safeguards through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Attest closure rebalance override (#68 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "attest_closure_rebalance_auto_execution_override",
+        actorId: partnerId,
+        ...rebalanceSelector,
+        reason: "Batch F lattice override attestation.",
+        note: "Attest rebalance override through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Set closure rebalance safeguard override expiry (#69 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "set_closure_rebalance_safeguard_override_expiry",
+        actorId: partnerId,
+        ...rebalanceSelector,
+        overrideExpiryHours: 1,
+        note: "Set safeguard override expiry through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Auto-clear closure rebalance safeguard suppression (#69 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "auto_clear_closure_rebalance_safeguard_suppression",
+        actorId: partnerId,
+        ...rebalanceSelector,
+        note: "Auto-clear safeguard suppression through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Cleanup stale closure rebalance safeguard lock (#69 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "cleanup_stale_closure_rebalance_safeguard_lock",
+        actorId: partnerId,
+        ...rebalanceSelector,
+        note: "Cleanup stale safeguard locks through /ops Batch F lattice.",
+      },
+    })
+
+    const closureViews: Array<{ view: string; step: string }> = [
+      { view: "remediation_expiry_digests", step: "Read remediation expiry digests view (#60 lattice)" },
+      { view: "rollover_breach_watches", step: "Read rollover breach watches view (#60 lattice)" },
+      { view: "remediation_lifecycle", step: "Read remediation lifecycle view (#61 lattice)" },
+      { view: "rollover_reaffirmation_sla", step: "Read rollover reaffirmation SLA view (#61 lattice)" },
+      { view: "closure_compliance_digests", step: "Read closure compliance digests view (#62 lattice)" },
+      { view: "closure_followup_queue", step: "Read closure follow-up queue view (#62 lattice)" },
+      { view: "closure_sla_window_configs", step: "Read closure SLA window configs view (#63 lattice)" },
+      { view: "closure_auto_assignment_rules", step: "Read closure auto-assignment rules view (#63 lattice)" },
+      { view: "closure_sla_windows", step: "Read closure SLA windows view (#63 lattice)" },
+      { view: "closure_attestations", step: "Read closure attestations view (#64 lattice)" },
+      { view: "closure_sla_exception_digests", step: "Read closure SLA exception digests view (#64 lattice)" },
+      { view: "closure_attestation_disputes", step: "Read closure attestation disputes view (#65 lattice)" },
+      { view: "closure_sla_exception_enforcement", step: "Read closure SLA exception enforcement view (#65 lattice)" },
+      { view: "closure_adjudication_queue", step: "Read closure adjudication queue view (#66 lattice)" },
+      { view: "closure_enforcement_rebalance", step: "Read closure enforcement rebalance view (#66 lattice)" },
+      { view: "closure_adjudication_quorum", step: "Read closure adjudication quorum view (#67 lattice)" },
+      { view: "closure_rebalance_execution", step: "Read closure rebalance execution view (#67 lattice)" },
+      { view: "closure_adjudication_slo", step: "Read closure adjudication SLO view (#68 lattice)" },
+      { view: "closure_rebalance_safeguards", step: "Read closure rebalance safeguards view (#68 lattice)" },
+      {
+        view: "closure_adjudication_slo_debt_remediation",
+        step: "Read closure adjudication SLO debt remediation view (#69 lattice)",
+      },
+      { view: "closure_rebalance_safeguard_expiry", step: "Read closure rebalance safeguard expiry view (#69 lattice)" },
+    ]
+    for (const viewCall of closureViews) {
+      await runApiCall({
+        step: viewCall.step,
+        method: "GET",
+        path: "/api/d4/filings",
+        query: {
+          view: viewCall.view,
+          ...closureViewsQuery,
+        },
+      })
+    }
   }
 
   async function setClosureAdjudicationDebtBurndownTarget() {
@@ -2924,6 +3505,9 @@ export function OperatorAuditConsole() {
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Phase #70-#73 adjudication context seeded", seedPhase7073AdjudicationContext)}>
               23) Seed #70-#73 adjudication context
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch F #60-#69 governance lattice executed", runBatch6069GovernanceLattice)}>
+              15) Run Batch F #60-#69 governance lattice
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Debt burndown target action sent", setClosureAdjudicationDebtBurndownTarget)}>
               24) Action: set_closure_adjudication_debt_burndown_target
