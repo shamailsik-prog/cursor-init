@@ -16,6 +16,8 @@ import type {
   FilingPacketArtifactRow,
   FilingSubmissionExceptionRow,
   FilingEscalationOwnerRotaRow,
+  FilingEscalationPolicyBaselineRow,
+  FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationWorkloadDigestRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
@@ -389,6 +391,40 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_workload_digests"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationWorkloadDigestRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationPolicyBaselines: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_policy_baselines", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationPolicyBaselineRow>(db, "filing_escalation_policy_baselines", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationPolicyBaselineRow>(db, "filing_escalation_policy_baselines", firmId)
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_policy_baselines"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationPolicyBaselineRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationBreachWaivers: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_breach_waivers", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationBreachWaiverLedgerRow>(db, "filing_escalation_breach_waivers", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationBreachWaiverLedgerRow>(db, "filing_escalation_breach_waivers", firmId)
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_breach_waivers"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationBreachWaiverLedgerRow)
           .filter((row) => row.packageId === packageId)
       },
     },

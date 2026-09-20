@@ -939,6 +939,78 @@ describe("GET/POST /api/d4/filings", () => {
     expect(rebalanceJson.result.rota.primaryOwnerId).toBe("partner_a")
     expect(["acknowledged", "cleared"]).toContain(rebalanceJson.result.workloadDigest.status)
 
+    const setFirmPolicy = await post(
+      {
+        action: "set_policy_baseline",
+        actorId: "partner_a",
+        ownerLoadThreshold: 2,
+        handoffSlaHours: 2,
+        waiverWindowHours: 12,
+        note: "Firm baseline tuned for escalation drift monitor",
+      },
+      "87427d81-754c-4ec0-a2e6-6fbf2378f1af"
+    )
+    expect(setFirmPolicy.status).toBe(200)
+    const setFirmPolicyJson = (await setFirmPolicy.json()) as {
+      result: { policy: { scope: string; ownerLoadThreshold: number } }
+    }
+    expect(setFirmPolicyJson.result.policy.scope).toBe("firm_default")
+    expect(setFirmPolicyJson.result.policy.ownerLoadThreshold).toBe(2)
+
+    const setPackagePolicy = await post(
+      {
+        action: "set_policy_baseline",
+        actorId: "partner_a",
+        packageId,
+        ownerLoadThreshold: 1,
+        handoffSlaHours: 1,
+        waiverWindowHours: 6,
+        note: "Package-specific policy override enabled",
+      },
+      "84b460ec-c264-43f6-95b0-59ccfe58b9ec"
+    )
+    expect(setPackagePolicy.status).toBe(200)
+    const setPackagePolicyJson = (await setPackagePolicy.json()) as {
+      result: { policy: { scope: string; packageId: string | null } }
+    }
+    expect(setPackagePolicyJson.result.policy.scope).toBe("package_override")
+    expect(setPackagePolicyJson.result.policy.packageId).toBe(packageId)
+
+    const grantWaiver = await post(
+      {
+        action: "grant_breach_waiver",
+        actorId: "partner_a",
+        packageId,
+        durationHours: 2,
+        reason: "Temporary judicial recess and staffing rotation",
+        note: "Waiver granted during controlled handoff window",
+      },
+      "bb1d514f-9631-4fc2-b4af-07884f2b8b8a"
+    )
+    expect(grantWaiver.status).toBe(200)
+    const grantWaiverJson = (await grantWaiver.json()) as {
+      result: { waiver: { status: string; packageId: string }; workloadDigest: { status: string } }
+    }
+    expect(grantWaiverJson.result.waiver.status).toBe("active")
+    expect(grantWaiverJson.result.waiver.packageId).toBe(packageId)
+    expect(["snoozed", "cleared"]).toContain(grantWaiverJson.result.workloadDigest.status)
+
+    const revokeWaiver = await post(
+      {
+        action: "revoke_breach_waiver",
+        actorId: "partner_a",
+        packageId,
+        note: "Waiver window closed after staffing recovery",
+      },
+      "d4aaf865-30dd-4363-9780-7d6b49f4dd33"
+    )
+    expect(revokeWaiver.status).toBe(200)
+    const revokeWaiverJson = (await revokeWaiver.json()) as {
+      result: { waiver: { status: string }; workloadDigest: { status: string } }
+    }
+    expect(revokeWaiverJson.result.waiver.status).toBe("revoked")
+    expect(["open_alert", "cleared"]).toContain(revokeWaiverJson.result.workloadDigest.status)
+
     const acknowledgeHandoff = await post(
       {
         action: "acknowledge_handoff",
@@ -1092,6 +1164,44 @@ describe("GET/POST /api/d4/filings", () => {
     }
     expect(
       workloadViewJson.items.some((row) => row.packageId === packageId && row.status === "cleared")
+    ).toBe(true)
+
+    const policyView = await get(
+      new URLSearchParams({
+        view: "escalation_policy_baselines",
+        userId: "associate_a",
+        packageId,
+        scope: "package_override",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(policyView.status).toBe(200)
+    const policyViewJson = (await policyView.json()) as {
+      items: Array<{ packageId: string | null; scope: string }>
+    }
+    expect(
+      policyViewJson.items.some(
+        (row) => row.packageId === packageId && row.scope === "package_override"
+      )
+    ).toBe(true)
+
+    const waiverView = await get(
+      new URLSearchParams({
+        view: "breach_waiver_ledger",
+        userId: "associate_a",
+        packageId,
+        waiverStatus: "revoked",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverView.status).toBe(200)
+    const waiverViewJson = (await waiverView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      waiverViewJson.items.some((row) => row.packageId === packageId && row.status === "revoked")
     ).toBe(true)
   })
 

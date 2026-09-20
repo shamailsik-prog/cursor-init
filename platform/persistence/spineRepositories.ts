@@ -7,6 +7,8 @@ import type {
   FilingPacketArtifactRow,
   FilingSubmissionExceptionRow,
   FilingEscalationOwnerRotaRow,
+  FilingEscalationPolicyBaselineRow,
+  FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationWorkloadDigestRow,
   FilingSubmissionReceiptRow,
   FilingSubmissionReconciliationRow,
@@ -157,6 +159,20 @@ export type FilingEscalationWorkloadDigestRepository = {
   listByPackageId(packageId: string): Promise<FilingEscalationWorkloadDigestRow[]>
 }
 
+export type FilingEscalationPolicyBaselineRepository = {
+  upsert(row: FilingEscalationPolicyBaselineRow): Promise<void>
+  get(id: string): Promise<FilingEscalationPolicyBaselineRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationPolicyBaselineRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationPolicyBaselineRow[]>
+}
+
+export type FilingEscalationBreachWaiverLedgerRepository = {
+  upsert(row: FilingEscalationBreachWaiverLedgerRow): Promise<void>
+  get(id: string): Promise<FilingEscalationBreachWaiverLedgerRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationBreachWaiverLedgerRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationBreachWaiverLedgerRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -230,6 +246,8 @@ export type SpineRepositories = {
   filingSubmissionSlaDigests: FilingSubmissionSlaDigestRepository
   filingEscalationOwnerRota: FilingEscalationOwnerRotaRepository
   filingEscalationWorkloadDigests: FilingEscalationWorkloadDigestRepository
+  filingEscalationPolicyBaselines: FilingEscalationPolicyBaselineRepository
+  filingEscalationBreachWaivers: FilingEscalationBreachWaiverLedgerRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -514,6 +532,40 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingEscalationWorkloadDigests.values()].filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationPolicyBaselines: {
+      async upsert(row) {
+        store.filingEscalationPolicyBaselines.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationPolicyBaselines.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationPolicyBaselines.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationPolicyBaselines.values()].filter(
+          (row) => row.packageId === packageId
+        )
+      },
+    },
+    filingEscalationBreachWaivers: {
+      async upsert(row) {
+        store.filingEscalationBreachWaivers.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationBreachWaivers.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationBreachWaivers.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationBreachWaivers.values()].filter(
+          (row) => row.packageId === packageId
+        )
       },
     },
     jobs: {

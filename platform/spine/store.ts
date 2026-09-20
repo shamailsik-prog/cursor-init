@@ -475,6 +475,45 @@ export type FilingEscalationWorkloadDigestRow = {
   updatedAt: number
 }
 
+export type FilingEscalationPolicyBaselineScope = "firm_default" | "package_override"
+
+export type FilingEscalationPolicyBaselineRow = {
+  id: string
+  firmId: string
+  packageId: string | null
+  matterId: string | null
+  classification: Classification
+  scope: FilingEscalationPolicyBaselineScope
+  ownerLoadThreshold: number
+  handoffSlaMs: number
+  waiverWindowMs: number
+  setBy: string
+  setAt: number
+  notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationWaiverStatus = "active" | "revoked" | "expired"
+
+export type FilingEscalationBreachWaiverLedgerRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingEscalationWaiverStatus
+  reason: string
+  grantedBy: string
+  grantedAt: number
+  expiresAt: number
+  revokedBy: string | null
+  revokedAt: number | null
+  linkedSlaDigestId: string | null
+  linkedWorkloadDigestId: string | null
+  notes: string[]
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -573,6 +612,8 @@ export class SpineStore {
   filingSubmissionSlaDigests = new Map<string, FilingSubmissionSlaDigestRow>()
   filingEscalationOwnerRota = new Map<string, FilingEscalationOwnerRotaRow>()
   filingEscalationWorkloadDigests = new Map<string, FilingEscalationWorkloadDigestRow>()
+  filingEscalationPolicyBaselines = new Map<string, FilingEscalationPolicyBaselineRow>()
+  filingEscalationBreachWaivers = new Map<string, FilingEscalationBreachWaiverLedgerRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

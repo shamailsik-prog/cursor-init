@@ -560,6 +560,49 @@ describe("Firestore repository adapters", () => {
       expect(workloadByFirm.some((row) => row.id === "workload:pkg_1")).toBe(true)
       const workloadByPackage = await repos.filingEscalationWorkloadDigests.listByPackageId("pkg_1")
       expect(workloadByPackage.some((row) => row.id === "workload:pkg_1")).toBe(true)
+      await repos.filingEscalationPolicyBaselines.upsert({
+        id: "policy:firmA:default",
+        firmId: "firmA",
+        packageId: null,
+        matterId: null,
+        classification: "internal",
+        scope: "firm_default",
+        ownerLoadThreshold: 3,
+        handoffSlaMs: 4 * 60 * 60 * 1000,
+        waiverWindowMs: 24 * 60 * 60 * 1000,
+        setBy: "partner_a",
+        setAt: 38,
+        notes: ["firm policy baseline"],
+        updatedAt: 38,
+      })
+      const policy = await repos.filingEscalationPolicyBaselines.get("policy:firmA:default")
+      expect(policy?.scope).toBe("firm_default")
+      const policiesByFirm = await repos.filingEscalationPolicyBaselines.listByFirm("firmA")
+      expect(policiesByFirm.some((row) => row.id === "policy:firmA:default")).toBe(true)
+      await repos.filingEscalationBreachWaivers.upsert({
+        id: "waiver:pkg_1:1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "active",
+        reason: "court closure window",
+        grantedBy: "partner_a",
+        grantedAt: 39,
+        expiresAt: 40,
+        revokedBy: null,
+        revokedAt: null,
+        linkedSlaDigestId: "digest:pkg_1",
+        linkedWorkloadDigestId: "workload:pkg_1",
+        notes: ["waiver granted"],
+        updatedAt: 39,
+      })
+      const waiver = await repos.filingEscalationBreachWaivers.get("waiver:pkg_1:1")
+      expect(waiver?.status).toBe("active")
+      const waiversByFirm = await repos.filingEscalationBreachWaivers.listByFirm("firmA")
+      expect(waiversByFirm.some((row) => row.id === "waiver:pkg_1:1")).toBe(true)
+      const waiversByPackage = await repos.filingEscalationBreachWaivers.listByPackageId("pkg_1")
+      expect(waiversByPackage.some((row) => row.id === "waiver:pkg_1:1")).toBe(true)
     })
   })
 })
