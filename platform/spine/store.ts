@@ -639,6 +639,7 @@ export type FilingEscalationRemediationExpiryReason =
   | "expires_lte_24h"
   | "expires_lte_4h"
   | "already_expired"
+  | "closure_attestation_pending"
 
 export type FilingEscalationRemediationExpiryDigestRow = {
   id: string
@@ -649,6 +650,7 @@ export type FilingEscalationRemediationExpiryDigestRow = {
   status: FilingEscalationRemediationExpiryDigestStatus
   reasons: FilingEscalationRemediationExpiryReason[]
   linkedRemediationId: string | null
+  linkedLifecycleId: string | null
   linkedPolicyVarianceDigestId: string | null
   linkedPolicyId: string | null
   remediationExpiresAt: number | null
@@ -681,6 +683,69 @@ export type FilingEscalationRolloverBreachWatchRow = {
   policyCapExpiresAt: number | null
   waiverExpiresAt: number | null
   attestationUpdatedAt: number | null
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationRemediationClosureOutcome =
+  | "resolved"
+  | "rolled_back"
+  | "accepted_risk_retired"
+
+export type FilingEscalationRemediationLifecycleStatus = "open" | "closure_attested"
+
+export type FilingEscalationRemediationLifecycleRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  remediationId: string
+  remediationDecision: FilingEscalationVarianceRemediationDecision
+  status: FilingEscalationRemediationLifecycleStatus
+  linkedPolicyVarianceDigestId: string | null
+  linkedPolicyId: string | null
+  expiresAt: number
+  openedBy: string
+  openedAt: number
+  closureOutcome: FilingEscalationRemediationClosureOutcome | null
+  closureAttestedBy: string | null
+  closureAttestedAt: number | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationRolloverReaffirmationSlaStatus =
+  | "within_sla"
+  | "warning"
+  | "breached"
+  | "acknowledged"
+  | "cleared"
+
+export type FilingEscalationRolloverReaffirmationSlaReason =
+  | "cap_crossed_reaffirmation_warning"
+  | "cap_crossed_reaffirmation_breached"
+
+export type FilingEscalationRolloverReaffirmationSlaRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingEscalationRolloverReaffirmationSlaStatus
+  reasons: FilingEscalationRolloverReaffirmationSlaReason[]
+  linkedWaiverId: string | null
+  linkedAttestationId: string | null
+  linkedPolicyId: string | null
+  policyCapExpiresAt: number | null
+  waiverExpiresAt: number | null
+  lastReaffirmedAt: number | null
+  elapsedSinceReaffirmationMs: number | null
+  warningThresholdMs: number
+  breachThresholdMs: number
   acknowledgedBy: string | null
   acknowledgedAt: number | null
   notes: string[]
@@ -796,6 +861,10 @@ export class SpineStore {
   filingEscalationRemediationExpiryDigests =
     new Map<string, FilingEscalationRemediationExpiryDigestRow>()
   filingEscalationRolloverBreachWatches = new Map<string, FilingEscalationRolloverBreachWatchRow>()
+  filingEscalationRemediationLifecycles =
+    new Map<string, FilingEscalationRemediationLifecycleRow>()
+  filingEscalationRolloverReaffirmationSlas =
+    new Map<string, FilingEscalationRolloverReaffirmationSlaRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

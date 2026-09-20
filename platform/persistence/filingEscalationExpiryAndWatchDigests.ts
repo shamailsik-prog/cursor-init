@@ -1,4 +1,5 @@
 import type {
+  FilingEscalationRemediationLifecycleRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationExpiryDigestStatus,
   FilingEscalationRemediationExpiryReason,
@@ -42,6 +43,7 @@ export function buildFilingEscalationRemediationExpiryDigestRow(
   filingPackage: FilingPackage,
   input: {
     activeRemediation: FilingEscalationVarianceRemediationRow | null
+    pendingClosureLifecycle: FilingEscalationRemediationLifecycleRow | null
     linkedPolicyId?: string | null
     now?: number
     existing?: FilingEscalationRemediationExpiryDigestRow | null
@@ -51,8 +53,9 @@ export function buildFilingEscalationRemediationExpiryDigestRow(
   const now = input.now ?? Date.now()
   const existing = input.existing ?? null
   const reasons: FilingEscalationRemediationExpiryReason[] = []
-  if (input.activeRemediation) {
-    const msUntilExpiry = input.activeRemediation.expiresAt - now
+  const activeOrPending = input.activeRemediation ?? input.pendingClosureLifecycle
+  if (activeOrPending) {
+    const msUntilExpiry = activeOrPending.expiresAt - now
     if (msUntilExpiry <= 0) {
       reasons.push("already_expired")
     } else if (msUntilExpiry <= FOUR_HOURS_MS) {
@@ -60,6 +63,9 @@ export function buildFilingEscalationRemediationExpiryDigestRow(
     } else if (msUntilExpiry <= TWENTY_FOUR_HOURS_MS) {
       reasons.push("expires_lte_24h")
     }
+  }
+  if (input.pendingClosureLifecycle) {
+    reasons.push("closure_attestation_pending")
   }
   const sortedReasons = sortUnique(reasons)
   const note = input.note?.text.trim()
@@ -84,11 +90,19 @@ export function buildFilingEscalationRemediationExpiryDigestRow(
     classification: filingPackage.classification,
     status,
     reasons: sortedReasons,
-    linkedRemediationId: input.activeRemediation?.id ?? null,
-    linkedPolicyVarianceDigestId: input.activeRemediation?.linkedPolicyVarianceDigestId ?? null,
-    linkedPolicyId: input.linkedPolicyId ?? input.activeRemediation?.linkedPolicyId ?? null,
-    remediationExpiresAt: input.activeRemediation?.expiresAt ?? null,
-    msUntilExpiry: input.activeRemediation ? input.activeRemediation.expiresAt - now : null,
+    linkedRemediationId: input.activeRemediation?.id ?? input.pendingClosureLifecycle?.remediationId ?? null,
+    linkedLifecycleId: input.pendingClosureLifecycle?.id ?? null,
+    linkedPolicyVarianceDigestId:
+      input.activeRemediation?.linkedPolicyVarianceDigestId ??
+      input.pendingClosureLifecycle?.linkedPolicyVarianceDigestId ??
+      null,
+    linkedPolicyId:
+      input.linkedPolicyId ??
+      input.activeRemediation?.linkedPolicyId ??
+      input.pendingClosureLifecycle?.linkedPolicyId ??
+      null,
+    remediationExpiresAt: activeOrPending?.expiresAt ?? null,
+    msUntilExpiry: activeOrPending ? activeOrPending.expiresAt - now : null,
     acknowledgedBy: status === "acknowledged" ? (existing?.acknowledgedBy ?? null) : null,
     acknowledgedAt: status === "acknowledged" ? (existing?.acknowledgedAt ?? null) : null,
     snoozeUntil: status === "snoozed" ? (existing?.snoozeUntil ?? null) : null,

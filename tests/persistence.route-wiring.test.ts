@@ -52,6 +52,8 @@ const baseStore = {
   filingEscalationWaiverRolloverAttestations: new Map(),
   filingEscalationRemediationExpiryDigests: new Map(),
   filingEscalationRolloverBreachWatches: new Map(),
+  filingEscalationRemediationLifecycles: new Map(),
+  filingEscalationRolloverReaffirmationSlas: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -594,6 +596,7 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
           status: "open_expiry",
           reasons: ["expires_lte_4h"],
           linkedRemediationId: "remediation:pkg_repo:1",
+          linkedLifecycleId: "remediation-lifecycle:remediation:pkg_repo:1",
           linkedPolicyVarianceDigestId: "policy-variance:pkg_repo",
           linkedPolicyId: "policy:pkg_repo:override",
           remediationExpiresAt: Date.now() + 2 * 60 * 60 * 1000,
@@ -629,6 +632,63 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
           acknowledgedBy: null,
           acknowledgedAt: null,
           notes: ["repo rollover watch row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationRemediationLifecycles: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "remediation-lifecycle:remediation:pkg_repo:1",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          remediationId: "remediation:pkg_repo:1",
+          remediationDecision: "temporary_override",
+          status: "open",
+          linkedPolicyVarianceDigestId: "policy-variance:pkg_repo",
+          linkedPolicyId: "policy:pkg_repo:override",
+          expiresAt: Date.now() + 2 * 60 * 60 * 1000,
+          openedBy: "partner_a",
+          openedAt: Date.now(),
+          closureOutcome: null,
+          closureAttestedBy: null,
+          closureAttestedAt: null,
+          notes: ["repo remediation lifecycle row"],
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationRolloverReaffirmationSlas: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "rollover-reaffirmation-sla:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "warning",
+          reasons: ["cap_crossed_reaffirmation_warning"],
+          linkedWaiverId: "waiver:pkg_repo:1",
+          linkedAttestationId: "rollover:pkg_repo:1",
+          linkedPolicyId: "policy:pkg_repo:override",
+          policyCapExpiresAt: Date.now() + 4 * 60 * 60 * 1000,
+          waiverExpiresAt: Date.now() + 8 * 60 * 60 * 1000,
+          lastReaffirmedAt: Date.now() - 4 * 60 * 60 * 1000,
+          elapsedSinceReaffirmationMs: 4 * 60 * 60 * 1000,
+          warningThresholdMs: 3 * 60 * 60 * 1000,
+          breachThresholdMs: 6 * 60 * 60 * 1000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          notes: ["repo reaffirmation SLA row"],
           lastEvaluatedAt: Date.now(),
           updatedAt: Date.now(),
         },
@@ -984,6 +1044,30 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("rollover-breach:pkg_repo")
+  })
+
+  it("filings remediation lifecycle view GET uses repository filingEscalationRemediationLifecycles listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=remediation_lifecycle&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("remediation-lifecycle:remediation:pkg_repo:1")
+  })
+
+  it("filings rollover reaffirmation SLA view GET uses repository filingEscalationRolloverReaffirmationSlas listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=rollover_reaffirmation_sla&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("rollover-reaffirmation-sla:pkg_repo")
   })
 
   it("clients route GET uses repository entities listByFirm", async () => {
