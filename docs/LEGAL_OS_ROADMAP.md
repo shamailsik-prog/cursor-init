@@ -49,6 +49,10 @@ Snapshot basis: current `main` as of this branch cut plus repository contents in
 - Extended `app/api/d4/filings/route.ts` with debt-remediation/expiry governance actions/views: `record_closure_adjudication_slo_debt_remediation`, `downshift_closure_adjudication_slo_tier`, `attest_closure_adjudication_slo_breach_closure`, `set_closure_rebalance_safeguard_override_expiry`, `auto_clear_closure_rebalance_safeguard_suppression`, `cleanup_stale_closure_rebalance_safeguard_lock`, `view=closure_adjudication_slo_debt_remediation`, and `view=closure_rebalance_safeguard_expiry`.
 - Wired SLO debt-remediation + safeguard-expiry pressure metrics into closure digest/queue/window payloads and workload severity forecasting for partner staffing.
 - Extended API, route-wiring, repository, and runtime-mode coverage for remediation/expiry transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
+- Added durable adjudication debt-burndown + safeguard-expiry-attestation governance entities across memory/Firestore repositories and `firestore.rules`.
+- Extended `app/api/d4/filings/route.ts` with debt-burndown/attestation governance actions/views: `set_closure_adjudication_debt_burndown_target`, `attest_closure_adjudication_debt_backlog`, `checkpoint_closure_adjudication_tier_normalization`, `acknowledge_closure_safeguard_expiry_attestation`, `queue_closure_safeguard_overdue_expiry_exception`, `reconcile_closure_safeguard_expiry_override`, `view=closure_adjudication_debt_burndown`, and `view=closure_safeguard_expiry_attestations`.
+- Surfaced debt-burndown velocity/forecast-breach and safeguard-expiry attestation backlog metrics in closure digest/queue/window payloads and workload severity forecasting for partner staffing projections.
+- Extended API, route-wiring, repository, and runtime-mode coverage for burndown/attestation governance transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
 
 ## Recommended immediate slice (Phase B)
 
@@ -63,9 +67,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure adjudication debt-burndown forecasting + safeguard expiry attestation governance parity**:
+Build **filing escalation closure burndown forecast recalibration + expiry attestation queue orchestration parity**:
 
-1. Add adjudication debt-burndown forecasting actions (retirement target timestamps, debt backlog attestations, and tier-normalization checkpoints).
-2. Add safeguard expiry attestation governance (expiry acknowledgment workflows, overdue-expiry exception queues, and expiry override reconciliation notes).
-3. Surface debt-burndown velocity + expiry-attestation backlog metrics in closure/workload digests for partner-level staffing projections.
-4. Extend emulator/runtime + route-wiring coverage for burndown/attestation governance transitions, including idempotent replay behavior and audit write-through.
+1. Add debt-burndown forecast recalibration actions (target re-baselining windows, confidence-band overrides, and checkpoint rollback annotations).
+2. Add expiry-attestation queue orchestration actions (exception triage states, reviewer handoff attestations, and stale queue auto-drain checkpoints).
+3. Surface burndown confidence drift + attestation queue aging metrics in closure/workload digests for partner staffing and panel planning projections.
+4. Extend emulator/runtime + route-wiring coverage for recalibration/orchestration transitions, including idempotent replay behavior and audit write-through.
