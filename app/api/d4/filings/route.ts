@@ -143,6 +143,15 @@ import {
   isFilingEscalationClosureEnforcementRebalanceStatus,
 } from "@/platform/persistence/filingEscalationClosureExceptionAdjudication"
 import {
+  buildFilingEscalationClosureAdjudicationQuorumRow,
+  buildFilingEscalationClosureRebalanceExecutionRow,
+  filingEscalationClosureAdjudicationQuorumId,
+  filingEscalationClosureRebalanceExecutionId,
+  isFilingEscalationClosureAdjudicationQuorumStatus,
+  isFilingEscalationClosureRebalanceExecutionMode,
+  isFilingEscalationClosureRebalanceExecutionStatus,
+} from "@/platform/persistence/filingEscalationClosureAdjudicationQuorum"
+import {
   buildFilingEscalationRemediationExpiryDigestRow,
   buildFilingEscalationRolloverBreachWatchRow,
   filingEscalationRemediationExpiryDigestId,
@@ -627,12 +636,42 @@ type RecordClosureAdjudicationVerdictBody = {
 type RebalanceClosureEnforcementQueueBody = {
   action: "rebalance_closure_enforcement_queue"
   actorId?: string
+  rebalanceId?: string
   queueId?: string
   ownerId?: string
   status?: "none" | "cooldown_scheduled" | "owner_reassignment_recommended" | "throttle_active"
   recommendedOwnerId?: string
   cooldownHours?: number
   throttleHours?: number
+  note?: string
+}
+
+type GovernClosureAdjudicationQuorumBody = {
+  action: "govern_closure_adjudication_quorum"
+  actorId?: string
+  adjudicationId?: string
+  requiredPanelCount?: number
+  quorumWindowHours?: number
+  verdictWindowHours?: number
+  note?: string
+}
+
+type ExecuteClosureRebalanceOwnerTransferBody = {
+  action: "execute_closure_rebalance_owner_transfer"
+  actorId?: string
+  rebalanceId?: string
+  queueId?: string
+  ownerId?: string
+  note?: string
+}
+
+type ExecuteClosureRebalanceThrottleReleaseBody = {
+  action: "execute_closure_rebalance_throttle_release"
+  actorId?: string
+  rebalanceId?: string
+  queueId?: string
+  ownerId?: string
+  reopenQueue?: boolean
   note?: string
 }
 
@@ -689,6 +728,9 @@ type Body =
   | EscalateClosureDisputeToPanelBody
   | RecordClosureAdjudicationVerdictBody
   | RebalanceClosureEnforcementQueueBody
+  | GovernClosureAdjudicationQuorumBody
+  | ExecuteClosureRebalanceOwnerTransferBody
+  | ExecuteClosureRebalanceThrottleReleaseBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -740,7 +782,9 @@ function parseFilingsView(
   | "closure_attestation_disputes"
   | "closure_sla_exception_enforcement"
   | "closure_adjudication_queue"
-  | "closure_enforcement_rebalance" {
+  | "closure_enforcement_rebalance"
+  | "closure_adjudication_quorum"
+  | "closure_rebalance_execution" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -771,6 +815,8 @@ function parseFilingsView(
   if (value === "closure_sla_exception_enforcement") return "closure_sla_exception_enforcement"
   if (value === "closure_adjudication_queue") return "closure_adjudication_queue"
   if (value === "closure_enforcement_rebalance") return "closure_enforcement_rebalance"
+  if (value === "closure_adjudication_quorum") return "closure_adjudication_quorum"
+  if (value === "closure_rebalance_execution") return "closure_rebalance_execution"
   return "packages"
 }
 
@@ -1233,6 +1279,22 @@ async function recomputeClosureComplianceState(
     reopenThrottleUntil: number | null
     linkedAdjudicationQueueId: string | null
   }>
+  adjudicationQuorumByOwner: Map<string, {
+    id: string
+    status: "quorum_pending" | "quorum_met" | "verdict_overdue" | "closed"
+    requiredPanelCount: number
+    confirmedPanelCount: number
+    verdictDueAt: number
+    breachFlags: Array<"quorum_unmet" | "verdict_overdue">
+  }>
+  rebalanceExecutionByOwner: Map<string, {
+    id: string
+    mode: "owner_transfer" | "throttle_release"
+    status: "queued" | "owner_transfer_in_progress" | "throttle_release_in_progress" | "completed"
+    queueReopened: boolean
+    churnCount: number
+    executedAt: number | null
+  }>
 }> {
   const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(input.firmId)
   const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
@@ -1334,6 +1396,18 @@ async function recomputeClosureComplianceState(
     input.firmId
   )
   const existingRebalanceByQueueId = new Map(existingRebalanceRows.map((row) => [row.queueId, row]))
+  const existingQuorumRows = await repos.filingEscalationClosureAdjudicationQuorum.listByFirm(
+    input.firmId
+  )
+  const existingQuorumByAdjudicationId = new Map(
+    existingQuorumRows.map((row) => [row.adjudicationId, row])
+  )
+  const existingExecutionRows = await repos.filingEscalationClosureRebalanceExecution.listByFirm(
+    input.firmId
+  )
+  const existingExecutionByRebalanceId = new Map(
+    existingExecutionRows.map((row) => [row.rebalanceId, row])
+  )
   let closureSlaConfigRows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm(input.firmId)
   if (!closureSlaConfigRows.some((row) => row.ownerId === null && row.scope === "firm_default")) {
     const seededDefaultConfig = buildFilingEscalationClosureSlaWindowConfigRow({
@@ -1485,6 +1559,28 @@ async function recomputeClosureComplianceState(
       recommendedOwnerId: string | null
       reopenThrottleUntil: number | null
       linkedAdjudicationQueueId: string | null
+    }
+  >()
+  const adjudicationQuorumByOwner = new Map<
+    string,
+    {
+      id: string
+      status: "quorum_pending" | "quorum_met" | "verdict_overdue" | "closed"
+      requiredPanelCount: number
+      confirmedPanelCount: number
+      verdictDueAt: number
+      breachFlags: Array<"quorum_unmet" | "verdict_overdue">
+    }
+  >()
+  const rebalanceExecutionByOwner = new Map<
+    string,
+    {
+      id: string
+      mode: "owner_transfer" | "throttle_release"
+      status: "queued" | "owner_transfer_in_progress" | "throttle_release_in_progress" | "completed"
+      queueReopened: boolean
+      churnCount: number
+      executedAt: number | null
     }
   >()
   for (const owner of ownerIds) {
@@ -1816,6 +1912,49 @@ async function recomputeClosureComplianceState(
         reopenThrottleUntil: rebalanceComputed.reopenThrottleUntil,
         linkedAdjudicationQueueId: rebalanceComputed.linkedAdjudicationQueueId,
       })
+      const existingQuorum = existingQuorumByAdjudicationId.get(adjudicationComputed.id) ?? null
+      const quorumComputed = buildFilingEscalationClosureAdjudicationQuorumRow({
+        adjudication: adjudicationComputed,
+        queue: queueComputed,
+        existing: existingQuorum,
+        now: input.now,
+      })
+      const quorumChanged =
+        !existingQuorum ||
+        existingQuorum.status !== quorumComputed.status ||
+        existingQuorum.requiredPanelCount !== quorumComputed.requiredPanelCount ||
+        existingQuorum.confirmedPanelCount !== quorumComputed.confirmedPanelCount ||
+        existingQuorum.quorumMetAt !== quorumComputed.quorumMetAt ||
+        existingQuorum.quorumDeadlineAt !== quorumComputed.quorumDeadlineAt ||
+        existingQuorum.verdictDueAt !== quorumComputed.verdictDueAt ||
+        existingQuorum.verdictRecordedAt !== quorumComputed.verdictRecordedAt ||
+        existingQuorum.lastGovernedAt !== quorumComputed.lastGovernedAt ||
+        existingQuorum.lastGovernedBy !== quorumComputed.lastGovernedBy ||
+        !sameStringArray(existingQuorum.breachFlags, quorumComputed.breachFlags)
+      if (quorumChanged) {
+        await repos.filingEscalationClosureAdjudicationQuorum.upsert(quorumComputed)
+      }
+      store.filingEscalationClosureAdjudicationQuorum.set(quorumComputed.id, quorumComputed)
+      adjudicationQuorumByOwner.set(owner, {
+        id: quorumComputed.id,
+        status: quorumComputed.status,
+        requiredPanelCount: quorumComputed.requiredPanelCount,
+        confirmedPanelCount: quorumComputed.confirmedPanelCount,
+        verdictDueAt: quorumComputed.verdictDueAt,
+        breachFlags: quorumComputed.breachFlags,
+      })
+      const existingExecution = existingExecutionByRebalanceId.get(rebalanceComputed.id) ?? null
+      if (existingExecution) {
+        store.filingEscalationClosureRebalanceExecution.set(existingExecution.id, existingExecution)
+        rebalanceExecutionByOwner.set(owner, {
+          id: existingExecution.id,
+          mode: existingExecution.mode,
+          status: existingExecution.status,
+          queueReopened: existingExecution.queueReopened,
+          churnCount: existingExecution.churnCount,
+          executedAt: existingExecution.executedAt,
+        })
+      }
     }
   }
   return {
@@ -1828,6 +1967,8 @@ async function recomputeClosureComplianceState(
     exceptionEnforcementByOwner,
     adjudicationByOwner,
     rebalanceByOwner,
+    adjudicationQuorumByOwner,
+    rebalanceExecutionByOwner,
   }
 }
 
@@ -2383,6 +2524,8 @@ export async function GET(request: Request) {
         exceptionEnforcementByOwner,
         adjudicationByOwner,
         rebalanceByOwner,
+        adjudicationQuorumByOwner,
+        rebalanceExecutionByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
@@ -2413,6 +2556,8 @@ export async function GET(request: Request) {
           const enforcement = exceptionEnforcementByOwner.get(row.ownerId)
           const adjudication = adjudicationByOwner.get(row.ownerId)
           const rebalance = rebalanceByOwner.get(row.ownerId)
+          const quorum = adjudicationQuorumByOwner.get(row.ownerId)
+          const execution = rebalanceExecutionByOwner.get(row.ownerId)
           return {
             ...row,
             slaWindowStatus: window?.status ?? "cleared",
@@ -2437,6 +2582,16 @@ export async function GET(request: Request) {
             closureEnforcementRebalanceStatus: rebalance?.status ?? "none",
             closureEnforcementRebalanceCooldownUntil: rebalance?.cooldownUntil ?? null,
             closureEnforcementRebalanceReopenThrottleUntil: rebalance?.reopenThrottleUntil ?? null,
+            closureAdjudicationQuorumStatus: quorum?.status ?? null,
+            closureAdjudicationBreachFlags: quorum?.breachFlags ?? [],
+            closureAdjudicationThroughputScore:
+              adjudication &&
+              (adjudication.status === "resolved_upheld" || adjudication.status === "resolved_overturned")
+                ? 1
+                : 0,
+            closureRebalanceExecutionStatus: execution?.status ?? null,
+            closureRebalanceExecutionMode: execution?.mode ?? null,
+            closureRebalanceChurnCount: execution?.churnCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -2471,6 +2626,8 @@ export async function GET(request: Request) {
         exceptionEnforcementByOwner,
         adjudicationByOwner,
         rebalanceByOwner,
+        adjudicationQuorumByOwner,
+        rebalanceExecutionByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
@@ -2502,6 +2659,8 @@ export async function GET(request: Request) {
           const enforcement = exceptionEnforcementByOwner.get(row.ownerId)
           const adjudication = adjudicationByOwner.get(row.ownerId)
           const rebalance = rebalanceByOwner.get(row.ownerId)
+          const quorum = adjudicationQuorumByOwner.get(row.ownerId)
+          const execution = rebalanceExecutionByOwner.get(row.ownerId)
           return {
             ...row,
             slaWindowStatus: window?.status ?? "cleared",
@@ -2523,6 +2682,16 @@ export async function GET(request: Request) {
             closureEnforcementRebalanceStatus: rebalance?.status ?? "none",
             closureEnforcementRebalanceCooldownUntil: rebalance?.cooldownUntil ?? null,
             closureEnforcementRebalanceReopenThrottleUntil: rebalance?.reopenThrottleUntil ?? null,
+            closureAdjudicationQuorumStatus: quorum?.status ?? null,
+            closureAdjudicationBreachFlags: quorum?.breachFlags ?? [],
+            closureAdjudicationThroughputScore:
+              adjudication &&
+              (adjudication.status === "resolved_upheld" || adjudication.status === "resolved_overturned")
+                ? 1
+                : 0,
+            closureRebalanceExecutionStatus: execution?.status ?? null,
+            closureRebalanceExecutionMode: execution?.mode ?? null,
+            closureRebalanceChurnCount: execution?.churnCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -2598,6 +2767,8 @@ export async function GET(request: Request) {
         exceptionEnforcementByOwner,
         adjudicationByOwner,
         rebalanceByOwner,
+        adjudicationQuorumByOwner,
+        rebalanceExecutionByOwner,
       } =
         await recomputeClosureComplianceState(
         store,
@@ -2643,6 +2814,8 @@ export async function GET(request: Request) {
           const enforcement = exceptionEnforcementByOwner.get(row.ownerId)
           const adjudication = adjudicationByOwner.get(row.ownerId)
           const rebalance = rebalanceByOwner.get(row.ownerId)
+          const quorum = adjudicationQuorumByOwner.get(row.ownerId)
+          const execution = rebalanceExecutionByOwner.get(row.ownerId)
           return {
             ...row,
             digestId: digest?.id ?? null,
@@ -2663,6 +2836,16 @@ export async function GET(request: Request) {
             closureEnforcementRebalanceStatus: rebalance?.status ?? "none",
             closureEnforcementRebalanceCooldownUntil: rebalance?.cooldownUntil ?? null,
             closureEnforcementRebalanceReopenThrottleUntil: rebalance?.reopenThrottleUntil ?? null,
+            closureAdjudicationQuorumStatus: quorum?.status ?? null,
+            closureAdjudicationBreachFlags: quorum?.breachFlags ?? [],
+            closureAdjudicationThroughputScore:
+              adjudication &&
+              (adjudication.status === "resolved_upheld" || adjudication.status === "resolved_overturned")
+                ? 1
+                : 0,
+            closureRebalanceExecutionStatus: execution?.status ?? null,
+            closureRebalanceExecutionMode: execution?.mode ?? null,
+            closureRebalanceChurnCount: execution?.churnCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -2932,6 +3115,86 @@ export async function GET(request: Request) {
         nextCursor,
       })
     }
+    if (view === "closure_adjudication_quorum") {
+      const ownerId = url.searchParams.get("ownerId")
+      const queueId = url.searchParams.get("queueId")
+      const adjudicationId = url.searchParams.get("adjudicationId")
+      const quorumStatus = url.searchParams.get("quorumStatus")
+      const rows = await repos.filingEscalationClosureAdjudicationQuorum.listByFirm(user.firmId)
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (queueId ? row.queueId === queueId : true))
+        .filter((row) => (adjudicationId ? row.adjudicationId === adjudicationId : true))
+        .filter((row) =>
+          isFilingEscalationClosureAdjudicationQuorumStatus(quorumStatus)
+            ? row.status === quorumStatus
+            : true
+        )
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_rebalance_execution") {
+      const ownerId = url.searchParams.get("ownerId")
+      const queueId = url.searchParams.get("queueId")
+      const rebalanceId = url.searchParams.get("rebalanceId")
+      const executionStatus = url.searchParams.get("executionStatus")
+      const mode = url.searchParams.get("mode")
+      const rows = await repos.filingEscalationClosureRebalanceExecution.listByFirm(user.firmId)
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (queueId ? row.queueId === queueId : true))
+        .filter((row) => (rebalanceId ? row.rebalanceId === rebalanceId : true))
+        .filter((row) =>
+          isFilingEscalationClosureRebalanceExecutionStatus(executionStatus)
+            ? row.status === executionStatus
+            : true
+        )
+        .filter((row) =>
+          isFilingEscalationClosureRebalanceExecutionMode(mode) ? row.mode === mode : true
+        )
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
     if (view === "escalation_workload_digests") {
       const packageId = url.searchParams.get("packageId")
       const ownerId = url.searchParams.get("ownerId")
@@ -2948,6 +3211,8 @@ export async function GET(request: Request) {
         exceptionEnforcementByOwner,
         adjudicationByOwner,
         rebalanceByOwner,
+        adjudicationQuorumByOwner,
+        rebalanceExecutionByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
           firmId: user.firmId,
@@ -3243,6 +3508,12 @@ export async function GET(request: Request) {
         const ownerRebalance = rota?.primaryOwnerId
           ? rebalanceByOwner.get(rota.primaryOwnerId) ?? null
           : null
+        const ownerAdjudicationQuorum = rota?.primaryOwnerId
+          ? adjudicationQuorumByOwner.get(rota.primaryOwnerId) ?? null
+          : null
+        const ownerRebalanceExecution = rota?.primaryOwnerId
+          ? rebalanceExecutionByOwner.get(rota.primaryOwnerId) ?? null
+          : null
         const closureQueueElevated =
           !!ownerClosureQueue &&
           ownerClosureQueue.status !== "resolved" &&
@@ -3294,6 +3565,19 @@ export async function GET(request: Request) {
           !!ownerRebalance &&
           (ownerRebalance.status === "cooldown_scheduled" ||
             ownerRebalance.status === "owner_reassignment_recommended")
+        const quorumBreachCritical =
+          !!ownerAdjudicationQuorum &&
+          (ownerAdjudicationQuorum.status === "verdict_overdue" ||
+            ownerAdjudicationQuorum.breachFlags.includes("quorum_unmet"))
+        const quorumBreachElevated =
+          !!ownerAdjudicationQuorum &&
+          ownerAdjudicationQuorum.status !== "closed" &&
+          (ownerAdjudicationQuorum.breachFlags.length > 0 ||
+            ownerAdjudicationQuorum.status === "quorum_pending")
+        const executionChurnCritical =
+          !!ownerRebalanceExecution && ownerRebalanceExecution.churnCount >= 4
+        const executionChurnElevated =
+          !!ownerRebalanceExecution && ownerRebalanceExecution.churnCount >= 2
         const closureQueueCritical =
           (closureQueueElevated && !!ownerClosureQueue && ownerClosureQueue.breachedReaffirmationCount > 0) ||
           closureSlaCritical ||
@@ -3301,7 +3585,9 @@ export async function GET(request: Request) {
           closureDisputeCritical ||
           exceptionEnforcementCritical ||
           adjudicationBacklogCritical ||
-          rebalancePressureCritical
+          rebalancePressureCritical ||
+          quorumBreachCritical ||
+          executionChurnCritical
         const computedBaseWithQueue =
           (
             closureQueueElevated ||
@@ -3310,7 +3596,9 @@ export async function GET(request: Request) {
             closureDisputeElevated ||
             exceptionEnforcementElevated ||
             adjudicationBacklogElevated ||
-            rebalancePressureElevated
+            rebalancePressureElevated ||
+            quorumBreachElevated ||
+            executionChurnElevated
           ) &&
           !computedBase.alertReasons.includes("closure_compliance_pressure")
             ? {
@@ -3380,7 +3668,9 @@ export async function GET(request: Request) {
                 closureDisputeElevated ||
                 exceptionEnforcementElevated ||
                 adjudicationBacklogElevated ||
-                rebalancePressureElevated
+                rebalancePressureElevated ||
+                quorumBreachElevated ||
+                executionChurnElevated
               ? "elevated"
               : "baseline"
         let computed =
@@ -3450,6 +3740,24 @@ export async function GET(request: Request) {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
           return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .map((row) => {
+          const quorum = row.ownerId ? adjudicationQuorumByOwner.get(row.ownerId) ?? null : null
+          const execution = row.ownerId ? rebalanceExecutionByOwner.get(row.ownerId) ?? null : null
+          const adjudication = row.ownerId ? adjudicationByOwner.get(row.ownerId) ?? null : null
+          return {
+            ...row,
+            closureAdjudicationQuorumStatus: quorum?.status ?? null,
+            closureAdjudicationBreachFlags: quorum?.breachFlags ?? [],
+            closureAdjudicationThroughputScore:
+              adjudication &&
+              (adjudication.status === "resolved_upheld" || adjudication.status === "resolved_overturned")
+                ? 1
+                : 0,
+            closureRebalanceExecutionStatus: execution?.status ?? null,
+            closureRebalanceExecutionMode: execution?.mode ?? null,
+            closureRebalanceChurnCount: execution?.churnCount ?? 0,
+          }
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -8671,9 +8979,9 @@ export async function POST(request: Request) {
     }
 
     if (parsed.action === "rebalance_closure_enforcement_queue") {
-      if (!parsed.actorId || (!parsed.queueId && !parsed.ownerId) || !parsed.status) {
+      if (!parsed.actorId || (!parsed.rebalanceId && !parsed.queueId && !parsed.ownerId) || !parsed.status) {
         return NextResponse.json(
-          { error: "actorId, status, and queueId or ownerId are required" },
+          { error: "actorId, status, and rebalanceId or queueId/ownerId are required" },
           { status: 400 }
         )
       }
@@ -8699,12 +9007,18 @@ export async function POST(request: Request) {
         packageById,
         now,
       })
+      const selectedRebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : null) ?? null
       const queue =
-        (parsed.queueId
-          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
-          : parsed.ownerId
-            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
-            : null) ?? null
+        (selectedRebalance
+          ? await repos.filingEscalationClosureFollowupQueues.get(selectedRebalance.queueId)
+          : parsed.queueId
+            ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+            : parsed.ownerId
+              ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+              : null) ?? null
       if (!queue || queue.firmId !== actor.firmId) {
         return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
       }
@@ -8730,9 +9044,11 @@ export async function POST(request: Request) {
         recommendedOwnerId = null
       }
       const priorAuditCount = store.audit.length
-      const existingRebalance = await repos.filingEscalationClosureEnforcementRebalance.get(
-        filingEscalationClosureEnforcementRebalanceId(queue.id)
-      )
+      const existingRebalance =
+        selectedRebalance ??
+        (await repos.filingEscalationClosureEnforcementRebalance.get(
+          filingEscalationClosureEnforcementRebalanceId(queue.id)
+        ))
       const adjudicationRef = closureState.adjudicationByOwner.get(queue.ownerId)
       const adjudication = adjudicationRef
         ? await repos.filingEscalationClosureAdjudicationQueue.get(adjudicationRef.id)
@@ -8778,6 +9094,349 @@ export async function POST(request: Request) {
           : rebalanceUpdated,
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(queue.id)) ?? queue,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "govern_closure_adjudication_quorum") {
+      if (!parsed.actorId || !parsed.adjudicationId) {
+        return NextResponse.json(
+          { error: "actorId and adjudicationId are required" },
+          { status: 400 }
+        )
+      }
+      const requiredPanelCount =
+        parsed.requiredPanelCount === undefined ? undefined : Number(parsed.requiredPanelCount)
+      if (
+        requiredPanelCount !== undefined &&
+        (!Number.isFinite(requiredPanelCount) || requiredPanelCount < 2 || requiredPanelCount > 7)
+      ) {
+        return NextResponse.json(
+          { error: "requiredPanelCount must be between 2 and 7" },
+          { status: 400 }
+        )
+      }
+      const quorumWindowHours =
+        parsed.quorumWindowHours === undefined ? undefined : Number(parsed.quorumWindowHours)
+      if (
+        quorumWindowHours !== undefined &&
+        (!Number.isFinite(quorumWindowHours) || quorumWindowHours < 0 || quorumWindowHours > 168)
+      ) {
+        return NextResponse.json(
+          { error: "quorumWindowHours must be between 0 and 168" },
+          { status: 400 }
+        )
+      }
+      const verdictWindowHours =
+        parsed.verdictWindowHours === undefined ? undefined : Number(parsed.verdictWindowHours)
+      if (
+        verdictWindowHours !== undefined &&
+        (!Number.isFinite(verdictWindowHours) || verdictWindowHours < 0 || verdictWindowHours > 168)
+      ) {
+        return NextResponse.json(
+          { error: "verdictWindowHours must be between 0 and 168" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "govern_closure_adjudication_quorum requires partner role" },
+          { status: 403 }
+        )
+      }
+      const adjudication = await repos.filingEscalationClosureAdjudicationQueue.get(parsed.adjudicationId)
+      if (!adjudication) {
+        return NextResponse.json({ error: "closure adjudication row not found" }, { status: 404 })
+      }
+      if (adjudication.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm closure adjudication denied" }, { status: 403 })
+      }
+      const queue = await repos.filingEscalationClosureFollowupQueues.get(adjudication.queueId)
+      if (!queue) {
+        return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const existingQuorum = await repos.filingEscalationClosureAdjudicationQuorum.get(
+        filingEscalationClosureAdjudicationQuorumId(adjudication.id)
+      )
+      const quorumUpdated = buildFilingEscalationClosureAdjudicationQuorumRow({
+        adjudication,
+        queue,
+        existing: existingQuorum,
+        requiredPanelCount,
+        quorumWindowHours,
+        verdictWindowHours,
+        actorId: actor.id,
+        now,
+        note: parsed.note ?? "adjudication quorum governance tick",
+      })
+      await repos.filingEscalationClosureAdjudicationQuorum.upsert(quorumUpdated)
+      store.filingEscalationClosureAdjudicationQuorum.set(quorumUpdated.id, quorumUpdated)
+      store.audit.push({
+        action: "filing_closure_adjudication_quorum_govern",
+        actorId: actor.id,
+        target: quorumUpdated.id,
+        classification: quorumUpdated.classification,
+        reason: quorumUpdated.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "govern_closure_adjudication_quorum",
+        closureAdjudicationQuorum:
+          (await repos.filingEscalationClosureAdjudicationQuorum.get(quorumUpdated.id)) ??
+          quorumUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "execute_closure_rebalance_owner_transfer") {
+      if (!parsed.actorId || (!parsed.rebalanceId && !parsed.queueId && !parsed.ownerId)) {
+        return NextResponse.json(
+          { error: "actorId and rebalanceId or queueId/ownerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "execute_closure_rebalance_owner_transfer requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const queueFromSelector =
+        parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null
+      const rebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : queueFromSelector
+            ? await repos.filingEscalationClosureEnforcementRebalance.get(
+                filingEscalationClosureEnforcementRebalanceId(queueFromSelector.id)
+              )
+            : null) ?? null
+      if (!rebalance || rebalance.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure enforcement rebalance row not found" }, { status: 404 })
+      }
+      if (
+        rebalance.status !== "owner_reassignment_recommended" ||
+        !rebalance.recommendedOwnerId
+      ) {
+        return NextResponse.json(
+          { error: "rebalance row is not in owner_reassignment_recommended state" },
+          { status: 422 }
+        )
+      }
+      const queue = await repos.filingEscalationClosureFollowupQueues.get(rebalance.queueId)
+      if (!queue) {
+        return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
+      }
+      const recommendedOwner = store.users.get(rebalance.recommendedOwnerId)
+      if (
+        !recommendedOwner ||
+        recommendedOwner.firmId !== actor.firmId ||
+        recommendedOwner.role !== "partner"
+      ) {
+        return NextResponse.json(
+          { error: "recommended owner is not an active partner in this firm" },
+          { status: 422 }
+        )
+      }
+      const priorAuditCount = store.audit.length
+      const queueUpdated = {
+        ...queue,
+        assignedPartnerId: recommendedOwner.id,
+        claimedBy: null,
+        claimedAt: null,
+        notes: [...queue.notes, `${new Date(now).toISOString()} ${actor.id}: rebalance owner transfer to ${recommendedOwner.id}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationClosureFollowupQueues.upsert(queueUpdated)
+      store.filingEscalationClosureFollowupQueues.set(queueUpdated.id, queueUpdated)
+      const rebalanceUpdated = {
+        ...rebalance,
+        status: "none" as const,
+        recommendedOwnerId: null,
+        lastRebalancedBy: actor.id,
+        lastRebalancedAt: now,
+        notes: [...rebalance.notes, `${new Date(now).toISOString()} ${actor.id}: owner transfer executed`],
+        updatedAt: now,
+        lastEvaluatedAt: now,
+      }
+      await repos.filingEscalationClosureEnforcementRebalance.upsert(rebalanceUpdated)
+      store.filingEscalationClosureEnforcementRebalance.set(rebalanceUpdated.id, rebalanceUpdated)
+      const existingExecution = await repos.filingEscalationClosureRebalanceExecution.get(
+        filingEscalationClosureRebalanceExecutionId(rebalance.id)
+      )
+      const executionUpdated = buildFilingEscalationClosureRebalanceExecutionRow({
+        rebalance: rebalanceUpdated,
+        queue: queueUpdated,
+        existing: existingExecution,
+        mode: "owner_transfer",
+        status: "completed",
+        targetOwnerId: recommendedOwner.id,
+        appliedOwnerId: recommendedOwner.id,
+        actorId: actor.id,
+        note: parsed.note ?? `rebalance owner transfer executed -> ${recommendedOwner.id}`,
+        now,
+      })
+      await repos.filingEscalationClosureRebalanceExecution.upsert(executionUpdated)
+      store.filingEscalationClosureRebalanceExecution.set(executionUpdated.id, executionUpdated)
+      store.audit.push({
+        action: "filing_closure_rebalance_owner_transfer_execute",
+        actorId: actor.id,
+        target: executionUpdated.id,
+        classification: executionUpdated.classification,
+        reason: recommendedOwner.id,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "execute_closure_rebalance_owner_transfer",
+        closureFollowupQueue:
+          (await repos.filingEscalationClosureFollowupQueues.get(queueUpdated.id)) ?? queueUpdated,
+        closureEnforcementRebalance:
+          (await repos.filingEscalationClosureEnforcementRebalance.get(rebalanceUpdated.id)) ??
+          rebalanceUpdated,
+        closureRebalanceExecution:
+          (await repos.filingEscalationClosureRebalanceExecution.get(executionUpdated.id)) ??
+          executionUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "execute_closure_rebalance_throttle_release") {
+      if (!parsed.actorId || (!parsed.rebalanceId && !parsed.queueId && !parsed.ownerId)) {
+        return NextResponse.json(
+          { error: "actorId and rebalanceId or queueId/ownerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "execute_closure_rebalance_throttle_release requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const queueFromSelector =
+        parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null
+      const rebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : queueFromSelector
+            ? await repos.filingEscalationClosureEnforcementRebalance.get(
+                filingEscalationClosureEnforcementRebalanceId(queueFromSelector.id)
+              )
+            : null) ?? null
+      if (!rebalance || rebalance.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure enforcement rebalance row not found" }, { status: 404 })
+      }
+      if (rebalance.status !== "throttle_active") {
+        return NextResponse.json(
+          { error: "rebalance row is not in throttle_active state" },
+          { status: 422 }
+        )
+      }
+      const queue = await repos.filingEscalationClosureFollowupQueues.get(rebalance.queueId)
+      if (!queue) {
+        return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
+      }
+      const priorAuditCount = store.audit.length
+      const reopenQueue = parsed.reopenQueue ?? true
+      const queueUpdated =
+        reopenQueue && queue.status === "resolved"
+          ? {
+              ...queue,
+              status: "open" as const,
+              resolvedBy: null,
+              resolvedAt: null,
+              resolutionNote: null,
+              notes: [...queue.notes, `${new Date(now).toISOString()} ${actor.id}: throttle release reopened queue`],
+              updatedAt: now,
+            }
+          : queue
+      if (queueUpdated !== queue) {
+        await repos.filingEscalationClosureFollowupQueues.upsert(queueUpdated)
+        store.filingEscalationClosureFollowupQueues.set(queueUpdated.id, queueUpdated)
+      }
+      const rebalanceUpdated = {
+        ...rebalance,
+        status: "none" as const,
+        reopenThrottleUntil: null,
+        lastRebalancedBy: actor.id,
+        lastRebalancedAt: now,
+        notes: [...rebalance.notes, `${new Date(now).toISOString()} ${actor.id}: throttle release executed`],
+        updatedAt: now,
+        lastEvaluatedAt: now,
+      }
+      await repos.filingEscalationClosureEnforcementRebalance.upsert(rebalanceUpdated)
+      store.filingEscalationClosureEnforcementRebalance.set(rebalanceUpdated.id, rebalanceUpdated)
+      const existingExecution = await repos.filingEscalationClosureRebalanceExecution.get(
+        filingEscalationClosureRebalanceExecutionId(rebalance.id)
+      )
+      const executionUpdated = buildFilingEscalationClosureRebalanceExecutionRow({
+        rebalance: rebalanceUpdated,
+        queue: queueUpdated,
+        existing: existingExecution,
+        mode: "throttle_release",
+        status: "completed",
+        targetOwnerId: null,
+        appliedOwnerId: queueUpdated.assignedPartnerId,
+        reopenQueue: reopenQueue && queue.status === "resolved",
+        actorId: actor.id,
+        note: parsed.note ?? "rebalance throttle release executed",
+        now,
+      })
+      await repos.filingEscalationClosureRebalanceExecution.upsert(executionUpdated)
+      store.filingEscalationClosureRebalanceExecution.set(executionUpdated.id, executionUpdated)
+      store.audit.push({
+        action: "filing_closure_rebalance_throttle_release_execute",
+        actorId: actor.id,
+        target: executionUpdated.id,
+        classification: executionUpdated.classification,
+        reason: String(reopenQueue),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "execute_closure_rebalance_throttle_release",
+        closureFollowupQueue:
+          (await repos.filingEscalationClosureFollowupQueues.get(queueUpdated.id)) ?? queueUpdated,
+        closureEnforcementRebalance:
+          (await repos.filingEscalationClosureEnforcementRebalance.get(rebalanceUpdated.id)) ??
+          rebalanceUpdated,
+        closureRebalanceExecution:
+          (await repos.filingEscalationClosureRebalanceExecution.get(executionUpdated.id)) ??
+          executionUpdated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

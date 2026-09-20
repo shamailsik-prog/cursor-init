@@ -65,6 +65,8 @@ const baseStore = {
   filingEscalationClosureSlaExceptionEnforcement: new Map(),
   filingEscalationClosureAdjudicationQueue: new Map(),
   filingEscalationClosureEnforcementRebalance: new Map(),
+  filingEscalationClosureAdjudicationQuorum: new Map(),
+  filingEscalationClosureRebalanceExecution: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -1022,6 +1024,68 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       listByOwnerId: vi.fn().mockResolvedValue([]),
       listByQueueId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationClosureAdjudicationQuorum: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-adjudication-quorum:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          adjudicationId:
+            "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "quorum_pending",
+          requiredPanelCount: 3,
+          confirmedPanelCount: 2,
+          quorumMetAt: null,
+          quorumDeadlineAt: Date.now() - 5 * 60 * 1000,
+          verdictDueAt: Date.now() + 60 * 60 * 1000,
+          verdictRecordedAt: null,
+          breachFlags: ["quorum_unmet"],
+          lastGovernedBy: "partner_b",
+          lastGovernedAt: Date.now() - 2 * 60 * 1000,
+          notes: ["repo quorum row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByAdjudicationId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureRebalanceExecution: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-rebalance-execution:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          mode: "owner_transfer",
+          status: "completed",
+          targetOwnerId: "partner_b",
+          appliedOwnerId: "partner_b",
+          throttleReleased: false,
+          queueReopened: false,
+          executedBy: "partner_a",
+          executedAt: Date.now() - 60 * 1000,
+          churnCount: 2,
+          notes: ["repo rebalance execution row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByRebalanceId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -1542,6 +1606,34 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain(
       "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+    )
+  })
+
+  it("filings closure adjudication quorum view GET uses repository filingEscalationClosureAdjudicationQuorum listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_quorum&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-adjudication-quorum:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+    )
+  })
+
+  it("filings closure rebalance execution view GET uses repository filingEscalationClosureRebalanceExecution listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_execution&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-rebalance-execution:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
     )
   })
 
