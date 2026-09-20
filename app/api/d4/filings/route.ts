@@ -1265,6 +1265,48 @@ type CheckpointClosureSettlementArbitrationRulingPublicationBody = {
   note?: string
 }
 
+type LogClosureSettlementArbitrationPublicationCorrectionBody = {
+  action: "log_closure_settlement_arbitration_publication_correction"
+  actorId?: string
+  arbitrationId?: string
+  settlementAttestationId?: string
+  settlementId?: string
+  recalibrationId?: string
+  burndownId?: string
+  remediationId?: string
+  adjudicationId?: string
+  correctionNote?: string
+  note?: string
+}
+
+type CheckpointClosureSettlementArbitrationPublicationRollbackBody = {
+  action: "checkpoint_closure_settlement_arbitration_publication_rollback"
+  actorId?: string
+  arbitrationId?: string
+  settlementAttestationId?: string
+  settlementId?: string
+  recalibrationId?: string
+  burndownId?: string
+  remediationId?: string
+  adjudicationId?: string
+  rollbackReason?: string
+  note?: string
+}
+
+type ReviewClosureSettlementArbitrationDistributionAttestationBody = {
+  action: "review_closure_settlement_arbitration_distribution_attestation"
+  actorId?: string
+  arbitrationId?: string
+  settlementAttestationId?: string
+  settlementId?: string
+  recalibrationId?: string
+  burndownId?: string
+  remediationId?: string
+  adjudicationId?: string
+  decision?: "approved" | "revision_required"
+  note?: string
+}
+
 type AssignClosureQueueReentryExceptionDebtBody = {
   action: "assign_closure_queue_reentry_exception_debt"
   actorId?: string
@@ -1310,6 +1352,54 @@ type ControlClosureQueueReentryDebtAgingAutoEscalationBody = {
   queueId?: string
   ownerId?: string
   agingHours?: number
+  note?: string
+}
+
+type OpenClosureQueueReentryDebtRetirementDisputeBody = {
+  action: "open_closure_queue_reentry_debt_retirement_dispute"
+  actorId?: string
+  complianceId?: string
+  reconciliationId?: string
+  drainId?: string
+  queueItemId?: string
+  attestationId?: string
+  expiryId?: string
+  rebalanceId?: string
+  queueId?: string
+  ownerId?: string
+  disputeReason?: string
+  note?: string
+}
+
+type ResolveClosureQueueReentryDebtRetirementDisputeBody = {
+  action: "resolve_closure_queue_reentry_debt_retirement_dispute"
+  actorId?: string
+  complianceId?: string
+  reconciliationId?: string
+  drainId?: string
+  queueItemId?: string
+  attestationId?: string
+  expiryId?: string
+  rebalanceId?: string
+  queueId?: string
+  ownerId?: string
+  resolution?: "uphold_retirement" | "reopen_debt"
+  note?: string
+}
+
+type ControlClosureQueueReentryDebtRetirementRollbackBody = {
+  action: "control_closure_queue_reentry_debt_retirement_rollback"
+  actorId?: string
+  complianceId?: string
+  reconciliationId?: string
+  drainId?: string
+  queueItemId?: string
+  attestationId?: string
+  expiryId?: string
+  rebalanceId?: string
+  queueId?: string
+  ownerId?: string
+  rollbackCount?: number
   note?: string
 }
 
@@ -1413,9 +1503,15 @@ type Body =
   | IssueClosureSettlementArbitrationFinalRulingBody
   | MemorializeClosureSettlementArbitrationDissentBody
   | CheckpointClosureSettlementArbitrationRulingPublicationBody
+  | LogClosureSettlementArbitrationPublicationCorrectionBody
+  | CheckpointClosureSettlementArbitrationPublicationRollbackBody
+  | ReviewClosureSettlementArbitrationDistributionAttestationBody
   | AssignClosureQueueReentryExceptionDebtBody
   | AttestClosureQueueReentryDebtRetirementBody
   | ControlClosureQueueReentryDebtAgingAutoEscalationBody
+  | OpenClosureQueueReentryDebtRetirementDisputeBody
+  | ResolveClosureQueueReentryDebtRetirementDisputeBody
+  | ControlClosureQueueReentryDebtRetirementRollbackBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -2132,8 +2228,12 @@ async function recomputeClosureComplianceState(
       | "final_ruling_issued"
       | "dissent_memorialized"
       | "ruling_publication_checkpointed"
+      | "publication_correction_logged"
+      | "publication_rollback_checkpointed"
+      | "distribution_attestation_reviewed"
     settlementArbitrationLeadTimeHours: number
     arbitrationRulingAgingHours: number
+    arbitrationPublicationExceptionBacklogCount: number
   }>
   queueReentryComplianceByOwner: Map<string, {
     id: string
@@ -2145,8 +2245,12 @@ async function recomputeClosureComplianceState(
       | "exception_debt_assigned"
       | "debt_retirement_attested"
       | "debt_aging_auto_escalated"
+      | "retirement_dispute_opened"
+      | "retirement_dispute_resolved"
+      | "retirement_rollback_controlled"
     queueReentryExceptionDebtCount: number
     queueReentryRetirementBurnCount: number
+    queueReentryRetirementReconciliationDriftCount: number
   }>
 }> {
   const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(input.firmId)
@@ -2667,8 +2771,12 @@ async function recomputeClosureComplianceState(
         | "final_ruling_issued"
         | "dissent_memorialized"
         | "ruling_publication_checkpointed"
+        | "publication_correction_logged"
+        | "publication_rollback_checkpointed"
+        | "distribution_attestation_reviewed"
       settlementArbitrationLeadTimeHours: number
       arbitrationRulingAgingHours: number
+      arbitrationPublicationExceptionBacklogCount: number
     }
   >()
   const queueReentryComplianceByOwner = new Map<
@@ -2683,8 +2791,12 @@ async function recomputeClosureComplianceState(
         | "exception_debt_assigned"
         | "debt_retirement_attested"
         | "debt_aging_auto_escalated"
+        | "retirement_dispute_opened"
+        | "retirement_dispute_resolved"
+        | "retirement_rollback_controlled"
       queueReentryExceptionDebtCount: number
       queueReentryRetirementBurnCount: number
+      queueReentryRetirementReconciliationDriftCount: number
     }
   >()
   for (const owner of ownerIds) {
@@ -3509,6 +3621,8 @@ async function recomputeClosureComplianceState(
         settlementArbitrationLeadTimeHours:
           settlementArbitrationComputed.settlementArbitrationLeadTimeHours,
         arbitrationRulingAgingHours: settlementArbitrationComputed.arbitrationRulingAgingHours ?? 0,
+        arbitrationPublicationExceptionBacklogCount:
+          settlementArbitrationComputed.arbitrationPublicationExceptionBacklogCount ?? 0,
       })
       const existingQueueReentryCompliance =
         existingQueueReentryComplianceByQueueReconciliationId.get(queueDrainReconciliationComputed.id) ??
@@ -3549,6 +3663,8 @@ async function recomputeClosureComplianceState(
         status: queueReentryComplianceComputed.status,
         queueReentryExceptionDebtCount: queueReentryComplianceComputed.queueReentryExceptionDebtCount,
         queueReentryRetirementBurnCount: queueReentryComplianceComputed.queueReentryRetirementBurnCount ?? 0,
+        queueReentryRetirementReconciliationDriftCount:
+          queueReentryComplianceComputed.queueReentryRetirementReconciliationDriftCount ?? 0,
       })
     }
   }
@@ -4276,12 +4392,16 @@ export async function GET(request: Request) {
               settlementArbitration?.settlementArbitrationLeadTimeHours ?? 0,
             closureArbitrationRulingAgingHours:
               settlementArbitration?.arbitrationRulingAgingHours ?? 0,
+            closureArbitrationPublicationExceptionBacklogCount:
+              settlementArbitration?.arbitrationPublicationExceptionBacklogCount ?? 0,
             closureQueueReentryComplianceStatus:
               queueReentryCompliance?.status ?? "compliance_pending",
             closureQueueReentryExceptionDebtCount:
               queueReentryCompliance?.queueReentryExceptionDebtCount ?? 0,
             closureQueueReentryRetirementBurnCount:
               queueReentryCompliance?.queueReentryRetirementBurnCount ?? 0,
+            closureQueueReentryRetirementReconciliationDriftCount:
+              queueReentryCompliance?.queueReentryRetirementReconciliationDriftCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -4457,12 +4577,16 @@ export async function GET(request: Request) {
               settlementArbitration?.settlementArbitrationLeadTimeHours ?? 0,
             closureArbitrationRulingAgingHours:
               settlementArbitration?.arbitrationRulingAgingHours ?? 0,
+            closureArbitrationPublicationExceptionBacklogCount:
+              settlementArbitration?.arbitrationPublicationExceptionBacklogCount ?? 0,
             closureQueueReentryComplianceStatus:
               queueReentryCompliance?.status ?? "compliance_pending",
             closureQueueReentryExceptionDebtCount:
               queueReentryCompliance?.queueReentryExceptionDebtCount ?? 0,
             closureQueueReentryRetirementBurnCount:
               queueReentryCompliance?.queueReentryRetirementBurnCount ?? 0,
+            closureQueueReentryRetirementReconciliationDriftCount:
+              queueReentryCompliance?.queueReentryRetirementReconciliationDriftCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -4692,12 +4816,16 @@ export async function GET(request: Request) {
               settlementArbitration?.settlementArbitrationLeadTimeHours ?? 0,
             closureArbitrationRulingAgingHours:
               settlementArbitration?.arbitrationRulingAgingHours ?? 0,
+            closureArbitrationPublicationExceptionBacklogCount:
+              settlementArbitration?.arbitrationPublicationExceptionBacklogCount ?? 0,
             closureQueueReentryComplianceStatus:
               queueReentryCompliance?.status ?? "compliance_pending",
             closureQueueReentryExceptionDebtCount:
               queueReentryCompliance?.queueReentryExceptionDebtCount ?? 0,
             closureQueueReentryRetirementBurnCount:
               queueReentryCompliance?.queueReentryRetirementBurnCount ?? 0,
+            closureQueueReentryRetirementReconciliationDriftCount:
+              queueReentryCompliance?.queueReentryRetirementReconciliationDriftCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -6119,7 +6247,9 @@ export async function GET(request: Request) {
               ownerSettlementArbitration.settlementArbitrationLeadTimeHours >= 8) ||
             ((ownerSettlementArbitration.status === "final_ruling_issued" ||
               ownerSettlementArbitration.status === "dissent_memorialized") &&
-              ownerSettlementArbitration.arbitrationRulingAgingHours >= 8)
+              ownerSettlementArbitration.arbitrationRulingAgingHours >= 8) ||
+            ownerSettlementArbitration.status === "publication_rollback_checkpointed" ||
+            ownerSettlementArbitration.arbitrationPublicationExceptionBacklogCount >= 2
           )
         const settlementArbitrationElevated =
           !!ownerSettlementArbitration &&
@@ -6127,20 +6257,27 @@ export async function GET(request: Request) {
             ownerSettlementArbitration.status === "reopen_veto_checkpointed" ||
             ownerSettlementArbitration.status === "final_ruling_issued" ||
             ownerSettlementArbitration.status === "dissent_memorialized" ||
-            ownerSettlementArbitration.status === "ruling_publication_checkpointed")
+            ownerSettlementArbitration.status === "ruling_publication_checkpointed" ||
+            ownerSettlementArbitration.status === "publication_correction_logged" ||
+            ownerSettlementArbitration.status === "publication_rollback_checkpointed" ||
+            ownerSettlementArbitration.status === "distribution_attestation_reviewed" ||
+            ownerSettlementArbitration.arbitrationPublicationExceptionBacklogCount > 0)
         const queueReentryComplianceCritical =
           !!ownerQueueReentryCompliance &&
           (
             ownerQueueReentryCompliance.status === "timeout_waiver_checkpointed" ||
             ownerQueueReentryCompliance.status === "debt_aging_auto_escalated" ||
-            ownerQueueReentryCompliance.queueReentryExceptionDebtCount >= 3
+            ownerQueueReentryCompliance.status === "retirement_rollback_controlled" ||
+            ownerQueueReentryCompliance.queueReentryExceptionDebtCount >= 3 ||
+            ownerQueueReentryCompliance.queueReentryRetirementReconciliationDriftCount >= 3
           )
         const queueReentryComplianceElevated =
           !!ownerQueueReentryCompliance &&
           (
             ownerQueueReentryCompliance.status !== "compliance_pending" ||
             ownerQueueReentryCompliance.queueReentryExceptionDebtCount > 0 ||
-            ownerQueueReentryCompliance.queueReentryRetirementBurnCount > 0
+            ownerQueueReentryCompliance.queueReentryRetirementBurnCount > 0 ||
+            ownerQueueReentryCompliance.queueReentryRetirementReconciliationDriftCount > 0
           )
         const closureQueueCritical =
           (closureQueueElevated && !!ownerClosureQueue && ownerClosureQueue.breachedReaffirmationCount > 0) ||
@@ -6438,12 +6575,16 @@ export async function GET(request: Request) {
               settlementArbitration?.settlementArbitrationLeadTimeHours ?? 0,
             closureArbitrationRulingAgingHours:
               settlementArbitration?.arbitrationRulingAgingHours ?? 0,
+            closureArbitrationPublicationExceptionBacklogCount:
+              settlementArbitration?.arbitrationPublicationExceptionBacklogCount ?? 0,
             closureQueueReentryComplianceStatus:
               queueReentryCompliance?.status ?? "compliance_pending",
             closureQueueReentryExceptionDebtCount:
               queueReentryCompliance?.queueReentryExceptionDebtCount ?? 0,
             closureQueueReentryRetirementBurnCount:
               queueReentryCompliance?.queueReentryRetirementBurnCount ?? 0,
+            closureQueueReentryRetirementReconciliationDriftCount:
+              queueReentryCompliance?.queueReentryRetirementReconciliationDriftCount ?? 0,
           }
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -16620,6 +16761,426 @@ export async function POST(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
+    if (parsed.action === "log_closure_settlement_arbitration_publication_correction") {
+      if (
+        !parsed.actorId ||
+        !parsed.correctionNote?.trim() ||
+        (!parsed.arbitrationId &&
+          !parsed.settlementAttestationId &&
+          !parsed.settlementId &&
+          !parsed.recalibrationId &&
+          !parsed.burndownId &&
+          !parsed.remediationId &&
+          !parsed.adjudicationId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, correctionNote, and arbitrationId/settlementAttestationId/settlementId/recalibrationId/burndownId/remediationId/adjudicationId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "log_closure_settlement_arbitration_publication_correction requires partner role" },
+          { status: 403 }
+        )
+      }
+      const existingArbitration = parsed.arbitrationId
+        ? await repos.filingEscalationClosureSettlementArbitration.get(parsed.arbitrationId)
+        : null
+      const existingSettlementAttestation = parsed.settlementAttestationId
+        ? await repos.filingEscalationClosureSettlementAttestation.get(parsed.settlementAttestationId)
+        : existingArbitration
+          ? await repos.filingEscalationClosureSettlementAttestation.get(
+              existingArbitration.settlementAttestationId
+            )
+          : null
+      const existingSettlement = parsed.settlementId
+        ? await repos.filingEscalationClosureBurndownSettlement.get(parsed.settlementId)
+        : existingSettlementAttestation
+          ? await repos.filingEscalationClosureBurndownSettlement.get(
+              existingSettlementAttestation.settlementId
+            )
+          : null
+      const existingRecalibration = parsed.recalibrationId
+        ? await repos.filingEscalationClosureBurndownRecalibration.get(parsed.recalibrationId)
+        : existingSettlement
+          ? await repos.filingEscalationClosureBurndownRecalibration.get(existingSettlement.recalibrationId)
+          : null
+      const resolvedBurndownId =
+        parsed.burndownId ??
+        existingRecalibration?.burndownId ??
+        (parsed.remediationId
+          ? filingEscalationClosureAdjudicationDebtBurndownId(parsed.remediationId)
+          : parsed.adjudicationId
+            ? filingEscalationClosureAdjudicationDebtBurndownId(
+                filingEscalationClosureAdjudicationSloDebtRemediationId(
+                  filingEscalationClosureAdjudicationSloId(parsed.adjudicationId)
+                )
+              )
+            : null)
+      const burndown = resolvedBurndownId
+        ? await repos.filingEscalationClosureAdjudicationDebtBurndown.get(resolvedBurndownId)
+        : null
+      if (!burndown || burndown.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
+      }
+      const now = Date.now()
+      const priorAuditCount = store.audit.length
+      const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
+        burndown,
+        existing:
+          existingRecalibration ??
+          (await repos.filingEscalationClosureBurndownRecalibration.get(
+            filingEscalationClosureBurndownRecalibrationId(burndown.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureBurndownRecalibration.upsert(recalibrationUpdated)
+      store.filingEscalationClosureBurndownRecalibration.set(recalibrationUpdated.id, recalibrationUpdated)
+      const settlementUpdated = buildFilingEscalationClosureBurndownSettlementRow({
+        recalibration: recalibrationUpdated,
+        existing:
+          existingSettlement ??
+          (await repos.filingEscalationClosureBurndownSettlement.get(
+            filingEscalationClosureBurndownSettlementId(recalibrationUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureBurndownSettlement.upsert(settlementUpdated)
+      store.filingEscalationClosureBurndownSettlement.set(settlementUpdated.id, settlementUpdated)
+      const settlementAttestationUpdated = buildFilingEscalationClosureSettlementAttestationRow({
+        settlement: settlementUpdated,
+        existing:
+          existingSettlementAttestation ??
+          (await repos.filingEscalationClosureSettlementAttestation.get(
+            filingEscalationClosureSettlementAttestationId(settlementUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureSettlementAttestation.upsert(settlementAttestationUpdated)
+      store.filingEscalationClosureSettlementAttestation.set(
+        settlementAttestationUpdated.id,
+        settlementAttestationUpdated
+      )
+      const arbitrationUpdated = buildFilingEscalationClosureSettlementArbitrationRow({
+        settlementAttestation: settlementAttestationUpdated,
+        existing:
+          existingArbitration ??
+          (await repos.filingEscalationClosureSettlementArbitration.get(
+            filingEscalationClosureSettlementArbitrationId(settlementAttestationUpdated.id)
+          )),
+        publicationCorrectionLoggedBy: actor.id,
+        publicationCorrectionNote: parsed.correctionNote.trim(),
+        now,
+        note: parsed.note ?? parsed.correctionNote.trim(),
+      })
+      await repos.filingEscalationClosureSettlementArbitration.upsert(arbitrationUpdated)
+      store.filingEscalationClosureSettlementArbitration.set(arbitrationUpdated.id, arbitrationUpdated)
+      store.audit.push({
+        action: "filing_closure_settlement_arbitration_publication_correction_log",
+        actorId: actor.id,
+        target: arbitrationUpdated.id,
+        classification: arbitrationUpdated.classification,
+        reason: parsed.correctionNote.trim(),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "log_closure_settlement_arbitration_publication_correction",
+        closureSettlementArbitration:
+          (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
+          arbitrationUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "checkpoint_closure_settlement_arbitration_publication_rollback") {
+      if (
+        !parsed.actorId ||
+        !parsed.rollbackReason?.trim() ||
+        (!parsed.arbitrationId &&
+          !parsed.settlementAttestationId &&
+          !parsed.settlementId &&
+          !parsed.recalibrationId &&
+          !parsed.burndownId &&
+          !parsed.remediationId &&
+          !parsed.adjudicationId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, rollbackReason, and arbitrationId/settlementAttestationId/settlementId/recalibrationId/burndownId/remediationId/adjudicationId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "checkpoint_closure_settlement_arbitration_publication_rollback requires partner role" },
+          { status: 403 }
+        )
+      }
+      const existingArbitration = parsed.arbitrationId
+        ? await repos.filingEscalationClosureSettlementArbitration.get(parsed.arbitrationId)
+        : null
+      const existingSettlementAttestation = parsed.settlementAttestationId
+        ? await repos.filingEscalationClosureSettlementAttestation.get(parsed.settlementAttestationId)
+        : existingArbitration
+          ? await repos.filingEscalationClosureSettlementAttestation.get(
+              existingArbitration.settlementAttestationId
+            )
+          : null
+      const existingSettlement = parsed.settlementId
+        ? await repos.filingEscalationClosureBurndownSettlement.get(parsed.settlementId)
+        : existingSettlementAttestation
+          ? await repos.filingEscalationClosureBurndownSettlement.get(
+              existingSettlementAttestation.settlementId
+            )
+          : null
+      const existingRecalibration = parsed.recalibrationId
+        ? await repos.filingEscalationClosureBurndownRecalibration.get(parsed.recalibrationId)
+        : existingSettlement
+          ? await repos.filingEscalationClosureBurndownRecalibration.get(existingSettlement.recalibrationId)
+          : null
+      const resolvedBurndownId =
+        parsed.burndownId ??
+        existingRecalibration?.burndownId ??
+        (parsed.remediationId
+          ? filingEscalationClosureAdjudicationDebtBurndownId(parsed.remediationId)
+          : parsed.adjudicationId
+            ? filingEscalationClosureAdjudicationDebtBurndownId(
+                filingEscalationClosureAdjudicationSloDebtRemediationId(
+                  filingEscalationClosureAdjudicationSloId(parsed.adjudicationId)
+                )
+              )
+            : null)
+      const burndown = resolvedBurndownId
+        ? await repos.filingEscalationClosureAdjudicationDebtBurndown.get(resolvedBurndownId)
+        : null
+      if (!burndown || burndown.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
+      }
+      const now = Date.now()
+      const priorAuditCount = store.audit.length
+      const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
+        burndown,
+        existing:
+          existingRecalibration ??
+          (await repos.filingEscalationClosureBurndownRecalibration.get(
+            filingEscalationClosureBurndownRecalibrationId(burndown.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureBurndownRecalibration.upsert(recalibrationUpdated)
+      store.filingEscalationClosureBurndownRecalibration.set(recalibrationUpdated.id, recalibrationUpdated)
+      const settlementUpdated = buildFilingEscalationClosureBurndownSettlementRow({
+        recalibration: recalibrationUpdated,
+        existing:
+          existingSettlement ??
+          (await repos.filingEscalationClosureBurndownSettlement.get(
+            filingEscalationClosureBurndownSettlementId(recalibrationUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureBurndownSettlement.upsert(settlementUpdated)
+      store.filingEscalationClosureBurndownSettlement.set(settlementUpdated.id, settlementUpdated)
+      const settlementAttestationUpdated = buildFilingEscalationClosureSettlementAttestationRow({
+        settlement: settlementUpdated,
+        existing:
+          existingSettlementAttestation ??
+          (await repos.filingEscalationClosureSettlementAttestation.get(
+            filingEscalationClosureSettlementAttestationId(settlementUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureSettlementAttestation.upsert(settlementAttestationUpdated)
+      store.filingEscalationClosureSettlementAttestation.set(
+        settlementAttestationUpdated.id,
+        settlementAttestationUpdated
+      )
+      const arbitrationUpdated = buildFilingEscalationClosureSettlementArbitrationRow({
+        settlementAttestation: settlementAttestationUpdated,
+        existing:
+          existingArbitration ??
+          (await repos.filingEscalationClosureSettlementArbitration.get(
+            filingEscalationClosureSettlementArbitrationId(settlementAttestationUpdated.id)
+          )),
+        publicationRollbackCheckpointedBy: actor.id,
+        publicationRollbackReason: parsed.rollbackReason.trim(),
+        now,
+        note: parsed.note ?? parsed.rollbackReason.trim(),
+      })
+      await repos.filingEscalationClosureSettlementArbitration.upsert(arbitrationUpdated)
+      store.filingEscalationClosureSettlementArbitration.set(arbitrationUpdated.id, arbitrationUpdated)
+      store.audit.push({
+        action: "filing_closure_settlement_arbitration_publication_rollback_checkpoint",
+        actorId: actor.id,
+        target: arbitrationUpdated.id,
+        classification: arbitrationUpdated.classification,
+        reason: parsed.rollbackReason.trim(),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "checkpoint_closure_settlement_arbitration_publication_rollback",
+        closureSettlementArbitration:
+          (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
+          arbitrationUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "review_closure_settlement_arbitration_distribution_attestation") {
+      if (
+        !parsed.actorId ||
+        !parsed.decision ||
+        (!parsed.arbitrationId &&
+          !parsed.settlementAttestationId &&
+          !parsed.settlementId &&
+          !parsed.recalibrationId &&
+          !parsed.burndownId &&
+          !parsed.remediationId &&
+          !parsed.adjudicationId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, decision, and arbitrationId/settlementAttestationId/settlementId/recalibrationId/burndownId/remediationId/adjudicationId are required",
+          },
+          { status: 400 }
+        )
+      }
+      if (parsed.decision !== "approved" && parsed.decision !== "revision_required") {
+        return NextResponse.json({ error: "decision must be approved or revision_required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          {
+            error:
+              "review_closure_settlement_arbitration_distribution_attestation requires partner role",
+          },
+          { status: 403 }
+        )
+      }
+      const existingArbitration = parsed.arbitrationId
+        ? await repos.filingEscalationClosureSettlementArbitration.get(parsed.arbitrationId)
+        : null
+      const existingSettlementAttestation = parsed.settlementAttestationId
+        ? await repos.filingEscalationClosureSettlementAttestation.get(parsed.settlementAttestationId)
+        : existingArbitration
+          ? await repos.filingEscalationClosureSettlementAttestation.get(
+              existingArbitration.settlementAttestationId
+            )
+          : null
+      const existingSettlement = parsed.settlementId
+        ? await repos.filingEscalationClosureBurndownSettlement.get(parsed.settlementId)
+        : existingSettlementAttestation
+          ? await repos.filingEscalationClosureBurndownSettlement.get(
+              existingSettlementAttestation.settlementId
+            )
+          : null
+      const existingRecalibration = parsed.recalibrationId
+        ? await repos.filingEscalationClosureBurndownRecalibration.get(parsed.recalibrationId)
+        : existingSettlement
+          ? await repos.filingEscalationClosureBurndownRecalibration.get(existingSettlement.recalibrationId)
+          : null
+      const resolvedBurndownId =
+        parsed.burndownId ??
+        existingRecalibration?.burndownId ??
+        (parsed.remediationId
+          ? filingEscalationClosureAdjudicationDebtBurndownId(parsed.remediationId)
+          : parsed.adjudicationId
+            ? filingEscalationClosureAdjudicationDebtBurndownId(
+                filingEscalationClosureAdjudicationSloDebtRemediationId(
+                  filingEscalationClosureAdjudicationSloId(parsed.adjudicationId)
+                )
+              )
+            : null)
+      const burndown = resolvedBurndownId
+        ? await repos.filingEscalationClosureAdjudicationDebtBurndown.get(resolvedBurndownId)
+        : null
+      if (!burndown || burndown.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
+      }
+      const now = Date.now()
+      const priorAuditCount = store.audit.length
+      const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
+        burndown,
+        existing:
+          existingRecalibration ??
+          (await repos.filingEscalationClosureBurndownRecalibration.get(
+            filingEscalationClosureBurndownRecalibrationId(burndown.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureBurndownRecalibration.upsert(recalibrationUpdated)
+      store.filingEscalationClosureBurndownRecalibration.set(recalibrationUpdated.id, recalibrationUpdated)
+      const settlementUpdated = buildFilingEscalationClosureBurndownSettlementRow({
+        recalibration: recalibrationUpdated,
+        existing:
+          existingSettlement ??
+          (await repos.filingEscalationClosureBurndownSettlement.get(
+            filingEscalationClosureBurndownSettlementId(recalibrationUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureBurndownSettlement.upsert(settlementUpdated)
+      store.filingEscalationClosureBurndownSettlement.set(settlementUpdated.id, settlementUpdated)
+      const settlementAttestationUpdated = buildFilingEscalationClosureSettlementAttestationRow({
+        settlement: settlementUpdated,
+        existing:
+          existingSettlementAttestation ??
+          (await repos.filingEscalationClosureSettlementAttestation.get(
+            filingEscalationClosureSettlementAttestationId(settlementUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureSettlementAttestation.upsert(settlementAttestationUpdated)
+      store.filingEscalationClosureSettlementAttestation.set(
+        settlementAttestationUpdated.id,
+        settlementAttestationUpdated
+      )
+      const arbitrationUpdated = buildFilingEscalationClosureSettlementArbitrationRow({
+        settlementAttestation: settlementAttestationUpdated,
+        existing:
+          existingArbitration ??
+          (await repos.filingEscalationClosureSettlementArbitration.get(
+            filingEscalationClosureSettlementArbitrationId(settlementAttestationUpdated.id)
+          )),
+        distributionAttestationReviewedBy: actor.id,
+        distributionAttestationDecision: parsed.decision,
+        now,
+        note: parsed.note ?? `distribution attestation reviewed: ${parsed.decision}`,
+      })
+      await repos.filingEscalationClosureSettlementArbitration.upsert(arbitrationUpdated)
+      store.filingEscalationClosureSettlementArbitration.set(arbitrationUpdated.id, arbitrationUpdated)
+      store.audit.push({
+        action: "filing_closure_settlement_arbitration_distribution_attestation_review",
+        actorId: actor.id,
+        target: arbitrationUpdated.id,
+        classification: arbitrationUpdated.classification,
+        reason: parsed.decision,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "review_closure_settlement_arbitration_distribution_attestation",
+        closureSettlementArbitration:
+          (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
+          arbitrationUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
     if (parsed.action === "attest_closure_queue_reentry_exception") {
       if (
         !parsed.actorId ||
@@ -17658,6 +18219,533 @@ export async function POST(request: Request) {
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "control_closure_queue_reentry_debt_aging_auto_escalation",
+        closureQueueReentryCompliance:
+          (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
+          complianceUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "open_closure_queue_reentry_debt_retirement_dispute") {
+      if (
+        !parsed.actorId ||
+        !parsed.disputeReason?.trim() ||
+        (!parsed.complianceId &&
+          !parsed.reconciliationId &&
+          !parsed.drainId &&
+          !parsed.queueItemId &&
+          !parsed.attestationId &&
+          !parsed.expiryId &&
+          !parsed.rebalanceId &&
+          !parsed.queueId &&
+          !parsed.ownerId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, disputeReason, and complianceId/reconciliationId/drainId/queueItemId/attestationId/expiryId/rebalanceId/queueId/ownerId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "open_closure_queue_reentry_debt_retirement_dispute requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const existingCompliance = parsed.complianceId
+        ? await repos.filingEscalationClosureQueueReentryCompliance.get(parsed.complianceId)
+        : null
+      const existingReconciliation = parsed.reconciliationId
+        ? await repos.filingEscalationClosureQueueDrainReconciliation.get(parsed.reconciliationId)
+        : existingCompliance
+          ? await repos.filingEscalationClosureQueueDrainReconciliation.get(
+              existingCompliance.queueReconciliationId
+            )
+          : null
+      const existingDrain = parsed.drainId
+        ? await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(parsed.drainId)
+        : existingReconciliation
+          ? await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(
+              existingReconciliation.queueDrainId
+            )
+          : null
+      const existingQueueItem = parsed.queueItemId
+        ? await repos.filingEscalationClosureExpiryAttestationQueue.get(parsed.queueItemId)
+        : existingDrain
+          ? await repos.filingEscalationClosureExpiryAttestationQueue.get(existingDrain.queueItemId)
+          : null
+      const existingAttestation =
+        (parsed.attestationId
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(parsed.attestationId)
+          : null) ??
+        (existingQueueItem
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(existingQueueItem.attestationId)
+          : null)
+      const existingExpiry = parsed.expiryId
+        ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(parsed.expiryId)
+        : existingAttestation
+          ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(existingAttestation.expiryId)
+          : null
+      const queueFromSelector =
+        parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null
+      const rebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : queueFromSelector
+            ? await repos.filingEscalationClosureEnforcementRebalance.get(
+                filingEscalationClosureEnforcementRebalanceId(queueFromSelector.id)
+              )
+            : null) ?? null
+      const resolvedAttestation =
+        existingAttestation ??
+        (existingExpiry
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+              filingEscalationClosureSafeguardExpiryAttestationId(existingExpiry.id)
+            )
+          : rebalance
+            ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+                filingEscalationClosureSafeguardExpiryAttestationId(
+                  filingEscalationClosureRebalanceSafeguardExpiryId(
+                    filingEscalationClosureRebalanceSafeguardId(rebalance.id)
+                  )
+                )
+              )
+            : null)
+      if (!resolvedAttestation || resolvedAttestation.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure safeguard expiry attestation row not found" }, { status: 404 })
+      }
+      const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
+        attestation: resolvedAttestation,
+        existing:
+          existingQueueItem ??
+          (await repos.filingEscalationClosureExpiryAttestationQueue.get(
+            filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
+      store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
+      const queueDrainUpdated = buildFilingEscalationClosureExpiryAttestationQueueDrainRow({
+        queueItem: queueUpdated,
+        existing:
+          existingDrain ??
+          (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(
+            filingEscalationClosureExpiryAttestationQueueDrainId(queueUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueueDrain.upsert(queueDrainUpdated)
+      store.filingEscalationClosureExpiryAttestationQueueDrain.set(queueDrainUpdated.id, queueDrainUpdated)
+      const queueDrainReconciliationUpdated = buildFilingEscalationClosureQueueDrainReconciliationRow({
+        queueDrain: queueDrainUpdated,
+        existing:
+          existingReconciliation ??
+          (await repos.filingEscalationClosureQueueDrainReconciliation.get(
+            filingEscalationClosureQueueDrainReconciliationId(queueDrainUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureQueueDrainReconciliation.upsert(queueDrainReconciliationUpdated)
+      store.filingEscalationClosureQueueDrainReconciliation.set(
+        queueDrainReconciliationUpdated.id,
+        queueDrainReconciliationUpdated
+      )
+      const priorAuditCount = store.audit.length
+      const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
+        queueReconciliation: queueDrainReconciliationUpdated,
+        existing:
+          existingCompliance ??
+          (await repos.filingEscalationClosureQueueReentryCompliance.get(
+            filingEscalationClosureQueueReentryComplianceId(queueDrainReconciliationUpdated.id)
+          )),
+        retirementDisputeOpenedBy: actor.id,
+        retirementDisputeReason: parsed.disputeReason.trim(),
+        now,
+        note: parsed.note ?? parsed.disputeReason.trim(),
+      })
+      await repos.filingEscalationClosureQueueReentryCompliance.upsert(complianceUpdated)
+      store.filingEscalationClosureQueueReentryCompliance.set(complianceUpdated.id, complianceUpdated)
+      store.audit.push({
+        action: "filing_closure_queue_reentry_debt_retirement_dispute_open",
+        actorId: actor.id,
+        target: complianceUpdated.id,
+        classification: complianceUpdated.classification,
+        reason: parsed.disputeReason.trim(),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "open_closure_queue_reentry_debt_retirement_dispute",
+        closureQueueReentryCompliance:
+          (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
+          complianceUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_closure_queue_reentry_debt_retirement_dispute") {
+      if (
+        !parsed.actorId ||
+        !parsed.resolution ||
+        (!parsed.complianceId &&
+          !parsed.reconciliationId &&
+          !parsed.drainId &&
+          !parsed.queueItemId &&
+          !parsed.attestationId &&
+          !parsed.expiryId &&
+          !parsed.rebalanceId &&
+          !parsed.queueId &&
+          !parsed.ownerId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, resolution, and complianceId/reconciliationId/drainId/queueItemId/attestationId/expiryId/rebalanceId/queueId/ownerId are required",
+          },
+          { status: 400 }
+        )
+      }
+      if (parsed.resolution !== "uphold_retirement" && parsed.resolution !== "reopen_debt") {
+        return NextResponse.json({ error: "resolution must be uphold_retirement or reopen_debt" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "resolve_closure_queue_reentry_debt_retirement_dispute requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const existingCompliance = parsed.complianceId
+        ? await repos.filingEscalationClosureQueueReentryCompliance.get(parsed.complianceId)
+        : null
+      const existingReconciliation = parsed.reconciliationId
+        ? await repos.filingEscalationClosureQueueDrainReconciliation.get(parsed.reconciliationId)
+        : existingCompliance
+          ? await repos.filingEscalationClosureQueueDrainReconciliation.get(
+              existingCompliance.queueReconciliationId
+            )
+          : null
+      const existingDrain = parsed.drainId
+        ? await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(parsed.drainId)
+        : existingReconciliation
+          ? await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(
+              existingReconciliation.queueDrainId
+            )
+          : null
+      const existingQueueItem = parsed.queueItemId
+        ? await repos.filingEscalationClosureExpiryAttestationQueue.get(parsed.queueItemId)
+        : existingDrain
+          ? await repos.filingEscalationClosureExpiryAttestationQueue.get(existingDrain.queueItemId)
+          : null
+      const existingAttestation =
+        (parsed.attestationId
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(parsed.attestationId)
+          : null) ??
+        (existingQueueItem
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(existingQueueItem.attestationId)
+          : null)
+      const existingExpiry = parsed.expiryId
+        ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(parsed.expiryId)
+        : existingAttestation
+          ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(existingAttestation.expiryId)
+          : null
+      const queueFromSelector =
+        parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null
+      const rebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : queueFromSelector
+            ? await repos.filingEscalationClosureEnforcementRebalance.get(
+                filingEscalationClosureEnforcementRebalanceId(queueFromSelector.id)
+              )
+            : null) ?? null
+      const resolvedAttestation =
+        existingAttestation ??
+        (existingExpiry
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+              filingEscalationClosureSafeguardExpiryAttestationId(existingExpiry.id)
+            )
+          : rebalance
+            ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+                filingEscalationClosureSafeguardExpiryAttestationId(
+                  filingEscalationClosureRebalanceSafeguardExpiryId(
+                    filingEscalationClosureRebalanceSafeguardId(rebalance.id)
+                  )
+                )
+              )
+            : null)
+      if (!resolvedAttestation || resolvedAttestation.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure safeguard expiry attestation row not found" }, { status: 404 })
+      }
+      const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
+        attestation: resolvedAttestation,
+        existing:
+          existingQueueItem ??
+          (await repos.filingEscalationClosureExpiryAttestationQueue.get(
+            filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
+      store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
+      const queueDrainUpdated = buildFilingEscalationClosureExpiryAttestationQueueDrainRow({
+        queueItem: queueUpdated,
+        existing:
+          existingDrain ??
+          (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(
+            filingEscalationClosureExpiryAttestationQueueDrainId(queueUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueueDrain.upsert(queueDrainUpdated)
+      store.filingEscalationClosureExpiryAttestationQueueDrain.set(queueDrainUpdated.id, queueDrainUpdated)
+      const queueDrainReconciliationUpdated = buildFilingEscalationClosureQueueDrainReconciliationRow({
+        queueDrain: queueDrainUpdated,
+        existing:
+          existingReconciliation ??
+          (await repos.filingEscalationClosureQueueDrainReconciliation.get(
+            filingEscalationClosureQueueDrainReconciliationId(queueDrainUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureQueueDrainReconciliation.upsert(queueDrainReconciliationUpdated)
+      store.filingEscalationClosureQueueDrainReconciliation.set(
+        queueDrainReconciliationUpdated.id,
+        queueDrainReconciliationUpdated
+      )
+      const priorAuditCount = store.audit.length
+      const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
+        queueReconciliation: queueDrainReconciliationUpdated,
+        existing:
+          existingCompliance ??
+          (await repos.filingEscalationClosureQueueReentryCompliance.get(
+            filingEscalationClosureQueueReentryComplianceId(queueDrainReconciliationUpdated.id)
+          )),
+        retirementDisputeResolvedBy: actor.id,
+        retirementDisputeResolution: parsed.resolution,
+        now,
+        note: parsed.note ?? `retirement dispute resolved: ${parsed.resolution}`,
+      })
+      await repos.filingEscalationClosureQueueReentryCompliance.upsert(complianceUpdated)
+      store.filingEscalationClosureQueueReentryCompliance.set(complianceUpdated.id, complianceUpdated)
+      store.audit.push({
+        action: "filing_closure_queue_reentry_debt_retirement_dispute_resolve",
+        actorId: actor.id,
+        target: complianceUpdated.id,
+        classification: complianceUpdated.classification,
+        reason: parsed.resolution,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "resolve_closure_queue_reentry_debt_retirement_dispute",
+        closureQueueReentryCompliance:
+          (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
+          complianceUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "control_closure_queue_reentry_debt_retirement_rollback") {
+      if (
+        !parsed.actorId ||
+        (!parsed.complianceId &&
+          !parsed.reconciliationId &&
+          !parsed.drainId &&
+          !parsed.queueItemId &&
+          !parsed.attestationId &&
+          !parsed.expiryId &&
+          !parsed.rebalanceId &&
+          !parsed.queueId &&
+          !parsed.ownerId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId and complianceId/reconciliationId/drainId/queueItemId/attestationId/expiryId/rebalanceId/queueId/ownerId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const rollbackCountRaw = parsed.rollbackCount ?? 1
+      if (!Number.isFinite(rollbackCountRaw) || rollbackCountRaw < 1 || rollbackCountRaw > 500) {
+        return NextResponse.json({ error: "rollbackCount must be between 1 and 500" }, { status: 400 })
+      }
+      const rollbackCount = Math.floor(rollbackCountRaw)
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "control_closure_queue_reentry_debt_retirement_rollback requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const existingCompliance = parsed.complianceId
+        ? await repos.filingEscalationClosureQueueReentryCompliance.get(parsed.complianceId)
+        : null
+      const existingReconciliation = parsed.reconciliationId
+        ? await repos.filingEscalationClosureQueueDrainReconciliation.get(parsed.reconciliationId)
+        : existingCompliance
+          ? await repos.filingEscalationClosureQueueDrainReconciliation.get(
+              existingCompliance.queueReconciliationId
+            )
+          : null
+      const existingDrain = parsed.drainId
+        ? await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(parsed.drainId)
+        : existingReconciliation
+          ? await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(
+              existingReconciliation.queueDrainId
+            )
+          : null
+      const existingQueueItem = parsed.queueItemId
+        ? await repos.filingEscalationClosureExpiryAttestationQueue.get(parsed.queueItemId)
+        : existingDrain
+          ? await repos.filingEscalationClosureExpiryAttestationQueue.get(existingDrain.queueItemId)
+          : null
+      const existingAttestation =
+        (parsed.attestationId
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(parsed.attestationId)
+          : null) ??
+        (existingQueueItem
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(existingQueueItem.attestationId)
+          : null)
+      const existingExpiry = parsed.expiryId
+        ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(parsed.expiryId)
+        : existingAttestation
+          ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(existingAttestation.expiryId)
+          : null
+      const queueFromSelector =
+        parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null
+      const rebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : queueFromSelector
+            ? await repos.filingEscalationClosureEnforcementRebalance.get(
+                filingEscalationClosureEnforcementRebalanceId(queueFromSelector.id)
+              )
+            : null) ?? null
+      const resolvedAttestation =
+        existingAttestation ??
+        (existingExpiry
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+              filingEscalationClosureSafeguardExpiryAttestationId(existingExpiry.id)
+            )
+          : rebalance
+            ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+                filingEscalationClosureSafeguardExpiryAttestationId(
+                  filingEscalationClosureRebalanceSafeguardExpiryId(
+                    filingEscalationClosureRebalanceSafeguardId(rebalance.id)
+                  )
+                )
+              )
+            : null)
+      if (!resolvedAttestation || resolvedAttestation.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure safeguard expiry attestation row not found" }, { status: 404 })
+      }
+      const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
+        attestation: resolvedAttestation,
+        existing:
+          existingQueueItem ??
+          (await repos.filingEscalationClosureExpiryAttestationQueue.get(
+            filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
+      store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
+      const queueDrainUpdated = buildFilingEscalationClosureExpiryAttestationQueueDrainRow({
+        queueItem: queueUpdated,
+        existing:
+          existingDrain ??
+          (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(
+            filingEscalationClosureExpiryAttestationQueueDrainId(queueUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueueDrain.upsert(queueDrainUpdated)
+      store.filingEscalationClosureExpiryAttestationQueueDrain.set(queueDrainUpdated.id, queueDrainUpdated)
+      const queueDrainReconciliationUpdated = buildFilingEscalationClosureQueueDrainReconciliationRow({
+        queueDrain: queueDrainUpdated,
+        existing:
+          existingReconciliation ??
+          (await repos.filingEscalationClosureQueueDrainReconciliation.get(
+            filingEscalationClosureQueueDrainReconciliationId(queueDrainUpdated.id)
+          )),
+        now,
+      })
+      await repos.filingEscalationClosureQueueDrainReconciliation.upsert(queueDrainReconciliationUpdated)
+      store.filingEscalationClosureQueueDrainReconciliation.set(
+        queueDrainReconciliationUpdated.id,
+        queueDrainReconciliationUpdated
+      )
+      const priorAuditCount = store.audit.length
+      const cumulativeRollbackCount = (existingCompliance?.retirementRollbackCount ?? 0) + rollbackCount
+      const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
+        queueReconciliation: queueDrainReconciliationUpdated,
+        existing:
+          existingCompliance ??
+          (await repos.filingEscalationClosureQueueReentryCompliance.get(
+            filingEscalationClosureQueueReentryComplianceId(queueDrainReconciliationUpdated.id)
+          )),
+        retirementRollbackControlledBy: actor.id,
+        retirementRollbackCount: cumulativeRollbackCount,
+        now,
+        note: parsed.note ?? `retirement rollback controls checkpointed for ${rollbackCount} items`,
+      })
+      await repos.filingEscalationClosureQueueReentryCompliance.upsert(complianceUpdated)
+      store.filingEscalationClosureQueueReentryCompliance.set(complianceUpdated.id, complianceUpdated)
+      store.audit.push({
+        action: "filing_closure_queue_reentry_debt_retirement_rollback_control",
+        actorId: actor.id,
+        target: complianceUpdated.id,
+        classification: complianceUpdated.classification,
+        reason: String(rollbackCount),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "control_closure_queue_reentry_debt_retirement_rollback",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,

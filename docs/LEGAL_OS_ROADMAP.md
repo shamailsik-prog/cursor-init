@@ -88,6 +88,10 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `app/api/d4/filings/route.ts` with disposition/retirement actions: `issue_closure_settlement_arbitration_final_ruling`, `memorialize_closure_settlement_arbitration_dissent`, `checkpoint_closure_settlement_arbitration_ruling_publication`, `assign_closure_queue_reentry_exception_debt`, `attest_closure_queue_reentry_debt_retirement`, and `control_closure_queue_reentry_debt_aging_auto_escalation`.
 - Surfaced arbitration-ruling aging and queue-reentry retirement-burn metrics in closure digest/queue/window payloads and workload pressure scoring for partner staffing and panel planning projections.
 - Extended API, repository, route-wiring, and runtime-mode coverage for disposition/retirement transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
+- Extended durable settlement-arbitration rows with publication-governance fields (publication correction logging, publication rollback checkpointing, distribution attestation review) and queue-reentry-compliance rows with debt-reconciliation controls (retirement dispute intake, dispute resolution, retirement rollback control) in runtime + Firestore persistence paths.
+- Extended `app/api/d4/filings/route.ts` with publication-governance/reconciliation actions: `log_closure_settlement_arbitration_publication_correction`, `checkpoint_closure_settlement_arbitration_publication_rollback`, `review_closure_settlement_arbitration_distribution_attestation`, `open_closure_queue_reentry_debt_retirement_dispute`, `resolve_closure_queue_reentry_debt_retirement_dispute`, and `control_closure_queue_reentry_debt_retirement_rollback`.
+- Surfaced arbitration publication-exception backlog and queue-reentry retirement reconciliation-drift metrics in closure digest/queue/window payloads and workload pressure scoring for partner staffing and panel planning projections.
+- Extended API, repository, route-wiring, and runtime-mode coverage for publication-governance/reconciliation transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
 
 ## Recommended immediate slice (Phase B)
 
@@ -102,9 +106,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure arbitration publication-governance + queue reentry debt reconciliation parity**:
+Build **Matters/Cases operational API slice**:
 
-1. Add arbitration publication-governance actions (publication correction logging, publication rollback checkpointing, and distribution attestation review).
-2. Add queue reentry debt reconciliation actions (retirement dispute intake, dispute resolution, and retirement rollback controls).
-3. Surface arbitration publication exception backlog + queue reentry retirement reconciliation drift metrics in closure/workload digests for partner staffing and panel planning projections.
-4. Extend emulator/runtime + route-wiring coverage for publication-governance/reconciliation transitions, including idempotent replay behavior and audit write-through.
+1. Add idempotent create/list endpoints for matters with tenancy + permission checks.
+2. Add case-number recording endpoint wired to the existing normaliser path.
+3. Persist an audit trail for matter lifecycle actions.
+4. Cover with API tests (idempotency, pagination cursor, tenant isolation, permission denial, case-number outcomes).

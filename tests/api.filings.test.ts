@@ -1931,6 +1931,55 @@ describe("GET/POST /api/d4/filings", () => {
         "90d0de8f-84af-4780-9cae-aa68d20bde08"
       )
       expect([200, 404, 422]).toContain(checkpointSettlementPublication.status)
+      const logSettlementPublicationCorrection = await post(
+        {
+          action: "log_closure_settlement_arbitration_publication_correction",
+          actorId: "partner_a",
+          adjudicationId,
+          correctionNote: "Panel publication correction logged for citation index mismatch",
+          note: "Log arbitration publication correction for governance review",
+        },
+        "9bcf8417-66fb-4d63-b0d5-1818b17ab4f9"
+      )
+      expect([200, 404, 422]).toContain(logSettlementPublicationCorrection.status)
+      if (logSettlementPublicationCorrection.status === 200) {
+        const logSettlementPublicationCorrectionReplay = await post(
+          {
+            action: "log_closure_settlement_arbitration_publication_correction",
+            actorId: "partner_a",
+            adjudicationId,
+            correctionNote: "Panel publication correction logged for citation index mismatch",
+            note: "Log arbitration publication correction for governance review",
+          },
+          "9bcf8417-66fb-4d63-b0d5-1818b17ab4f9"
+        )
+        expect(logSettlementPublicationCorrectionReplay.status).toBe(200)
+        const logSettlementPublicationCorrectionReplayJson =
+          (await logSettlementPublicationCorrectionReplay.json()) as { reused: boolean }
+        expect(logSettlementPublicationCorrectionReplayJson.reused).toBe(true)
+      }
+      const checkpointSettlementPublicationRollback = await post(
+        {
+          action: "checkpoint_closure_settlement_arbitration_publication_rollback",
+          actorId: "partner_a",
+          adjudicationId,
+          rollbackReason: "Distribution mismatch requires rollback checkpoint before republish",
+          note: "Checkpoint arbitration publication rollback",
+        },
+        "7c6f2cb2-7c37-41a8-8bd3-a27f992fb378"
+      )
+      expect([200, 404, 422]).toContain(checkpointSettlementPublicationRollback.status)
+      const reviewSettlementDistributionAttestation = await post(
+        {
+          action: "review_closure_settlement_arbitration_distribution_attestation",
+          actorId: "partner_a",
+          adjudicationId,
+          decision: "revision_required",
+          note: "Review distribution attestation and request revision",
+        },
+        "7d50cde0-a4b5-43f0-870f-f70f98f37fcb"
+      )
+      expect([200, 404, 422]).toContain(reviewSettlementDistributionAttestation.status)
       const attestQueueReentryException = await post(
         {
           action: "attest_closure_queue_reentry_exception",
@@ -1995,6 +2044,55 @@ describe("GET/POST /api/d4/filings", () => {
         "87be23c7-e7a0-43d8-ba57-f4af2bb77574"
       )
       expect([200, 404, 422]).toContain(controlQueueDebtAgingEscalation.status)
+      const openQueueDebtRetirementDispute = await post(
+        {
+          action: "open_closure_queue_reentry_debt_retirement_dispute",
+          actorId: "partner_a",
+          rebalanceId,
+          disputeReason: "Retirement evidence mismatch requires dispute intake",
+          note: "Open queue debt retirement dispute",
+        },
+        "69256e99-b7c8-4162-ac2d-f4f2769a368f"
+      )
+      expect([200, 404, 422]).toContain(openQueueDebtRetirementDispute.status)
+      if (openQueueDebtRetirementDispute.status === 200) {
+        const openQueueDebtRetirementDisputeReplay = await post(
+          {
+            action: "open_closure_queue_reentry_debt_retirement_dispute",
+            actorId: "partner_a",
+            rebalanceId,
+            disputeReason: "Retirement evidence mismatch requires dispute intake",
+            note: "Open queue debt retirement dispute",
+          },
+          "69256e99-b7c8-4162-ac2d-f4f2769a368f"
+        )
+        expect(openQueueDebtRetirementDisputeReplay.status).toBe(200)
+        const openQueueDebtRetirementDisputeReplayJson =
+          (await openQueueDebtRetirementDisputeReplay.json()) as { reused: boolean }
+        expect(openQueueDebtRetirementDisputeReplayJson.reused).toBe(true)
+      }
+      const resolveQueueDebtRetirementDispute = await post(
+        {
+          action: "resolve_closure_queue_reentry_debt_retirement_dispute",
+          actorId: "partner_a",
+          rebalanceId,
+          resolution: "reopen_debt",
+          note: "Resolve retirement dispute with debt reopen decision",
+        },
+        "f9f4b53a-2ef8-48ec-9dbd-f4be6ccd2f08"
+      )
+      expect([200, 404, 422]).toContain(resolveQueueDebtRetirementDispute.status)
+      const controlQueueDebtRetirementRollback = await post(
+        {
+          action: "control_closure_queue_reentry_debt_retirement_rollback",
+          actorId: "partner_a",
+          rebalanceId,
+          rollbackCount: 1,
+          note: "Control queue debt retirement rollback for reconciliation parity",
+        },
+        "2cde31d0-7ff3-49df-bf1d-3ec572e0e4f6"
+      )
+      expect([200, 404, 422]).toContain(controlQueueDebtRetirementRollback.status)
       if (executeOwnerTransfer.status === 200) {
         const executeOwnerTransferReplay = await post(
           executeOwnerTransferPayload,
@@ -2571,9 +2669,11 @@ describe("GET/POST /api/d4/filings", () => {
         closureSettlementArbitrationStatus?: string
         closureSettlementArbitrationLeadTimeHours?: number
         closureArbitrationRulingAgingHours?: number
+        closureArbitrationPublicationExceptionBacklogCount?: number
         closureQueueReentryComplianceStatus?: string
         closureQueueReentryExceptionDebtCount?: number
         closureQueueReentryRetirementBurnCount?: number
+        closureQueueReentryRetirementReconciliationDriftCount?: number
         closureCriticalPath?: boolean
       }>
     }
@@ -2800,6 +2900,9 @@ describe("GET/POST /api/d4/filings", () => {
               "final_ruling_issued",
               "dissent_memorialized",
               "ruling_publication_checkpointed",
+              "publication_correction_logged",
+              "publication_rollback_checkpointed",
+              "distribution_attestation_reviewed",
             ].includes(row.closureSettlementArbitrationStatus)
           const settlementArbitrationLeadTimeOk =
             row.closureSettlementArbitrationLeadTimeHours === undefined ||
@@ -2809,6 +2912,10 @@ describe("GET/POST /api/d4/filings", () => {
             row.closureArbitrationRulingAgingHours === undefined ||
             (Number.isFinite(row.closureArbitrationRulingAgingHours) &&
               row.closureArbitrationRulingAgingHours >= 0)
+          const settlementArbitrationPublicationBacklogOk =
+            row.closureArbitrationPublicationExceptionBacklogCount === undefined ||
+            (Number.isFinite(row.closureArbitrationPublicationExceptionBacklogCount) &&
+              row.closureArbitrationPublicationExceptionBacklogCount >= 0)
           const queueReentryComplianceStatusOk =
             row.closureQueueReentryComplianceStatus === undefined ||
             [
@@ -2819,6 +2926,9 @@ describe("GET/POST /api/d4/filings", () => {
               "exception_debt_assigned",
               "debt_retirement_attested",
               "debt_aging_auto_escalated",
+              "retirement_dispute_opened",
+              "retirement_dispute_resolved",
+              "retirement_rollback_controlled",
             ].includes(row.closureQueueReentryComplianceStatus)
           const queueReentryDebtOk =
             row.closureQueueReentryExceptionDebtCount === undefined ||
@@ -2828,6 +2938,10 @@ describe("GET/POST /api/d4/filings", () => {
             row.closureQueueReentryRetirementBurnCount === undefined ||
             (Number.isFinite(row.closureQueueReentryRetirementBurnCount) &&
               row.closureQueueReentryRetirementBurnCount >= 0)
+          const queueReentryReconciliationDriftOk =
+            row.closureQueueReentryRetirementReconciliationDriftCount === undefined ||
+            (Number.isFinite(row.closureQueueReentryRetirementReconciliationDriftCount) &&
+              row.closureQueueReentryRetirementReconciliationDriftCount >= 0)
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -2877,9 +2991,11 @@ describe("GET/POST /api/d4/filings", () => {
             settlementArbitrationStatusOk &&
             settlementArbitrationLeadTimeOk &&
             settlementArbitrationRulingAgingOk &&
+            settlementArbitrationPublicationBacklogOk &&
             queueReentryComplianceStatusOk &&
             queueReentryDebtOk &&
             queueReentryRetirementBurnOk &&
+            queueReentryReconciliationDriftOk &&
             criticalPathOk
           )
         }

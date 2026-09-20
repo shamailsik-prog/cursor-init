@@ -1498,6 +1498,9 @@ export type FilingEscalationClosureSettlementArbitrationStatus =
   | "final_ruling_issued"
   | "dissent_memorialized"
   | "ruling_publication_checkpointed"
+  | "publication_correction_logged"
+  | "publication_rollback_checkpointed"
+  | "distribution_attestation_reviewed"
 
 export type FilingEscalationClosureSettlementArbitrationRow = {
   id: string
@@ -1525,8 +1528,18 @@ export type FilingEscalationClosureSettlementArbitrationRow = {
   rulingPublicationCheckpointedBy?: string | null
   rulingPublicationCheckpointedAt?: number | null
   rulingPublicationChannel?: string | null
+  publicationCorrectionLoggedBy?: string | null
+  publicationCorrectionLoggedAt?: number | null
+  publicationCorrectionNote?: string | null
+  publicationRollbackCheckpointedBy?: string | null
+  publicationRollbackCheckpointedAt?: number | null
+  publicationRollbackReason?: string | null
+  distributionAttestationReviewedBy?: string | null
+  distributionAttestationReviewedAt?: number | null
+  distributionAttestationDecision?: "approved" | "revision_required" | null
   settlementArbitrationLeadTimeHours: number
   arbitrationRulingAgingHours?: number
+  arbitrationPublicationExceptionBacklogCount?: number
   notes: string[]
   lastEvaluatedAt: number
   updatedAt: number
@@ -1540,6 +1553,9 @@ export type FilingEscalationClosureQueueReentryComplianceStatus =
   | "exception_debt_assigned"
   | "debt_retirement_attested"
   | "debt_aging_auto_escalated"
+  | "retirement_dispute_opened"
+  | "retirement_dispute_resolved"
+  | "retirement_rollback_controlled"
 
 export type FilingEscalationClosureQueueReentryComplianceRow = {
   id: string
@@ -1567,8 +1583,18 @@ export type FilingEscalationClosureQueueReentryComplianceRow = {
   debtAgingAutoEscalatedBy?: string | null
   debtAgingAutoEscalatedAt?: number | null
   debtAgingEscalationHours?: number | null
+  retirementDisputeOpenedBy?: string | null
+  retirementDisputeOpenedAt?: number | null
+  retirementDisputeReason?: string | null
+  retirementDisputeResolvedBy?: string | null
+  retirementDisputeResolvedAt?: number | null
+  retirementDisputeResolution?: "uphold_retirement" | "reopen_debt" | null
+  retirementRollbackControlledBy?: string | null
+  retirementRollbackControlledAt?: number | null
+  retirementRollbackCount?: number
   queueReentryExceptionDebtCount: number
   queueReentryRetirementBurnCount?: number
+  queueReentryRetirementReconciliationDriftCount?: number
   notes: string[]
   lastEvaluatedAt: number
   updatedAt: number
