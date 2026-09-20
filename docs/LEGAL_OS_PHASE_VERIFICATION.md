@@ -3,6 +3,8 @@
 Last updated: 2026-09-20  
 Primary source: `docs/audits/phase-reaudit-70-73-after-stream1.md`.
 
+Requested re-audit anchor commit: `2dd668d4d061fbca490aca10393cb7c8c61058c9` (PR #92 merge tip state).
+
 ## Executive verdict
 
 No audited sample phase qualifies as **DONE product**.

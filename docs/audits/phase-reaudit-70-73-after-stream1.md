@@ -2,7 +2,7 @@
 
 Date: 2026-09-20  
 Repo: `shamail-sikander/cursor-init`  
-Audited main tip: `2dd668d`
+Audited requested main tip: `2dd668d4d061fbca490aca10393cb7c8c61058c9`
 
 ## Overall verdict (lead)
 
@@ -26,10 +26,12 @@ Verified on current `origin/main`:
 - PR `#88` tip commit `fbeba2c0de41` is ancestor of `origin/main`.
 - PR `#90` tip commit `835578cb3742` is ancestor of `origin/main`.
 - PR `#92` tip commit `453d7929fcb9` is ancestor of `origin/main`.
+- The same evidence set (`#79/#86/#88/#90/#92` tips) is also verified as ancestor of requested main tip `2dd668d4d061fbca490aca10393cb7c8c61058c9`.
 
 Batch D note:
 
 - PR `#92` is already merged to `main` (not a pending/off-main branch in this re-audit window), so Batch D secondary verdict is based on current `origin/main` call-site state.
+- `origin/main` moved ahead after that merge, but the requested tip remains on `main` ancestry and this re-audit evidence is anchored to the requested commit state.
 
 ## Required per-phase verdicts (#70-#73)
 
