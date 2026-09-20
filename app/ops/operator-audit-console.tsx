@@ -1457,6 +1457,50 @@ export function OperatorAuditConsole() {
     )
     await runApiCallAllowingStatuses(
       {
+        step: "Batch E: acknowledge remediation expiry",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_remediation_expiry",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: acknowledge remediation expiry",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: snooze remediation expiry",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "snooze_remediation_expiry",
+          actorId: partnerId,
+          packageId,
+          snoozeHours: 2,
+          note: "Batch E /ops wiring: snooze remediation expiry",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: attest remediation closure",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "attest_remediation_closure",
+          actorId: partnerId,
+          packageId,
+          closureOutcome: "accepted_risk_retired",
+          note: "Batch E /ops wiring: attest remediation closure",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
         step: "Batch E: acknowledge waiver expiry",
         method: "POST",
         path: "/api/d4/filings",
@@ -1483,6 +1527,48 @@ export function OperatorAuditConsole() {
           rolloverJustification: "Waiver cap exceeded due documented closure period",
           rolloverNote: "Rollover attestation captured with partner signoff",
           note: "Batch E /ops wiring: extend breach waiver",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: acknowledge rollover breach",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_rollover_breach",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: acknowledge rollover breach",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: reaffirm rollover attestation",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "reaffirm_rollover_attestation",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: reaffirm rollover attestation",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch E: acknowledge rollover reaffirmation SLA",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_rollover_reaffirmation_sla",
+          actorId: partnerId,
+          packageId,
+          note: "Batch E /ops wiring: acknowledge rollover reaffirmation SLA",
         },
       },
       allowed
@@ -1677,6 +1763,58 @@ export function OperatorAuditConsole() {
       path: "/api/d4/filings",
       query: {
         view: "waiver_rollover_attestations",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch E view: remediation expiry digests",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "remediation_expiry_digests",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch E view: remediation lifecycle",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "remediation_lifecycle",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch E view: rollover breach watches",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "rollover_breach_watches",
+        userId: operatorId,
+        matterId,
+        packageId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch E view: rollover reaffirmation SLA",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: {
+        view: "rollover_reaffirmation_sla",
         userId: operatorId,
         matterId,
         packageId,
