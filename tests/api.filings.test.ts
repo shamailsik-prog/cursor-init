@@ -1291,6 +1291,54 @@ describe("GET/POST /api/d4/filings", () => {
       )
       expect([200, 422]).toContain(reviewClosureAttestation.status)
     }
+    let disputeId: string | null = null
+    if (attestationId) {
+      const openClosureDispute = await post(
+        {
+          action: "open_closure_attestation_dispute",
+          actorId: "partner_b",
+          attestationId,
+          conflictReason: "Dispute raised for chronology reconciliation",
+          note: "Open attestation dispute for override workflow validation",
+        },
+        "089de9d4-2ec4-4f13-be09-cf7325480d41"
+      )
+      expect([200, 422]).toContain(openClosureDispute.status)
+      if (openClosureDispute.status === 200) {
+        const openClosureDisputeJson = (await openClosureDispute.json()) as {
+          result: { closureAttestationDispute: { id: string; status: string } }
+        }
+        disputeId = openClosureDisputeJson.result.closureAttestationDispute.id
+        expect(
+          ["open_dispute", "under_review", "resolved_upheld", "resolved_overturned"].includes(
+            openClosureDisputeJson.result.closureAttestationDispute.status
+          )
+        ).toBe(true)
+      }
+    }
+    if (disputeId) {
+      const resolveClosureDispute = await post(
+        {
+          action: "resolve_closure_attestation_dispute",
+          actorId: "partner_a",
+          disputeId,
+          resolution: "uphold",
+          note: "Dispute reviewed and attestation upheld",
+        },
+        "594fe088-669f-43dd-bec5-8bca67674600"
+      )
+      expect([200, 422]).toContain(resolveClosureDispute.status)
+    }
+    const tickClosureEnforcement = await post(
+      {
+        action: "tick_closure_sla_exception_enforcement",
+        actorId: "partner_a",
+        ownerId: "partner_a",
+        note: "Advance expiry enforcement counters and transitions",
+      },
+      "88f0ea98-fb32-4fd8-8e6d-c8b95e9acdb9"
+    )
+    expect([200, 404]).toContain(tickClosureEnforcement.status)
 
     const waiverExpiryViewBefore = await get(
       new URLSearchParams({
@@ -1790,6 +1838,8 @@ describe("GET/POST /api/d4/filings", () => {
         slaPressureLevel?: string
         slaExceptionStatus?: string
         slaExceptionPressureLevel?: string
+        attestationDisputeStatus?: string | null
+        slaExceptionEnforcementStatus?: string
       }>
     }
     expect(
@@ -1810,13 +1860,26 @@ describe("GET/POST /api/d4/filings", () => {
           const exceptionPressureOk =
             row.slaExceptionPressureLevel === undefined ||
             ["baseline", "elevated", "critical"].includes(row.slaExceptionPressureLevel)
+          const disputeStatusOk =
+            row.attestationDisputeStatus === undefined ||
+            row.attestationDisputeStatus === null ||
+            ["open_dispute", "under_review", "resolved_upheld", "resolved_overturned"].includes(
+              row.attestationDisputeStatus
+            )
+          const enforcementStatusOk =
+            row.slaExceptionEnforcementStatus === undefined ||
+            ["countdown_active", "reminder_sent", "escalated", "closed"].includes(
+              row.slaExceptionEnforcementStatus
+            )
           return (
             row.ownerId === "partner_a" &&
             digestStatusOk &&
             slaStatusOk &&
             pressureOk &&
             exceptionStatusOk &&
-            exceptionPressureOk
+            exceptionPressureOk &&
+            disputeStatusOk &&
+            enforcementStatusOk
           )
         }
       )
@@ -1941,6 +2004,48 @@ describe("GET/POST /api/d4/filings", () => {
           row.ownerId === "partner_a" &&
           ["open_exception", "waived", "expired", "cleared"].includes(row.status) &&
           ["baseline", "elevated", "critical"].includes(row.pressureLevel)
+      )
+    ).toBe(true)
+    const closureDisputesView = await get(
+      new URLSearchParams({
+        view: "closure_attestation_disputes",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureDisputesView.status).toBe(200)
+    const closureDisputesViewJson = (await closureDisputesView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    if (disputeId) {
+      expect(
+        closureDisputesViewJson.items.some(
+          (row) =>
+            row.ownerId === "partner_a" &&
+            ["open_dispute", "under_review", "resolved_upheld", "resolved_overturned"].includes(
+              row.status
+            )
+        )
+      ).toBe(true)
+    }
+    const closureEnforcementView = await get(
+      new URLSearchParams({
+        view: "closure_sla_exception_enforcement",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureEnforcementView.status).toBe(200)
+    const closureEnforcementViewJson = (await closureEnforcementView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureEnforcementViewJson.items.every((row) =>
+        ["countdown_active", "reminder_sent", "escalated", "closed"].includes(row.status)
       )
     ).toBe(true)
   })

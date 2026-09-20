@@ -937,6 +937,66 @@ export type FilingEscalationClosureSlaExceptionDigestRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureAttestationDisputeStatus =
+  | "open_dispute"
+  | "under_review"
+  | "resolved_upheld"
+  | "resolved_overturned"
+
+export type FilingEscalationClosureAttestationDisputeRow = {
+  id: string
+  sequenceNo: number
+  firmId: string
+  ownerId: string
+  digestId: string
+  queueId: string
+  attestationId: string
+  exceptionDigestId: string | null
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureAttestationDisputeStatus
+  conflictReason: string
+  openedBy: string
+  openedAt: number
+  reviewerChainIds: string[]
+  reviewerChainSnapshot: string
+  underReviewBy: string | null
+  underReviewAt: number | null
+  resolvedBy: string | null
+  resolvedAt: number | null
+  resolutionNote: string | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationClosureSlaExceptionEnforcementStatus =
+  | "countdown_active"
+  | "reminder_sent"
+  | "escalated"
+  | "closed"
+
+export type FilingEscalationClosureSlaExceptionEnforcementRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  digestId: string
+  queueId: string
+  exceptionDigestId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureSlaExceptionEnforcementStatus
+  waiverExpiresAt: number | null
+  msUntilExpiry: number | null
+  reminderCount: number
+  escalationCount: number
+  lastReminderAt: number | null
+  lastEscalatedAt: number | null
+  linkedAttestationDisputeId: string | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -1063,6 +1123,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureAttestationRow>()
   filingEscalationClosureSlaExceptionDigests =
     new Map<string, FilingEscalationClosureSlaExceptionDigestRow>()
+  filingEscalationClosureAttestationDisputes =
+    new Map<string, FilingEscalationClosureAttestationDisputeRow>()
+  filingEscalationClosureSlaExceptionEnforcement =
+    new Map<string, FilingEscalationClosureSlaExceptionEnforcementRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
