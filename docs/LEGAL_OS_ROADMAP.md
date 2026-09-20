@@ -13,7 +13,7 @@ The independent Phase Auditor sample for PRs #34-#37 and #70-#73 must not be tre
 | Sample phases | backend_real | frontend_real | transport_stub | Classification |
 |---|---|---|---|---|
 | #34-#37 | PASS | PASS (minimal operator UI: `/ops`) | true | PARTIAL |
-| #70-#73 | PASS | PASS (minimal operator UI: `/ops`) | true | PARTIAL |
+| #70-#73 | PASS | PENDING RE-AUDIT (phase-specific `/ops` action/view call sites now wired) | true | PARTIAL |
 
 Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be blocked by policy and PR metadata gate checks.
 
