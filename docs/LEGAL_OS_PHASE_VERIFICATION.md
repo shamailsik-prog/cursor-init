@@ -82,3 +82,21 @@ The gate fails when either condition is true:
 7. **Audit publication**
    - Publish verdict, evidence paths, command list, failed checks, and remediation.
 
+## Batch E ledger — PR #48-#59 (independent audit)
+
+- Audit file: `docs/audits/phase-sample-48-59-findings.md`
+- Verdict: **NOT COMPLETE / PARTIAL only**
+- Date: 2026-09-20
+
+### Blocking findings
+
+1. `FRONTEND_REAL` is not met for this batch (audited merge diffs show no corresponding product UI coverage for these capabilities).
+2. Filing transport across `#49-#53` remains explicit stub/TODO(firm) boundary (`_stub` channels, `blocked_todo_firm`, `todo_firm_external_transport_blocked`), so transport realism is incomplete and must stay fail-closed.
+
+### DoD summary
+
+- `SHA on main`: PASS (`#48-#59` confirmed on `main` by audit).
+- `BACKEND_REAL`: PASS/PARTIAL (transport-related items are internal parity only while external transport remains blocked).
+- `FRONTEND_REAL`: FAIL (pending dedicated operator/UI coverage lane).
+- `stubs policy`: PASS (explicit and fail-closed).
+
