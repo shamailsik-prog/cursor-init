@@ -1249,6 +1249,66 @@ export type FilingEscalationClosureRebalanceSafeguardExpiryRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureAdjudicationDebtBurndownStatus =
+  | "burndown_tracking"
+  | "burndown_checkpoint_due"
+  | "burndown_attested"
+  | "burndown_forecast_breached"
+
+export type FilingEscalationClosureAdjudicationDebtBurndownRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  adjudicationId: string
+  remediationId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureAdjudicationDebtBurndownStatus
+  retirementTargetAt: number | null
+  checkpointAt: number | null
+  backlogAttestedBy: string | null
+  backlogAttestedAt: number | null
+  tierNormalizedBy: string | null
+  tierNormalizedAt: number | null
+  tierNormalizedTo: FilingEscalationClosureAdjudicationSloEscalationTier | null
+  debtVelocityPerDay: number
+  projectedBurndownHours: number
+  forecastBreachHours: number
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationClosureSafeguardExpiryAttestationStatus =
+  | "attestation_open"
+  | "attestation_acknowledged"
+  | "attestation_overdue"
+  | "attestation_reconciled"
+
+export type FilingEscalationClosureSafeguardExpiryAttestationRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  rebalanceId: string
+  expiryId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureSafeguardExpiryAttestationStatus
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  overdueExceptionQueuedBy: string | null
+  overdueExceptionQueuedAt: number | null
+  overrideReconciledBy: string | null
+  overrideReconciledAt: number | null
+  latestReconciliationNote: string | null
+  openBacklogHours: number
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -1395,6 +1455,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureAdjudicationSloDebtRemediationRow>()
   filingEscalationClosureRebalanceSafeguardExpiry =
     new Map<string, FilingEscalationClosureRebalanceSafeguardExpiryRow>()
+  filingEscalationClosureAdjudicationDebtBurndown =
+    new Map<string, FilingEscalationClosureAdjudicationDebtBurndownRow>()
+  filingEscalationClosureSafeguardExpiryAttestations =
+    new Map<string, FilingEscalationClosureSafeguardExpiryAttestationRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

@@ -1377,6 +1377,70 @@ describe("Firestore repository adapters", () => {
       const closureSafeguardExpiryByFirm =
         await repos.filingEscalationClosureRebalanceSafeguardExpiry.listByFirm("firmA")
       expect(closureSafeguardExpiryByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureAdjudicationDebtBurndown.upsert({
+        id: "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        adjudicationId:
+          "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        remediationId:
+          "closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "burndown_checkpoint_due",
+        retirementTargetAt: 72,
+        checkpointAt: 72,
+        backlogAttestedBy: "partner_a",
+        backlogAttestedAt: 70,
+        tierNormalizedBy: "partner_a",
+        tierNormalizedAt: 71,
+        tierNormalizedTo: "tier_1_partner_watch",
+        debtVelocityPerDay: 3,
+        projectedBurndownHours: 2,
+        forecastBreachHours: 1,
+        notes: ["burndown target breached by one hour"],
+        lastEvaluatedAt: 73,
+        updatedAt: 73,
+      })
+      const closureDebtBurndown = await repos.filingEscalationClosureAdjudicationDebtBurndown.get(
+        "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureDebtBurndown?.status).toBe("burndown_checkpoint_due")
+      const closureDebtBurndownByFirm =
+        await repos.filingEscalationClosureAdjudicationDebtBurndown.listByFirm("firmA")
+      expect(closureDebtBurndownByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureSafeguardExpiryAttestations.upsert({
+        id: "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        expiryId:
+          "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "attestation_overdue",
+        acknowledgedBy: "partner_a",
+        acknowledgedAt: 74,
+        overdueExceptionQueuedBy: "partner_a",
+        overdueExceptionQueuedAt: 75,
+        overrideReconciledBy: null,
+        overrideReconciledAt: null,
+        latestReconciliationNote: null,
+        openBacklogHours: 2,
+        notes: ["overdue exception queued"],
+        lastEvaluatedAt: 75,
+        updatedAt: 75,
+      })
+      const closureSafeguardAttestation =
+        await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+          "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+        )
+      expect(closureSafeguardAttestation?.status).toBe("attestation_overdue")
+      const closureSafeguardAttestationByFirm =
+        await repos.filingEscalationClosureSafeguardExpiryAttestations.listByFirm("firmA")
+      expect(closureSafeguardAttestationByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   })
 })

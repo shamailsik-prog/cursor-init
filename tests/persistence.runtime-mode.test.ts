@@ -1034,12 +1034,18 @@ describe("Runtime persistence mode", () => {
       let recordSloDebtRemediationStatus: number | null = null
       let downshiftSloTierStatus: number | null = null
       let attestSloBreachClosureStatus: number | null = null
+      let setDebtBurndownTargetStatus: number | null = null
+      let attestDebtBacklogStatus: number | null = null
+      let checkpointTierNormalizationStatus: number | null = null
       let adjudicationVerdictStatus: number | null = null
       let rebalanceClosureEnforcementStatus: number | null = null
       let configureRebalanceSafeguardStatus: number | null = null
       let setSafeguardOverrideExpiryStatus: number | null = null
       let autoClearSafeguardSuppressionStatus: number | null = null
       let cleanupStaleSafeguardLockStatus: number | null = null
+      let acknowledgeSafeguardAttestationStatus: number | null = null
+      let queueSafeguardOverdueExceptionStatus: number | null = null
+      let reconcileSafeguardOverrideStatus: number | null = null
       let attestRebalanceOverrideStatus: number | null = null
       let executeOwnerTransferStatus: number | null = null
       let executeThrottleReleaseStatus: number | null = null
@@ -1261,6 +1267,59 @@ describe("Runtime persistence mode", () => {
                   )
                   attestSloBreachClosureStatus = attestSloBreachClosure.status
                   expect([200, 422]).toContain(attestSloBreachClosureStatus)
+                  const setDebtBurndownTarget = await filingsPost(
+                    new Request("http://127.0.0.1/api/d4/filings", {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "56ad68d2-fbc7-4f16-a8e0-ebce95efd67d",
+                      },
+                      body: JSON.stringify({
+                        action: "set_closure_adjudication_debt_burndown_target",
+                        actorId: "partner_a",
+                        adjudicationId,
+                        targetHours: 2,
+                        note: "runtime set debt burndown target",
+                      }),
+                    })
+                  )
+                  setDebtBurndownTargetStatus = setDebtBurndownTarget.status
+                  expect([200, 404, 422]).toContain(setDebtBurndownTargetStatus)
+                  const attestDebtBacklog = await filingsPost(
+                    new Request("http://127.0.0.1/api/d4/filings", {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "bce0f413-6d6f-4f6d-9e27-f11b78465064",
+                      },
+                      body: JSON.stringify({
+                        action: "attest_closure_adjudication_debt_backlog",
+                        actorId: "partner_a",
+                        adjudicationId,
+                        note: "runtime attest debt backlog",
+                      }),
+                    })
+                  )
+                  attestDebtBacklogStatus = attestDebtBacklog.status
+                  expect([200, 404, 422]).toContain(attestDebtBacklogStatus)
+                  const checkpointTierNormalization = await filingsPost(
+                    new Request("http://127.0.0.1/api/d4/filings", {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "3087e2f3-cf31-4fa3-bf2e-74dbf95c5a17",
+                      },
+                      body: JSON.stringify({
+                        action: "checkpoint_closure_adjudication_tier_normalization",
+                        actorId: "partner_a",
+                        adjudicationId,
+                        escalationTier: "tier_1_partner_watch",
+                        note: "runtime tier normalization checkpoint",
+                      }),
+                    })
+                  )
+                  checkpointTierNormalizationStatus = checkpointTierNormalization.status
+                  expect([200, 404, 422]).toContain(checkpointTierNormalizationStatus)
                 }
               }
               const resolveClosureDispute = await filingsPost(
@@ -1445,6 +1504,58 @@ describe("Runtime persistence mode", () => {
         )
         cleanupStaleSafeguardLockStatus = cleanupStaleSafeguardLock.status
         expect([200, 404, 422]).toContain(cleanupStaleSafeguardLockStatus)
+        const acknowledgeSafeguardAttestation = await filingsPost(
+          new Request("http://127.0.0.1/api/d4/filings", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": "a6f76713-4e78-49de-a731-58d594f7225f",
+            },
+            body: JSON.stringify({
+              action: "acknowledge_closure_safeguard_expiry_attestation",
+              actorId: "partner_a",
+              ownerId: "partner_a",
+              note: "runtime acknowledge safeguard expiry attestation",
+            }),
+          })
+        )
+        acknowledgeSafeguardAttestationStatus = acknowledgeSafeguardAttestation.status
+        expect([200, 404, 422]).toContain(acknowledgeSafeguardAttestationStatus)
+        const queueSafeguardOverdueException = await filingsPost(
+          new Request("http://127.0.0.1/api/d4/filings", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": "d8f92ca1-f9d7-4bf7-a975-8f4fd71d3bd4",
+            },
+            body: JSON.stringify({
+              action: "queue_closure_safeguard_overdue_expiry_exception",
+              actorId: "partner_a",
+              ownerId: "partner_a",
+              note: "runtime queue overdue safeguard expiry exception",
+            }),
+          })
+        )
+        queueSafeguardOverdueExceptionStatus = queueSafeguardOverdueException.status
+        expect([200, 404, 422]).toContain(queueSafeguardOverdueExceptionStatus)
+        const reconcileSafeguardOverride = await filingsPost(
+          new Request("http://127.0.0.1/api/d4/filings", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": "95cd0828-805c-406b-b73c-17c51355e35c",
+            },
+            body: JSON.stringify({
+              action: "reconcile_closure_safeguard_expiry_override",
+              actorId: "partner_a",
+              ownerId: "partner_a",
+              reconciliationNote: "runtime override reconciliation note",
+              note: "runtime reconcile safeguard expiry override",
+            }),
+          })
+        )
+        reconcileSafeguardOverrideStatus = reconcileSafeguardOverride.status
+        expect([200, 404, 422]).toContain(reconcileSafeguardOverrideStatus)
         if (executeOwnerTransferStatus !== 200) {
           const executeOwnerTransferAfterOverride = await filingsPost(
             new Request("http://127.0.0.1/api/d4/filings", {
@@ -1625,6 +1736,8 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingEscalationClosureRebalanceSafeguards = new Map()
       getRuntimeStore().filingEscalationClosureAdjudicationSloDebtRemediation = new Map()
       getRuntimeStore().filingEscalationClosureRebalanceSafeguardExpiry = new Map()
+      getRuntimeStore().filingEscalationClosureAdjudicationDebtBurndown = new Map()
+      getRuntimeStore().filingEscalationClosureSafeguardExpiryAttestations = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -2200,6 +2313,44 @@ describe("Runtime persistence mode", () => {
           ["expiry_pending", "auto_cleared", "override_expired", "stale_lock_cleaned"].includes(
             item.status
           )
+        )
+      ).toBe(true)
+      const rehydratedDebtBurndown = await filingsGet(
+        new Request(
+          "http://127.0.0.1/api/d4/filings?view=closure_adjudication_debt_burndown&userId=partner_a&ownerId=partner_a&limit=10&cursor=0"
+        )
+      )
+      expect(rehydratedDebtBurndown.status).toBe(200)
+      const rehydratedDebtBurndownJson = (await rehydratedDebtBurndown.json()) as {
+        items: Array<{ ownerId: string; status: string }>
+      }
+      expect(
+        rehydratedDebtBurndownJson.items.every((item) =>
+          [
+            "burndown_tracking",
+            "burndown_checkpoint_due",
+            "burndown_attested",
+            "burndown_forecast_breached",
+          ].includes(item.status)
+        )
+      ).toBe(true)
+      const rehydratedSafeguardAttestations = await filingsGet(
+        new Request(
+          "http://127.0.0.1/api/d4/filings?view=closure_safeguard_expiry_attestations&userId=partner_a&ownerId=partner_a&limit=10&cursor=0"
+        )
+      )
+      expect(rehydratedSafeguardAttestations.status).toBe(200)
+      const rehydratedSafeguardAttestationsJson = (await rehydratedSafeguardAttestations.json()) as {
+        items: Array<{ ownerId: string; status: string }>
+      }
+      expect(
+        rehydratedSafeguardAttestationsJson.items.every((item) =>
+          [
+            "attestation_open",
+            "attestation_acknowledged",
+            "attestation_overdue",
+            "attestation_reconciled",
+          ].includes(item.status)
         )
       ).toBe(true)
       await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
@@ -3019,6 +3170,69 @@ describe("Runtime persistence mode", () => {
           updatedAt: Date.now(),
         }
       )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_closure_adjudication_debt_burndown",
+          "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmB:partner_b:1:1"
+        ),
+        {
+          id: "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmB:partner_b:1:1",
+          firmId: "firmB",
+          ownerId: "partner_b",
+          queueId: "closure-followup:closure-compliance:firmB:partner_b",
+          adjudicationId:
+            "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmB:partner_b:1:1",
+          remediationId:
+            "closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmB:partner_b:1:1",
+          classification: "internal",
+          packageIds: ["pkg_firmB"],
+          status: "burndown_checkpoint_due",
+          retirementTargetAt: Date.now() - 30 * 60 * 1000,
+          checkpointAt: Date.now() - 30 * 60 * 1000,
+          backlogAttestedBy: "partner_b",
+          backlogAttestedAt: Date.now() - 45 * 60 * 1000,
+          tierNormalizedBy: "partner_b",
+          tierNormalizedAt: Date.now() - 40 * 60 * 1000,
+          tierNormalizedTo: "tier_1_partner_watch",
+          debtVelocityPerDay: 2,
+          projectedBurndownHours: 3,
+          forecastBreachHours: 1,
+          notes: ["firmB debt burndown row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+      )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_closure_safeguard_expiry_attestations",
+          "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmB:partner_b"
+        ),
+        {
+          id: "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmB:partner_b",
+          firmId: "firmB",
+          ownerId: "partner_b",
+          queueId: "closure-followup:closure-compliance:firmB:partner_b",
+          rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmB:partner_b",
+          expiryId:
+            "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmB:partner_b",
+          classification: "internal",
+          packageIds: ["pkg_firmB"],
+          status: "attestation_overdue",
+          acknowledgedBy: "partner_b",
+          acknowledgedAt: Date.now() - 30 * 60 * 1000,
+          overdueExceptionQueuedBy: "partner_b",
+          overdueExceptionQueuedAt: Date.now() - 20 * 60 * 1000,
+          overrideReconciledBy: null,
+          overrideReconciledAt: null,
+          latestReconciliationNote: null,
+          openBacklogHours: 2,
+          notes: ["firmB safeguard attestation row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+      )
       const firmAScopeEvidence = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
@@ -3370,6 +3584,28 @@ describe("Runtime persistence mode", () => {
       }
       expect(
         firmAScopeSafeguardExpiryJson.items.some((item) => item.ownerId === "partner_b")
+      ).toBe(false)
+      const firmAScopeDebtBurndown = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_adjudication_debt_burndown&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeDebtBurndown.status).toBe(200)
+      const firmAScopeDebtBurndownJson = (await firmAScopeDebtBurndown.json()) as {
+        items: Array<{ ownerId: string }>
+      }
+      expect(firmAScopeDebtBurndownJson.items.some((item) => item.ownerId === "partner_b")).toBe(false)
+      const firmAScopeSafeguardAttestations = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_safeguard_expiry_attestations&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeSafeguardAttestations.status).toBe(200)
+      const firmAScopeSafeguardAttestationsJson = (await firmAScopeSafeguardAttestations.json()) as {
+        items: Array<{ ownerId: string }>
+      }
+      expect(
+        firmAScopeSafeguardAttestationsJson.items.some((item) => item.ownerId === "partner_b")
       ).toBe(false)
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
@@ -3811,6 +4047,39 @@ describe("Runtime persistence mode", () => {
           )
         ).toBe(true)
       }
+      if (setDebtBurndownTargetStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_adjudication_debt_burndown_target_set" &&
+              item.target.startsWith(
+                "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:"
+              )
+          )
+        ).toBe(true)
+      }
+      if (attestDebtBacklogStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_adjudication_debt_backlog_attest" &&
+              item.target.startsWith(
+                "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:"
+              )
+          )
+        ).toBe(true)
+      }
+      if (checkpointTierNormalizationStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_adjudication_tier_normalization_checkpoint" &&
+              item.target.startsWith(
+                "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:"
+              )
+          )
+        ).toBe(true)
+      }
       if (waiveClosureSlaException.status === 200) {
         expect(
           auditViewJson.items.some(
@@ -3895,6 +4164,36 @@ describe("Runtime persistence mode", () => {
               item.action === "filing_closure_rebalance_safeguard_stale_lock_cleanup" &&
               item.target ===
                 "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+          )
+        ).toBe(true)
+      }
+      if (acknowledgeSafeguardAttestationStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_safeguard_expiry_attestation_acknowledge" &&
+              item.target ===
+                "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+          )
+        ).toBe(true)
+      }
+      if (queueSafeguardOverdueExceptionStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_safeguard_overdue_expiry_exception_queue" &&
+              item.target ===
+                "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+          )
+        ).toBe(true)
+      }
+      if (reconcileSafeguardOverrideStatus === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_safeguard_expiry_override_reconcile" &&
+              item.target ===
+                "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
           )
         ).toBe(true)
       }
@@ -4411,6 +4710,50 @@ describe("Runtime persistence mode", () => {
               entry.data()?.id ===
                 "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a" &&
               ["expiry_pending", "auto_cleared", "override_expired", "stale_lock_cleaned"].includes(
+                String(entry.data()?.status ?? "")
+              )
+          )
+        ).toBe(true)
+      }
+      const dbDebtBurndown = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_closure_adjudication_debt_burndown")
+      )
+      if (
+        setDebtBurndownTargetStatus === 200 ||
+        attestDebtBacklogStatus === 200 ||
+        checkpointTierNormalizationStatus === 200
+      ) {
+        expect(
+          dbDebtBurndown.docs.some(
+            (entry) =>
+              entry.data()?.firmId === "firmA" &&
+              String(entry.data()?.id ?? "").startsWith(
+                "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:"
+              ) &&
+              [
+                "burndown_tracking",
+                "burndown_checkpoint_due",
+                "burndown_attested",
+                "burndown_forecast_breached",
+              ].includes(String(entry.data()?.status ?? ""))
+          )
+        ).toBe(true)
+      }
+      const dbSafeguardAttestations = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_closure_safeguard_expiry_attestations")
+      )
+      if (
+        acknowledgeSafeguardAttestationStatus === 200 ||
+        queueSafeguardOverdueExceptionStatus === 200 ||
+        reconcileSafeguardOverrideStatus === 200
+      ) {
+        expect(
+          dbSafeguardAttestations.docs.some(
+            (entry) =>
+              entry.data()?.firmId === "firmA" &&
+              entry.data()?.id ===
+                "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a" &&
+              ["attestation_open", "attestation_acknowledged", "attestation_overdue", "attestation_reconciled"].includes(
                 String(entry.data()?.status ?? "")
               )
           )
