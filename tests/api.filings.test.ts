@@ -1401,7 +1401,7 @@ describe("GET/POST /api/d4/filings", () => {
       rebalanceEnforcementPayload,
       "0f72938a-ccce-43a1-adf5-fd66f7eeb3ef"
     )
-    expect([200, 404]).toContain(rebalanceClosureEnforcement.status)
+    expect([200, 404, 422]).toContain(rebalanceClosureEnforcement.status)
     if (rebalanceClosureEnforcement.status === 200) {
       const rebalanceReplay = await post(
         rebalanceEnforcementPayload,

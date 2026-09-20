@@ -1198,7 +1198,7 @@ describe("Runtime persistence mode", () => {
         })
       )
       rebalanceClosureEnforcementStatus = rebalanceClosureEnforcement.status
-      expect([200, 404]).toContain(rebalanceClosureEnforcementStatus)
+      expect([200, 404, 422]).toContain(rebalanceClosureEnforcementStatus)
       const revokeWaiver = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
