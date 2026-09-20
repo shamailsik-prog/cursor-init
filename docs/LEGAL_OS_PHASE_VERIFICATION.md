@@ -90,14 +90,14 @@ The gate fails when either condition is true:
 
 ### Blocking findings
 
-1. `FRONTEND_REAL` is not met for this batch (audited merge diffs show no corresponding product UI coverage for these capabilities).
+1. Auditor baseline found `FRONTEND_REAL` not met for this batch (audited merge diffs had no corresponding product UI coverage for these capabilities).
 2. Filing transport across `#49-#53` remains explicit stub/TODO(firm) boundary (`_stub` channels, `blocked_todo_firm`, `todo_firm_external_transport_blocked`), so transport realism is incomplete and must stay fail-closed.
 
 ### DoD summary
 
 - `SHA on main`: PASS (`#48-#59` confirmed on `main` by audit).
 - `BACKEND_REAL`: PASS/PARTIAL (transport-related items are internal parity only while external transport remains blocked).
-- `FRONTEND_REAL`: FAIL (pending dedicated operator/UI coverage lane).
+- `FRONTEND_REAL`: PENDING RE-AUDIT (dedicated `/ops` call-site coverage lane added; independent auditor verdict pending).
 - `stubs policy`: PASS (explicit and fail-closed).
 
 ## Batch D ledger — PR #38-#47 (independent audit)
