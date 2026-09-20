@@ -47,6 +47,7 @@ export function OperatorAuditConsole() {
   const [documentId, setDocumentId] = useState("")
   const [draftId, setDraftId] = useState("")
   const [packageId, setPackageId] = useState("")
+  const [clientEntityId, setClientEntityId] = useState("")
   const [attestationId, setAttestationId] = useState("")
   const [disputeId, setDisputeId] = useState("")
   const [adjudicationId, setAdjudicationId] = useState("")
@@ -2242,6 +2243,200 @@ export function OperatorAuditConsole() {
     })
   }
 
+  async function runBatchDActions() {
+    if (!matterId) throw new Error("Create a matter first.")
+    const allowed = [200, 400, 403, 404, 422]
+
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch D: confirm engagement source action",
+        method: "POST",
+        path: "/api/d1/matters",
+        body: {
+          action: "confirm_engagement",
+          actorId: partnerId,
+          matterId,
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch D: record case number source action",
+        method: "POST",
+        path: "/api/d1/matters",
+        body: {
+          action: "record_case_number",
+          actorId: partnerId,
+          matterId,
+          courtId: "SHC",
+          raw: "C.P. No. D-1234 of 2025",
+        },
+      },
+      allowed
+    )
+
+    const cnicSuffix = String(Date.now()).slice(-6)
+    const createEntity = await runApiCallAllowingStatuses(
+      {
+        step: "Batch D: create client entity",
+        method: "POST",
+        path: "/api/d1/clients",
+        body: {
+          action: "create",
+          actorId: partnerId,
+          firmId: "firmA",
+          canonicalName: `Ops Client ${cnicSuffix}`,
+          cnic: `4220112${cnicSuffix}`,
+          phone: `+9230011${cnicSuffix}`,
+          classification: "internal",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+
+    let resolvedEntityId = clientEntityId
+    if (
+      createEntity.ok &&
+      typeof createEntity.body === "object" &&
+      createEntity.body !== null &&
+      "result" in createEntity.body &&
+      createEntity.body.result &&
+      typeof createEntity.body.result === "object" &&
+      "entity" in createEntity.body.result &&
+      createEntity.body.result.entity &&
+      typeof createEntity.body.result.entity === "object" &&
+      "id" in createEntity.body.result.entity &&
+      typeof createEntity.body.result.entity.id === "string"
+    ) {
+      resolvedEntityId = createEntity.body.result.entity.id
+      setClientEntityId(resolvedEntityId)
+    }
+    if (!resolvedEntityId) {
+      const entityList = await runApiCall({
+        step: "Batch D: list clients for conflict-check target fallback",
+        method: "GET",
+        path: "/api/d1/clients",
+        query: {
+          userId: partnerId,
+          limit: 10,
+          cursor: 0,
+        },
+      })
+      resolvedEntityId = firstItemIdFromBody(entityList)
+      if (resolvedEntityId) setClientEntityId(resolvedEntityId)
+    }
+    if (resolvedEntityId) {
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch D: run client conflict check",
+          method: "POST",
+          path: "/api/d1/clients",
+          body: {
+            action: "conflict_check",
+            actorId: partnerId,
+            firmId: "firmA",
+            entityId: resolvedEntityId,
+          },
+        },
+        [200, 400, 403, 404, 422]
+      )
+    }
+
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch D: tenancy role update for audit trail",
+        method: "POST",
+        path: "/api/p5/tenancy",
+        body: {
+          action: "update_role",
+          actorId: partnerId,
+          firmId: "firmA",
+          targetUserId: clerkId,
+          nextRole: "clerk",
+          nextClearance: "internal",
+          reason: "Batch D /ops frontend wiring audit trail",
+        },
+      },
+      [200, 400, 403, 404, 409, 422]
+    )
+
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch D: committee-brain write for list hydration",
+        method: "POST",
+        path: "/api/p1/committee-brain",
+        body: {
+          actorId: partnerId,
+          body: "Batch D frontend coverage probe",
+          classification: "internal",
+          purpose: "summarise",
+          partyNames: ["Coverage Probe"],
+        },
+      },
+      [200, 400, 403, 404]
+    )
+  }
+
+  async function readBatchDViews() {
+    if (!matterId) throw new Error("Create a matter first.")
+    await runApiCall({
+      step: "Batch D view: tenancy session",
+      method: "GET",
+      path: "/api/p5/tenancy",
+      query: { view: "session", userId: operatorId, firmId: "firmA" },
+    })
+    await runApiCall({
+      step: "Batch D view: tenancy users",
+      method: "GET",
+      path: "/api/p5/tenancy",
+      query: { view: "users", actorId: partnerId, firmId: "firmA", limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch D view: tenancy memberships",
+      method: "GET",
+      path: "/api/p5/tenancy",
+      query: {
+        view: "memberships",
+        actorId: partnerId,
+        firmId: "firmA",
+        matterId,
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "Batch D view: tenancy audit",
+      method: "GET",
+      path: "/api/p5/tenancy",
+      query: { view: "audit", actorId: partnerId, firmId: "firmA", limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch D view: clients list",
+      method: "GET",
+      path: "/api/d1/clients",
+      query: { userId: partnerId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch D view: d1 reporting rows",
+      method: "GET",
+      path: "/api/d1/reporting",
+      query: { actorId: partnerId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch D view: d2 ops-reporting rows",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: { actorId: partnerId, matterId, limit: 10, cursor: 0 },
+    })
+    await runApiCall({
+      step: "Batch D view: committee-brain list",
+      method: "GET",
+      path: "/api/p1/committee-brain",
+      query: { actorId: partnerId, limit: 10, cursor: 0 },
+    })
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 md:px-8">
       <header className="space-y-3">
@@ -2301,7 +2496,7 @@ export function OperatorAuditConsole() {
               onChange={(e) => setFileText(e.target.value)}
             />
           </div>
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-5">
             <div>
               <p className="mb-1 text-xs tracking-wide uppercase">matterId</p>
               <Input className="rounded-none font-mono text-xs" value={matterId} onChange={(e) => setMatterId(e.target.value)} />
@@ -2317,6 +2512,10 @@ export function OperatorAuditConsole() {
             <div>
               <p className="mb-1 text-xs tracking-wide uppercase">packageId</p>
               <Input className="rounded-none font-mono text-xs" value={packageId} onChange={(e) => setPackageId(e.target.value)} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">clientEntityId (#38-#47 path)</p>
+              <Input className="rounded-none font-mono text-xs" value={clientEntityId} onChange={(e) => setClientEntityId(e.target.value)} />
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-4">
@@ -2436,6 +2635,12 @@ export function OperatorAuditConsole() {
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch F governance views read", readBatchFGovernanceViews)}>
               26) Batch F views (#60-#69 closure governance reads)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch D API actions executed", runBatchDActions)}>
+              27) Batch D actions (/p5 tenancy + /d1 clients + source actions + committee write)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch D API views read", readBatchDViews)}>
+              28) Batch D views (/p5 tenancy + /d1 reporting + /d2 ops-reporting + committee list)
             </Button>
           </CardContent>
         </Card>
