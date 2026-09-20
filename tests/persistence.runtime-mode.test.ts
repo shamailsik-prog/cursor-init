@@ -7707,6 +7707,55 @@ describe("Runtime persistence mode", () => {
         "external_session_hint_changed"
       )
 
+      const disputeFirst = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f97264af-5021-4ece-b777-80607b5bd99d",
+          },
+          body: JSON.stringify({
+            action: "attest_session_lineage_dispute",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            reason: "Runtime lineage divergence disputed",
+            note: "Raise attestation from runtime-mode test",
+          }),
+        })
+      )
+      expect(disputeFirst.status).toBe(200)
+      const disputeFirstJson = (await disputeFirst.json()) as {
+        result: {
+          dispute: { id: string; status: string }
+          digest: { openDisputeCount: number; reasons: string[] }
+        }
+      }
+      expect(disputeFirstJson.result.dispute.status).toBe("open")
+      expect(disputeFirstJson.result.digest.openDisputeCount).toBeGreaterThanOrEqual(1)
+      expect(disputeFirstJson.result.digest.reasons).toContain("open_lineage_dispute")
+
+      const disputeReplay = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f97264af-5021-4ece-b777-80607b5bd99d",
+          },
+          body: JSON.stringify({
+            action: "attest_session_lineage_dispute",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            reason: "Runtime lineage divergence disputed",
+            note: "Raise attestation from runtime-mode test",
+          }),
+        })
+      )
+      expect(disputeReplay.status).toBe(200)
+      const disputeReplayJson = (await disputeReplay.json()) as { reused: boolean }
+      expect(disputeReplayJson.reused).toBe(true)
+
       const roleUpdate = await tenancyPost(
         new Request("http://127.0.0.1/api/p5/tenancy", {
           method: "POST",
@@ -7831,6 +7880,94 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const resolveDispute = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f873afd6-8b1b-4f3d-b428-a48449561492",
+          },
+          body: JSON.stringify({
+            action: "resolve_session_lineage_dispute",
+            actorId: "partner_a",
+            firmId: "firmA",
+            disputeId: disputeFirstJson.result.dispute.id,
+            disposition: "mark_reconciled",
+            resolutionNote: "Runtime lineage reconciled",
+          }),
+        })
+      )
+      expect(resolveDispute.status).toBe(200)
+      const resolveJson = (await resolveDispute.json()) as {
+        result: {
+          dispute: { status: string; disposition: string }
+          relatedSessionReference: {
+            delegatedBoundaryReconciliationStatus: string
+            delegatedBoundaryDivergenceReasons: string[]
+          } | null
+          digest: { openDisputeCount: number }
+        }
+      }
+      expect(resolveJson.result.dispute.status).toBe("resolved")
+      expect(resolveJson.result.dispute.disposition).toBe("mark_reconciled")
+      expect(resolveJson.result.relatedSessionReference?.delegatedBoundaryReconciliationStatus).toBe(
+        "aligned"
+      )
+      expect(resolveJson.result.relatedSessionReference?.delegatedBoundaryDivergenceReasons).toEqual(
+        []
+      )
+      expect(resolveJson.result.digest.openDisputeCount).toBe(0)
+
+      const disputesOpenRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_disputes&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=open&limit=10&cursor=0`
+        )
+      )
+      expect(disputesOpenRes.status).toBe(200)
+      const disputesOpenJson = (await disputesOpenRes.json()) as {
+        items: Array<{ id: string }>
+      }
+      expect(disputesOpenJson.items.some((row) => row.id === disputeFirstJson.result.dispute.id)).toBe(
+        false
+      )
+
+      const disputesResolvedRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_disputes&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=resolved&limit=10&cursor=0`
+        )
+      )
+      expect(disputesResolvedRes.status).toBe(200)
+      const disputesResolvedJson = (await disputesResolvedRes.json()) as {
+        items: Array<{ id: string; disposition: string }>
+      }
+      expect(
+        disputesResolvedJson.items.some(
+          (row) => row.id === disputeFirstJson.result.dispute.id && row.disposition === "mark_reconciled"
+        )
+      ).toBe(true)
+
+      const digestViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_reconciliation_digests&actorId=partner_a&firmId=firmA&limit=10&cursor=0`
+        )
+      )
+      expect(digestViewRes.status).toBe(200)
+      const digestViewJson = (await digestViewRes.json()) as {
+        items: Array<{
+          lineageRootSessionReferenceId: string
+          status: string
+          openDisputeCount: number
+          divergedHopCount: number
+          reasons: string[]
+        }>
+      }
+      const rootDigest = digestViewJson.items.find(
+        (row) => row.lineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+      expect(rootDigest).toBeDefined()
+      expect(rootDigest?.openDisputeCount).toBe(0)
+      expect(rootDigest?.status).toBe("aligned")
+
       const sessionRes = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
       )
@@ -7935,6 +8072,21 @@ describe("Runtime persistence mode", () => {
             )
         )
       ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_attest_lineage_dispute" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_resolve_lineage_dispute" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id &&
+            row.delegatedBoundaryReconciliationStatus === "aligned"
+        )
+      ).toBe(true)
 
       const persistedClerk = await getDoc(doc(ctx.firestore(), "users", "clerk_a"))
       expect(persistedClerk.exists()).toBe(true)
@@ -7984,13 +8136,32 @@ describe("Runtime persistence mode", () => {
       )
       expect(persistedLineageDiverged.exists()).toBe(true)
       expect(persistedLineageDiverged.data()?.delegatedBoundaryReconciliationStatus).toBe(
-        "diverged"
+        "aligned"
       )
-      expect(
-        (persistedLineageDiverged.data()?.delegatedBoundaryDivergenceReasons as string[]).includes(
-          "external_session_hint_changed"
+      expect(persistedLineageDiverged.data()?.delegatedBoundaryDivergenceReasons).toEqual([])
+
+      const persistedDispute = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_dispute_attestations",
+          disputeFirstJson.result.dispute.id
         )
-      ).toBe(true)
+      )
+      expect(persistedDispute.exists()).toBe(true)
+      expect(persistedDispute.data()?.status).toBe("resolved")
+      expect(persistedDispute.data()?.disposition).toBe("mark_reconciled")
+
+      const persistedDigest = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_reconciliation_digests",
+          `tenancy-lineage-digest:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedDigest.exists()).toBe(true)
+      expect(persistedDigest.data()?.lineageRootSessionReferenceId).toBe(
+        actorSessionJson.sessionReference.id
+      )
 
       const persistedClerkSessionRef = await getDoc(
         doc(ctx.firestore(), "tenancy_session_references", clerkSessionJson.sessionReference.id)

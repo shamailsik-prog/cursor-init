@@ -83,6 +83,52 @@ describe("Firestore repository adapters", () => {
       expect(firmSessionRefs.some((row) => row.id === "tsr_1")).toBe(true)
       const userSessionRefs = await repos.tenancySessionReferences.listByUserId("partner_a")
       expect(userSessionRefs.some((row) => row.id === "tsr_1")).toBe(true)
+      await repos.tenancyLineageDisputeAttestations.upsert({
+        id: "tld_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        sessionReferenceId: "tsr_1",
+        parentSessionReferenceId: null,
+        raisedBy: "partner_a",
+        raisedAt: 104,
+        reason: "lineage mismatch",
+        notes: ["review requested"],
+        status: "open",
+        reviewedBy: null,
+        reviewedAt: null,
+        disposition: null,
+        resolutionNote: null,
+      })
+      const dispute = await repos.tenancyLineageDisputeAttestations.get("tld_1")
+      expect(dispute?.status).toBe("open")
+      const disputesByFirm = await repos.tenancyLineageDisputeAttestations.listByFirm("firmA")
+      expect(disputesByFirm.some((row) => row.id === "tld_1")).toBe(true)
+      const disputesByRoot = await repos.tenancyLineageDisputeAttestations.listByLineageRoot("tsr_1")
+      expect(disputesByRoot.some((row) => row.id === "tld_1")).toBe(true)
+      await repos.tenancyLineageReconciliationDigests.upsert({
+        id: "tenancy-lineage-digest:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        lineageNodeCount: 2,
+        lineageDepthMax: 1,
+        divergedHopCount: 1,
+        openDisputeCount: 1,
+        resolvedDisputeCount: 0,
+        unresolvedRevocationCount: 0,
+        status: "needs_review",
+        reasons: ["open_lineage_dispute", "delegated_boundary_divergence"],
+        updatedAt: 105,
+      })
+      const tenancyDigest = await repos.tenancyLineageReconciliationDigests.get(
+        "tenancy-lineage-digest:tsr_1"
+      )
+      expect(tenancyDigest?.status).toBe("needs_review")
+      const tenancyDigestsByFirm = await repos.tenancyLineageReconciliationDigests.listByFirm(
+        "firmA"
+      )
+      expect(
+        tenancyDigestsByFirm.some((row) => row.lineageRootSessionReferenceId === "tsr_1")
+      ).toBe(true)
       await repos.committeeOutputs.create({
         id: "cbo_1",
         firmId: "firmA",
