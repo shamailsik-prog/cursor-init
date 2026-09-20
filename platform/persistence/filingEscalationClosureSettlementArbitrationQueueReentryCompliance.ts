@@ -28,7 +28,10 @@ export function isFilingEscalationClosureSettlementArbitrationStatus(
     value === "arbitration_pending" ||
     value === "verification_override_petitioned" ||
     value === "panel_confirmation_attested" ||
-    value === "reopen_veto_checkpointed"
+    value === "reopen_veto_checkpointed" ||
+    value === "final_ruling_issued" ||
+    value === "dissent_memorialized" ||
+    value === "ruling_publication_checkpointed"
   )
 }
 
@@ -39,7 +42,10 @@ export function isFilingEscalationClosureQueueReentryComplianceStatus(
     value === "compliance_pending" ||
     value === "reentry_exception_attested" ||
     value === "timeout_waiver_checkpointed" ||
-    value === "reconciliation_resumed"
+    value === "reconciliation_resumed" ||
+    value === "exception_debt_assigned" ||
+    value === "debt_retirement_attested" ||
+    value === "debt_aging_auto_escalated"
   )
 }
 
@@ -50,6 +56,12 @@ export function buildFilingEscalationClosureSettlementArbitrationRow(input: {
   panelConfirmationAttestedBy?: string | null
   reopenVetoCheckpointedBy?: string | null
   reopenVetoNote?: string | null
+  finalRulingIssuedBy?: string | null
+  finalRulingSummary?: string | null
+  dissentMemorializedBy?: string | null
+  dissentMemorializedNote?: string | null
+  rulingPublicationCheckpointedBy?: string | null
+  rulingPublicationChannel?: string | null
   now?: number
   note?: string | null
 }): FilingEscalationClosureSettlementArbitrationRow {
@@ -73,6 +85,26 @@ export function buildFilingEscalationClosureSettlementArbitrationRow(input: {
   const reopenVetoNote = input.reopenVetoCheckpointedBy
     ? input.reopenVetoNote?.trim() ?? input.note?.trim() ?? "reopen veto checkpoint recorded"
     : (existing?.reopenVetoNote ?? null)
+  const finalRulingIssuedBy = input.finalRulingIssuedBy ?? existing?.finalRulingIssuedBy ?? null
+  const finalRulingIssuedAt = input.finalRulingIssuedBy ? now : (existing?.finalRulingIssuedAt ?? null)
+  const finalRulingSummary = input.finalRulingIssuedBy
+    ? input.finalRulingSummary?.trim() ?? input.note?.trim() ?? "final ruling issued"
+    : (existing?.finalRulingSummary ?? null)
+  const dissentMemorializedBy = input.dissentMemorializedBy ?? existing?.dissentMemorializedBy ?? null
+  const dissentMemorializedAt = input.dissentMemorializedBy
+    ? now
+    : (existing?.dissentMemorializedAt ?? null)
+  const dissentMemorializedNote = input.dissentMemorializedBy
+    ? input.dissentMemorializedNote?.trim() ?? input.note?.trim() ?? "dissent memorialized"
+    : (existing?.dissentMemorializedNote ?? null)
+  const rulingPublicationCheckpointedBy =
+    input.rulingPublicationCheckpointedBy ?? existing?.rulingPublicationCheckpointedBy ?? null
+  const rulingPublicationCheckpointedAt = input.rulingPublicationCheckpointedBy
+    ? now
+    : (existing?.rulingPublicationCheckpointedAt ?? null)
+  const rulingPublicationChannel = input.rulingPublicationCheckpointedBy
+    ? input.rulingPublicationChannel?.trim() ?? input.note?.trim() ?? "internal_panel_registry"
+    : (existing?.rulingPublicationChannel ?? null)
   const leadAnchorAt =
     existing?.lastEvaluatedAt ??
     input.settlementAttestation.disputeReopenGuardedAt ??
@@ -80,8 +112,16 @@ export function buildFilingEscalationClosureSettlementArbitrationRow(input: {
     input.settlementAttestation.postResolutionCheckpointedAt ??
     input.settlementAttestation.updatedAt
   const settlementArbitrationLeadTimeHours = Math.max(0, Math.ceil((now - leadAnchorAt) / HOUR_MS))
+  const rulingAgingAnchorAt = finalRulingIssuedAt ?? leadAnchorAt
+  const arbitrationRulingAgingHours = Math.max(0, Math.ceil((now - rulingAgingAnchorAt) / HOUR_MS))
   let status: FilingEscalationClosureSettlementArbitrationStatus = "arbitration_pending"
-  if (reopenVetoCheckpointedBy) {
+  if (rulingPublicationCheckpointedBy) {
+    status = "ruling_publication_checkpointed"
+  } else if (dissentMemorializedBy) {
+    status = "dissent_memorialized"
+  } else if (finalRulingIssuedBy) {
+    status = "final_ruling_issued"
+  } else if (reopenVetoCheckpointedBy) {
     status = "reopen_veto_checkpointed"
   } else if (panelConfirmationAttestedBy) {
     status = "panel_confirmation_attested"
@@ -90,6 +130,9 @@ export function buildFilingEscalationClosureSettlementArbitrationRow(input: {
   }
   const note = input.note?.trim()
   const noteActor =
+    input.rulingPublicationCheckpointedBy ??
+    input.dissentMemorializedBy ??
+    input.finalRulingIssuedBy ??
     input.reopenVetoCheckpointedBy ??
     input.panelConfirmationAttestedBy ??
     input.verificationOverridePetitionedBy ??
@@ -114,7 +157,17 @@ export function buildFilingEscalationClosureSettlementArbitrationRow(input: {
     reopenVetoCheckpointedBy,
     reopenVetoCheckpointedAt,
     reopenVetoNote,
+    finalRulingIssuedBy,
+    finalRulingIssuedAt,
+    finalRulingSummary,
+    dissentMemorializedBy,
+    dissentMemorializedAt,
+    dissentMemorializedNote,
+    rulingPublicationCheckpointedBy,
+    rulingPublicationCheckpointedAt,
+    rulingPublicationChannel,
     settlementArbitrationLeadTimeHours,
+    arbitrationRulingAgingHours,
     notes,
     lastEvaluatedAt: now,
     updatedAt: now,
@@ -128,6 +181,12 @@ export function buildFilingEscalationClosureQueueReentryComplianceRow(input: {
   timeoutWaiverCheckpointedBy?: string | null
   timeoutWaiverHours?: number | null
   reconciliationResumedBy?: string | null
+  exceptionDebtAssignedBy?: string | null
+  debtAssigneeId?: string | null
+  debtRetirementAttestedBy?: string | null
+  debtRetiredCount?: number
+  debtAgingAutoEscalatedBy?: string | null
+  debtAgingEscalationHours?: number | null
   now?: number
   note?: string | null
 }): FilingEscalationClosureQueueReentryComplianceRow {
@@ -152,6 +211,32 @@ export function buildFilingEscalationClosureQueueReentryComplianceRow(input: {
   const reconciliationResumedAt = input.reconciliationResumedBy
     ? now
     : (existing?.reconciliationResumedAt ?? null)
+  const exceptionDebtAssignedBy =
+    input.exceptionDebtAssignedBy ?? existing?.exceptionDebtAssignedBy ?? null
+  const exceptionDebtAssignedAt = input.exceptionDebtAssignedBy
+    ? now
+    : (existing?.exceptionDebtAssignedAt ?? null)
+  const debtAssigneeId = input.exceptionDebtAssignedBy
+    ? input.debtAssigneeId ?? input.exceptionDebtAssignedBy
+    : (existing?.debtAssigneeId ?? null)
+  const debtRetirementAttestedBy =
+    input.debtRetirementAttestedBy ?? existing?.debtRetirementAttestedBy ?? null
+  const debtRetirementAttestedAt = input.debtRetirementAttestedBy
+    ? now
+    : (existing?.debtRetirementAttestedAt ?? null)
+  const debtRetiredCount =
+    input.debtRetiredCount !== undefined
+      ? Math.max(0, Math.floor(input.debtRetiredCount))
+      : (existing?.debtRetiredCount ?? 0)
+  const debtAgingAutoEscalatedBy =
+    input.debtAgingAutoEscalatedBy ?? existing?.debtAgingAutoEscalatedBy ?? null
+  const debtAgingAutoEscalatedAt = input.debtAgingAutoEscalatedBy
+    ? now
+    : (existing?.debtAgingAutoEscalatedAt ?? null)
+  const debtAgingEscalationHours =
+    input.debtAgingEscalationHours !== undefined
+      ? input.debtAgingEscalationHours
+      : (existing?.debtAgingEscalationHours ?? null)
   let queueReentryExceptionDebtCount = input.queueReconciliation.drainReopenPressureCount
   if (input.queueReconciliation.status === "reassignment_rollback_checkpointed") {
     queueReentryExceptionDebtCount += 1
@@ -162,8 +247,18 @@ export function buildFilingEscalationClosureQueueReentryComplianceRow(input: {
   if (reconciliationResumedBy) {
     queueReentryExceptionDebtCount = 0
   }
+  const queueReentryRetirementBurnCount = Math.max(
+    0,
+    Math.min(debtRetiredCount, queueReentryExceptionDebtCount)
+  )
   let status: FilingEscalationClosureQueueReentryComplianceStatus = "compliance_pending"
-  if (reconciliationResumedBy) {
+  if (debtAgingAutoEscalatedBy) {
+    status = "debt_aging_auto_escalated"
+  } else if (debtRetirementAttestedBy) {
+    status = "debt_retirement_attested"
+  } else if (exceptionDebtAssignedBy) {
+    status = "exception_debt_assigned"
+  } else if (reconciliationResumedBy) {
     status = "reconciliation_resumed"
   } else if (timeoutWaiverCheckpointedBy) {
     status = "timeout_waiver_checkpointed"
@@ -172,6 +267,9 @@ export function buildFilingEscalationClosureQueueReentryComplianceRow(input: {
   }
   const note = input.note?.trim()
   const noteActor =
+    input.debtAgingAutoEscalatedBy ??
+    input.debtRetirementAttestedBy ??
+    input.exceptionDebtAssignedBy ??
     input.reconciliationResumedBy ??
     input.timeoutWaiverCheckpointedBy ??
     input.reentryExceptionAttestedBy ??
@@ -196,7 +294,17 @@ export function buildFilingEscalationClosureQueueReentryComplianceRow(input: {
     timeoutWaiverHours,
     reconciliationResumedBy,
     reconciliationResumedAt,
+    exceptionDebtAssignedBy,
+    exceptionDebtAssignedAt,
+    debtAssigneeId,
+    debtRetirementAttestedBy,
+    debtRetirementAttestedAt,
+    debtRetiredCount,
+    debtAgingAutoEscalatedBy,
+    debtAgingAutoEscalatedAt,
+    debtAgingEscalationHours,
     queueReentryExceptionDebtCount,
+    queueReentryRetirementBurnCount,
     notes,
     lastEvaluatedAt: now,
     updatedAt: now,
