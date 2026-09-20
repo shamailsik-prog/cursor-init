@@ -182,6 +182,8 @@ service cloud.firestore {
     match /filing_escalation_closure_expiry_attestation_queue_drain/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_escalation_closure_settlement_attestation/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_escalation_closure_queue_drain_reconciliation/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /filing_escalation_closure_settlement_arbitration/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /filing_escalation_closure_queue_reentry_compliance/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /feature_flags/{id}  { allow read: if signedIn(); allow write: if false; }
     match /firm_feature_overrides/{id} { allow read: if sameFirm(); allow write: if false; }
 

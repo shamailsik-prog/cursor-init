@@ -65,6 +65,10 @@ Snapshot basis: current `main` as of this branch cut plus repository contents in
 - Extended `app/api/d4/filings/route.ts` with settlement-attestation/reconciliation actions/views: `checkpoint_closure_settlement_post_resolution_verification`, `attest_closure_settlement_lock_release`, `safeguard_closure_settlement_dispute_reopen`, `attest_closure_queue_drain_forced_reconciliation`, `checkpoint_closure_queue_drain_reassignment_rollback`, `control_closure_queue_drain_timeout_reentry`, `view=closure_settlement_attestation`, and `view=closure_queue_drain_reconciliation`.
 - Surfaced settlement-verification lag and queue-drain reopen-pressure metrics in closure digest/queue/window payloads and workload severity forecasting for partner staffing and panel planning.
 - Extended API, route-wiring, repository, and runtime-mode coverage for settlement-attestation/reconciliation transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
+- Added durable settlement-verification-arbitration + queue-reentry-compliance governance entities across memory/Firestore repositories and `firestore.rules`.
+- Extended `app/api/d4/filings/route.ts` with arbitration/reentry actions/views: `petition_closure_settlement_verification_override`, `attest_closure_settlement_arbitration_panel_confirmation`, `checkpoint_closure_settlement_reopen_veto`, `attest_closure_queue_reentry_exception`, `checkpoint_closure_queue_reentry_timeout_waiver`, `control_closure_queue_reentry_reconciliation_resume`, `view=closure_settlement_arbitration`, and `view=closure_queue_reentry_compliance`.
+- Surfaced settlement arbitration lead-time and queue re-entry exception-debt metrics in closure digest/queue/window payloads and workload severity forecasting for partner staffing and panel planning.
+- Extended API, route-wiring, repository, and runtime-mode coverage for arbitration/reentry transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
 
 ## Recommended immediate slice (Phase B)
 
@@ -79,9 +83,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure settlement verification arbitration + queue drain reentry compliance parity**:
+Build **filing escalation closure arbitration disposition finalization + queue reentry debt retirement parity**:
 
-1. Add settlement-verification arbitration actions (verification override petitions, panel confirmation attestations, and reopen veto checkpoints).
-2. Add queue-reentry compliance actions (reentry exception attestations, timeout waiver checkpoints, and reconciliation resumption controls).
-3. Surface settlement arbitration lead-time + queue reentry exception debt metrics in closure/workload digests for partner staffing and panel planning projections.
-4. Extend emulator/runtime + route-wiring coverage for arbitration/reentry transitions, including idempotent replay behavior and audit write-through.
+1. Add settlement arbitration disposition actions (final ruling issuance, dissent memorialization, and ruling publication checkpoints).
+2. Add queue reentry debt retirement actions (exception debt assignment, retirement attestation, and aging auto-escalation controls).
+3. Surface arbitration ruling aging + queue reentry retirement-burn metrics in closure/workload digests for partner staffing and panel planning projections.
+4. Extend emulator/runtime + route-wiring coverage for disposition/retirement transitions, including idempotent replay behavior and audit write-through.

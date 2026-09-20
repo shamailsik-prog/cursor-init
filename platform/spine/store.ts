@@ -1490,6 +1490,64 @@ export type FilingEscalationClosureQueueDrainReconciliationRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureSettlementArbitrationStatus =
+  | "arbitration_pending"
+  | "verification_override_petitioned"
+  | "panel_confirmation_attested"
+  | "reopen_veto_checkpointed"
+
+export type FilingEscalationClosureSettlementArbitrationRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  adjudicationId: string
+  settlementAttestationId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureSettlementArbitrationStatus
+  verificationOverridePetitionedBy: string | null
+  verificationOverridePetitionedAt: number | null
+  panelConfirmationAttestedBy: string | null
+  panelConfirmationAttestedAt: number | null
+  reopenVetoCheckpointedBy: string | null
+  reopenVetoCheckpointedAt: number | null
+  reopenVetoNote: string | null
+  settlementArbitrationLeadTimeHours: number
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationClosureQueueReentryComplianceStatus =
+  | "compliance_pending"
+  | "reentry_exception_attested"
+  | "timeout_waiver_checkpointed"
+  | "reconciliation_resumed"
+
+export type FilingEscalationClosureQueueReentryComplianceRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  rebalanceId: string
+  queueReconciliationId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureQueueReentryComplianceStatus
+  reentryExceptionAttestedBy: string | null
+  reentryExceptionAttestedAt: number | null
+  timeoutWaiverCheckpointedBy: string | null
+  timeoutWaiverCheckpointedAt: number | null
+  timeoutWaiverHours: number | null
+  reconciliationResumedBy: string | null
+  reconciliationResumedAt: number | null
+  queueReentryExceptionDebtCount: number
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -1652,6 +1710,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureSettlementAttestationRow>()
   filingEscalationClosureQueueDrainReconciliation =
     new Map<string, FilingEscalationClosureQueueDrainReconciliationRow>()
+  filingEscalationClosureSettlementArbitration =
+    new Map<string, FilingEscalationClosureSettlementArbitrationRow>()
+  filingEscalationClosureQueueReentryCompliance =
+    new Map<string, FilingEscalationClosureQueueReentryComplianceRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
