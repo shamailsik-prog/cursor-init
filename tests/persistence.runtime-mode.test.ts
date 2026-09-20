@@ -80,7 +80,7 @@ describe("Runtime persistence mode", () => {
     return created.result.matter.id
   }
 
-  it("routes matters create/list through Firestore adapter mode in emulator", async () => {
+  it("routes matter lifecycle writes through Firestore after in-memory reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
 
@@ -99,6 +99,72 @@ describe("Runtime persistence mode", () => {
       const dbMatter = await getDoc(doc(ctx.firestore(), "matters", matterId))
       expect(dbMatter.exists()).toBe(true)
       expect(dbMatter.data()?.title).toBe("Persisted runtime matter")
+
+      // Simulate a fresh runtime cycle and assert write actions rehydrate persisted matter access.
+      resetRuntimeStoreForTests()
+      setFirestorePersistenceForTests(ctx.firestore())
+
+      const confirmRes = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "0545f812-9d63-4f60-bf16-4d7000f93395",
+          },
+          body: JSON.stringify({
+            action: "confirm_engagement",
+            actorId: "partner_a",
+            matterId,
+          }),
+        })
+      )
+      expect(confirmRes.status).toBe(200)
+
+      const caseRes = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "7934d6e3-53d5-4355-bfe5-f66029b13c13",
+          },
+          body: JSON.stringify({
+            action: "record_case_number",
+            actorId: "partner_a",
+            matterId,
+            courtId: "SHC",
+            raw: "C.P. No. D-1234 of 2025",
+          }),
+        })
+      )
+      expect(caseRes.status).toBe(200)
+      const caseJson = (await caseRes.json()) as {
+        result: { result: { status: string; canonical?: string } }
+      }
+      expect(caseJson.result.result.status).toBe("OK")
+      expect(caseJson.result.result.canonical).toBe("CP D-1234/2025")
+
+      const dbMatterAfter = await getDoc(doc(ctx.firestore(), "matters", matterId))
+      expect(dbMatterAfter.data()?.status).toBe("live")
+      expect(dbMatterAfter.data()?.caseNumber).toBe("CP D-1234/2025")
+      expect(dbMatterAfter.data()?.caseNumberStatus).toBe("recorded")
+
+      const persistedAudit = await getDocs(collection(ctx.firestore(), "audit_log"))
+      expect(
+        persistedAudit.docs.some(
+          (entry) =>
+            entry.data()?.action === "matter_confirm_engagement" &&
+            entry.data()?.target === matterId &&
+            entry.data()?.firmId === "firmA"
+        )
+      ).toBe(true)
+      expect(
+        persistedAudit.docs.some(
+          (entry) =>
+            entry.data()?.action === "matter_record_case_number" &&
+            entry.data()?.target === matterId &&
+            entry.data()?.firmId === "firmA"
+        )
+      ).toBe(true)
     })
   })
 

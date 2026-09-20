@@ -8,6 +8,7 @@ import {
 import { checkPermission } from "@/platform/p5/checkPermission"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
+import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
@@ -75,11 +76,28 @@ function ensureActor(actorId: string, firmId?: string) {
   return actor
 }
 
-function ensureMatterAccess(actorId: string, matterId: string) {
+function ensureClientIdentityInFirm(clientId: string, firmId: string) {
+  const store = getRuntimeStore()
+  const client = store.users.get(clientId)
+  if (!client) return
+  if (client.firmId !== firmId) {
+    throw new Error("cross-firm client denied")
+  }
+  if (client.role !== "client") {
+    throw new Error("clientId must reference a client user")
+  }
+}
+
+async function ensureMatterAccess(
+  repos: SpineRepositories,
+  actorId: string,
+  matterId: string
+) {
   const store = getRuntimeStore()
   const actor = ensureActor(actorId)
-  const matter = store.matters.get(matterId)
+  const matter = store.matters.get(matterId) ?? (await repos.matters.get(matterId))
   if (!matter) throw new Error("unknown matter")
+  store.matters.set(matter.id, matter)
   if (matter.firmId !== actor.firmId) throw new Error("cross-firm access denied")
   if (!store.members.has(store.memberKey(matterId, actorId))) {
     throw new Error("actor is not a member of this matter")
@@ -184,6 +202,7 @@ export async function POST(request: Request) {
       if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification as Classification)) {
         return deny("actor clearance is below requested matter classification")
       }
+      ensureClientIdentityInFirm(parsed.clientId, parsed.firmId)
       const priorAuditCount = store.audit.length
       const matter = {
         id: store.id("mat"),
@@ -226,7 +245,7 @@ export async function POST(request: Request) {
       }
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
-      const { matter } = ensureMatterAccess(parsed.actorId, parsed.matterId)
+      const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
       const priorAuditCount = store.audit.length
       const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
@@ -267,7 +286,7 @@ export async function POST(request: Request) {
       }
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
-      const { matter } = ensureMatterAccess(parsed.actorId, parsed.matterId)
+      const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
       const priorAuditCount = store.audit.length
       const priorFollowUpIds = new Set(store.followUps.map((row) => row.id))
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)
