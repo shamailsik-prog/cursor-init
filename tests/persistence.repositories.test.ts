@@ -1061,6 +1061,77 @@ describe("Firestore repository adapters", () => {
             row.id === "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a"
         )
       ).toBe(true)
+      await repos.filingEscalationClosureAttestationDisputes.upsert({
+        id: "closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        sequenceNo: 1,
+        firmId: "firmA",
+        ownerId: "partner_a",
+        digestId: "closure-compliance:firmA:partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        attestationId: "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1",
+        exceptionDigestId: "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "open_dispute",
+        conflictReason: "conflicting evidence timing",
+        openedBy: "partner_b",
+        openedAt: 55,
+        reviewerChainIds: ["partner_a", "partner_b"],
+        reviewerChainSnapshot: "partner_a -> partner_b",
+        underReviewBy: null,
+        underReviewAt: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNote: null,
+        notes: ["dispute opened"],
+        updatedAt: 55,
+      })
+      const closureDispute = await repos.filingEscalationClosureAttestationDisputes.get(
+        "closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureDispute?.status).toBe("open_dispute")
+      const closureDisputesByFirm =
+        await repos.filingEscalationClosureAttestationDisputes.listByFirm("firmA")
+      expect(
+        closureDisputesByFirm.some((row) =>
+          row.id.includes("closure-attestation-dispute:closure-attestation:closure-followup")
+        )
+      ).toBe(true)
+      await repos.filingEscalationClosureSlaExceptionEnforcement.upsert({
+        id: "closure-sla-exception-enforcement:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        digestId: "closure-compliance:firmA:partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        exceptionDigestId: "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "reminder_sent",
+        waiverExpiresAt: 58,
+        msUntilExpiry: 3_600_000,
+        reminderCount: 2,
+        escalationCount: 0,
+        lastReminderAt: 56,
+        lastEscalatedAt: null,
+        linkedAttestationDisputeId:
+          "closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        notes: ["reminder sent"],
+        lastEvaluatedAt: 57,
+        updatedAt: 57,
+      })
+      const closureEnforcement = await repos.filingEscalationClosureSlaExceptionEnforcement.get(
+        "closure-sla-exception-enforcement:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureEnforcement?.status).toBe("reminder_sent")
+      const closureEnforcementByFirm =
+        await repos.filingEscalationClosureSlaExceptionEnforcement.listByFirm("firmA")
+      expect(
+        closureEnforcementByFirm.some(
+          (row) =>
+            row.id ===
+            "closure-sla-exception-enforcement:closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
     })
   })
 })
