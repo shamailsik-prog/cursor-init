@@ -1,4 +1,4 @@
-# Legal OS phase verification status (audited sample: PR #34-#37 and #70-#73)
+# Legal OS phase verification status (audited sample: PR #34-#37, #60-#69, and #70-#73)
 
 Last updated: 2026-09-20  
 Source of truth: forensic audit docs plus post-audit operator UI wiring on `main` lineage.
@@ -7,8 +7,8 @@ Source of truth: forensic audit docs plus post-audit operator UI wiring on `main
 
 No audited sample phase qualifies as **DONE product**.
 
-- `backend_real`: PASS across #34-#37 and #70-#73.
-- `frontend_real`: now PASS for minimal operator coverage via `/ops`.
+- `backend_real`: PASS across #34-#37, #60-#69, and #70-#73.
+- `frontend_real`: mixed. PASS for #34-#37 and minimal #70-#73 coverage via `/ops`; FAIL for #60-#69 governance action coverage.
 - `transport_stub`: still true because filing transport remains `TODO(firm)` + `_stub` + `blocked_todo_firm`.
 
 Because `transport_stub=true`, final status remains **PARTIAL** for all sampled phases.
@@ -21,6 +21,16 @@ Because `transport_stub=true`, final status remains **PARTIAL** for all sampled 
 | #35 | Firestore write-path parity (documents/filings/workflow) | `3a60438` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
 | #36 | Workflow timeline + OCR job persistence | `aebefbb` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
 | #37 | Drafts + Court Ops persistence | `45cacaf` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
+| #60 | Remediation expiry + rollover breach watch | `72cc388` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
+| #61 | Remediation lifecycle + reaffirmation SLA | `625ccc5` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
+| #62 | Closure compliance digest + follow-up queue | `ab9cdca` | Yes | PASS | FAIL (`/ops` only reads digest; queue actions not covered) | true | PARTIAL | blocker |
+| #63 | Closure SLA windows + auto-assignment | `5b2bd06` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
+| #64 | Closure attestation + SLA exception digest | `5f0651e` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
+| #65 | Attestation dispute + exception expiry enforcement | `8733a06` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
+| #66 | Exception adjudication + enforcement rebalance | `c598fc9` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
+| #67 | Panel quorum + rebalance execution | `1a3dd2c` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
+| #68 | Adjudication SLO + rebalance safeguards | `f563876` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
+| #69 | SLO debt remediation + safeguard expiry | `15254ca` | Yes | PASS | FAIL (`/ops` does not execute this action family) | true | PARTIAL | blocker |
 | #70 | Debt-burndown forecasting + expiry attestation | `0e2d397` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | blocker |
 | #71 | Burndown recalibration + attestation queue orchestration | `ca564d8` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | blocker |
 | #72 | Burndown settlement + queue drain | `65b1615` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | blocker |
