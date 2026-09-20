@@ -1849,6 +1849,86 @@ describe("GET/POST /api/d4/filings", () => {
         "e55f9656-7abf-4a8d-a06f-976341e990af"
       )
       expect([200, 404, 422]).toContain(controlQueueTimeoutReentry.status)
+      const petitionSettlementOverride = await post(
+        {
+          action: "petition_closure_settlement_verification_override",
+          actorId: "partner_a",
+          adjudicationId,
+          overrideReason: "Verification conflict requires override petition for arbitration panel",
+          note: "Petition settlement verification override for arbitration review",
+        },
+        "d2d67066-ca2d-4f0b-b16f-8289514f63c4"
+      )
+      expect([200, 404, 422]).toContain(petitionSettlementOverride.status)
+      if (petitionSettlementOverride.status === 200) {
+        const petitionSettlementOverrideReplay = await post(
+          {
+            action: "petition_closure_settlement_verification_override",
+            actorId: "partner_a",
+            adjudicationId,
+            overrideReason: "Verification conflict requires override petition for arbitration panel",
+            note: "Petition settlement verification override for arbitration review",
+          },
+          "d2d67066-ca2d-4f0b-b16f-8289514f63c4"
+        )
+        expect(petitionSettlementOverrideReplay.status).toBe(200)
+        const petitionSettlementOverrideReplayJson = (await petitionSettlementOverrideReplay.json()) as {
+          reused: boolean
+        }
+        expect(petitionSettlementOverrideReplayJson.reused).toBe(true)
+      }
+      const attestSettlementPanelConfirmation = await post(
+        {
+          action: "attest_closure_settlement_arbitration_panel_confirmation",
+          actorId: "partner_a",
+          adjudicationId,
+          note: "Attest arbitration panel confirmation after settlement override petition",
+        },
+        "f41f2061-9f2c-4b5d-bdf5-d6f86a695ce3"
+      )
+      expect([200, 404, 422]).toContain(attestSettlementPanelConfirmation.status)
+      const checkpointSettlementReopenVeto = await post(
+        {
+          action: "checkpoint_closure_settlement_reopen_veto",
+          actorId: "partner_a",
+          adjudicationId,
+          vetoNote: "Reopen denied pending additional corroborating panel evidence",
+          note: "Checkpoint settlement reopen veto for arbitration guardrail",
+        },
+        "1f56c8d3-2b92-447c-ab71-4e81ffef6e9f"
+      )
+      expect([200, 404, 422]).toContain(checkpointSettlementReopenVeto.status)
+      const attestQueueReentryException = await post(
+        {
+          action: "attest_closure_queue_reentry_exception",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Attest queue re-entry exception debt for compliance monitoring",
+        },
+        "5ec0d615-fca4-4888-afb2-168720064f47"
+      )
+      expect([200, 404, 422]).toContain(attestQueueReentryException.status)
+      const checkpointQueueReentryTimeoutWaiver = await post(
+        {
+          action: "checkpoint_closure_queue_reentry_timeout_waiver",
+          actorId: "partner_a",
+          rebalanceId,
+          waiverHours: 24,
+          note: "Checkpoint queue re-entry timeout waiver",
+        },
+        "6c53f9fc-7c0f-4f42-bc6f-5d7d8a7e58de"
+      )
+      expect([200, 404, 422]).toContain(checkpointQueueReentryTimeoutWaiver.status)
+      const controlQueueReentryResume = await post(
+        {
+          action: "control_closure_queue_reentry_reconciliation_resume",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Resume queue re-entry reconciliation after waiver checkpoint",
+        },
+        "f6c9f4a5-933f-469e-b9e0-a31b43ec34b2"
+      )
+      expect([200, 404, 422]).toContain(controlQueueReentryResume.status)
       if (executeOwnerTransfer.status === 200) {
         const executeOwnerTransferReplay = await post(
           executeOwnerTransferPayload,
@@ -2422,6 +2502,10 @@ describe("GET/POST /api/d4/filings", () => {
         closureSettlementVerificationLagHours?: number
         closureQueueDrainReconciliationStatus?: string
         closureQueueDrainReopenPressureCount?: number
+        closureSettlementArbitrationStatus?: string
+        closureSettlementArbitrationLeadTimeHours?: number
+        closureQueueReentryComplianceStatus?: string
+        closureQueueReentryExceptionDebtCount?: number
         closureCriticalPath?: boolean
       }>
     }
@@ -2638,6 +2722,30 @@ describe("GET/POST /api/d4/filings", () => {
             row.closureQueueDrainReopenPressureCount === undefined ||
             (Number.isFinite(row.closureQueueDrainReopenPressureCount) &&
               row.closureQueueDrainReopenPressureCount >= 0)
+          const settlementArbitrationStatusOk =
+            row.closureSettlementArbitrationStatus === undefined ||
+            [
+              "arbitration_pending",
+              "verification_override_petitioned",
+              "panel_confirmation_attested",
+              "reopen_veto_checkpointed",
+            ].includes(row.closureSettlementArbitrationStatus)
+          const settlementArbitrationLeadTimeOk =
+            row.closureSettlementArbitrationLeadTimeHours === undefined ||
+            (Number.isFinite(row.closureSettlementArbitrationLeadTimeHours) &&
+              row.closureSettlementArbitrationLeadTimeHours >= 0)
+          const queueReentryComplianceStatusOk =
+            row.closureQueueReentryComplianceStatus === undefined ||
+            [
+              "compliance_pending",
+              "reentry_exception_attested",
+              "timeout_waiver_checkpointed",
+              "reconciliation_resumed",
+            ].includes(row.closureQueueReentryComplianceStatus)
+          const queueReentryDebtOk =
+            row.closureQueueReentryExceptionDebtCount === undefined ||
+            (Number.isFinite(row.closureQueueReentryExceptionDebtCount) &&
+              row.closureQueueReentryExceptionDebtCount >= 0)
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -2684,6 +2792,10 @@ describe("GET/POST /api/d4/filings", () => {
             settlementVerificationLagOk &&
             queueReconciliationStatusOk &&
             queueReconciliationPressureOk &&
+            settlementArbitrationStatusOk &&
+            settlementArbitrationLeadTimeOk &&
+            queueReentryComplianceStatusOk &&
+            queueReentryDebtOk &&
             criticalPathOk
           )
         }
@@ -3199,6 +3311,52 @@ describe("GET/POST /api/d4/filings", () => {
           "forced_drain_attested",
           "reassignment_rollback_checkpointed",
           "timeout_reentry_controlled",
+        ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureSettlementArbitrationView = await get(
+      new URLSearchParams({
+        view: "closure_settlement_arbitration",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSettlementArbitrationView.status).toBe(200)
+    const closureSettlementArbitrationViewJson = (await closureSettlementArbitrationView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureSettlementArbitrationViewJson.items.every((row) =>
+        [
+          "arbitration_pending",
+          "verification_override_petitioned",
+          "panel_confirmation_attested",
+          "reopen_veto_checkpointed",
+        ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureQueueReentryComplianceView = await get(
+      new URLSearchParams({
+        view: "closure_queue_reentry_compliance",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureQueueReentryComplianceView.status).toBe(200)
+    const closureQueueReentryComplianceViewJson = (await closureQueueReentryComplianceView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureQueueReentryComplianceViewJson.items.every((row) =>
+        [
+          "compliance_pending",
+          "reentry_exception_attested",
+          "timeout_waiver_checkpointed",
+          "reconciliation_resumed",
         ].includes(row.status)
       )
     ).toBe(true)

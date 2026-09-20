@@ -43,6 +43,8 @@ import type {
   FilingEscalationClosureExpiryAttestationQueueDrainRow,
   FilingEscalationClosureSettlementAttestationRow,
   FilingEscalationClosureQueueDrainReconciliationRow,
+  FilingEscalationClosureSettlementArbitrationRow,
+  FilingEscalationClosureQueueReentryComplianceRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -1505,6 +1507,80 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_closure_queue_drain_reconciliation"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationClosureQueueDrainReconciliationRow)
+          .filter((row) => row.rebalanceId === rebalanceId)
+      },
+    },
+    filingEscalationClosureSettlementArbitration: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_settlement_arbitration", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureSettlementArbitrationRow>(
+          db,
+          "filing_escalation_closure_settlement_arbitration",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureSettlementArbitrationRow>(
+          db,
+          "filing_escalation_closure_settlement_arbitration",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_settlement_arbitration"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSettlementArbitrationRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_settlement_arbitration"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSettlementArbitrationRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByAdjudicationId(adjudicationId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_settlement_arbitration"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSettlementArbitrationRow)
+          .filter((row) => row.adjudicationId === adjudicationId)
+      },
+    },
+    filingEscalationClosureQueueReentryCompliance: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_queue_reentry_compliance", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureQueueReentryComplianceRow>(
+          db,
+          "filing_escalation_closure_queue_reentry_compliance",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureQueueReentryComplianceRow>(
+          db,
+          "filing_escalation_closure_queue_reentry_compliance",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_queue_reentry_compliance"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureQueueReentryComplianceRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_queue_reentry_compliance"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureQueueReentryComplianceRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByRebalanceId(rebalanceId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_queue_reentry_compliance"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureQueueReentryComplianceRow)
           .filter((row) => row.rebalanceId === rebalanceId)
       },
     },
