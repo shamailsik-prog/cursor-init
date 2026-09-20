@@ -42,12 +42,14 @@ export function buildFilingEscalationWorkloadDigestRow(
     now?: number
     existing?: FilingEscalationWorkloadDigestRow | null
     ownerLoadThreshold?: number
+    handoffSlaMs?: number
     note?: { actorId: string; text: string } | null
   }
 ): FilingEscalationWorkloadDigestRow {
   const now = input.now ?? Date.now()
   const existing = input.existing ?? null
   const ownerLoadThreshold = input.ownerLoadThreshold ?? DEFAULT_OWNER_LOAD_THRESHOLD
+  const handoffSlaMs = input.handoffSlaMs ?? 0
   const reasons: FilingEscalationWorkloadAlertReason[] = []
   const ownerId = input.rota?.primaryOwnerId ?? null
   const slaOpen = !!input.slaDigest && input.slaDigest.status !== "cleared"
@@ -59,7 +61,7 @@ export function buildFilingEscalationWorkloadDigestRow(
   }
   const handoffLagMs =
     input.rota && input.rota.handoffRequired ? now - input.rota.updatedAt : null
-  if (input.rota?.handoffRequired) {
+  if (input.rota?.handoffRequired && handoffLagMs !== null && handoffLagMs >= handoffSlaMs) {
     reasons.push("handoff_lag")
   }
   const alertReasons = [...new Set(reasons)].sort((a, b) => a.localeCompare(b))

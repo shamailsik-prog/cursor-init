@@ -44,6 +44,8 @@ const baseStore = {
   filingSubmissionSlaDigests: new Map(),
   filingEscalationOwnerRota: new Map(),
   filingEscalationWorkloadDigests: new Map(),
+  filingEscalationPolicyBaselines: new Map(),
+  filingEscalationBreachWaivers: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -418,6 +420,53 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationPolicyBaselines: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "policy:firmA:default",
+          firmId: "firmA",
+          packageId: null,
+          matterId: null,
+          classification: "internal",
+          scope: "firm_default",
+          ownerLoadThreshold: 3,
+          handoffSlaMs: 4 * 60 * 60 * 1000,
+          waiverWindowMs: 24 * 60 * 60 * 1000,
+          setBy: "partner_a",
+          setAt: 15,
+          notes: ["repo policy row"],
+          updatedAt: 15,
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationBreachWaivers: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "waiver:pkg_repo:1",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "active",
+          reason: "temporary rebalance pending",
+          grantedBy: "partner_a",
+          grantedAt: Date.now(),
+          expiresAt: Date.now() + 2 * 60 * 60 * 1000,
+          revokedBy: null,
+          revokedAt: null,
+          linkedSlaDigestId: "digest:pkg_repo",
+          linkedWorkloadDigestId: "workload:pkg_repo",
+          notes: ["repo waiver row"],
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -671,6 +720,30 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string; packageId: string }> }
     expect(json.items.map((item) => item.id)).toContain("workload:pkg_repo")
     expect(json.items.some((item) => item.packageId === "pkg_repo")).toBe(true)
+  })
+
+  it("filings escalation policy baselines view GET uses repository filingEscalationPolicyBaselines listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=escalation_policy_baselines&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("policy:firmA:default")
+  })
+
+  it("filings breach waiver ledger view GET uses repository filingEscalationBreachWaivers listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=breach_waiver_ledger&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("waiver:pkg_repo:1")
   })
 
   it("clients route GET uses repository entities listByFirm", async () => {

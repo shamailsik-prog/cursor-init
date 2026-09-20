@@ -57,6 +57,16 @@ import {
   isFilingEscalationHandoffLagBucket,
   isFilingEscalationWorkloadDigestStatus,
 } from "@/platform/persistence/filingEscalationWorkloadDigests"
+import {
+  buildFilingEscalationPolicyBaselineRow,
+  buildFilingEscalationWaiverLedgerRow,
+  DEFAULT_ESCALATION_HANDOFF_SLA_MS,
+  DEFAULT_ESCALATION_OWNER_LOAD_THRESHOLD,
+  DEFAULT_ESCALATION_WAIVER_WINDOW_MS,
+  filingEscalationPolicyBaselineId,
+  isFilingEscalationPolicyBaselineScope,
+  isFilingEscalationWaiverStatus,
+} from "@/platform/persistence/filingEscalationPolicyWaivers"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -288,6 +298,33 @@ type SnoozeWorkloadAlertBody = {
   note?: string
 }
 
+type SetPolicyBaselineBody = {
+  action: "set_policy_baseline"
+  actorId?: string
+  packageId?: string
+  ownerLoadThreshold?: number
+  handoffSlaHours?: number
+  waiverWindowHours?: number
+  note?: string
+}
+
+type GrantBreachWaiverBody = {
+  action: "grant_breach_waiver"
+  actorId?: string
+  packageId?: string
+  durationHours?: number
+  reason?: string
+  note?: string
+}
+
+type RevokeBreachWaiverBody = {
+  action: "revoke_breach_waiver"
+  actorId?: string
+  packageId?: string
+  waiverId?: string
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -312,6 +349,9 @@ type Body =
   | AcknowledgeOwnerDriftBody
   | RebalanceAssignmentBody
   | SnoozeWorkloadAlertBody
+  | SetPolicyBaselineBody
+  | GrantBreachWaiverBody
+  | RevokeBreachWaiverBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -342,7 +382,9 @@ function parseFilingsView(
   | "transport_execution"
   | "submission_sla_digests"
   | "escalation_owner_rota"
-  | "escalation_workload_digests" {
+  | "escalation_workload_digests"
+  | "escalation_policy_baselines"
+  | "breach_waiver_ledger" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -352,6 +394,8 @@ function parseFilingsView(
   if (value === "submission_sla_digests") return "submission_sla_digests"
   if (value === "escalation_owner_rota") return "escalation_owner_rota"
   if (value === "escalation_workload_digests") return "escalation_workload_digests"
+  if (value === "escalation_policy_baselines") return "escalation_policy_baselines"
+  if (value === "breach_waiver_ledger") return "breach_waiver_ledger"
   return "packages"
 }
 
@@ -365,6 +409,57 @@ function buildOwnerActiveLoadCounts(
     byOwner.set(row.primaryOwnerId, (byOwner.get(row.primaryOwnerId) ?? 0) + 1)
   }
   return byOwner
+}
+
+type EffectiveEscalationPolicy = {
+  ownerLoadThreshold: number
+  handoffSlaMs: number
+  waiverWindowMs: number
+  sourcePolicyId: string | null
+}
+
+function resolveEffectiveEscalationPolicy(
+  packageId: string,
+  packagePolicies: Map<
+    string,
+    {
+      ownerLoadThreshold: number
+      handoffSlaMs: number
+      waiverWindowMs: number
+      id: string
+      updatedAt?: number
+    }
+  >,
+  defaultPolicy: { ownerLoadThreshold: number; handoffSlaMs: number; waiverWindowMs: number; id: string } | null
+): EffectiveEscalationPolicy {
+  const scoped = packagePolicies.get(packageId)
+  if (scoped) {
+    return {
+      ownerLoadThreshold: scoped.ownerLoadThreshold,
+      handoffSlaMs: scoped.handoffSlaMs,
+      waiverWindowMs: scoped.waiverWindowMs,
+      sourcePolicyId: scoped.id,
+    }
+  }
+  if (defaultPolicy) {
+    return {
+      ownerLoadThreshold: defaultPolicy.ownerLoadThreshold,
+      handoffSlaMs: defaultPolicy.handoffSlaMs,
+      waiverWindowMs: defaultPolicy.waiverWindowMs,
+      sourcePolicyId: defaultPolicy.id,
+    }
+  }
+  return {
+    ownerLoadThreshold: DEFAULT_ESCALATION_OWNER_LOAD_THRESHOLD,
+    handoffSlaMs: DEFAULT_ESCALATION_HANDOFF_SLA_MS,
+    waiverWindowMs: DEFAULT_ESCALATION_WAIVER_WINDOW_MS,
+    sourcePolicyId: null,
+  }
+}
+
+function latestByUpdatedAt<T extends { updatedAt: number }>(rows: T[]): T | null {
+  if (rows.length === 0) return null
+  return [...rows].sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
 }
 
 export async function GET(request: Request) {
@@ -918,12 +1013,60 @@ export async function GET(request: Request) {
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(rotaRows)
       const slaRows = await repos.filingSubmissionSlaDigests.listByFirm(user.firmId)
       const slaByPackage = new Map(slaRows.map((row) => [row.packageId, row]))
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const policyOverridesByPackage = new Map<
+        string,
+        {
+          ownerLoadThreshold: number
+          handoffSlaMs: number
+          waiverWindowMs: number
+          id: string
+          updatedAt: number
+        }
+      >()
+      const defaultPolicy = latestByUpdatedAt(
+        policyRows.filter((row) => row.scope === "firm_default")
+      )
+      for (const row of policyRows) {
+        if (row.scope !== "package_override" || !row.packageId) continue
+        const existing = policyOverridesByPackage.get(row.packageId)
+        if (!existing || row.updatedAt > existing.updatedAt) {
+          policyOverridesByPackage.set(row.packageId, {
+            ownerLoadThreshold: row.ownerLoadThreshold,
+            handoffSlaMs: row.handoffSlaMs,
+            waiverWindowMs: row.waiverWindowMs,
+            id: row.id,
+            updatedAt: row.updatedAt,
+          })
+        }
+      }
+      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm(user.firmId)
+      const activeWaiverByPackage = new Map<string, (typeof waiverRows)[number]>()
+      for (const row of waiverRows) {
+        if (row.status === "active" && row.expiresAt <= now) {
+          const expired = {
+            ...row,
+            status: "expired" as const,
+            updatedAt: now,
+          }
+          await repos.filingEscalationBreachWaivers.upsert(expired)
+          store.filingEscalationBreachWaivers.set(expired.id, expired)
+          continue
+        }
+        if (row.status !== "active" || row.expiresAt <= now) continue
+        const current = activeWaiverByPackage.get(row.packageId)
+        if (!current || row.updatedAt > current.updatedAt) {
+          activeWaiverByPackage.set(row.packageId, row)
+        }
+      }
       const persistedRows = await repos.filingEscalationWorkloadDigests.listByFirm(user.firmId)
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
         ...rotaByPackage.keys(),
         ...slaByPackage.keys(),
+        ...policyOverridesByPackage.keys(),
+        ...activeWaiverByPackage.keys(),
       ])
       for (const pkgId of candidatePackageIds) {
         const filingPackage = packageById.get(pkgId)
@@ -934,13 +1077,38 @@ export async function GET(request: Request) {
         if (!rota && !slaDigest && !existing) continue
         const ownerLoadCount =
           rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
-        const computed = buildFilingEscalationWorkloadDigestRow(filingPackage, {
+        const policy = resolveEffectiveEscalationPolicy(
+          pkgId,
+          policyOverridesByPackage,
+          defaultPolicy
+            ? {
+                ownerLoadThreshold: defaultPolicy.ownerLoadThreshold,
+                handoffSlaMs: defaultPolicy.handoffSlaMs,
+                waiverWindowMs: defaultPolicy.waiverWindowMs,
+                id: defaultPolicy.id,
+              }
+            : null
+        )
+        const computedBase = buildFilingEscalationWorkloadDigestRow(filingPackage, {
           rota,
           slaDigest,
           ownerLoadCount,
+          ownerLoadThreshold: policy.ownerLoadThreshold,
+          handoffSlaMs: policy.handoffSlaMs,
           now,
           existing,
         })
+        const activeWaiver = activeWaiverByPackage.get(pkgId) ?? null
+        const computed =
+          activeWaiver && computedBase.alertReasons.length > 0
+            ? {
+                ...computedBase,
+                status: "snoozed" as const,
+                snoozeUntil: activeWaiver.expiresAt,
+                updatedAt: now,
+                lastEvaluatedAt: now,
+              }
+            : computedBase
         const changed =
           !existing ||
           existing.status !== computed.status ||
@@ -983,6 +1151,82 @@ export async function GET(request: Request) {
           return rankOf(user.clearanceLevel) >= rankOf(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "escalation_policy_baselines") {
+      const scope = url.searchParams.get("scope")
+      const packageId = url.searchParams.get("packageId")
+      const rows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const visible = rows
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (!isFilingEscalationPolicyBaselineScope(scope)) return true
+          return row.scope === scope
+        })
+        .filter((row) => {
+          if (!matterId) return true
+          if (!row.matterId) return true
+          return row.matterId === matterId
+        })
+        .filter((row) => {
+          if (row.matterId) {
+            const permission = checkPermission(store, user.id, "draft", row.matterId)
+            if (!permission.allow) return false
+          }
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "breach_waiver_ledger") {
+      const packageId = url.searchParams.get("packageId")
+      const waiverStatus = url.searchParams.get("waiverStatus")
+      const now = Date.now()
+      const rows = await repos.filingEscalationBreachWaivers.listByFirm(user.firmId)
+      const normalized: typeof rows = []
+      for (const row of rows) {
+        if (row.status === "active" && row.expiresAt <= now) {
+          const expired = { ...row, status: "expired" as const, updatedAt: now }
+          await repos.filingEscalationBreachWaivers.upsert(expired)
+          store.filingEscalationBreachWaivers.set(expired.id, expired)
+          normalized.push(expired)
+          continue
+        }
+        normalized.push(row)
+      }
+      const visible = normalized
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (!isFilingEscalationWaiverStatus(waiverStatus)) return true
+          return row.status === waiverStatus
+        })
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => b.grantedAt - a.grantedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor =
         cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -3298,6 +3542,354 @@ export async function POST(request: Request) {
       const payload = {
         action: "snooze_workload_alert",
         workloadDigest: (await repos.filingEscalationWorkloadDigests.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "set_policy_baseline") {
+      if (!parsed.actorId) {
+        return NextResponse.json({ error: "actorId is required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "set_policy_baseline requires partner role" }, { status: 403 })
+      }
+      const ownerLoadThreshold =
+        parsed.ownerLoadThreshold === undefined ? undefined : Number(parsed.ownerLoadThreshold)
+      const handoffSlaHours =
+        parsed.handoffSlaHours === undefined ? undefined : Number(parsed.handoffSlaHours)
+      const waiverWindowHours =
+        parsed.waiverWindowHours === undefined ? undefined : Number(parsed.waiverWindowHours)
+      if (
+        ownerLoadThreshold !== undefined &&
+        (!Number.isFinite(ownerLoadThreshold) || ownerLoadThreshold < 1 || ownerLoadThreshold > 20)
+      ) {
+        return NextResponse.json({ error: "ownerLoadThreshold must be between 1 and 20" }, { status: 400 })
+      }
+      if (
+        handoffSlaHours !== undefined &&
+        (!Number.isFinite(handoffSlaHours) || handoffSlaHours < 1 || handoffSlaHours > 72)
+      ) {
+        return NextResponse.json({ error: "handoffSlaHours must be between 1 and 72" }, { status: 400 })
+      }
+      if (
+        waiverWindowHours !== undefined &&
+        (!Number.isFinite(waiverWindowHours) || waiverWindowHours < 1 || waiverWindowHours > 168)
+      ) {
+        return NextResponse.json({ error: "waiverWindowHours must be between 1 and 168" }, { status: 400 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      let filingPackage: Awaited<ReturnType<typeof repos.filings.get>> | null = null
+      if (parsed.packageId) {
+        filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+        if (!filingPackage) {
+          return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+        }
+        if (filingPackage.firmId !== actor.firmId) {
+          return NextResponse.json({ error: "cross-firm policy baseline denied" }, { status: 403 })
+        }
+        const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+        if (!permission.allow) {
+          return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+        }
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const id = filingEscalationPolicyBaselineId({ firmId: actor.firmId, packageId: parsed.packageId ?? null })
+      const existing = await repos.filingEscalationPolicyBaselines.get(id)
+      const policy = buildFilingEscalationPolicyBaselineRow({
+        firmId: actor.firmId,
+        actorId: actor.id,
+        packageId: filingPackage?.id ?? null,
+        matterId: filingPackage?.matterId ?? null,
+        classification: filingPackage?.classification ?? "internal",
+        ownerLoadThreshold: ownerLoadThreshold === undefined ? undefined : ownerLoadThreshold,
+        handoffSlaMs: handoffSlaHours === undefined ? undefined : handoffSlaHours * 60 * 60 * 1000,
+        waiverWindowMs: waiverWindowHours === undefined ? undefined : waiverWindowHours * 60 * 60 * 1000,
+        now,
+        existing,
+        note: parsed.note ?? null,
+      })
+      await repos.filingEscalationPolicyBaselines.upsert(policy)
+      store.filingEscalationPolicyBaselines.set(policy.id, policy)
+      store.audit.push({
+        action: "filing_escalation_policy_set",
+        actorId: actor.id,
+        target: policy.id,
+        classification: policy.classification,
+        reason: policy.scope,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "set_policy_baseline",
+        policy: (await repos.filingEscalationPolicyBaselines.get(policy.id)) ?? policy,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "grant_breach_waiver") {
+      if (!parsed.actorId || !parsed.packageId || !parsed.reason?.trim()) {
+        return NextResponse.json(
+          { error: "actorId, packageId, and reason are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "grant_breach_waiver requires partner role" }, { status: 403 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm waiver grant denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const defaultPolicy = latestByUpdatedAt(policyRows.filter((row) => row.scope === "firm_default"))
+      const packagePolicy = latestByUpdatedAt(
+        policyRows.filter((row) => row.scope === "package_override" && row.packageId === filingPackage.id)
+      )
+      const policy = resolveEffectiveEscalationPolicy(
+        filingPackage.id,
+        packagePolicy
+          ? new Map([
+              [
+                filingPackage.id,
+                {
+                  ownerLoadThreshold: packagePolicy.ownerLoadThreshold,
+                  handoffSlaMs: packagePolicy.handoffSlaMs,
+                  waiverWindowMs: packagePolicy.waiverWindowMs,
+                  id: packagePolicy.id,
+                },
+              ],
+            ])
+          : new Map(),
+        defaultPolicy
+          ? {
+              ownerLoadThreshold: defaultPolicy.ownerLoadThreshold,
+              handoffSlaMs: defaultPolicy.handoffSlaMs,
+              waiverWindowMs: defaultPolicy.waiverWindowMs,
+              id: defaultPolicy.id,
+            }
+          : null
+      )
+      const durationHours =
+        parsed.durationHours === undefined ? policy.waiverWindowMs / (60 * 60 * 1000) : Number(parsed.durationHours)
+      if (!Number.isFinite(durationHours) || durationHours < 1 || durationHours > 168) {
+        return NextResponse.json({ error: "durationHours must be between 1 and 168" }, { status: 400 })
+      }
+      const existingWaivers = await repos.filingEscalationBreachWaivers.listByPackageId(filingPackage.id)
+      const activeWaiver = existingWaivers.find((row) => row.status === "active" && row.expiresAt > now) ?? null
+      if (activeWaiver) {
+        return NextResponse.json({ error: "an active waiver already exists for this package" }, { status: 409 })
+      }
+      const sequenceNo = existingWaivers.length + 1
+      const slaDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const existingWorkload = await repos.filingEscalationWorkloadDigests.get(
+        filingEscalationWorkloadDigestId(filingPackage.id)
+      )
+      const rota = await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))
+      const ownerLoadByOwner = buildOwnerActiveLoadCounts(
+        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+      )
+      const ownerLoadCount =
+        rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
+      const baseWorkload = buildFilingEscalationWorkloadDigestRow(filingPackage, {
+        rota,
+        slaDigest,
+        ownerLoadCount,
+        ownerLoadThreshold: policy.ownerLoadThreshold,
+        handoffSlaMs: policy.handoffSlaMs,
+        existing: existingWorkload,
+        now,
+      })
+      const waiver = buildFilingEscalationWaiverLedgerRow(filingPackage, {
+        actorId: actor.id,
+        sequenceNo,
+        reason: parsed.reason,
+        durationMs: durationHours * 60 * 60 * 1000,
+        now,
+        linkedSlaDigestId: slaDigest?.id ?? null,
+        linkedWorkloadDigestId: baseWorkload.id,
+        note: parsed.note ?? null,
+      })
+      await repos.filingEscalationBreachWaivers.upsert(waiver)
+      store.filingEscalationBreachWaivers.set(waiver.id, waiver)
+      const workloadDigest =
+        baseWorkload.alertReasons.length > 0
+          ? {
+              ...baseWorkload,
+              status: "snoozed" as const,
+              snoozeUntil: waiver.expiresAt,
+              notes: [
+                ...baseWorkload.notes,
+                `${new Date(now).toISOString()} ${actor.id}: waiver granted (${waiver.id})`,
+              ],
+              updatedAt: now,
+              lastEvaluatedAt: now,
+            }
+          : baseWorkload
+      await repos.filingEscalationWorkloadDigests.upsert(workloadDigest)
+      store.filingEscalationWorkloadDigests.set(workloadDigest.id, workloadDigest)
+      store.audit.push({
+        action: "filing_escalation_waiver_grant",
+        actorId: actor.id,
+        target: waiver.id,
+        classification: filingPackage.classification,
+        reason: waiver.reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "grant_breach_waiver",
+        waiver: (await repos.filingEscalationBreachWaivers.get(waiver.id)) ?? waiver,
+        workloadDigest:
+          (await repos.filingEscalationWorkloadDigests.get(workloadDigest.id)) ?? workloadDigest,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "revoke_breach_waiver") {
+      if (!parsed.actorId || !parsed.packageId) {
+        return NextResponse.json({ error: "actorId and packageId are required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) {
+        return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      }
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "revoke_breach_waiver requires partner role" }, { status: 403 })
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm waiver revoke denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const now = Date.now()
+      const priorAuditCount = store.audit.length
+      const waivers = await repos.filingEscalationBreachWaivers.listByPackageId(filingPackage.id)
+      const target =
+        (parsed.waiverId
+          ? waivers.find((row) => row.id === parsed.waiverId)
+          : [...waivers]
+              .filter((row) => row.status === "active" && row.expiresAt > now)
+              .sort((a, b) => b.updatedAt - a.updatedAt)[0]) ?? null
+      if (!target) {
+        return NextResponse.json({ error: "no matching active waiver found for package" }, { status: 404 })
+      }
+      const revoked = {
+        ...target,
+        status: "revoked" as const,
+        revokedBy: actor.id,
+        revokedAt: now,
+        notes: [
+          ...target.notes,
+          `${new Date(now).toISOString()} ${actor.id}: ${parsed.note?.trim() || "waiver revoked"}`,
+        ],
+        updatedAt: now,
+      }
+      await repos.filingEscalationBreachWaivers.upsert(revoked)
+      store.filingEscalationBreachWaivers.set(revoked.id, revoked)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const defaultPolicy = latestByUpdatedAt(policyRows.filter((row) => row.scope === "firm_default"))
+      const packagePolicy = latestByUpdatedAt(
+        policyRows.filter((row) => row.scope === "package_override" && row.packageId === filingPackage.id)
+      )
+      const policy = resolveEffectiveEscalationPolicy(
+        filingPackage.id,
+        packagePolicy
+          ? new Map([
+              [
+                filingPackage.id,
+                {
+                  ownerLoadThreshold: packagePolicy.ownerLoadThreshold,
+                  handoffSlaMs: packagePolicy.handoffSlaMs,
+                  waiverWindowMs: packagePolicy.waiverWindowMs,
+                  id: packagePolicy.id,
+                },
+              ],
+            ])
+          : new Map(),
+        defaultPolicy
+          ? {
+              ownerLoadThreshold: defaultPolicy.ownerLoadThreshold,
+              handoffSlaMs: defaultPolicy.handoffSlaMs,
+              waiverWindowMs: defaultPolicy.waiverWindowMs,
+              id: defaultPolicy.id,
+            }
+          : null
+      )
+      const rota = await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))
+      const slaDigest = await repos.filingSubmissionSlaDigests.get(
+        filingSubmissionSlaDigestId(filingPackage.id)
+      )
+      const existingWorkload = await repos.filingEscalationWorkloadDigests.get(
+        filingEscalationWorkloadDigestId(filingPackage.id)
+      )
+      const ownerLoadByOwner = buildOwnerActiveLoadCounts(
+        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+      )
+      const ownerLoadCount =
+        rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
+      const recomputed = buildFilingEscalationWorkloadDigestRow(filingPackage, {
+        rota,
+        slaDigest,
+        ownerLoadCount,
+        ownerLoadThreshold: policy.ownerLoadThreshold,
+        handoffSlaMs: policy.handoffSlaMs,
+        existing: existingWorkload,
+        now,
+      })
+      const workloadDigest = {
+        ...recomputed,
+        status:
+          recomputed.alertReasons.length === 0
+            ? ("cleared" as const)
+            : ("open_alert" as const),
+        snoozeUntil: null,
+        updatedAt: now,
+        lastEvaluatedAt: now,
+      }
+      await repos.filingEscalationWorkloadDigests.upsert(workloadDigest)
+      store.filingEscalationWorkloadDigests.set(workloadDigest.id, workloadDigest)
+      store.audit.push({
+        action: "filing_escalation_waiver_revoke",
+        actorId: actor.id,
+        target: revoked.id,
+        classification: filingPackage.classification,
+        reason: revoked.id,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "revoke_breach_waiver",
+        waiver: (await repos.filingEscalationBreachWaivers.get(revoked.id)) ?? revoked,
+        workloadDigest:
+          (await repos.filingEscalationWorkloadDigests.get(workloadDigest.id)) ?? workloadDigest,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
