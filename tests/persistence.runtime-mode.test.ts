@@ -2172,7 +2172,8 @@ describe("Runtime persistence mode", () => {
       expect(
         auditViewJson.items.some(
           (item) =>
-            item.action === "filing_dispatch_update" && item.target === `dispatch:${packageId}`
+            ["filing_dispatch_update", "filing_dispatch_closure_update"].includes(item.action) &&
+            item.target === `dispatch:${packageId}`
         )
       ).toBe(true)
       expect(
