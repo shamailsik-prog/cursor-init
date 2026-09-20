@@ -121,6 +121,46 @@ describe("POST/GET /api/d1/matters", () => {
     expect(two.nextCursor).toBeNull()
   })
 
+  it("keeps firm data isolated in list responses", async () => {
+    const createdA = await post(
+      {
+        action: "create",
+        actorId: "partner_a",
+        firmId: "firmA",
+        clientId: "client_a",
+        title: "Firm A only matter",
+        courtId: "SHC",
+        classification: "internal",
+      },
+      "2b3033e2-a7cc-438e-93b5-2a8e3ec2433e"
+    )
+    expect(createdA.status).toBe(200)
+    const createdAJson = (await createdA.json()) as { result: { matter: { id: string } } }
+    const matterAId = createdAJson.result.matter.id
+
+    const createdB = await post(
+      {
+        action: "create",
+        actorId: "partner_b",
+        firmId: "firmB",
+        clientId: "client_b",
+        title: "Firm B only matter",
+        courtId: "LHC",
+        classification: "internal",
+      },
+      "042cb8fc-c14a-41e8-9d7a-e45258e07f6f"
+    )
+    expect(createdB.status).toBe(200)
+    const createdBJson = (await createdB.json()) as { result: { matter: { id: string } } }
+    const matterBId = createdBJson.result.matter.id
+
+    const listA = await get(new URLSearchParams({ userId: "partner_a", limit: "10", cursor: "0" }))
+    expect(listA.status).toBe(200)
+    const listAJson = (await listA.json()) as { items: Array<{ id: string }> }
+    expect(listAJson.items.some((item) => item.id === matterAId)).toBe(true)
+    expect(listAJson.items.some((item) => item.id === matterBId)).toBe(false)
+  })
+
   it("records case numbers and keeps REJECT for malformed numbers", async () => {
     const create = await post(
       {
@@ -195,6 +235,84 @@ describe("POST/GET /api/d1/matters", () => {
       "a8a71f9f-0357-4f29-8e72-c236e5600a4f"
     )
     expect(clientDenied.status).toBe(400)
+  })
+
+  it("rejects create when client identity belongs to another firm", async () => {
+    const crossFirmClient = await post(
+      {
+        action: "create",
+        actorId: "partner_a",
+        firmId: "firmA",
+        clientId: "partner_b",
+        title: "Invalid cross-firm client link",
+        courtId: "SHC",
+        classification: "internal",
+      },
+      "3ca4ea75-7f8a-48f6-b356-6ed0fb2609c9"
+    )
+    expect(crossFirmClient.status).toBe(400)
+    const json = (await crossFirmClient.json()) as { error: string }
+    expect(json.error).toBe("cross-firm client denied")
+
+    const nonClientIdentity = await post(
+      {
+        action: "create",
+        actorId: "partner_a",
+        firmId: "firmA",
+        clientId: "associate_a",
+        title: "Invalid non-client identity link",
+        courtId: "SHC",
+        classification: "internal",
+      },
+      "ec8656a9-c58e-4acc-aa2e-37bb2b64188b"
+    )
+    expect(nonClientIdentity.status).toBe(400)
+    const nonClientJson = (await nonClientIdentity.json()) as { error: string }
+    expect(nonClientJson.error).toBe("clientId must reference a client user")
+  })
+
+  it("denies confirm and case-number writes for non-members", async () => {
+    const create = await post(
+      {
+        action: "create",
+        actorId: "partner_a",
+        firmId: "firmA",
+        clientId: "client_a",
+        title: "Membership scoped matter",
+        courtId: "SHC",
+        classification: "internal",
+      },
+      "73130bb2-a066-4ff1-9243-41e56f8503a2"
+    )
+    expect(create.status).toBe(200)
+    const created = (await create.json()) as { result: { matter: { id: string } } }
+    const matterId = created.result.matter.id
+
+    const confirmDenied = await post(
+      {
+        action: "confirm_engagement",
+        actorId: "associate_a",
+        matterId,
+      },
+      "94f7f2d4-97cf-4190-a78d-7f6f47d19859"
+    )
+    expect(confirmDenied.status).toBe(400)
+    const confirmJson = (await confirmDenied.json()) as { error: string }
+    expect(confirmJson.error).toBe("actor is not a member of this matter")
+
+    const caseNoDenied = await post(
+      {
+        action: "record_case_number",
+        actorId: "associate_a",
+        matterId,
+        courtId: "SHC",
+        raw: "C.P. No. D-1234 of 2025",
+      },
+      "6975535f-8ea2-4f8b-b91d-f6f4a8b6e8d4"
+    )
+    expect(caseNoDenied.status).toBe(400)
+    const caseNoJson = (await caseNoDenied.json()) as { error: string }
+    expect(caseNoJson.error).toBe("actor is not a member of this matter")
   })
 
   it("writes audit entries for create + confirm + case number operations", async () => {

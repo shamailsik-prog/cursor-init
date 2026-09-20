@@ -92,23 +92,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `app/api/d4/filings/route.ts` with publication-governance/reconciliation actions: `log_closure_settlement_arbitration_publication_correction`, `checkpoint_closure_settlement_arbitration_publication_rollback`, `review_closure_settlement_arbitration_distribution_attestation`, `open_closure_queue_reentry_debt_retirement_dispute`, `resolve_closure_queue_reentry_debt_retirement_dispute`, and `control_closure_queue_reentry_debt_retirement_rollback`.
 - Surfaced arbitration publication-exception backlog and queue-reentry retirement reconciliation-drift metrics in closure digest/queue/window payloads and workload pressure scoring for partner staffing and panel planning projections.
 - Extended API, repository, route-wiring, and runtime-mode coverage for publication-governance/reconciliation transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
-
-## Recommended immediate slice (Phase B)
-
-Ship a first-class **Matters/Cases operational API slice** on top of existing D1/D6 service primitives:
-
-1. Add idempotent create/list endpoints for matters with tenancy + permission checks.
-2. Add case-number recording endpoint wired to the existing normaliser path.
-3. Persist an audit trail for matter lifecycle actions.
-4. Cover with API tests (idempotency, pagination cursor, tenant isolation, permission denial, case-number outcomes).
-
-Rationale: this closes a high-value PARTIAL area already in-tree, improves real product operability, and does not require firm-only secrets.
+- Delivered a first-class matters/cases operational API slice in `app/api/d1/matters/route.ts` with idempotent create/list operations, explicit tenant + clearance/membership enforcement, and durable write-through to matter/member/search-index repositories.
+- Wired case-number recording through `services/d6-1/caseNumber.ts` normaliser paths with deterministic `OK`/`AMBIGUOUS`/`REJECT` outcomes and follow-up persistence for rejection triage.
+- Hardened matter lifecycle write paths (confirm engagement and case-number recording) to rehydrate persisted matters after in-memory resets, ensuring Firestore runtime mode parity for long-lived API sessions.
+- Extended API + runtime tests for idempotency conflict handling, pagination cursor behavior, tenant isolation, permission denial, and matter lifecycle audit persistence (`matter_create`, `matter_confirm_engagement`, `matter_record_case_number`).
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **Matters/Cases operational API slice**:
+Build **tenancy external-session durability + auth boundary scaffolding**:
 
-1. Add idempotent create/list endpoints for matters with tenancy + permission checks.
-2. Add case-number recording endpoint wired to the existing normaliser path.
-3. Persist an audit trail for matter lifecycle actions.
-4. Cover with API tests (idempotency, pagination cursor, tenant isolation, permission denial, case-number outcomes).
+1. Add durable session-reference persistence in tenancy APIs so role/firm context can be rehydrated without relying on in-memory state.
+2. Introduce explicit auth-boundary metadata on tenancy audit entries to distinguish local runtime actor identity vs external session identity hints.
+3. Extend tenancy route tests for session replay/idempotency semantics, cross-firm denial, and audit provenance visibility.
+4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.
