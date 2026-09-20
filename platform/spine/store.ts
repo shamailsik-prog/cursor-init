@@ -1058,6 +1058,71 @@ export type FilingEscalationClosureEnforcementRebalanceRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureAdjudicationQuorumStatus =
+  | "quorum_pending"
+  | "quorum_met"
+  | "verdict_overdue"
+  | "closed"
+
+export type FilingEscalationClosureAdjudicationQuorumBreachFlag =
+  | "quorum_unmet"
+  | "verdict_overdue"
+
+export type FilingEscalationClosureAdjudicationQuorumRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  adjudicationId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureAdjudicationQuorumStatus
+  requiredPanelCount: number
+  confirmedPanelCount: number
+  quorumMetAt: number | null
+  quorumDeadlineAt: number
+  verdictDueAt: number
+  verdictRecordedAt: number | null
+  breachFlags: FilingEscalationClosureAdjudicationQuorumBreachFlag[]
+  lastGovernedBy: string | null
+  lastGovernedAt: number | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationClosureRebalanceExecutionStatus =
+  | "queued"
+  | "owner_transfer_in_progress"
+  | "throttle_release_in_progress"
+  | "completed"
+
+export type FilingEscalationClosureRebalanceExecutionMode =
+  | "owner_transfer"
+  | "throttle_release"
+
+export type FilingEscalationClosureRebalanceExecutionRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  rebalanceId: string
+  classification: Classification
+  packageIds: string[]
+  mode: FilingEscalationClosureRebalanceExecutionMode
+  status: FilingEscalationClosureRebalanceExecutionStatus
+  targetOwnerId: string | null
+  appliedOwnerId: string | null
+  throttleReleased: boolean
+  queueReopened: boolean
+  executedBy: string | null
+  executedAt: number | null
+  churnCount: number
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -1192,6 +1257,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureAdjudicationQueueRow>()
   filingEscalationClosureEnforcementRebalance =
     new Map<string, FilingEscalationClosureEnforcementRebalanceRow>()
+  filingEscalationClosureAdjudicationQuorum =
+    new Map<string, FilingEscalationClosureAdjudicationQuorumRow>()
+  filingEscalationClosureRebalanceExecution =
+    new Map<string, FilingEscalationClosureRebalanceExecutionRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

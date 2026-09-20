@@ -1353,6 +1353,20 @@ describe("GET/POST /api/d4/filings", () => {
       }
     }
     if (adjudicationId) {
+      const governQuorumPayload = {
+        action: "govern_closure_adjudication_quorum" as const,
+        actorId: "partner_a",
+        adjudicationId,
+        requiredPanelCount: 3,
+        quorumWindowHours: 0,
+        verdictWindowHours: 0,
+        note: "Govern quorum/timer status for adjudication backlog checks",
+      }
+      const governQuorum = await post(
+        governQuorumPayload,
+        "7a7fe973-3ea2-4fd3-8e0e-cf9b4cb74c53"
+      )
+      expect([200, 422]).toContain(governQuorum.status)
       const recordAdjudicationVerdict = await post(
         {
           action: "record_closure_adjudication_verdict",
@@ -1402,7 +1416,12 @@ describe("GET/POST /api/d4/filings", () => {
       "0f72938a-ccce-43a1-adf5-fd66f7eeb3ef"
     )
     expect([200, 404, 422]).toContain(rebalanceClosureEnforcement.status)
+    let rebalanceId: string | null = null
     if (rebalanceClosureEnforcement.status === 200) {
+      const rebalanceJson = (await rebalanceClosureEnforcement.json()) as {
+        result: { closureEnforcementRebalance?: { id: string } }
+      }
+      rebalanceId = rebalanceJson.result.closureEnforcementRebalance?.id ?? null
       const rebalanceReplay = await post(
         rebalanceEnforcementPayload,
         "0f72938a-ccce-43a1-adf5-fd66f7eeb3ef"
@@ -1410,6 +1429,55 @@ describe("GET/POST /api/d4/filings", () => {
       expect(rebalanceReplay.status).toBe(200)
       const rebalanceReplayJson = (await rebalanceReplay.json()) as { reused: boolean }
       expect(rebalanceReplayJson.reused).toBe(true)
+    }
+    if (rebalanceId) {
+      const executeOwnerTransferPayload = {
+        action: "execute_closure_rebalance_owner_transfer" as const,
+        actorId: "partner_a",
+        rebalanceId,
+        note: "Execute owner reassignment recommendation for closure rebalance",
+      }
+      const executeOwnerTransfer = await post(
+        executeOwnerTransferPayload,
+        "ca6a53fa-12d5-445a-a6a8-73e68d852bb8"
+      )
+      expect([200, 422, 404]).toContain(executeOwnerTransfer.status)
+      if (executeOwnerTransfer.status === 200) {
+        const executeOwnerTransferReplay = await post(
+          executeOwnerTransferPayload,
+          "ca6a53fa-12d5-445a-a6a8-73e68d852bb8"
+        )
+        expect(executeOwnerTransferReplay.status).toBe(200)
+        const executeOwnerTransferReplayJson = (await executeOwnerTransferReplay.json()) as {
+          reused: boolean
+        }
+        expect(executeOwnerTransferReplayJson.reused).toBe(true)
+      }
+      const throttleOn = await post(
+        {
+          action: "rebalance_closure_enforcement_queue",
+          actorId: "partner_a",
+          rebalanceId,
+          status: "throttle_active",
+          note: "Activate throttle before controlled release execution",
+        },
+        "9d3f55b8-6b01-4e9e-93f4-31a509ee4a8f"
+      )
+      expect([200, 404, 422]).toContain(throttleOn.status)
+      if (throttleOn.status === 200) {
+        const executeThrottleReleasePayload = {
+          action: "execute_closure_rebalance_throttle_release" as const,
+          actorId: "partner_a",
+          rebalanceId,
+          reopenQueue: true,
+          note: "Execute throttle release with controlled reopen path",
+        }
+        const executeThrottleRelease = await post(
+          executeThrottleReleasePayload,
+          "4dc72ec5-b873-460d-88b3-f40853db7dad"
+        )
+        expect([200, 404, 422]).toContain(executeThrottleRelease.status)
+      }
     }
 
     const waiverExpiryViewBefore = await get(
@@ -1914,6 +1982,11 @@ describe("GET/POST /api/d4/filings", () => {
         slaExceptionEnforcementStatus?: string
         closureAdjudicationStatus?: string | null
         closureEnforcementRebalanceStatus?: string
+        closureAdjudicationQuorumStatus?: string | null
+        closureRebalanceExecutionStatus?: string | null
+        closureRebalanceExecutionMode?: string | null
+        closureRebalanceChurnCount?: number
+        closureAdjudicationThroughputScore?: number
         closureCriticalPath?: boolean
       }>
     }
@@ -1960,6 +2033,28 @@ describe("GET/POST /api/d4/filings", () => {
             ["none", "cooldown_scheduled", "owner_reassignment_recommended", "throttle_active"].includes(
               row.closureEnforcementRebalanceStatus
             )
+          const quorumStatusOk =
+            row.closureAdjudicationQuorumStatus === undefined ||
+            row.closureAdjudicationQuorumStatus === null ||
+            ["quorum_pending", "quorum_met", "verdict_overdue", "closed"].includes(
+              row.closureAdjudicationQuorumStatus
+            )
+          const executionStatusOk =
+            row.closureRebalanceExecutionStatus === undefined ||
+            row.closureRebalanceExecutionStatus === null ||
+            ["queued", "owner_transfer_in_progress", "throttle_release_in_progress", "completed"].includes(
+              row.closureRebalanceExecutionStatus
+            )
+          const executionModeOk =
+            row.closureRebalanceExecutionMode === undefined ||
+            row.closureRebalanceExecutionMode === null ||
+            ["owner_transfer", "throttle_release"].includes(row.closureRebalanceExecutionMode)
+          const churnMetricOk =
+            row.closureRebalanceChurnCount === undefined ||
+            (Number.isFinite(row.closureRebalanceChurnCount) && row.closureRebalanceChurnCount >= 0)
+          const throughputMetricOk =
+            row.closureAdjudicationThroughputScore === undefined ||
+            [0, 1].includes(row.closureAdjudicationThroughputScore)
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -1973,6 +2068,11 @@ describe("GET/POST /api/d4/filings", () => {
             enforcementStatusOk &&
             adjudicationStatusOk &&
             rebalanceStatusOk &&
+            quorumStatusOk &&
+            executionStatusOk &&
+            executionModeOk &&
+            churnMetricOk &&
+            throughputMetricOk &&
             criticalPathOk
           )
         }
@@ -2183,6 +2283,45 @@ describe("GET/POST /api/d4/filings", () => {
         ["none", "cooldown_scheduled", "owner_reassignment_recommended", "throttle_active"].includes(
           row.status
         )
+      )
+    ).toBe(true)
+    const closureQuorumView = await get(
+      new URLSearchParams({
+        view: "closure_adjudication_quorum",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureQuorumView.status).toBe(200)
+    const closureQuorumViewJson = (await closureQuorumView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureQuorumViewJson.items.every((row) =>
+        ["quorum_pending", "quorum_met", "verdict_overdue", "closed"].includes(row.status)
+      )
+    ).toBe(true)
+    const closureExecutionView = await get(
+      new URLSearchParams({
+        view: "closure_rebalance_execution",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureExecutionView.status).toBe(200)
+    const closureExecutionViewJson = (await closureExecutionView.json()) as {
+      items: Array<{ ownerId: string; status: string; mode: string }>
+    }
+    expect(
+      closureExecutionViewJson.items.every(
+        (row) =>
+          ["queued", "owner_transfer_in_progress", "throttle_release_in_progress", "completed"].includes(
+            row.status
+          ) && ["owner_transfer", "throttle_release"].includes(row.mode)
       )
     ).toBe(true)
   })

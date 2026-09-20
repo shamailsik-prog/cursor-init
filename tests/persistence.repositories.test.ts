@@ -1199,6 +1199,66 @@ describe("Firestore repository adapters", () => {
             "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
         )
       ).toBe(true)
+      await repos.filingEscalationClosureAdjudicationQuorum.upsert({
+        id: "closure-adjudication-quorum:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        adjudicationId:
+          "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "quorum_pending",
+        requiredPanelCount: 3,
+        confirmedPanelCount: 2,
+        quorumMetAt: null,
+        quorumDeadlineAt: 60,
+        verdictDueAt: 3600,
+        verdictRecordedAt: null,
+        breachFlags: ["quorum_unmet"],
+        lastGovernedBy: "partner_a",
+        lastGovernedAt: 60,
+        notes: ["quorum unmet"],
+        lastEvaluatedAt: 60,
+        updatedAt: 60,
+      })
+      const closureQuorum = await repos.filingEscalationClosureAdjudicationQuorum.get(
+        "closure-adjudication-quorum:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureQuorum?.status).toBe("quorum_pending")
+      const closureQuorumByFirm = await repos.filingEscalationClosureAdjudicationQuorum.listByFirm(
+        "firmA"
+      )
+      expect(closureQuorumByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureRebalanceExecution.upsert({
+        id: "closure-rebalance-execution:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        mode: "owner_transfer",
+        status: "completed",
+        targetOwnerId: "partner_b",
+        appliedOwnerId: "partner_b",
+        throttleReleased: false,
+        queueReopened: false,
+        executedBy: "partner_a",
+        executedAt: 61,
+        churnCount: 1,
+        notes: ["owner transfer completed"],
+        lastEvaluatedAt: 61,
+        updatedAt: 61,
+      })
+      const closureExecution = await repos.filingEscalationClosureRebalanceExecution.get(
+        "closure-rebalance-execution:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureExecution?.status).toBe("completed")
+      const closureExecutionByFirm = await repos.filingEscalationClosureRebalanceExecution.listByFirm(
+        "firmA"
+      )
+      expect(closureExecutionByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   })
 })
