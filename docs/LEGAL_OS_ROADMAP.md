@@ -33,6 +33,10 @@ Snapshot basis: current `main` as of this branch cut plus repository contents in
 - Extended `app/api/d4/filings/route.ts` with dispute + enforcement governance actions/views: `open_closure_attestation_dispute`, `resolve_closure_attestation_dispute`, `tick_closure_sla_exception_enforcement`, `view=closure_attestation_disputes`, and `view=closure_sla_exception_enforcement`.
 - Wired dispute and enforcement countdown/escalation indicators into closure digest/queue/window payloads and workload critical-path severity signaling.
 - Extended API, route-wiring, repository, and runtime-mode coverage for dispute + enforcement persistence, firm isolation, reset rehydration, and audit write-through.
+- Added durable closure adjudication queue + closure enforcement rebalance entities across memory/Firestore repositories and `firestore.rules`.
+- Extended `app/api/d4/filings/route.ts` with adjudication/rebalance governance actions/views: `escalate_closure_dispute_to_panel`, `record_closure_adjudication_verdict`, `rebalance_closure_enforcement_queue`, `view=closure_adjudication_queue`, and `view=closure_enforcement_rebalance`.
+- Wired adjudication backlog + enforcement rebalance pressure into closure digest/queue/window payloads and workload critical-path escalation with panel/dissent + throttle signals.
+- Extended API, route-wiring, repository, and runtime-mode coverage for adjudication/rebalance persistence, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
 
 ## Recommended immediate slice (Phase B)
 
@@ -47,9 +51,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure exception adjudication + enforcement queue rebalance parity**:
+Build **filing escalation closure adjudication panel quorum + rebalance execution governance parity**:
 
-1. Add adjudication queue actions for disputed closure attestations (escalate-to-panel, panel verdict capture, and immutable dissent notes).
-2. Add enforcement rebalance actions for repeated SLA-exception escalations (cooldown scheduling, owner reassignment hints, and reopen throttles).
-3. Surface adjudication backlog and enforcement rebalance pressure in closure/workload digests with explicit critical-path flags.
-4. Extend emulator/runtime + route-wiring coverage for adjudication/rebalance transitions, including idempotent replay behavior and audit write-through.
+1. Add panel quorum/timer governance for adjudication rows (quorum unmet and verdict-overdue transitions with explicit breach flags).
+2. Add rebalance execution actions that apply owner reassignment recommendations and controlled throttle-release reopen paths.
+3. Surface adjudication throughput + rebalance churn metrics in closure/workload digests for partner-level operational forecasting.
+4. Extend emulator/runtime + route-wiring coverage for quorum/execution transitions, including idempotent replay behavior and audit write-through.

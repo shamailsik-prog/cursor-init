@@ -1292,6 +1292,7 @@ describe("GET/POST /api/d4/filings", () => {
       expect([200, 422]).toContain(reviewClosureAttestation.status)
     }
     let disputeId: string | null = null
+    let adjudicationId: string | null = null
     if (attestationId) {
       const openClosureDispute = await post(
         {
@@ -1317,6 +1318,55 @@ describe("GET/POST /api/d4/filings", () => {
       }
     }
     if (disputeId) {
+      const escalateDisputeToPanelPayload = {
+        action: "escalate_closure_dispute_to_panel" as const,
+        actorId: "partner_b",
+        disputeId,
+        panelMemberIds: ["partner_a", "partner_b"],
+        dissentNote: "preserve immutable dissent note for review",
+        note: "Escalate closure dispute to adjudication panel",
+      }
+      const escalateDisputeToPanel = await post(
+        escalateDisputeToPanelPayload,
+        "7cf92ef7-f258-42c5-8fc0-d0bc9f2f732b"
+      )
+      expect([200, 422]).toContain(escalateDisputeToPanel.status)
+      if (escalateDisputeToPanel.status === 200) {
+        const escalateJson = (await escalateDisputeToPanel.json()) as {
+          reused: boolean
+          result: { closureAdjudicationQueue?: { id: string; status: string } }
+        }
+        expect(escalateJson.reused).toBe(false)
+        adjudicationId = escalateJson.result.closureAdjudicationQueue?.id ?? null
+        expect(
+          ["pending_panel_assignment", "panel_in_review", "resolved_upheld", "resolved_overturned"].includes(
+            escalateJson.result.closureAdjudicationQueue?.status ?? ""
+          )
+        ).toBe(true)
+        const escalateReplay = await post(
+          escalateDisputeToPanelPayload,
+          "7cf92ef7-f258-42c5-8fc0-d0bc9f2f732b"
+        )
+        expect(escalateReplay.status).toBe(200)
+        const escalateReplayJson = (await escalateReplay.json()) as { reused: boolean }
+        expect(escalateReplayJson.reused).toBe(true)
+      }
+    }
+    if (adjudicationId) {
+      const recordAdjudicationVerdict = await post(
+        {
+          action: "record_closure_adjudication_verdict",
+          actorId: "partner_a",
+          adjudicationId,
+          verdict: "uphold_dispute",
+          dissentNote: "immutable dissent retained with verdict",
+          note: "Capture panel verdict for closure dispute",
+        },
+        "b1279536-680b-46d8-a0a0-f329d3507f04"
+      )
+      expect([200, 422]).toContain(recordAdjudicationVerdict.status)
+    }
+    if (disputeId) {
       const resolveClosureDispute = await post(
         {
           action: "resolve_closure_attestation_dispute",
@@ -1339,6 +1389,28 @@ describe("GET/POST /api/d4/filings", () => {
       "88f0ea98-fb32-4fd8-8e6d-c8b95e9acdb9"
     )
     expect([200, 404]).toContain(tickClosureEnforcement.status)
+    const rebalanceEnforcementPayload = {
+      action: "rebalance_closure_enforcement_queue" as const,
+      actorId: "partner_a",
+      ownerId: "partner_a",
+      status: "owner_reassignment_recommended" as const,
+      recommendedOwnerId: "partner_b",
+      note: "Record owner reassignment hint after repeated SLA exception escalation",
+    }
+    const rebalanceClosureEnforcement = await post(
+      rebalanceEnforcementPayload,
+      "0f72938a-ccce-43a1-adf5-fd66f7eeb3ef"
+    )
+    expect([200, 404, 422]).toContain(rebalanceClosureEnforcement.status)
+    if (rebalanceClosureEnforcement.status === 200) {
+      const rebalanceReplay = await post(
+        rebalanceEnforcementPayload,
+        "0f72938a-ccce-43a1-adf5-fd66f7eeb3ef"
+      )
+      expect(rebalanceReplay.status).toBe(200)
+      const rebalanceReplayJson = (await rebalanceReplay.json()) as { reused: boolean }
+      expect(rebalanceReplayJson.reused).toBe(true)
+    }
 
     const waiverExpiryViewBefore = await get(
       new URLSearchParams({
@@ -1840,6 +1912,9 @@ describe("GET/POST /api/d4/filings", () => {
         slaExceptionPressureLevel?: string
         attestationDisputeStatus?: string | null
         slaExceptionEnforcementStatus?: string
+        closureAdjudicationStatus?: string | null
+        closureEnforcementRebalanceStatus?: string
+        closureCriticalPath?: boolean
       }>
     }
     expect(
@@ -1871,6 +1946,22 @@ describe("GET/POST /api/d4/filings", () => {
             ["countdown_active", "reminder_sent", "escalated", "closed"].includes(
               row.slaExceptionEnforcementStatus
             )
+          const adjudicationStatusOk =
+            row.closureAdjudicationStatus === undefined ||
+            row.closureAdjudicationStatus === null ||
+            [
+              "pending_panel_assignment",
+              "panel_in_review",
+              "resolved_upheld",
+              "resolved_overturned",
+            ].includes(row.closureAdjudicationStatus)
+          const rebalanceStatusOk =
+            row.closureEnforcementRebalanceStatus === undefined ||
+            ["none", "cooldown_scheduled", "owner_reassignment_recommended", "throttle_active"].includes(
+              row.closureEnforcementRebalanceStatus
+            )
+          const criticalPathOk =
+            row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
             row.ownerId === "partner_a" &&
             digestStatusOk &&
@@ -1879,7 +1970,10 @@ describe("GET/POST /api/d4/filings", () => {
             exceptionStatusOk &&
             exceptionPressureOk &&
             disputeStatusOk &&
-            enforcementStatusOk
+            enforcementStatusOk &&
+            adjudicationStatusOk &&
+            rebalanceStatusOk &&
+            criticalPathOk
           )
         }
       )
@@ -2046,6 +2140,49 @@ describe("GET/POST /api/d4/filings", () => {
     expect(
       closureEnforcementViewJson.items.every((row) =>
         ["countdown_active", "reminder_sent", "escalated", "closed"].includes(row.status)
+      )
+    ).toBe(true)
+    const closureAdjudicationView = await get(
+      new URLSearchParams({
+        view: "closure_adjudication_queue",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureAdjudicationView.status).toBe(200)
+    const closureAdjudicationViewJson = (await closureAdjudicationView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureAdjudicationViewJson.items.every((row) =>
+        [
+          "pending_panel_assignment",
+          "panel_in_review",
+          "resolved_upheld",
+          "resolved_overturned",
+        ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureRebalanceView = await get(
+      new URLSearchParams({
+        view: "closure_enforcement_rebalance",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureRebalanceView.status).toBe(200)
+    const closureRebalanceViewJson = (await closureRebalanceView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureRebalanceViewJson.items.every((row) =>
+        ["none", "cooldown_scheduled", "owner_reassignment_recommended", "throttle_active"].includes(
+          row.status
+        )
       )
     ).toBe(true)
   })
