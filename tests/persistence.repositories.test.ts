@@ -1642,7 +1642,7 @@ describe("Firestore repository adapters", () => {
           "closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
         classification: "internal",
         packageIds: ["pkg_1"],
-        status: "ruling_publication_checkpointed",
+        status: "distribution_attestation_reviewed",
         verificationOverridePetitionedBy: "partner_a",
         verificationOverridePetitionedAt: 88,
         panelConfirmationAttestedBy: "partner_a",
@@ -1659,17 +1659,28 @@ describe("Firestore repository adapters", () => {
         rulingPublicationCheckpointedBy: "partner_a",
         rulingPublicationCheckpointedAt: 93,
         rulingPublicationChannel: "internal_panel_registry",
+        publicationCorrectionLoggedBy: "partner_a",
+        publicationCorrectionLoggedAt: 94,
+        publicationCorrectionNote: "publication correction logged",
+        publicationRollbackCheckpointedBy: "partner_a",
+        publicationRollbackCheckpointedAt: 95,
+        publicationRollbackReason: "distribution rollback checkpointed",
+        distributionAttestationReviewedBy: "partner_a",
+        distributionAttestationReviewedAt: 96,
+        distributionAttestationDecision: "revision_required",
         settlementArbitrationLeadTimeHours: 2,
         arbitrationRulingAgingHours: 1,
+        arbitrationPublicationExceptionBacklogCount: 3,
         notes: ["settlement verification override petitioned and panel attested"],
-        lastEvaluatedAt: 93,
-        updatedAt: 93,
+        lastEvaluatedAt: 96,
+        updatedAt: 96,
       })
       const closureSettlementArbitration = await repos.filingEscalationClosureSettlementArbitration.get(
         "closure-settlement-arbitration:closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
       )
-      expect(closureSettlementArbitration?.status).toBe("ruling_publication_checkpointed")
+      expect(closureSettlementArbitration?.status).toBe("distribution_attestation_reviewed")
       expect(closureSettlementArbitration?.rulingPublicationChannel).toBe("internal_panel_registry")
+      expect(closureSettlementArbitration?.arbitrationPublicationExceptionBacklogCount).toBe(3)
       const closureSettlementArbitrationByFirm =
         await repos.filingEscalationClosureSettlementArbitration.listByFirm("firmA")
       expect(closureSettlementArbitrationByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
@@ -1683,7 +1694,7 @@ describe("Firestore repository adapters", () => {
           "closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
         classification: "internal",
         packageIds: ["pkg_1"],
-        status: "debt_aging_auto_escalated",
+        status: "retirement_rollback_controlled",
         reentryExceptionAttestedBy: "partner_a",
         reentryExceptionAttestedAt: 90,
         timeoutWaiverCheckpointedBy: "partner_a",
@@ -1700,17 +1711,28 @@ describe("Firestore repository adapters", () => {
         debtAgingAutoEscalatedBy: "partner_a",
         debtAgingAutoEscalatedAt: 94,
         debtAgingEscalationHours: 6,
+        retirementDisputeOpenedBy: "partner_a",
+        retirementDisputeOpenedAt: 95,
+        retirementDisputeReason: "retirement dispute opened",
+        retirementDisputeResolvedBy: "partner_a",
+        retirementDisputeResolvedAt: 96,
+        retirementDisputeResolution: "reopen_debt",
+        retirementRollbackControlledBy: "partner_a",
+        retirementRollbackControlledAt: 97,
+        retirementRollbackCount: 1,
         queueReentryExceptionDebtCount: 1,
         queueReentryRetirementBurnCount: 1,
+        queueReentryRetirementReconciliationDriftCount: 2,
         notes: ["queue re-entry timeout waiver checkpointed"],
-        lastEvaluatedAt: 94,
-        updatedAt: 94,
+        lastEvaluatedAt: 97,
+        updatedAt: 97,
       })
       const closureQueueReentryCompliance = await repos.filingEscalationClosureQueueReentryCompliance.get(
         "closure-queue-reentry-compliance:closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
       )
-      expect(closureQueueReentryCompliance?.status).toBe("debt_aging_auto_escalated")
+      expect(closureQueueReentryCompliance?.status).toBe("retirement_rollback_controlled")
       expect(closureQueueReentryCompliance?.debtAssigneeId).toBe("partner_b")
+      expect(closureQueueReentryCompliance?.queueReentryRetirementReconciliationDriftCount).toBe(2)
       const closureQueueReentryComplianceByFirm =
         await repos.filingEscalationClosureQueueReentryCompliance.listByFirm("firmA")
       expect(closureQueueReentryComplianceByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
