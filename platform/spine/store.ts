@@ -102,6 +102,8 @@ export type AuditEntry = {
   authBoundary?: TenancyAuthBoundary
   sessionReferenceId?: string | null
   externalSessionId?: string | null
+  privilegedBoundaryDriftCount?: number
+  privilegedBoundaryDriftSessionReferenceIds?: string[]
   at?: number
 }
 
@@ -118,6 +120,12 @@ export type TenancySessionReferenceRow = {
   issuedAt: number
   lastSeenAt: number
   expiresAt: number | null
+  revokedAt: number | null
+  revokedBy: string | null
+  revokedReason: string | null
+  privilegedBoundaryDriftedAt: number | null
+  privilegedBoundaryDriftedBy: string | null
+  privilegedBoundaryDriftReason: string | null
 }
 
 export type StatuteSectionVersion = {

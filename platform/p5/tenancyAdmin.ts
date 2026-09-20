@@ -10,6 +10,8 @@ import {
 
 const DEFAULT_SESSION_REFERENCE_TTL_MS = 8 * 60 * 60 * 1000
 
+export type TenancySessionReferenceState = "active" | "revoked" | "expired"
+
 function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
   const actor = store.users.get(actorId)
   if (!actor) throw new Error("unknown actor")
@@ -125,6 +127,8 @@ export function listFirmAudit(
     authBoundary?: TenancyAuthBoundary
     sessionReferenceId?: string | null
     externalSessionId?: string | null
+    privilegedBoundaryDriftCount?: number
+    privilegedBoundaryDriftSessionReferenceIds?: string[]
     at: number
   }>
   total: number
@@ -144,6 +148,9 @@ export function listFirmAudit(
       authBoundary: entry.authBoundary,
       sessionReferenceId: entry.sessionReferenceId ?? null,
       externalSessionId: entry.externalSessionId ?? null,
+      privilegedBoundaryDriftCount: entry.privilegedBoundaryDriftCount ?? 0,
+      privilegedBoundaryDriftSessionReferenceIds:
+        entry.privilegedBoundaryDriftSessionReferenceIds ?? [],
       at: entry.at ?? 0,
     }))
     .sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))
@@ -168,6 +175,8 @@ export function updateUserRole(
     authBoundary?: TenancyAuthBoundary
     sessionReferenceId?: string | null
     externalSessionId?: string | null
+    privilegedBoundaryDriftCount?: number
+    privilegedBoundaryDriftSessionReferenceIds?: string[]
   }
 ): { user: User; auditEntry: NonNullable<SpineStore["audit"][number]> } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
@@ -199,10 +208,21 @@ export function updateUserRole(
     authBoundary: input.authBoundary,
     sessionReferenceId: input.sessionReferenceId ?? null,
     externalSessionId: input.externalSessionId ?? null,
+    privilegedBoundaryDriftCount: input.privilegedBoundaryDriftCount ?? 0,
+    privilegedBoundaryDriftSessionReferenceIds: input.privilegedBoundaryDriftSessionReferenceIds ?? [],
     at: Date.now(),
   } as const
   store.audit.push(auditEntry)
   return { user: target, auditEntry }
+}
+
+export function getTenancySessionReferenceState(
+  row: TenancySessionReferenceRow,
+  now = Date.now()
+): TenancySessionReferenceState {
+  if (row.revokedAt) return "revoked"
+  if (row.expiresAt !== null && row.expiresAt <= now) return "expired"
+  return "active"
 }
 
 export function upsertTenancySessionReference(
@@ -245,9 +265,99 @@ export function upsertTenancySessionReference(
     issuedAt: existing?.issuedAt ?? now,
     lastSeenAt: now,
     expiresAt,
+    revokedAt: existing?.revokedAt ?? null,
+    revokedBy: existing?.revokedBy ?? null,
+    revokedReason: existing?.revokedReason ?? null,
+    privilegedBoundaryDriftedAt: existing?.privilegedBoundaryDriftedAt ?? null,
+    privilegedBoundaryDriftedBy: existing?.privilegedBoundaryDriftedBy ?? null,
+    privilegedBoundaryDriftReason: existing?.privilegedBoundaryDriftReason ?? null,
   }
   store.tenancySessionReferences.set(row.id, row)
   return row
+}
+
+export function revokeTenancySessionReference(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    sessionReferenceId: string
+    reason?: string
+    now?: number
+  }
+): {
+  reference: TenancySessionReferenceRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const reference = store.tenancySessionReferences.get(input.sessionReferenceId)
+  if (!reference) throw new Error("unknown session reference")
+  if (reference.firmId !== input.firmId) throw new Error("cross-firm session reference denied")
+  const now = input.now ?? Date.now()
+  const revoked =
+    reference.revokedAt !== null
+      ? reference
+      : {
+          ...reference,
+          revokedAt: now,
+          revokedBy: actor.id,
+          revokedReason: input.reason ?? "admin_revocation",
+        }
+  store.tenancySessionReferences.set(revoked.id, revoked)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_revoke_session_reference",
+    actorId: actor.id,
+    target: revoked.userId,
+    classification: actor.clearanceLevel,
+    reason: input.reason,
+    authBoundary: revoked.authBoundary,
+    sessionReferenceId: revoked.id,
+    externalSessionId: revoked.externalSessionId,
+    privilegedBoundaryDriftCount: 0,
+    privilegedBoundaryDriftSessionReferenceIds: [],
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { reference: revoked, auditEntry }
+}
+
+export function invalidateSessionReferencesForPrivilegeDrift(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    targetUserId: string
+    targetRole: Role
+    targetClearance: Classification
+    now?: number
+  }
+): TenancySessionReferenceRow[] {
+  requirePartnerInFirm(store, input.actorId, input.firmId)
+  const now = input.now ?? Date.now()
+  const updatedRows: TenancySessionReferenceRow[] = []
+  for (const row of store.tenancySessionReferences.values()) {
+    if (row.firmId !== input.firmId || row.userId !== input.targetUserId) continue
+    if (row.revokedAt !== null) continue
+    const state = getTenancySessionReferenceState(row, now)
+    if (state === "expired") continue
+    if (row.roleSnapshot === input.targetRole && row.clearanceSnapshot === input.targetClearance) {
+      continue
+    }
+    const invalidated = {
+      ...row,
+      revokedAt: now,
+      revokedBy: input.actorId,
+      revokedReason: "privileged_boundary_drift",
+      privilegedBoundaryDriftedAt: now,
+      privilegedBoundaryDriftedBy: input.actorId,
+      privilegedBoundaryDriftReason: "role_or_clearance_changed",
+    }
+    store.tenancySessionReferences.set(invalidated.id, invalidated)
+    updatedRows.push(invalidated)
+  }
+  return updatedRows
 }
 
 export function listFirmSessionReferences(
@@ -258,11 +368,12 @@ export function listFirmSessionReferences(
   limit: number,
   cursor: number
 ): {
-  items: TenancySessionReferenceRow[]
+  items: Array<TenancySessionReferenceRow & { state: TenancySessionReferenceState }>
   total: number
   nextCursor: string | null
 } {
   requirePartnerInFirm(store, actorId, firmId)
+  const now = Date.now()
   const rows = [...store.tenancySessionReferences.values()]
     .filter((row) => row.firmId === firmId)
     .filter((row) => (userId ? row.userId === userId : true))
@@ -270,7 +381,10 @@ export function listFirmSessionReferences(
   const page = rows.slice(cursor, cursor + limit)
   const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
   return {
-    items: page,
+    items: page.map((row) => ({
+      ...row,
+      state: getTenancySessionReferenceState(row, now),
+    })),
     total: rows.length,
     nextCursor,
   }

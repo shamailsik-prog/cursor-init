@@ -14,10 +14,13 @@ import { syncFirmAudit } from "@/platform/persistence/auditSync"
 import { syncFirmTenancySessionReferences } from "@/platform/persistence/tenancySessionReferenceSync"
 import {
   buildSessionContext,
+  getTenancySessionReferenceState,
+  invalidateSessionReferencesForPrivilegeDrift,
   listFirmAudit,
   listFirmMemberships,
   listFirmSessionReferences,
   listFirmUsers,
+  revokeTenancySessionReference,
   upsertTenancySessionReference,
   updateUserRole,
 } from "@/platform/p5/tenancyAdmin"
@@ -37,7 +40,15 @@ type UpdateRoleBody = {
   externalSessionId?: string
 }
 
-type Body = UpdateRoleBody
+type RevokeSessionReferenceBody = {
+  action: "revoke_session_reference"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  reason?: string
+}
+
+type Body = UpdateRoleBody | RevokeSessionReferenceBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -117,6 +128,13 @@ export async function GET(request: Request) {
         if (!existingReference) {
           return NextResponse.json({ error: "unknown session reference" }, { status: 404 })
         }
+        const state = getTenancySessionReferenceState(existingReference)
+        if (state === "revoked") {
+          return NextResponse.json({ error: "session reference revoked" }, { status: 410 })
+        }
+        if (state === "expired") {
+          return NextResponse.json({ error: "session reference expired" }, { status: 410 })
+        }
         store.tenancySessionReferences.set(existingReference.id, existingReference)
         if (requestedUserId && requestedUserId !== existingReference.userId) {
           return NextResponse.json({ error: "session reference user mismatch" }, { status: 400 })
@@ -138,6 +156,25 @@ export async function GET(request: Request) {
       }
       if (resolvedFirmId && resolvedFirmId !== user.firmId) {
         return NextResponse.json({ error: "firm scope mismatch" }, { status: 400 })
+      }
+      if (
+        existingReference &&
+        (existingReference.roleSnapshot !== user.role ||
+          existingReference.clearanceSnapshot !== user.clearanceLevel)
+      ) {
+        const now = Date.now()
+        const staleReference = {
+          ...existingReference,
+          revokedAt: now,
+          revokedBy: user.id,
+          revokedReason: "privileged_boundary_drift",
+          privilegedBoundaryDriftedAt: now,
+          privilegedBoundaryDriftedBy: user.id,
+          privilegedBoundaryDriftReason: "role_or_clearance_changed",
+        }
+        store.tenancySessionReferences.set(staleReference.id, staleReference)
+        await repos.tenancySessionReferences.upsert(staleReference)
+        return NextResponse.json({ error: "session reference stale due privilege drift" }, { status: 410 })
       }
       await syncFirmUsers(store, repos, user.firmId)
       await syncFirmMembers(store, repos, user.firmId)
@@ -279,18 +316,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
   }
 
-  if (parsed.action !== "update_role") {
+  if (parsed.action !== "update_role" && parsed.action !== "revoke_session_reference") {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
-  if (!parsed.actorId || !parsed.firmId || !parsed.targetUserId || !isRole(parsed.nextRole)) {
+
+  if (parsed.action === "update_role") {
+    if (!parsed.actorId || !parsed.firmId || !parsed.targetUserId || !isRole(parsed.nextRole)) {
+      return NextResponse.json(
+        { error: "actorId, firmId, targetUserId, and nextRole are required" },
+        { status: 400 }
+      )
+    }
+    if (!isClassification(parsed.nextClearance)) {
+      return NextResponse.json(
+        { error: "nextClearance must be a rank-0–4 label" },
+        { status: 400 }
+      )
+    }
+  } else if (!parsed.actorId || !parsed.firmId || !parsed.sessionReferenceId) {
     return NextResponse.json(
-      { error: "actorId, firmId, targetUserId, and nextRole are required" },
-      { status: 400 }
-    )
-  }
-  if (!isClassification(parsed.nextClearance)) {
-    return NextResponse.json(
-      { error: "nextClearance must be a rank-0–4 label" },
+      { error: "actorId, firmId, and sessionReferenceId are required" },
       { status: 400 }
     )
   }
@@ -312,24 +357,77 @@ export async function POST(request: Request) {
   }
 
   try {
+    if (parsed.action === "revoke_session_reference") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const sessionReferenceId = parsed.sessionReferenceId
+      if (!actorId || !firmId || !sessionReferenceId) {
+        throw new Error("actorId, firmId, and sessionReferenceId are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      const revoked = revokeTenancySessionReference(store, {
+        actorId,
+        firmId,
+        sessionReferenceId,
+        reason: normalizeOptionalString(parsed.reason),
+      })
+      await repos.tenancySessionReferences.upsert(revoked.reference)
+      await repos.audit.append(revoked.auditEntry)
+      const payload = {
+        action: "revoke_session_reference",
+        sessionReference: {
+          id: revoked.reference.id,
+          userId: revoked.reference.userId,
+          firmId: revoked.reference.firmId,
+          revokedAt: revoked.reference.revokedAt,
+          revokedBy: revoked.reference.revokedBy,
+          revokedReason: revoked.reference.revokedReason,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    const actorId = parsed.actorId
+    const firmId = parsed.firmId
+    const targetUserId = parsed.targetUserId
+    const nextRole = parsed.nextRole
+    const nextClearance = parsed.nextClearance
+    if (
+      !actorId ||
+      !firmId ||
+      !targetUserId ||
+      !nextRole ||
+      !isRole(nextRole) ||
+      !nextClearance ||
+      !isClassification(nextClearance)
+    ) {
+      throw new Error("actorId, firmId, targetUserId, nextRole, and nextClearance are required")
+    }
+
     const sessionReferenceId = normalizeOptionalString(parsed.sessionReferenceId)
     const authBoundary = parseAuthBoundary(parsed.authBoundary)
     const externalSessionId = normalizeOptionalString(parsed.externalSessionId)
-    await syncFirmUsers(store, repos, parsed.firmId)
-    await syncFirmMembers(store, repos, parsed.firmId)
+    await syncFirmUsers(store, repos, firmId)
+    await syncFirmMembers(store, repos, firmId)
+    await syncFirmTenancySessionReferences(store, repos, firmId)
     let existingReference = null
     if (sessionReferenceId) {
       existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
       if (!existingReference) throw new Error("unknown session reference")
       store.tenancySessionReferences.set(existingReference.id, existingReference)
-      if (existingReference.firmId !== parsed.firmId) {
+      if (existingReference.firmId !== firmId) {
         throw new Error("cross-firm session reference denied")
       }
-      if (existingReference.userId !== parsed.actorId) {
+      if (existingReference.userId !== actorId) {
         throw new Error("session reference actor mismatch")
       }
+      const state = getTenancySessionReferenceState(existingReference)
+      if (state === "revoked") throw new Error("session reference revoked")
+      if (state === "expired") throw new Error("session reference expired")
     }
-    const actor = await loadUser(store, repos, parsed.actorId)
+    const actor = await loadUser(store, repos, actorId)
     if (!actor) throw new Error("unknown actor")
     const sessionReference = upsertTenancySessionReference(store, {
       user: actor,
@@ -340,17 +438,36 @@ export async function POST(request: Request) {
     })
     await repos.tenancySessionReferences.upsert(sessionReference)
     const updated = updateUserRole(store, {
-      actorId: parsed.actorId,
-      firmId: parsed.firmId,
-      targetUserId: parsed.targetUserId,
-      nextRole: parsed.nextRole,
-      nextClearance: parsed.nextClearance,
+      actorId,
+      firmId,
+      targetUserId,
+      nextRole,
+      nextClearance,
       reason: parsed.reason,
       authBoundary: sessionReference.authBoundary,
       sessionReferenceId: sessionReference.id,
       externalSessionId: sessionReference.externalSessionId,
     })
-    const refreshedActor = await loadUser(store, repos, parsed.actorId)
+    const driftedReferences = invalidateSessionReferencesForPrivilegeDrift(store, {
+      actorId,
+      firmId,
+      targetUserId,
+      targetRole: nextRole,
+      targetClearance: nextClearance,
+    })
+    for (const drifted of driftedReferences) {
+      await repos.tenancySessionReferences.upsert(drifted)
+    }
+    const enrichedAuditEntry = {
+      ...updated.auditEntry,
+      privilegedBoundaryDriftCount: driftedReferences.length,
+      privilegedBoundaryDriftSessionReferenceIds: driftedReferences.map((row) => row.id),
+    }
+    const auditIdx = store.audit.findIndex((row) => row.id === updated.auditEntry.id)
+    if (auditIdx >= 0) {
+      store.audit[auditIdx] = enrichedAuditEntry
+    }
+    const refreshedActor = await loadUser(store, repos, actorId)
     if (refreshedActor) {
       const refreshedReference = upsertTenancySessionReference(store, {
         user: refreshedActor,
@@ -362,7 +479,7 @@ export async function POST(request: Request) {
       await repos.tenancySessionReferences.upsert(refreshedReference)
     }
     await repos.users.upsert(updated.user)
-    await repos.audit.append(updated.auditEntry)
+    await repos.audit.append(enrichedAuditEntry)
     const payload = {
       action: "update_role",
       user: {
@@ -371,14 +488,17 @@ export async function POST(request: Request) {
         role: updated.user.role,
         clearanceLevel: updated.user.clearanceLevel,
       },
-      authBoundary: updated.auditEntry.authBoundary ?? "runtime_local",
-      sessionReferenceId: updated.auditEntry.sessionReferenceId ?? null,
-      externalSessionId: updated.auditEntry.externalSessionId ?? null,
+      authBoundary: enrichedAuditEntry.authBoundary ?? "runtime_local",
+      sessionReferenceId: enrichedAuditEntry.sessionReferenceId ?? null,
+      externalSessionId: enrichedAuditEntry.externalSessionId ?? null,
+      privilegedBoundaryDriftCount: enrichedAuditEntry.privilegedBoundaryDriftCount ?? 0,
+      privilegedBoundaryDriftSessionReferenceIds:
+        enrichedAuditEntry.privilegedBoundaryDriftSessionReferenceIds ?? [],
     }
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "role update failed"
+    const message = err instanceof Error ? err.message : "tenancy write failed"
     return NextResponse.json({ error: message }, { status: 400 })
   }
 }
