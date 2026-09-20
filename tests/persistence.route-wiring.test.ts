@@ -75,6 +75,8 @@ const baseStore = {
   filingEscalationClosureSafeguardExpiryAttestations: new Map(),
   filingEscalationClosureBurndownRecalibration: new Map(),
   filingEscalationClosureExpiryAttestationQueue: new Map(),
+  filingEscalationClosureBurndownSettlement: new Map(),
+  filingEscalationClosureExpiryAttestationQueueDrain: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -1357,6 +1359,73 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       listByQueueId: vi.fn().mockResolvedValue([]),
       listByRebalanceId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationClosureBurndownSettlement: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          adjudicationId:
+            "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          recalibrationId:
+            "closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "drift_acknowledged",
+          driftAcknowledgedBy: "partner_a",
+          driftAcknowledgedAt: Date.now() - 50 * 60 * 1000,
+          targetLockAttestedBy: null,
+          targetLockAttestedAt: null,
+          rollbackResolutionClosedBy: null,
+          rollbackResolutionClosedAt: null,
+          rollbackResolutionNote: null,
+          settlementLatencyHours: 2,
+          notes: ["repo burndown settlement row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByAdjudicationId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureExpiryAttestationQueueDrain: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          queueItemId:
+            "closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "handoff_timeout_escalated",
+          handoffTimeoutEscalatedBy: "partner_a",
+          handoffTimeoutEscalatedAt: Date.now() - 40 * 60 * 1000,
+          staleReassignmentAttestedBy: null,
+          staleReassignmentAttestedAt: null,
+          reassignedOwnerId: null,
+          forcedDrainCheckpointedBy: null,
+          forcedDrainCheckpointedAt: null,
+          forcedDrainOverrideNote: null,
+          drainThroughputPerDay: 2,
+          openQueueAgingHours: 2,
+          notes: ["repo queue drain row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByRebalanceId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -2017,6 +2086,34 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain(
       "closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+    )
+  })
+
+  it("filings closure burndown settlement view GET uses repository filingEscalationClosureBurndownSettlement listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_burndown_settlement&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+    )
+  })
+
+  it("filings closure expiry attestation queue drain view GET uses repository filingEscalationClosureExpiryAttestationQueueDrain listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_expiry_attestation_queue_drain&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
     )
   })
 

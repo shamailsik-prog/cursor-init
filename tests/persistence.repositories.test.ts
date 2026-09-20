@@ -1506,6 +1506,69 @@ describe("Firestore repository adapters", () => {
       const closureExpiryAttestationQueueByFirm =
         await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm("firmA")
       expect(closureExpiryAttestationQueueByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureBurndownSettlement.upsert({
+        id: "closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        adjudicationId:
+          "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        recalibrationId:
+          "closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "target_lock_attested",
+        driftAcknowledgedBy: "partner_a",
+        driftAcknowledgedAt: 79,
+        targetLockAttestedBy: "partner_a",
+        targetLockAttestedAt: 80,
+        rollbackResolutionClosedBy: null,
+        rollbackResolutionClosedAt: null,
+        rollbackResolutionNote: null,
+        settlementLatencyHours: 2,
+        notes: ["target lock attested for settlement"],
+        lastEvaluatedAt: 80,
+        updatedAt: 80,
+      })
+      const closureBurndownSettlement = await repos.filingEscalationClosureBurndownSettlement.get(
+        "closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureBurndownSettlement?.status).toBe("target_lock_attested")
+      const closureBurndownSettlementByFirm =
+        await repos.filingEscalationClosureBurndownSettlement.listByFirm("firmA")
+      expect(closureBurndownSettlementByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureExpiryAttestationQueueDrain.upsert({
+        id: "closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        queueItemId:
+          "closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "stale_reassignment_attested",
+        handoffTimeoutEscalatedBy: "partner_a",
+        handoffTimeoutEscalatedAt: 81,
+        staleReassignmentAttestedBy: "partner_a",
+        staleReassignmentAttestedAt: 82,
+        reassignedOwnerId: "partner_b",
+        forcedDrainCheckpointedBy: null,
+        forcedDrainCheckpointedAt: null,
+        forcedDrainOverrideNote: null,
+        drainThroughputPerDay: 3,
+        openQueueAgingHours: 2,
+        notes: ["stale queue reassignment attested"],
+        lastEvaluatedAt: 82,
+        updatedAt: 82,
+      })
+      const closureQueueDrain = await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(
+        "closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureQueueDrain?.status).toBe("stale_reassignment_attested")
+      const closureQueueDrainByFirm =
+        await repos.filingEscalationClosureExpiryAttestationQueueDrain.listByFirm("firmA")
+      expect(closureQueueDrainByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   })
 })
