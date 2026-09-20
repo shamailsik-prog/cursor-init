@@ -8,6 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import {
+  formatApiErrorMessage,
+  runApiCallAllowingStatuses as runApiCallAllowingStatusesImpl,
+  type ApiCallResult,
+} from "@/app/ops/api-call-helpers"
 
 type ApiLog = {
   id: string
@@ -27,12 +32,6 @@ type ApiCallOptions = {
   path: string
   query?: Record<string, string | number | undefined>
   body?: unknown
-}
-
-type ApiCallResult = {
-  ok: boolean
-  status: number
-  body: unknown
 }
 
 const DEFAULT_FILE_TEXT =
@@ -118,16 +117,20 @@ export function OperatorAuditConsole() {
   async function runApiCall(options: ApiCallOptions): Promise<unknown> {
     const result = await runApiCallWithStatus(options)
     if (!result.ok) {
-      const message =
-        typeof result.body === "object" &&
-        result.body !== null &&
-        "error" in result.body &&
-        typeof result.body.error === "string"
-          ? result.body.error
-          : `${options.step} failed with ${result.status}`
-      throw new Error(message)
+      throw new Error(formatApiErrorMessage(options.step, result.status, result.body))
     }
     return result.body
+  }
+
+  async function runApiCallAllowingStatuses(
+    options: ApiCallOptions,
+    allowedStatuses: readonly number[]
+  ): Promise<ApiCallResult> {
+    return runApiCallAllowingStatusesImpl({
+      step: options.step,
+      allowedStatuses,
+      execute: () => runApiCallWithStatus(options),
+    })
   }
 
   function firstItemIdFromBody(body: unknown): string {
