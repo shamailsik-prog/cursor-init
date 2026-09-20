@@ -1562,6 +1562,37 @@ describe("GET/POST /api/d4/filings", () => {
         "6f53ecfd-3c6d-4991-85f3-b492a0fae09e"
       )
       expect([200, 404, 422]).toContain(closeRollbackResolution.status)
+      const checkpointSettlementVerification = await post(
+        {
+          action: "checkpoint_closure_settlement_post_resolution_verification",
+          actorId: "partner_a",
+          adjudicationId,
+          note: "Checkpoint post-resolution settlement verification",
+        },
+        "70cbf127-b112-4888-ac43-5d515be88d70"
+      )
+      expect([200, 404, 422]).toContain(checkpointSettlementVerification.status)
+      const attestSettlementLockRelease = await post(
+        {
+          action: "attest_closure_settlement_lock_release",
+          actorId: "partner_a",
+          adjudicationId,
+          note: "Attest settlement lock release after verification",
+        },
+        "81550cca-ed45-43e4-9e67-91c96029b895"
+      )
+      expect([200, 404, 422]).toContain(attestSettlementLockRelease.status)
+      const safeguardSettlementDisputeReopen = await post(
+        {
+          action: "safeguard_closure_settlement_dispute_reopen",
+          actorId: "partner_a",
+          adjudicationId,
+          guardNote: "Dispute reopen requires corroborating panel variance memo",
+          note: "Apply dispute reopen safeguard",
+        },
+        "f303d3c7-c02f-425c-9ef6-43b335fbe63d"
+      )
+      expect([200, 404, 422]).toContain(safeguardSettlementDisputeReopen.status)
     }
     if (disputeId) {
       const resolveClosureDispute = await post(
@@ -1786,6 +1817,38 @@ describe("GET/POST /api/d4/filings", () => {
         "f8cf4d6e-6812-42f7-87d7-5fd292f47353"
       )
       expect([200, 404, 422]).toContain(checkpointQueueForcedDrain.status)
+      const attestQueueForcedReconciliation = await post(
+        {
+          action: "attest_closure_queue_drain_forced_reconciliation",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Attest forced queue drain reconciliation",
+        },
+        "8f88800f-daa0-4cb9-aa4f-c0c8a81ff27d"
+      )
+      expect([200, 404, 422]).toContain(attestQueueForcedReconciliation.status)
+      const checkpointQueueRollback = await post(
+        {
+          action: "checkpoint_closure_queue_drain_reassignment_rollback",
+          actorId: "partner_a",
+          rebalanceId,
+          rollbackToOwnerId: "partner_a",
+          note: "Checkpoint queue reassignment rollback for reconciliation",
+        },
+        "873f0ca9-0d24-4605-8204-0ac445c63738"
+      )
+      expect([200, 404, 422]).toContain(checkpointQueueRollback.status)
+      const controlQueueTimeoutReentry = await post(
+        {
+          action: "control_closure_queue_drain_timeout_reentry",
+          actorId: "partner_a",
+          rebalanceId,
+          timeoutWindowHours: 12,
+          note: "Control timeout re-entry window for queue drain reconciliation",
+        },
+        "e55f9656-7abf-4a8d-a06f-976341e990af"
+      )
+      expect([200, 404, 422]).toContain(controlQueueTimeoutReentry.status)
       if (executeOwnerTransfer.status === 200) {
         const executeOwnerTransferReplay = await post(
           executeOwnerTransferPayload,
@@ -2355,6 +2418,10 @@ describe("GET/POST /api/d4/filings", () => {
         closureBurndownSettlementLatencyHours?: number
         closureExpiryAttestationQueueDrainStatus?: string
         closureExpiryAttestationQueueDrainThroughputPerDay?: number
+        closureSettlementAttestationStatus?: string
+        closureSettlementVerificationLagHours?: number
+        closureQueueDrainReconciliationStatus?: string
+        closureQueueDrainReopenPressureCount?: number
         closureCriticalPath?: boolean
       }>
     }
@@ -2547,6 +2614,30 @@ describe("GET/POST /api/d4/filings", () => {
             row.closureExpiryAttestationQueueDrainThroughputPerDay === undefined ||
             (Number.isFinite(row.closureExpiryAttestationQueueDrainThroughputPerDay) &&
               row.closureExpiryAttestationQueueDrainThroughputPerDay >= 0)
+          const settlementAttestationStatusOk =
+            row.closureSettlementAttestationStatus === undefined ||
+            [
+              "verification_pending",
+              "lock_release_attested",
+              "dispute_reopen_guarded",
+              "settlement_verified",
+            ].includes(row.closureSettlementAttestationStatus)
+          const settlementVerificationLagOk =
+            row.closureSettlementVerificationLagHours === undefined ||
+            (Number.isFinite(row.closureSettlementVerificationLagHours) &&
+              row.closureSettlementVerificationLagHours >= 0)
+          const queueReconciliationStatusOk =
+            row.closureQueueDrainReconciliationStatus === undefined ||
+            [
+              "reconciliation_pending",
+              "forced_drain_attested",
+              "reassignment_rollback_checkpointed",
+              "timeout_reentry_controlled",
+            ].includes(row.closureQueueDrainReconciliationStatus)
+          const queueReconciliationPressureOk =
+            row.closureQueueDrainReopenPressureCount === undefined ||
+            (Number.isFinite(row.closureQueueDrainReopenPressureCount) &&
+              row.closureQueueDrainReopenPressureCount >= 0)
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -2589,6 +2680,10 @@ describe("GET/POST /api/d4/filings", () => {
             burndownSettlementLatencyOk &&
             queueDrainStatusOk &&
             queueDrainThroughputOk &&
+            settlementAttestationStatusOk &&
+            settlementVerificationLagOk &&
+            queueReconciliationStatusOk &&
+            queueReconciliationPressureOk &&
             criticalPathOk
           )
         }
@@ -3058,6 +3153,52 @@ describe("GET/POST /api/d4/filings", () => {
           "handoff_timeout_escalated",
           "stale_reassignment_attested",
           "forced_drain_checkpointed",
+        ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureSettlementAttestationView = await get(
+      new URLSearchParams({
+        view: "closure_settlement_attestation",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSettlementAttestationView.status).toBe(200)
+    const closureSettlementAttestationViewJson = (await closureSettlementAttestationView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureSettlementAttestationViewJson.items.every((row) =>
+        [
+          "verification_pending",
+          "lock_release_attested",
+          "dispute_reopen_guarded",
+          "settlement_verified",
+        ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureQueueDrainReconciliationView = await get(
+      new URLSearchParams({
+        view: "closure_queue_drain_reconciliation",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureQueueDrainReconciliationView.status).toBe(200)
+    const closureQueueDrainReconciliationViewJson = (await closureQueueDrainReconciliationView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureQueueDrainReconciliationViewJson.items.every((row) =>
+        [
+          "reconciliation_pending",
+          "forced_drain_attested",
+          "reassignment_rollback_checkpointed",
+          "timeout_reentry_controlled",
         ].includes(row.status)
       )
     ).toBe(true)

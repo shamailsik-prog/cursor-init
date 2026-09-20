@@ -1569,6 +1569,68 @@ describe("Firestore repository adapters", () => {
       const closureQueueDrainByFirm =
         await repos.filingEscalationClosureExpiryAttestationQueueDrain.listByFirm("firmA")
       expect(closureQueueDrainByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureSettlementAttestation.upsert({
+        id: "closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        adjudicationId:
+          "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        settlementId:
+          "closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "settlement_verified",
+        postResolutionCheckpointedBy: "partner_a",
+        postResolutionCheckpointedAt: 83,
+        lockReleaseAttestedBy: "partner_a",
+        lockReleaseAttestedAt: 84,
+        disputeReopenGuardedBy: null,
+        disputeReopenGuardedAt: null,
+        disputeReopenGuardNote: null,
+        settlementVerificationLagHours: 1,
+        notes: ["settlement verification attestation recorded"],
+        lastEvaluatedAt: 84,
+        updatedAt: 84,
+      })
+      const closureSettlementAttestation = await repos.filingEscalationClosureSettlementAttestation.get(
+        "closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureSettlementAttestation?.status).toBe("settlement_verified")
+      const closureSettlementAttestationByFirm =
+        await repos.filingEscalationClosureSettlementAttestation.listByFirm("firmA")
+      expect(closureSettlementAttestationByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureQueueDrainReconciliation.upsert({
+        id: "closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        queueDrainId:
+          "closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "timeout_reentry_controlled",
+        forcedDrainAttestedBy: "partner_a",
+        forcedDrainAttestedAt: 85,
+        reassignmentRollbackCheckpointedBy: "partner_a",
+        reassignmentRollbackCheckpointedAt: 86,
+        rollbackToOwnerId: "partner_b",
+        timeoutReentryControlledBy: "partner_a",
+        timeoutReentryControlledAt: 87,
+        timeoutReentryWindowHours: 12,
+        drainReopenPressureCount: 1,
+        notes: ["queue drain re-entry controlled"],
+        lastEvaluatedAt: 87,
+        updatedAt: 87,
+      })
+      const closureQueueDrainReconciliation = await repos.filingEscalationClosureQueueDrainReconciliation.get(
+        "closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureQueueDrainReconciliation?.status).toBe("timeout_reentry_controlled")
+      const closureQueueDrainReconciliationByFirm =
+        await repos.filingEscalationClosureQueueDrainReconciliation.listByFirm("firmA")
+      expect(closureQueueDrainReconciliationByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   })
 })
