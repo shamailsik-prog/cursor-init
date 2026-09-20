@@ -1,0 +1,148 @@
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
+import { describe, expect, it } from "vitest"
+
+const GATE_SCRIPT = resolve(process.cwd(), "ci_gates/check_pr_phase_claims.py")
+
+function runGit(cwd: string, args: string[]) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf-8" })
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${result.stderr || result.stdout}`)
+  }
+  return result.stdout.trim()
+}
+
+function writeFile(root: string, relativePath: string, content: string) {
+  const absolutePath = join(root, relativePath)
+  mkdirSync(resolve(absolutePath, ".."), { recursive: true })
+  writeFileSync(absolutePath, content, "utf-8")
+}
+
+function makeRepo(baseFiles: Record<string, string>, headFiles: Record<string, string>) {
+  const root = mkdtempSync(join(tmpdir(), "phase-claim-gate-"))
+  runGit(root, ["init"])
+  runGit(root, ["config", "user.name", "Test Runner"])
+  runGit(root, ["config", "user.email", "test@example.com"])
+
+  for (const [path, content] of Object.entries(baseFiles)) {
+    writeFile(root, path, content)
+  }
+  runGit(root, ["add", "."])
+  runGit(root, ["commit", "-m", "base"])
+  const baseSha = runGit(root, ["rev-parse", "HEAD"])
+
+  for (const [path, content] of Object.entries(headFiles)) {
+    writeFile(root, path, content)
+  }
+  runGit(root, ["add", "."])
+  runGit(root, ["commit", "-m", "head"])
+  const headSha = runGit(root, ["rev-parse", "HEAD"])
+
+  return { root, baseSha, headSha }
+}
+
+function runGate(cwd: string, env: Record<string, string>) {
+  return spawnSync("python3", [GATE_SCRIPT], {
+    cwd,
+    encoding: "utf-8",
+    env: { ...process.env, ...env },
+  })
+}
+
+describe("PR phase claim gate hardening", () => {
+  it("fails when required flags are missing", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Update notes",
+      PR_BODY: "action-name→call-site evidence: set_backup_owner -> app/ops/operator-audit-console.tsx",
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("missing: backend_real, frontend_real, transport_stub")
+  })
+
+  it("fails COMPLETE claims when frontend_real=false", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Phase complete",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=false",
+        "action-name→call-site evidence: set_backup_owner -> app/ops/operator-audit-console.tsx",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("frontend_real=false")
+  })
+
+  it("fails self-certified DONE to Shamail", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Shamail done",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=true",
+        "transport_stub=true",
+        "action-name→call-site evidence: set_backup_owner -> app/ops/operator-audit-console.tsx",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("Do not self-certify DONE/COMPLETE to Shamail")
+  })
+
+  it("fails ops changes without focused tests", () => {
+    const repo = makeRepo(
+      { "app/ops/operator-audit-console.tsx": "export const x = 1\n" },
+      { "app/ops/operator-audit-console.tsx": "export const x = 2\n" }
+    )
+    const result = runGate(repo.root, {
+      PR_TITLE: "Batch E ops hardening",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=true",
+        "transport_stub=true",
+        "action-name→call-site evidence: set_backup_owner -> app/ops/operator-audit-console.tsx",
+        "real fetch path: /api/d4/filings",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("no focused tests under tests/ops*.test.ts were changed")
+  })
+
+  it("passes with required flags and evidence for ops changes", () => {
+    const repo = makeRepo(
+      {
+        "app/ops/operator-audit-console.tsx": "export const x = 1\n",
+        "tests/ops.batch-e-frontend-real.test.ts": "export const t = 1\n",
+      },
+      {
+        "app/ops/operator-audit-console.tsx": "export const x = 2\n",
+        "tests/ops.batch-e-frontend-real.test.ts": "export const t = 2\n",
+      }
+    )
+    const result = runGate(repo.root, {
+      PR_TITLE: "Batch E ops hardening",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=true",
+        "transport_stub=true",
+        "action-name→call-site evidence: set_backup_owner -> app/ops/operator-audit-console.tsx",
+        "real fetch path: /api/d4/filings",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+})
