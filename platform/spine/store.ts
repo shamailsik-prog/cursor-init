@@ -629,6 +629,65 @@ export type FilingEscalationWaiverRolloverAttestationRow = {
   updatedAt: number
 }
 
+export type FilingEscalationRemediationExpiryDigestStatus =
+  | "open_expiry"
+  | "acknowledged"
+  | "snoozed"
+  | "cleared"
+
+export type FilingEscalationRemediationExpiryReason =
+  | "expires_lte_24h"
+  | "expires_lte_4h"
+  | "already_expired"
+
+export type FilingEscalationRemediationExpiryDigestRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingEscalationRemediationExpiryDigestStatus
+  reasons: FilingEscalationRemediationExpiryReason[]
+  linkedRemediationId: string | null
+  linkedPolicyVarianceDigestId: string | null
+  linkedPolicyId: string | null
+  remediationExpiresAt: number | null
+  msUntilExpiry: number | null
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  snoozeUntil: number | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationRolloverBreachWatchStatus = "open_breach" | "acknowledged" | "cleared"
+
+export type FilingEscalationRolloverBreachWatchReason =
+  | "cap_crossed_without_attestation"
+  | "reaffirmation_note_stale"
+
+export type FilingEscalationRolloverBreachWatchRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  status: FilingEscalationRolloverBreachWatchStatus
+  reasons: FilingEscalationRolloverBreachWatchReason[]
+  linkedWaiverId: string | null
+  linkedAttestationId: string | null
+  linkedPolicyId: string | null
+  policyCapExpiresAt: number | null
+  waiverExpiresAt: number | null
+  attestationUpdatedAt: number | null
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -734,6 +793,9 @@ export class SpineStore {
   filingEscalationVarianceRemediations = new Map<string, FilingEscalationVarianceRemediationRow>()
   filingEscalationWaiverRolloverAttestations =
     new Map<string, FilingEscalationWaiverRolloverAttestationRow>()
+  filingEscalationRemediationExpiryDigests =
+    new Map<string, FilingEscalationRemediationExpiryDigestRow>()
+  filingEscalationRolloverBreachWatches = new Map<string, FilingEscalationRolloverBreachWatchRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
