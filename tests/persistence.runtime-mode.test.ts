@@ -889,6 +889,39 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(acknowledgeRolloverReaffirmationSla.status).toBe(200)
+      const assignClosureFollowup = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "fc7b0fe7-8fd9-4bcf-a252-c30661db5f1b",
+          },
+          body: JSON.stringify({
+            action: "assign_closure_followup",
+            actorId: "partner_a",
+            ownerId: "partner_a",
+            assigneeId: "partner_a",
+            note: "runtime closure follow-up assigned",
+          }),
+        })
+      )
+      expect(assignClosureFollowup.status).toBe(200)
+      const claimClosureFollowup = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f4ad4c56-8a80-4f5a-8ac4-9f58fa9888be",
+          },
+          body: JSON.stringify({
+            action: "claim_closure_followup",
+            actorId: "partner_a",
+            ownerId: "partner_a",
+            note: "runtime closure follow-up claimed",
+          }),
+        })
+      )
+      expect(claimClosureFollowup.status).toBe(200)
       const reaffirmRolloverAttestation = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -905,6 +938,22 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(reaffirmRolloverAttestation.status).toBe(200)
+      const resolveClosureFollowup = await filingsPost(
+        new Request("http://127.0.0.1/api/d4/filings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "6f3436ab-95b2-443f-a0d8-ef65c339ef38",
+          },
+          body: JSON.stringify({
+            action: "resolve_closure_followup",
+            actorId: "partner_a",
+            ownerId: "partner_a",
+            note: "runtime closure follow-up resolved after reaffirmation",
+          }),
+        })
+      )
+      expect([200, 422]).toContain(resolveClosureFollowup.status)
       const revokeWaiver = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -1010,6 +1059,8 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().filingEscalationRolloverBreachWatches = new Map()
       getRuntimeStore().filingEscalationRemediationLifecycles = new Map()
       getRuntimeStore().filingEscalationRolloverReaffirmationSlas = new Map()
+      getRuntimeStore().filingEscalationClosureComplianceDigests = new Map()
+      getRuntimeStore().filingEscalationClosureFollowupQueues = new Map()
       const rehydratedList = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?userId=associate_a&matterId=${matterId}&readiness=ready&limit=10&cursor=0`
@@ -1310,6 +1361,37 @@ describe("Runtime persistence mode", () => {
           (item) =>
             item.packageId === packageId &&
             ["within_sla", "cleared", "acknowledged"].includes(item.status)
+        )
+      ).toBe(true)
+      const rehydratedClosureCompliance = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_compliance_digests&userId=partner_a&ownerId=partner_a&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedClosureCompliance.status).toBe(200)
+      const rehydratedClosureComplianceJson = (await rehydratedClosureCompliance.json()) as {
+        items: Array<{ ownerId: string; status: string }>
+      }
+      expect(
+        rehydratedClosureComplianceJson.items.some(
+          (item) =>
+            item.ownerId === "partner_a" &&
+            ["open_alert", "acknowledged", "cleared"].includes(item.status)
+        )
+      ).toBe(true)
+      const rehydratedClosureQueue = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_followup_queue&userId=partner_a&ownerId=partner_a&limit=10&cursor=0`
+        )
+      )
+      expect(rehydratedClosureQueue.status).toBe(200)
+      const rehydratedClosureQueueJson = (await rehydratedClosureQueue.json()) as {
+        items: Array<{ ownerId: string; status: string }>
+      }
+      expect(
+        rehydratedClosureQueueJson.items.some(
+          (item) =>
+            item.ownerId === "partner_a" && ["open", "claimed", "resolved"].includes(item.status)
         )
       ).toBe(true)
       await setDoc(doc(ctx.firestore(), "filing_transport_execution_evidence", "transport:pkg_firmB:1"), {
@@ -1644,6 +1726,57 @@ describe("Runtime persistence mode", () => {
           updatedAt: Date.now(),
         }
       )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_closure_compliance_digests",
+          "closure-compliance:firmB:partner_b"
+        ),
+        {
+          id: "closure-compliance:firmB:partner_b",
+          firmId: "firmB",
+          ownerId: "partner_b",
+          classification: "internal",
+          status: "open_alert",
+          pendingLifecycleCount: 1,
+          breachedReaffirmationCount: 1,
+          linkedPackageIds: ["pkg_firmB"],
+          linkedLifecycleIds: ["remediation-lifecycle:remediation:pkg_firmB:1"],
+          linkedReaffirmationSlaIds: ["rollover-reaffirmation-sla:pkg_firmB"],
+          linkedFollowupQueueId: "closure-followup:closure-compliance:firmB:partner_b",
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          notes: ["firmB closure compliance digest row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+      )
+      await setDoc(
+        doc(
+          ctx.firestore(),
+          "filing_escalation_closure_followup_queue",
+          "closure-followup:closure-compliance:firmB:partner_b"
+        ),
+        {
+          id: "closure-followup:closure-compliance:firmB:partner_b",
+          firmId: "firmB",
+          ownerId: "partner_b",
+          digestId: "closure-compliance:firmB:partner_b",
+          classification: "internal",
+          status: "open",
+          packageIds: ["pkg_firmB"],
+          pendingLifecycleCount: 1,
+          breachedReaffirmationCount: 1,
+          assignedPartnerId: "partner_b",
+          claimedBy: null,
+          claimedAt: null,
+          resolvedBy: null,
+          resolvedAt: null,
+          resolutionNote: null,
+          notes: ["firmB closure follow-up queue row"],
+          updatedAt: Date.now(),
+        }
+      )
       const firmAScopeEvidence = await filingsGet(
         new Request(
           `http://127.0.0.1/api/d4/filings?view=transport_execution&userId=associate_a&matterId=${matterId}&limit=20&cursor=0`
@@ -1798,6 +1931,30 @@ describe("Runtime persistence mode", () => {
       expect(
         firmAScopeReaffirmationSlaJson.items.some((item) => item.packageId === "pkg_firmB")
       ).toBe(false)
+      const firmAScopeClosureCompliance = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_compliance_digests&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeClosureCompliance.status).toBe(200)
+      const firmAScopeClosureComplianceJson = (await firmAScopeClosureCompliance.json()) as {
+        items: Array<{ ownerId: string }>
+      }
+      expect(
+        firmAScopeClosureComplianceJson.items.some((item) => item.ownerId === "partner_b")
+      ).toBe(false)
+      const firmAScopeClosureQueue = await filingsGet(
+        new Request(
+          `http://127.0.0.1/api/d4/filings?view=closure_followup_queue&userId=associate_a&limit=20&cursor=0`
+        )
+      )
+      expect(firmAScopeClosureQueue.status).toBe(200)
+      const firmAScopeClosureQueueJson = (await firmAScopeClosureQueue.json()) as {
+        items: Array<{ ownerId: string }>
+      }
+      expect(firmAScopeClosureQueueJson.items.some((item) => item.ownerId === "partner_b")).toBe(
+        false
+      )
       getRuntimeStore().audit = []
       const auditView = await tenancyGet(
         new Request(
@@ -2061,6 +2218,29 @@ describe("Runtime persistence mode", () => {
             item.target === `rollover-reaffirmation-sla:${packageId}`
         )
       ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_closure_followup_assign" &&
+            item.target === "closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
+      expect(
+        auditViewJson.items.some(
+          (item) =>
+            item.action === "filing_closure_followup_claim" &&
+            item.target === "closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
+      if (resolveClosureFollowup.status === 200) {
+        expect(
+          auditViewJson.items.some(
+            (item) =>
+              item.action === "filing_closure_followup_resolve" &&
+              item.target === "closure-followup:closure-compliance:firmA:partner_a"
+          )
+        ).toBe(true)
+      }
 
       const dbPackage = await getDoc(doc(ctx.firestore(), "filing_packages", packageId))
       expect(dbPackage.exists()).toBe(true)
@@ -2281,6 +2461,30 @@ describe("Runtime persistence mode", () => {
             ["within_sla", "cleared", "acknowledged"].includes(
               String(entry.data()?.status ?? "")
             )
+        )
+      ).toBe(true)
+      const dbClosureComplianceDigests = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_closure_compliance_digests")
+      )
+      expect(
+        dbClosureComplianceDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === "closure-compliance:firmA:partner_a" &&
+            ["open_alert", "acknowledged", "cleared"].includes(
+              String(entry.data()?.status ?? "")
+            )
+        )
+      ).toBe(true)
+      const dbClosureFollowupQueues = await getDocs(
+        collection(ctx.firestore(), "filing_escalation_closure_followup_queue")
+      )
+      expect(
+        dbClosureFollowupQueues.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.id === "closure-followup:closure-compliance:firmA:partner_a" &&
+            ["open", "claimed", "resolved"].includes(String(entry.data()?.status ?? ""))
         )
       ).toBe(true)
     })

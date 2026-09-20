@@ -443,6 +443,7 @@ export type FilingEscalationWorkloadAlertReason =
   | "overloaded_owner"
   | "unassigned_breach"
   | "handoff_lag"
+  | "closure_compliance_pressure"
 
 export type FilingEscalationHandoffLagBucket =
   | "none"
@@ -753,6 +754,52 @@ export type FilingEscalationRolloverReaffirmationSlaRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureComplianceDigestStatus =
+  | "open_alert"
+  | "acknowledged"
+  | "cleared"
+
+export type FilingEscalationClosureComplianceDigestRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  classification: Classification
+  status: FilingEscalationClosureComplianceDigestStatus
+  pendingLifecycleCount: number
+  breachedReaffirmationCount: number
+  linkedPackageIds: string[]
+  linkedLifecycleIds: string[]
+  linkedReaffirmationSlaIds: string[]
+  linkedFollowupQueueId: string | null
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationClosureFollowupQueueStatus = "open" | "claimed" | "resolved"
+
+export type FilingEscalationClosureFollowupQueueRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  digestId: string
+  classification: Classification
+  status: FilingEscalationClosureFollowupQueueStatus
+  packageIds: string[]
+  pendingLifecycleCount: number
+  breachedReaffirmationCount: number
+  assignedPartnerId: string | null
+  claimedBy: string | null
+  claimedAt: number | null
+  resolvedBy: string | null
+  resolvedAt: number | null
+  resolutionNote: string | null
+  notes: string[]
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -865,6 +912,10 @@ export class SpineStore {
     new Map<string, FilingEscalationRemediationLifecycleRow>()
   filingEscalationRolloverReaffirmationSlas =
     new Map<string, FilingEscalationRolloverReaffirmationSlaRow>()
+  filingEscalationClosureComplianceDigests =
+    new Map<string, FilingEscalationClosureComplianceDigestRow>()
+  filingEscalationClosureFollowupQueues =
+    new Map<string, FilingEscalationClosureFollowupQueueRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

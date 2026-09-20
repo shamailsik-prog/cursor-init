@@ -54,6 +54,8 @@ const baseStore = {
   filingEscalationRolloverBreachWatches: new Map(),
   filingEscalationRemediationLifecycles: new Map(),
   filingEscalationRolloverReaffirmationSlas: new Map(),
+  filingEscalationClosureComplianceDigests: new Map(),
+  filingEscalationClosureFollowupQueues: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -695,6 +697,57 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationClosureComplianceDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          classification: "internal",
+          status: "open_alert",
+          pendingLifecycleCount: 1,
+          breachedReaffirmationCount: 1,
+          linkedPackageIds: ["pkg_repo"],
+          linkedLifecycleIds: ["remediation-lifecycle:remediation:pkg_repo:1"],
+          linkedReaffirmationSlaIds: ["rollover-reaffirmation-sla:pkg_repo"],
+          linkedFollowupQueueId: "closure-followup:closure-compliance:firmA:partner_a",
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          notes: ["repo closure compliance digest row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureFollowupQueues: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-followup:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          digestId: "closure-compliance:firmA:partner_a",
+          classification: "internal",
+          status: "open",
+          packageIds: ["pkg_repo"],
+          pendingLifecycleCount: 1,
+          breachedReaffirmationCount: 1,
+          assignedPartnerId: "partner_a",
+          claimedBy: null,
+          claimedAt: null,
+          resolvedBy: null,
+          resolvedAt: null,
+          resolutionNote: null,
+          notes: ["repo closure follow-up queue row"],
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -1068,6 +1121,32 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("rollover-reaffirmation-sla:pkg_repo")
+  })
+
+  it("filings closure compliance digest view GET uses repository filingEscalationClosureComplianceDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_compliance_digests&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("closure-compliance:firmA:partner_a")
+  })
+
+  it("filings closure follow-up queue view GET uses repository filingEscalationClosureFollowupQueues listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_followup_queue&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-followup:closure-compliance:firmA:partner_a"
+    )
   })
 
   it("clients route GET uses repository entities listByFirm", async () => {

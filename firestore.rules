@@ -157,6 +157,8 @@ service cloud.firestore {
     match /filing_escalation_rollover_breach_watches/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_escalation_remediation_lifecycles/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_escalation_rollover_reaffirmation_sla/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /filing_escalation_closure_compliance_digests/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /filing_escalation_closure_followup_queue/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /feature_flags/{id}  { allow read: if signedIn(); allow write: if false; }
     match /firm_feature_overrides/{id} { allow read: if sameFirm(); allow write: if false; }
 

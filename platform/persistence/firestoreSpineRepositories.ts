@@ -18,6 +18,8 @@ import type {
   FilingEscalationOwnerRotaRow,
   FilingEscalationPolicyBaselineRow,
   FilingEscalationBreachWaiverLedgerRow,
+  FilingEscalationClosureComplianceDigestRow,
+  FilingEscalationClosureFollowupQueueRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -634,6 +636,56 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationRolloverReaffirmationSlaRow)
           .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationClosureComplianceDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_compliance_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureComplianceDigestRow>(
+          db,
+          "filing_escalation_closure_compliance_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureComplianceDigestRow>(
+          db,
+          "filing_escalation_closure_compliance_digests",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_compliance_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureComplianceDigestRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+    },
+    filingEscalationClosureFollowupQueues: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_followup_queue", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureFollowupQueueRow>(
+          db,
+          "filing_escalation_closure_followup_queue",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureFollowupQueueRow>(
+          db,
+          "filing_escalation_closure_followup_queue",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_followup_queue"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureFollowupQueueRow)
+          .filter((row) => row.ownerId === ownerId)
       },
     },
     jobs: {

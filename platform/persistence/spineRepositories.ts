@@ -9,6 +9,8 @@ import type {
   FilingEscalationOwnerRotaRow,
   FilingEscalationPolicyBaselineRow,
   FilingEscalationBreachWaiverLedgerRow,
+  FilingEscalationClosureComplianceDigestRow,
+  FilingEscalationClosureFollowupQueueRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -237,6 +239,20 @@ export type FilingEscalationRolloverReaffirmationSlaRepository = {
   listByPackageId(packageId: string): Promise<FilingEscalationRolloverReaffirmationSlaRow[]>
 }
 
+export type FilingEscalationClosureComplianceDigestRepository = {
+  upsert(row: FilingEscalationClosureComplianceDigestRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureComplianceDigestRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureComplianceDigestRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureComplianceDigestRow[]>
+}
+
+export type FilingEscalationClosureFollowupQueueRepository = {
+  upsert(row: FilingEscalationClosureFollowupQueueRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureFollowupQueueRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureFollowupQueueRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureFollowupQueueRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -320,6 +336,8 @@ export type SpineRepositories = {
   filingEscalationRolloverBreachWatches: FilingEscalationRolloverBreachWatchRepository
   filingEscalationRemediationLifecycles: FilingEscalationRemediationLifecycleRepository
   filingEscalationRolloverReaffirmationSlas: FilingEscalationRolloverReaffirmationSlaRepository
+  filingEscalationClosureComplianceDigests: FilingEscalationClosureComplianceDigestRepository
+  filingEscalationClosureFollowupQueues: FilingEscalationClosureFollowupQueueRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -781,6 +799,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async listByPackageId(packageId) {
         return [...store.filingEscalationRolloverReaffirmationSlas.values()].filter(
           (row) => row.packageId === packageId
+        )
+      },
+    },
+    filingEscalationClosureComplianceDigests: {
+      async upsert(row) {
+        store.filingEscalationClosureComplianceDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureComplianceDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureComplianceDigests.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureComplianceDigests.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+    },
+    filingEscalationClosureFollowupQueues: {
+      async upsert(row) {
+        store.filingEscalationClosureFollowupQueues.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureFollowupQueues.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureFollowupQueues.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureFollowupQueues.values()].filter(
+          (row) => row.ownerId === ownerId
         )
       },
     },

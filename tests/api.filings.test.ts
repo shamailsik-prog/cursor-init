@@ -1082,6 +1082,48 @@ describe("GET/POST /api/d4/filings", () => {
     expect(remediationJson.result.remediationLifecycle.status).toBe("open")
     expect(remediationJson.result.policyVarianceDigest.status).toBe("snoozed")
 
+    const closureComplianceViewBefore = await get(
+      new URLSearchParams({
+        view: "closure_compliance_digests",
+        userId: "associate_a",
+        ownerId: "partner_a",
+        digestStatus: "open_alert",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureComplianceViewBefore.status).toBe(200)
+    const closureComplianceViewBeforeJson = (await closureComplianceViewBefore.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureComplianceViewBeforeJson.items.some(
+        (row) => row.ownerId === "partner_a" && row.status === "open_alert"
+      )
+    ).toBe(true)
+
+    const assignClosureFollowup = await post(
+      {
+        action: "assign_closure_followup",
+        actorId: "partner_a",
+        ownerId: "partner_a",
+        assigneeId: "partner_a",
+        note: "Assign closure follow-up to active escalation owner",
+      },
+      "5fcbcf14-af92-4126-8581-1f92ec84f894"
+    )
+    expect(assignClosureFollowup.status).toBe(200)
+    const claimClosureFollowup = await post(
+      {
+        action: "claim_closure_followup",
+        actorId: "partner_a",
+        ownerId: "partner_a",
+        note: "Claim closure follow-up for remediation lifecycle",
+      },
+      "bb28f7b4-0947-4f31-88ac-0283365a5d95"
+    )
+    expect(claimClosureFollowup.status).toBe(200)
+
     const acknowledgeRemediationExpiry = await post(
       {
         action: "acknowledge_remediation_expiry",
@@ -1140,6 +1182,17 @@ describe("GET/POST /api/d4/filings", () => {
       "accepted_risk_retired"
     )
     expect(closeRemediationJson.result.remediationExpiryDigest.status).toBe("cleared")
+
+    const resolveClosureFollowup = await post(
+      {
+        action: "resolve_closure_followup",
+        actorId: "partner_a",
+        ownerId: "partner_a",
+        note: "Resolved closure follow-up after lifecycle attestation",
+      },
+      "1df96cf6-842e-4c02-8d89-c3982ed1d575"
+    )
+    expect([200, 422]).toContain(resolveClosureFollowup.status)
 
     const waiverExpiryViewBefore = await get(
       new URLSearchParams({
@@ -1618,6 +1671,45 @@ describe("GET/POST /api/d4/filings", () => {
         (row) =>
           row.packageId === packageId &&
           ["within_sla", "cleared", "acknowledged"].includes(row.status)
+      )
+    ).toBe(true)
+
+    const closureComplianceView = await get(
+      new URLSearchParams({
+        view: "closure_compliance_digests",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureComplianceView.status).toBe(200)
+    const closureComplianceViewJson = (await closureComplianceView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureComplianceViewJson.items.some(
+        (row) =>
+          row.ownerId === "partner_a" && ["open_alert", "acknowledged", "cleared"].includes(row.status)
+      )
+    ).toBe(true)
+
+    const closureQueueView = await get(
+      new URLSearchParams({
+        view: "closure_followup_queue",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureQueueView.status).toBe(200)
+    const closureQueueViewJson = (await closureQueueView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureQueueViewJson.items.some(
+        (row) => row.ownerId === "partner_a" && ["open", "claimed", "resolved"].includes(row.status)
       )
     ).toBe(true)
   })
