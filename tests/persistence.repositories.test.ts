@@ -119,12 +119,16 @@ describe("Firestore repository adapters", () => {
         reasons: ["open_lineage_dispute", "delegated_boundary_divergence"],
         updatedAt: 105,
       })
-      const digest = await repos.tenancyLineageReconciliationDigests.get(
+      const tenancyDigest = await repos.tenancyLineageReconciliationDigests.get(
         "tenancy-lineage-digest:tsr_1"
       )
-      expect(digest?.status).toBe("needs_review")
-      const digestsByFirm = await repos.tenancyLineageReconciliationDigests.listByFirm("firmA")
-      expect(digestsByFirm.some((row) => row.lineageRootSessionReferenceId === "tsr_1")).toBe(true)
+      expect(tenancyDigest?.status).toBe("needs_review")
+      const tenancyDigestsByFirm = await repos.tenancyLineageReconciliationDigests.listByFirm(
+        "firmA"
+      )
+      expect(
+        tenancyDigestsByFirm.some((row) => row.lineageRootSessionReferenceId === "tsr_1")
+      ).toBe(true)
       await repos.committeeOutputs.create({
         id: "cbo_1",
         firmId: "firmA",

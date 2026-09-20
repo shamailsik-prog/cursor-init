@@ -563,20 +563,19 @@ describe("GET/POST /api/p5/tenancy", () => {
         view: "session_lineage_reconciliation_digests",
         actorId: "partner_a",
         firmId: "firmA",
-        status: "needs_review",
         limit: "10",
         cursor: "0",
       })
     )
     expect(digestView.status).toBe(200)
     const digestJson = (await digestView.json()) as {
-      items: Array<{ lineageRootSessionReferenceId: string }>
+      items: Array<{ lineageRootSessionReferenceId: string; status: string }>
     }
-    expect(
-      digestJson.items.some(
-        (row) => row.lineageRootSessionReferenceId === actorSessionJson.sessionReference.id
-      )
-    ).toBe(true)
+    const rootDigest = digestJson.items.find(
+      (row) => row.lineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+    )
+    expect(rootDigest).toBeDefined()
+    expect(rootDigest?.status).toBe("aligned")
 
     const resolvedDisputesView = await get(
       new URLSearchParams({

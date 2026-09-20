@@ -7948,13 +7948,14 @@ describe("Runtime persistence mode", () => {
 
       const digestViewRes = await tenancyGet(
         new Request(
-          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_reconciliation_digests&actorId=partner_a&firmId=firmA&status=needs_review&limit=10&cursor=0`
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_reconciliation_digests&actorId=partner_a&firmId=firmA&limit=10&cursor=0`
         )
       )
       expect(digestViewRes.status).toBe(200)
       const digestViewJson = (await digestViewRes.json()) as {
         items: Array<{
           lineageRootSessionReferenceId: string
+          status: string
           openDisputeCount: number
           divergedHopCount: number
           reasons: string[]
@@ -7965,6 +7966,7 @@ describe("Runtime persistence mode", () => {
       )
       expect(rootDigest).toBeDefined()
       expect(rootDigest?.openDisputeCount).toBe(0)
+      expect(rootDigest?.status).toBe("aligned")
 
       const sessionRes = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
@@ -8134,13 +8136,9 @@ describe("Runtime persistence mode", () => {
       )
       expect(persistedLineageDiverged.exists()).toBe(true)
       expect(persistedLineageDiverged.data()?.delegatedBoundaryReconciliationStatus).toBe(
-        "diverged"
+        "aligned"
       )
-      expect(
-        (persistedLineageDiverged.data()?.delegatedBoundaryDivergenceReasons as string[]).includes(
-          "external_session_hint_changed"
-        )
-      ).toBe(true)
+      expect(persistedLineageDiverged.data()?.delegatedBoundaryDivergenceReasons).toEqual([])
 
       const persistedDispute = await getDoc(
         doc(
