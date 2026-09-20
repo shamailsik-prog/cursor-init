@@ -8,7 +8,7 @@ Source of truth: forensic audit docs plus post-audit operator UI wiring on `main
 No audited sample phase qualifies as **DONE product**.
 
 - `backend_real`: PASS across sampled batches (#34-#37, #38-#47, #48-#59, #60-#69, #70-#73).
-- `frontend_real`: mixed; PASS for some surfaces via `/ops`, with #60-#69 and #70-#73 marked pending independent re-audit after follow-up `/ops` coverage lanes.
+- `frontend_real`: mixed; PASS for some surfaces via `/ops`, with #38-#47, #60-#69, and #70-#73 pending independent re-audit after follow-up `/ops` coverage lanes.
 - `transport_stub`: still true because filing transport remains `TODO(firm)` + `_stub` + `blocked_todo_firm`.
 
 Because `transport_stub=true`, final status remains **PARTIAL** for all sampled phases.
@@ -110,23 +110,23 @@ The gate fails when either condition is true:
 
 - `SHA on main`: PASS (`#38-#47` confirmed on `main` by audit).
 - `BACKEND_REAL`: PASS across sampled claims.
-- `FRONTEND_REAL`: mixed/PARTIAL (missing UI callers for portions of tenancy/clients/reporting/ops-reporting + partial committee-brain hydration path coverage).
+- `FRONTEND_REAL`: PENDING RE-AUDIT (follow-up `/ops` coverage lane now includes tenancy/clients/reporting/ops-reporting + follow-up source actions + committee list hydration path).
 - `stubs policy`: filing-linked slices remain capped by explicit transport stubs (`TODO(firm)`, `_stub`, `blocked_todo_firm`).
 
 ### PR matrix (Batch D)
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #38 | Follow-up source persistence | `f78abce` | Yes | PASS | FAIL (no UI for follow-up/intimation source actions) | true | PARTIAL | major |
+| #38 | Follow-up source persistence | `f78abce` | Yes | PASS | PENDING RE-AUDIT (follow-up source actions wired in `/ops`) | true | PARTIAL | major |
 | #39 | Membership persistence | `f93ec73` | Yes | PASS | PASS (`/ops` route family) | true | PARTIAL | blocker |
-| #40 | Tenancy membership | `2a411b5` | Yes | PASS | FAIL (no `/api/p5/tenancy` UI caller) | true | PARTIAL | major |
-| #41 | Tenancy audit | `e0ee204` | Yes | PASS | FAIL (no `/api/p5/tenancy` UI caller) | true | PARTIAL | major |
-| #42 | Entity/client persistence | `b895247` | Yes | PASS | FAIL (no `/api/d1/clients` UI caller) | true | PARTIAL | major |
-| #43 | Audit write-through non-tenancy | `9ed9195` | Yes | PASS | PARTIAL (most touched APIs in `/ops`, not `/api/d1/clients`) | true | PARTIAL | blocker |
-| #44 | Committee-brain output persistence | `a48f868` | Yes | PASS | PARTIAL (Foundation console POST only) | true | PARTIAL | major |
-| #45 | Matter/client reporting + search index | `2d2d0a8` | Yes | PASS | FAIL (no `/api/d1/reporting` UI caller) | true | PARTIAL | major |
+| #40 | Tenancy membership | `2a411b5` | Yes | PASS | PENDING RE-AUDIT (`/api/p5/tenancy` views/actions wired in `/ops`) | true | PARTIAL | major |
+| #41 | Tenancy audit | `e0ee204` | Yes | PASS | PENDING RE-AUDIT (`/api/p5/tenancy` audit view wired in `/ops`) | true | PARTIAL | major |
+| #42 | Entity/client persistence | `b895247` | Yes | PASS | PENDING RE-AUDIT (`/api/d1/clients` create/list/conflict-check wired in `/ops`) | true | PARTIAL | major |
+| #43 | Audit write-through non-tenancy | `9ed9195` | Yes | PASS | PENDING RE-AUDIT (`/api/d1/clients` + related surfaces now wired in `/ops`) | true | PARTIAL | blocker |
+| #44 | Committee-brain output persistence | `a48f868` | Yes | PASS | PENDING RE-AUDIT (committee write + list hydration path wired in `/ops`) | true | PARTIAL | major |
+| #45 | Matter/client reporting + search index | `2d2d0a8` | Yes | PASS | PENDING RE-AUDIT (`/api/d1/reporting` + `/api/d1/clients` wired in `/ops`) | true | PARTIAL | major |
 | #46 | Draft template analytics | `b896b60` | Yes | PASS | PASS (`/ops` templates + compose + drafts views) | true | PARTIAL | major |
-| #47 | Workflow ops reporting | `be269a9` | Yes | PASS | FAIL (no `/api/d2/ops-reporting` UI caller) | true | PARTIAL | major |
+| #47 | Workflow ops reporting | `be269a9` | Yes | PASS | PENDING RE-AUDIT (`/api/d2/ops-reporting` caller wired in `/ops`) | true | PARTIAL | major |
 
 ## Batch F ledger — PR #60-#69 (independent audit)
 

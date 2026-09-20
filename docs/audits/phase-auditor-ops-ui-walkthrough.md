@@ -156,6 +156,24 @@ Route under test: `/ops`
       - `view=closure_rebalance_safeguards`
       - `view=closure_adjudication_slo_debt_remediation`
       - `view=closure_rebalance_safeguard_expiry`
+27. Click `Batch D actions (/p5 tenancy + /d1 clients + source actions + committee write)`.
+    - Expected APIs:
+      - `POST /api/d1/matters` (`action=confirm_engagement`)
+      - `POST /api/d1/matters` (`action=record_case_number`)
+      - `POST /api/d1/clients` (`action=create`)
+      - `POST /api/d1/clients` (`action=conflict_check`)
+      - `POST /api/p5/tenancy` (`action=update_role`)
+      - `POST /api/p1/committee-brain` (persisted output seed for list hydration path)
+28. Click `Batch D views (/p5 tenancy + /d1 reporting + /d2 ops-reporting + committee list)`.
+    - Expected APIs:
+      - `GET /api/p5/tenancy?view=session`
+      - `GET /api/p5/tenancy?view=users`
+      - `GET /api/p5/tenancy?view=memberships`
+      - `GET /api/p5/tenancy?view=audit`
+      - `GET /api/d1/clients`
+      - `GET /api/d1/reporting`
+      - `GET /api/d2/ops-reporting`
+      - `GET /api/p1/committee-brain`
 
 ## Purpose
 
@@ -163,7 +181,7 @@ This walkthrough establishes `frontend_real` evidence for the audited API famili
 
 ## Expected completion state
 
-- API call log panel shows successful responses across steps 1-26 (for Batch E/F action lattices, some guarded operations may return deterministic 4xx statuses while still proving call-site wiring and fail-closed behavior).
+- API call log panel shows successful responses across steps 1-28 (for Batch E/F/D action lattices, some guarded operations may return deterministic 4xx statuses while still proving call-site wiring and fail-closed behavior).
 - No red error text is present in the UI.
 - Fixture ids are populated in the operator panel:
   - `matterId` after step 1
@@ -171,3 +189,4 @@ This walkthrough establishes `frontend_real` evidence for the audited API famili
   - `draftId` after step 5
   - `packageId` after step 9
   - `attestationId`, `disputeId`, and `adjudicationId` after step 14
+  - `clientEntityId` after step 27 (or resolved via client list fallback)
