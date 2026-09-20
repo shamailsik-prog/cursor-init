@@ -243,7 +243,7 @@ describe("POST/GET /api/d1/matters", () => {
         action: "create",
         actorId: "partner_a",
         firmId: "firmA",
-        clientId: "client_b",
+        clientId: "partner_b",
         title: "Invalid cross-firm client link",
         courtId: "SHC",
         classification: "internal",
@@ -253,6 +253,22 @@ describe("POST/GET /api/d1/matters", () => {
     expect(crossFirmClient.status).toBe(400)
     const json = (await crossFirmClient.json()) as { error: string }
     expect(json.error).toBe("cross-firm client denied")
+
+    const nonClientIdentity = await post(
+      {
+        action: "create",
+        actorId: "partner_a",
+        firmId: "firmA",
+        clientId: "associate_a",
+        title: "Invalid non-client identity link",
+        courtId: "SHC",
+        classification: "internal",
+      },
+      "ec8656a9-c58e-4acc-aa2e-37bb2b64188b"
+    )
+    expect(nonClientIdentity.status).toBe(400)
+    const nonClientJson = (await nonClientIdentity.json()) as { error: string }
+    expect(nonClientJson.error).toBe("clientId must reference a client user")
   })
 
   it("denies confirm and case-number writes for non-members", async () => {
