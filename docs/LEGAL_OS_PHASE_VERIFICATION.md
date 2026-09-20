@@ -1,4 +1,4 @@
-# Legal OS phase verification status (audited sample: PR #34-#37 and #70-#73)
+# Legal OS phase verification status (audited sample: PR #34-#37, #60-#69, and #70-#73)
 
 Last updated: 2026-09-20  
 Source of truth: forensic audit docs plus post-audit operator UI wiring on `main` lineage.
@@ -7,8 +7,8 @@ Source of truth: forensic audit docs plus post-audit operator UI wiring on `main
 
 No audited sample phase qualifies as **DONE product**.
 
-- `backend_real`: PASS across #34-#37 and #70-#73.
-- `frontend_real`: PASS for #34-#37 via `/ops`, but FAIL for #70-#73-specific governance actions/views.
+- `backend_real`: PASS across #34-#37, #60-#69, and #70-#73.
+- `frontend_real`: mixed. PASS for #34-#37 via `/ops`; #60-#69 is FAIL; #70-#73 remains pending independent re-audit confirmation after `/ops` wiring updates.
 - `transport_stub`: still true because filing transport remains `TODO(firm)` + `_stub` + `blocked_todo_firm`.
 
 Because `transport_stub=true`, final status remains **PARTIAL** for all sampled phases.
@@ -21,16 +21,26 @@ Because `transport_stub=true`, final status remains **PARTIAL** for all sampled 
 | #35 | Firestore write-path parity (documents/filings/workflow) | `3a60438` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
 | #36 | Workflow timeline + OCR job persistence | `aebefbb` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
 | #37 | Drafts + Court Ops persistence | `45cacaf` | Yes | PASS | PASS (`/ops`) | true | PARTIAL | major |
-| #70 | Debt-burndown forecasting + expiry attestation | `0e2d397` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added in fix lane) | true | PARTIAL | blocker |
-| #71 | Burndown recalibration + attestation queue orchestration | `ca564d8` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added in fix lane) | true | PARTIAL | blocker |
-| #72 | Burndown settlement + queue drain | `65b1615` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added in fix lane) | true | PARTIAL | blocker |
-| #73 | Settlement attestation + queue drain reconciliation | `3a1812c` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added in fix lane) | true | PARTIAL | blocker |
+| #60 | Remediation expiry + rollover breach watch | `72cc388` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #61 | Remediation lifecycle + reaffirmation SLA | `625ccc5` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #62 | Closure compliance digest + follow-up queue | `ab9cdca` | Yes | PASS | FAIL (`/ops` only reads digest; queue actions not covered yet) | true | PARTIAL | blocker |
+| #63 | Closure SLA windows + auto-assignment | `5b2bd06` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #64 | Closure attestation + SLA exception digest | `5f0651e` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #65 | Attestation dispute + exception expiry enforcement | `8733a06` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #66 | Exception adjudication + enforcement rebalance | `c598fc9` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #67 | Panel quorum + rebalance execution | `1a3dd2c` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #68 | Adjudication SLO + rebalance safeguards | `f563876` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #69 | SLO debt remediation + safeguard expiry | `15254ca` | Yes | PASS | FAIL (`/ops` does not execute this action family yet) | true | PARTIAL | blocker |
+| #70 | Debt-burndown forecasting + expiry attestation | `0e2d397` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added) | true | PARTIAL | blocker |
+| #71 | Burndown recalibration + attestation queue orchestration | `ca564d8` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added) | true | PARTIAL | blocker |
+| #72 | Burndown settlement + queue drain | `65b1615` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added) | true | PARTIAL | blocker |
+| #73 | Settlement attestation + queue drain reconciliation | `3a1812c` | Yes | PASS | PENDING RE-AUDIT (phase-specific `/ops` call sites added) | true | PARTIAL | blocker |
 
 ## Re-audit correction + current lane update (independent, 2026-09-20)
 
 - `/ops` is real and calls audited endpoint families (`/api/d1/documents`, `/api/d1/document-workflow`, `/api/d4/drafts`, `/api/d2/court-ops`, `/api/d4/filings`).
 - Re-audit #78 correctly flagged #70-#73 `frontend_real` as FAIL at that time.
-- This fix lane adds direct `/ops` call sites for #70-#73-specific actions/views:
+- The current fix lane adds direct `/ops` call sites for #70-#73-specific actions/views:
   - `set_closure_adjudication_debt_burndown_target`
   - `rebaseline_closure_adjudication_burndown_forecast`
   - `acknowledge_closure_burndown_settlement_drift`
@@ -97,6 +107,24 @@ The gate fails when either condition is true:
 
 - `SHA on main`: PASS (`#48-#59` confirmed on `main` by audit).
 - `BACKEND_REAL`: PASS/PARTIAL (transport-related items are internal parity only while external transport remains blocked).
+- `FRONTEND_REAL`: FAIL (pending dedicated operator/UI coverage lane).
+- `stubs policy`: PASS (explicit and fail-closed).
+
+## Batch F ledger — PR #60-#69 (independent audit)
+
+- Audit file: `docs/audits/phase-sample-60-69-findings.md`
+- Verdict: **NOT COMPLETE / PARTIAL only**
+- Date: 2026-09-20
+
+### Blocking findings
+
+1. `FRONTEND_REAL` is not met for this batch (`/ops` does not yet execute the full #60-#69 governance action lattice).
+2. Filing transport stubs remain active, so COMPLETE classification remains blocked by policy.
+
+### DoD summary
+
+- `SHA on main`: PASS (`#60-#69` confirmed on `main` by audit).
+- `BACKEND_REAL`: PASS.
 - `FRONTEND_REAL`: FAIL (pending dedicated operator/UI coverage lane).
 - `stubs policy`: PASS (explicit and fail-closed).
 
