@@ -41,6 +41,8 @@ import type {
   FilingEscalationClosureExpiryAttestationQueueRow,
   FilingEscalationClosureBurndownSettlementRow,
   FilingEscalationClosureExpiryAttestationQueueDrainRow,
+  FilingEscalationClosureSettlementAttestationRow,
+  FilingEscalationClosureQueueDrainReconciliationRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -1429,6 +1431,80 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_closure_expiry_attestation_queue_drain"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationClosureExpiryAttestationQueueDrainRow)
+          .filter((row) => row.rebalanceId === rebalanceId)
+      },
+    },
+    filingEscalationClosureSettlementAttestation: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_settlement_attestation", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureSettlementAttestationRow>(
+          db,
+          "filing_escalation_closure_settlement_attestation",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureSettlementAttestationRow>(
+          db,
+          "filing_escalation_closure_settlement_attestation",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_settlement_attestation"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSettlementAttestationRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_settlement_attestation"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSettlementAttestationRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByAdjudicationId(adjudicationId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_settlement_attestation"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSettlementAttestationRow)
+          .filter((row) => row.adjudicationId === adjudicationId)
+      },
+    },
+    filingEscalationClosureQueueDrainReconciliation: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_queue_drain_reconciliation", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureQueueDrainReconciliationRow>(
+          db,
+          "filing_escalation_closure_queue_drain_reconciliation",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureQueueDrainReconciliationRow>(
+          db,
+          "filing_escalation_closure_queue_drain_reconciliation",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_queue_drain_reconciliation"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureQueueDrainReconciliationRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_queue_drain_reconciliation"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureQueueDrainReconciliationRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByRebalanceId(rebalanceId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_queue_drain_reconciliation"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureQueueDrainReconciliationRow)
           .filter((row) => row.rebalanceId === rebalanceId)
       },
     },

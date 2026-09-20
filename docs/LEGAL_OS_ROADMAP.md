@@ -61,6 +61,10 @@ Snapshot basis: current `main` as of this branch cut plus repository contents in
 - Extended `app/api/d4/filings/route.ts` with settlement/drain governance actions/views: `acknowledge_closure_burndown_settlement_drift`, `attest_closure_burndown_settlement_target_lock`, `close_closure_burndown_rollback_resolution`, `escalate_closure_expiry_attestation_queue_handoff_timeout`, `attest_closure_expiry_attestation_queue_stale_reassignment`, `checkpoint_closure_expiry_attestation_queue_forced_drain_override`, `view=closure_burndown_settlement`, and `view=closure_expiry_attestation_queue_drain`.
 - Surfaced burndown settlement-latency and attestation-queue-drain throughput metrics in closure digest/queue/window payloads and workload severity forecasting for partner staffing and panel planning.
 - Extended API, route-wiring, repository, and runtime-mode coverage for settlement/drain transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
+- Added durable settlement-attestation + queue-drain-reconciliation governance entities across memory/Firestore repositories and `firestore.rules`.
+- Extended `app/api/d4/filings/route.ts` with settlement-attestation/reconciliation actions/views: `checkpoint_closure_settlement_post_resolution_verification`, `attest_closure_settlement_lock_release`, `safeguard_closure_settlement_dispute_reopen`, `attest_closure_queue_drain_forced_reconciliation`, `checkpoint_closure_queue_drain_reassignment_rollback`, `control_closure_queue_drain_timeout_reentry`, `view=closure_settlement_attestation`, and `view=closure_queue_drain_reconciliation`.
+- Surfaced settlement-verification lag and queue-drain reopen-pressure metrics in closure digest/queue/window payloads and workload severity forecasting for partner staffing and panel planning.
+- Extended API, route-wiring, repository, and runtime-mode coverage for settlement-attestation/reconciliation transitions, idempotent replay behavior, firm isolation, reset rehydration, and audit write-through.
 
 ## Recommended immediate slice (Phase B)
 
@@ -75,9 +79,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure settlement attestation + queue drain reconciliation governance parity**:
+Build **filing escalation closure settlement verification arbitration + queue drain reentry compliance parity**:
 
-1. Add settlement-attestation closure actions (post-resolution verification checkpoints, lock-release attestations, and dispute-reopen safeguards).
-2. Add queue-drain reconciliation governance actions (forced-drain reconciliation attestations, reassignment rollback checkpoints, and timeout re-entry controls).
-3. Surface settlement verification lag + drain-reconciliation reopen pressure metrics in closure/workload digests for partner staffing and panel planning projections.
-4. Extend emulator/runtime + route-wiring coverage for settlement-attestation/reconciliation transitions, including idempotent replay behavior and audit write-through.
+1. Add settlement-verification arbitration actions (verification override petitions, panel confirmation attestations, and reopen veto checkpoints).
+2. Add queue-reentry compliance actions (reentry exception attestations, timeout waiver checkpoints, and reconciliation resumption controls).
+3. Surface settlement arbitration lead-time + queue reentry exception debt metrics in closure/workload digests for partner staffing and panel planning projections.
+4. Extend emulator/runtime + route-wiring coverage for arbitration/reentry transitions, including idempotent replay behavior and audit write-through.
