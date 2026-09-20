@@ -104,12 +104,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/p5/tenancy` with `revoke_session_reference`, expiry/revocation enforcement on `view=session` replay, and stale-session denial when privilege snapshots drift from current user role/clearance.
 - Propagated privileged-boundary drift telemetry onto `tenant_update_role` audit metadata (`privilegedBoundaryDriftCount` and session-reference IDs) while preserving existing COMPLETE/stub + scaffold-claim guard behavior.
 - Extended API + runtime persistence tests for revocation idempotency replay, cross-firm revocation denial, stale-session rejection, and persisted drift/revocation provenance visibility.
+- Added durable tenancy session-lineage linkage fields (parent/root/depth) and delegated-boundary reconciliation metadata on session references + audit rows to track reissued reference hops without external IdP assertions.
+- Extended `/api/p5/tenancy` with `reissue_session_reference` and `view=session_lineage` surfaces, including paginated lineage traversal and delegated-divergence filtering for partner-admin tenancy operations.
+- Surfaced delegated-boundary reconciliation status/reason telemetry (`aligned`/`diverged`, compared parent reference, divergence reasons) on reissue payloads and tenancy audit traces.
+- Extended API + runtime persistence tests for lineage pagination traversal, delegated divergence visibility, reissue audit traceability, and Firestore rehydration parity after runtime resets.
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy session lineage attestation + delegated-boundary reconciliation scaffolding**:
+Build **tenancy lineage dispute attestation + reconciliation digest scaffolding**:
 
-1. Add session-lineage linkage (parent/child reference graph) so rotated/reissued references can be traced without external IdP assertions.
-2. Introduce delegated-boundary reconciliation metadata to flag when external-session hints and local role snapshots diverge across lineage hops.
-3. Extend tenancy route + runtime tests for lineage traversal pagination, delegated divergence visibility, and reconciliation audit traceability.
+1. Add lineage-dispute attestation records for contested reissue hops (reason, reviewer, disposition) with durable memory/Firestore persistence.
+2. Introduce tenancy reconciliation digest rollups per lineage root (open disputes, diverged hops, unresolved revocations) for partner-admin monitoring.
+3. Extend tenancy route + runtime tests for dispute lifecycle transitions, digest pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.

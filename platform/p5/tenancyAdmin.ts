@@ -11,6 +11,7 @@ import {
 const DEFAULT_SESSION_REFERENCE_TTL_MS = 8 * 60 * 60 * 1000
 
 export type TenancySessionReferenceState = "active" | "revoked" | "expired"
+export type TenancyDelegatedBoundaryReconciliationStatus = "aligned" | "diverged"
 
 function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
   const actor = store.users.get(actorId)
@@ -129,6 +130,10 @@ export function listFirmAudit(
     externalSessionId?: string | null
     privilegedBoundaryDriftCount?: number
     privilegedBoundaryDriftSessionReferenceIds?: string[]
+    delegatedBoundaryLineageRootSessionReferenceId?: string | null
+    delegatedBoundaryComparedSessionReferenceId?: string | null
+    delegatedBoundaryReconciliationStatus?: TenancyDelegatedBoundaryReconciliationStatus
+    delegatedBoundaryDivergenceReasons?: string[]
     at: number
   }>
   total: number
@@ -151,6 +156,13 @@ export function listFirmAudit(
       privilegedBoundaryDriftCount: entry.privilegedBoundaryDriftCount ?? 0,
       privilegedBoundaryDriftSessionReferenceIds:
         entry.privilegedBoundaryDriftSessionReferenceIds ?? [],
+      delegatedBoundaryLineageRootSessionReferenceId:
+        entry.delegatedBoundaryLineageRootSessionReferenceId ?? null,
+      delegatedBoundaryComparedSessionReferenceId:
+        entry.delegatedBoundaryComparedSessionReferenceId ?? null,
+      delegatedBoundaryReconciliationStatus:
+        entry.delegatedBoundaryReconciliationStatus ?? "aligned",
+      delegatedBoundaryDivergenceReasons: entry.delegatedBoundaryDivergenceReasons ?? [],
       at: entry.at ?? 0,
     }))
     .sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))
@@ -177,6 +189,10 @@ export function updateUserRole(
     externalSessionId?: string | null
     privilegedBoundaryDriftCount?: number
     privilegedBoundaryDriftSessionReferenceIds?: string[]
+    delegatedBoundaryLineageRootSessionReferenceId?: string | null
+    delegatedBoundaryComparedSessionReferenceId?: string | null
+    delegatedBoundaryReconciliationStatus?: TenancyDelegatedBoundaryReconciliationStatus
+    delegatedBoundaryDivergenceReasons?: string[]
   }
 ): { user: User; auditEntry: NonNullable<SpineStore["audit"][number]> } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
@@ -210,6 +226,12 @@ export function updateUserRole(
     externalSessionId: input.externalSessionId ?? null,
     privilegedBoundaryDriftCount: input.privilegedBoundaryDriftCount ?? 0,
     privilegedBoundaryDriftSessionReferenceIds: input.privilegedBoundaryDriftSessionReferenceIds ?? [],
+    delegatedBoundaryLineageRootSessionReferenceId:
+      input.delegatedBoundaryLineageRootSessionReferenceId ?? null,
+    delegatedBoundaryComparedSessionReferenceId:
+      input.delegatedBoundaryComparedSessionReferenceId ?? null,
+    delegatedBoundaryReconciliationStatus: input.delegatedBoundaryReconciliationStatus ?? "aligned",
+    delegatedBoundaryDivergenceReasons: input.delegatedBoundaryDivergenceReasons ?? [],
     at: Date.now(),
   } as const
   store.audit.push(auditEntry)
@@ -231,8 +253,16 @@ export function upsertTenancySessionReference(
     user: User
     sessionReferenceId?: string
     existing?: TenancySessionReferenceRow | null
+    parentSessionReferenceId?: string | null
+    lineageRootSessionReferenceId?: string
+    lineageDepth?: number
     authBoundary?: TenancyAuthBoundary
     externalSessionId?: string | null
+    delegatedBoundaryComparedSessionReferenceId?: string | null
+    delegatedBoundaryReconciliationStatus?: TenancyDelegatedBoundaryReconciliationStatus
+    delegatedBoundaryDivergenceReasons?: string[]
+    delegatedBoundaryReconciledAt?: number | null
+    delegatedBoundaryReconciledBy?: string | null
     now?: number
     ttlMs?: number | null
   }
@@ -252,16 +282,41 @@ export function upsertTenancySessionReference(
       ? rawExternalSessionId?.trim() || null
       : null
   const id = existing?.id ?? input.sessionReferenceId ?? store.id("tsr")
+  const lineageRootSessionReferenceId =
+    input.lineageRootSessionReferenceId ?? existing?.lineageRootSessionReferenceId ?? id
+  const lineageDepth = input.lineageDepth ?? existing?.lineageDepth ?? 0
   const expiresAt =
     input.ttlMs === null ? null : now + (input.ttlMs ?? DEFAULT_SESSION_REFERENCE_TTL_MS)
+  const delegatedBoundaryDivergenceReasons = input.delegatedBoundaryDivergenceReasons ?? []
+  const delegatedBoundaryReconciliationStatus =
+    input.delegatedBoundaryReconciliationStatus ??
+    existing?.delegatedBoundaryReconciliationStatus ??
+    (delegatedBoundaryDivergenceReasons.length > 0 ? "diverged" : "aligned")
   const row: TenancySessionReferenceRow = {
     id,
     firmId: input.user.firmId,
     userId: input.user.id,
     roleSnapshot: input.user.role,
     clearanceSnapshot: input.user.clearanceLevel,
+    parentSessionReferenceId: input.parentSessionReferenceId ?? existing?.parentSessionReferenceId ?? null,
+    lineageRootSessionReferenceId,
+    lineageDepth,
     authBoundary,
     externalSessionId,
+    delegatedBoundaryComparedSessionReferenceId:
+      input.delegatedBoundaryComparedSessionReferenceId ??
+      existing?.delegatedBoundaryComparedSessionReferenceId ??
+      null,
+    delegatedBoundaryReconciliationStatus,
+    delegatedBoundaryDivergenceReasons,
+    delegatedBoundaryReconciledAt:
+      input.delegatedBoundaryReconciledAt ??
+      existing?.delegatedBoundaryReconciledAt ??
+      (delegatedBoundaryDivergenceReasons.length > 0 ? now : null),
+    delegatedBoundaryReconciledBy:
+      input.delegatedBoundaryReconciledBy ??
+      existing?.delegatedBoundaryReconciledBy ??
+      (delegatedBoundaryDivergenceReasons.length > 0 ? input.user.id : null),
     issuedAt: existing?.issuedAt ?? now,
     lastSeenAt: now,
     expiresAt,
@@ -274,6 +329,100 @@ export function upsertTenancySessionReference(
   }
   store.tenancySessionReferences.set(row.id, row)
   return row
+}
+
+function computeDelegatedBoundaryDivergenceReasons(
+  parent: TenancySessionReferenceRow,
+  child: Pick<
+    TenancySessionReferenceRow,
+    "authBoundary" | "externalSessionId" | "roleSnapshot" | "clearanceSnapshot"
+  >
+): string[] {
+  const reasons: string[] = []
+  if (parent.authBoundary !== child.authBoundary) reasons.push("auth_boundary_changed")
+  if ((parent.externalSessionId ?? null) !== (child.externalSessionId ?? null)) {
+    reasons.push("external_session_hint_changed")
+  }
+  if (parent.roleSnapshot !== child.roleSnapshot) reasons.push("role_snapshot_changed")
+  if (parent.clearanceSnapshot !== child.clearanceSnapshot) {
+    reasons.push("clearance_snapshot_changed")
+  }
+  return reasons
+}
+
+export function reissueTenancySessionReference(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    parentSessionReferenceId: string
+    reason?: string
+    authBoundary?: TenancyAuthBoundary
+    externalSessionId?: string | null
+    now?: number
+    ttlMs?: number | null
+  }
+): {
+  reference: TenancySessionReferenceRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const parent = store.tenancySessionReferences.get(input.parentSessionReferenceId)
+  if (!parent) throw new Error("unknown session reference")
+  if (parent.firmId !== input.firmId) throw new Error("cross-firm session reference denied")
+  if (getTenancySessionReferenceState(parent, input.now) !== "active") {
+    throw new Error("session reference is not active")
+  }
+  const user = store.users.get(parent.userId)
+  if (!user) throw new Error("unknown session reference user")
+  const nextAuthBoundary = input.authBoundary ?? parent.authBoundary
+  const nextExternalSessionId =
+    nextAuthBoundary === "external_session_hint"
+      ? (input.externalSessionId ?? parent.externalSessionId ?? null)
+      : null
+  const divergenceReasons = computeDelegatedBoundaryDivergenceReasons(parent, {
+    authBoundary: nextAuthBoundary,
+    externalSessionId: nextExternalSessionId,
+    roleSnapshot: user.role,
+    clearanceSnapshot: user.clearanceLevel,
+  })
+  const now = input.now ?? Date.now()
+  const reference = upsertTenancySessionReference(store, {
+    user,
+    parentSessionReferenceId: parent.id,
+    lineageRootSessionReferenceId: parent.lineageRootSessionReferenceId || parent.id,
+    lineageDepth: (parent.lineageDepth ?? 0) + 1,
+    authBoundary: nextAuthBoundary,
+    externalSessionId: nextExternalSessionId,
+    delegatedBoundaryComparedSessionReferenceId: parent.id,
+    delegatedBoundaryReconciliationStatus: divergenceReasons.length > 0 ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: divergenceReasons,
+    delegatedBoundaryReconciledAt: now,
+    delegatedBoundaryReconciledBy: actor.id,
+    now,
+    ttlMs: input.ttlMs,
+  })
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_reissue_session_reference",
+    actorId: actor.id,
+    target: user.id,
+    classification: actor.clearanceLevel,
+    reason: input.reason,
+    authBoundary: reference.authBoundary,
+    sessionReferenceId: reference.id,
+    externalSessionId: reference.externalSessionId,
+    privilegedBoundaryDriftCount: 0,
+    privilegedBoundaryDriftSessionReferenceIds: [],
+    delegatedBoundaryLineageRootSessionReferenceId: reference.lineageRootSessionReferenceId,
+    delegatedBoundaryComparedSessionReferenceId: parent.id,
+    delegatedBoundaryReconciliationStatus: reference.delegatedBoundaryReconciliationStatus,
+    delegatedBoundaryDivergenceReasons: reference.delegatedBoundaryDivergenceReasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { reference, auditEntry }
 }
 
 export function revokeTenancySessionReference(
@@ -378,6 +527,47 @@ export function listFirmSessionReferences(
     .filter((row) => row.firmId === firmId)
     .filter((row) => (userId ? row.userId === userId : true))
     .sort((a, b) => b.lastSeenAt - a.lastSeenAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page.map((row) => ({
+      ...row,
+      state: getTenancySessionReferenceState(row, now),
+    })),
+    total: rows.length,
+    nextCursor,
+  }
+}
+
+export function listSessionReferenceLineage(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  rootSessionReferenceId: string,
+  delegatedDivergedOnly: boolean,
+  limit: number,
+  cursor: number
+): {
+  items: Array<TenancySessionReferenceRow & { state: TenancySessionReferenceState }>
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const root = store.tenancySessionReferences.get(rootSessionReferenceId)
+  if (!root) throw new Error("unknown root session reference")
+  if (root.firmId !== firmId) throw new Error("cross-firm session reference denied")
+  const now = Date.now()
+  const rows = [...store.tenancySessionReferences.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) => (row.lineageRootSessionReferenceId || row.id) === rootSessionReferenceId)
+    .filter((row) =>
+      delegatedDivergedOnly ? row.delegatedBoundaryReconciliationStatus === "diverged" : true
+    )
+    .sort((a, b) => {
+      if (a.lineageDepth !== b.lineageDepth) return a.lineageDepth - b.lineageDepth
+      if (a.issuedAt !== b.issuedAt) return a.issuedAt - b.issuedAt
+      return a.id.localeCompare(b.id)
+    })
   const page = rows.slice(cursor, cursor + limit)
   const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
   return {

@@ -104,6 +104,10 @@ export type AuditEntry = {
   externalSessionId?: string | null
   privilegedBoundaryDriftCount?: number
   privilegedBoundaryDriftSessionReferenceIds?: string[]
+  delegatedBoundaryLineageRootSessionReferenceId?: string | null
+  delegatedBoundaryComparedSessionReferenceId?: string | null
+  delegatedBoundaryReconciliationStatus?: "aligned" | "diverged"
+  delegatedBoundaryDivergenceReasons?: string[]
   at?: number
 }
 
@@ -115,8 +119,16 @@ export type TenancySessionReferenceRow = {
   userId: string
   roleSnapshot: Role
   clearanceSnapshot: Classification
+  parentSessionReferenceId: string | null
+  lineageRootSessionReferenceId: string
+  lineageDepth: number
   authBoundary: TenancyAuthBoundary
   externalSessionId: string | null
+  delegatedBoundaryComparedSessionReferenceId: string | null
+  delegatedBoundaryReconciliationStatus: "aligned" | "diverged"
+  delegatedBoundaryDivergenceReasons: string[]
+  delegatedBoundaryReconciledAt: number | null
+  delegatedBoundaryReconciledBy: string | null
   issuedAt: number
   lastSeenAt: number
   expiresAt: number | null
