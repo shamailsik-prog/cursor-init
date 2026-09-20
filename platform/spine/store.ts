@@ -581,6 +581,54 @@ export type FilingEscalationWaiverExpiryDigestRow = {
   updatedAt: number
 }
 
+export type FilingEscalationVarianceRemediationDecision =
+  | "accepted_risk"
+  | "rollback"
+  | "temporary_override"
+
+export type FilingEscalationVarianceRemediationStatus = "active" | "expired" | "superseded"
+
+export type FilingEscalationVarianceRemediationRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  decision: FilingEscalationVarianceRemediationDecision
+  status: FilingEscalationVarianceRemediationStatus
+  linkedPolicyVarianceDigestId: string | null
+  linkedPolicyId: string | null
+  justification: string
+  decidedBy: string
+  decidedAt: number
+  expiresAt: number
+  secondApproverId: string | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationWaiverRolloverStatus = "attested" | "not_required"
+
+export type FilingEscalationWaiverRolloverAttestationRow = {
+  id: string
+  firmId: string
+  packageId: string
+  matterId: string
+  classification: Classification
+  waiverId: string
+  status: FilingEscalationWaiverRolloverStatus
+  extensionHours: number
+  previousExpiresAt: number
+  newExpiresAt: number
+  policyCapExpiresAt: number
+  attestedBy: string
+  secondApproverId: string
+  justification: string
+  attestedAt: number
+  notes: string[]
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -683,6 +731,9 @@ export class SpineStore {
   filingEscalationBreachWaivers = new Map<string, FilingEscalationBreachWaiverLedgerRow>()
   filingEscalationPolicyVarianceDigests = new Map<string, FilingEscalationPolicyVarianceDigestRow>()
   filingEscalationWaiverExpiryDigests = new Map<string, FilingEscalationWaiverExpiryDigestRow>()
+  filingEscalationVarianceRemediations = new Map<string, FilingEscalationVarianceRemediationRow>()
+  filingEscalationWaiverRolloverAttestations =
+    new Map<string, FilingEscalationWaiverRolloverAttestationRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

@@ -659,6 +659,57 @@ describe("Firestore repository adapters", () => {
       expect(expiryByFirm.some((row) => row.id === "waiver-expiry:pkg_1")).toBe(true)
       const expiryByPackage = await repos.filingEscalationWaiverExpiryDigests.listByPackageId("pkg_1")
       expect(expiryByPackage.some((row) => row.id === "waiver-expiry:pkg_1")).toBe(true)
+      await repos.filingEscalationVarianceRemediations.upsert({
+        id: "remediation:pkg_1:1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        decision: "temporary_override",
+        status: "active",
+        linkedPolicyVarianceDigestId: "policy-variance:pkg_1",
+        linkedPolicyId: "policy:pkg_1:override",
+        justification: "Override accepted for constrained partner coverage window",
+        decidedBy: "partner_a",
+        decidedAt: 42,
+        expiresAt: 48,
+        secondApproverId: "partner_b",
+        notes: ["remediation recorded"],
+        updatedAt: 42,
+      })
+      const remediation = await repos.filingEscalationVarianceRemediations.get("remediation:pkg_1:1")
+      expect(remediation?.decision).toBe("temporary_override")
+      const remediationsByFirm = await repos.filingEscalationVarianceRemediations.listByFirm("firmA")
+      expect(remediationsByFirm.some((row) => row.id === "remediation:pkg_1:1")).toBe(true)
+      const remediationsByPackage =
+        await repos.filingEscalationVarianceRemediations.listByPackageId("pkg_1")
+      expect(remediationsByPackage.some((row) => row.id === "remediation:pkg_1:1")).toBe(true)
+      await repos.filingEscalationWaiverRolloverAttestations.upsert({
+        id: "rollover:pkg_1:1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        waiverId: "waiver:pkg_1:1",
+        status: "attested",
+        extensionHours: 8,
+        previousExpiresAt: 43,
+        newExpiresAt: 51,
+        policyCapExpiresAt: 47,
+        attestedBy: "partner_a",
+        secondApproverId: "partner_b",
+        justification: "Baseline cap exceeded; second approver attested controlled extension.",
+        attestedAt: 44,
+        notes: ["rollover attested"],
+        updatedAt: 44,
+      })
+      const rollover = await repos.filingEscalationWaiverRolloverAttestations.get("rollover:pkg_1:1")
+      expect(rollover?.status).toBe("attested")
+      const rolloverByFirm = await repos.filingEscalationWaiverRolloverAttestations.listByFirm("firmA")
+      expect(rolloverByFirm.some((row) => row.id === "rollover:pkg_1:1")).toBe(true)
+      const rolloverByPackage =
+        await repos.filingEscalationWaiverRolloverAttestations.listByPackageId("pkg_1")
+      expect(rolloverByPackage.some((row) => row.id === "rollover:pkg_1:1")).toBe(true)
     })
   })
 })
