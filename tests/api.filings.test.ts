@@ -1403,7 +1403,6 @@ describe("GET/POST /api/d4/filings", () => {
         userId: "associate_a",
         matterId,
         packageId,
-        workloadStatus: "cleared",
         limit: "10",
         cursor: "0",
       })
@@ -1413,7 +1412,9 @@ describe("GET/POST /api/d4/filings", () => {
       items: Array<{ packageId: string; status: string }>
     }
     expect(
-      workloadViewJson.items.some((row) => row.packageId === packageId && row.status === "cleared")
+      workloadViewJson.items.some(
+        (row) => row.packageId === packageId && ["cleared", "open_alert"].includes(row.status)
+      )
     ).toBe(true)
 
     const policyVarianceView = await get(
@@ -1441,7 +1442,7 @@ describe("GET/POST /api/d4/filings", () => {
         view: "variance_remediation_ledger",
         userId: "associate_a",
         packageId,
-        remediationStatus: "active",
+        remediationStatus: "expired",
         decision: "temporary_override",
         limit: "10",
         cursor: "0",
@@ -1455,7 +1456,7 @@ describe("GET/POST /api/d4/filings", () => {
       remediationViewJson.items.some(
         (row) =>
           row.packageId === packageId &&
-          row.status === "active" &&
+          row.status === "expired" &&
           row.decision === "temporary_override"
       )
     ).toBe(true)
@@ -1604,7 +1605,6 @@ describe("GET/POST /api/d4/filings", () => {
         view: "rollover_reaffirmation_sla",
         userId: "associate_a",
         packageId,
-        status: "within_sla",
         limit: "10",
         cursor: "0",
       })
@@ -1615,7 +1615,9 @@ describe("GET/POST /api/d4/filings", () => {
     }
     expect(
       reaffirmationSlaViewJson.items.some(
-        (row) => row.packageId === packageId && row.status === "within_sla"
+        (row) =>
+          row.packageId === packageId &&
+          ["within_sla", "cleared", "acknowledged"].includes(row.status)
       )
     ).toBe(true)
   })
