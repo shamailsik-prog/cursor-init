@@ -1309,6 +1309,68 @@ export type FilingEscalationClosureSafeguardExpiryAttestationRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureBurndownRecalibrationStatus =
+  | "recalibration_pending"
+  | "confidence_band_overridden"
+  | "checkpoint_rollback_noted"
+  | "recalibration_settled"
+
+export type FilingEscalationClosureBurndownRecalibrationRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  adjudicationId: string
+  burndownId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureBurndownRecalibrationStatus
+  rebaselineTargetAt: number | null
+  confidenceBandLowerHours: number | null
+  confidenceBandUpperHours: number | null
+  confidenceOverriddenBy: string | null
+  confidenceOverriddenAt: number | null
+  rollbackNotedBy: string | null
+  rollbackNotedAt: number | null
+  rollbackReason: string | null
+  settledBy: string | null
+  settledAt: number | null
+  confidenceDriftHours: number
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationClosureExpiryAttestationQueueStatus =
+  | "queue_open"
+  | "queue_triaged"
+  | "handoff_attested"
+  | "queue_auto_drained"
+
+export type FilingEscalationClosureExpiryAttestationQueueRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  rebalanceId: string
+  attestationId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureExpiryAttestationQueueStatus
+  triagedBy: string | null
+  triagedAt: number | null
+  handoffAttestedBy: string | null
+  handoffAttestedAt: number | null
+  handoffToOwnerId: string | null
+  autoDrainCheckpointAt: number | null
+  queueAgingHours: number
+  openExceptionCount: number
+  reconciliationCarryoverNote: string | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -1459,6 +1521,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureAdjudicationDebtBurndownRow>()
   filingEscalationClosureSafeguardExpiryAttestations =
     new Map<string, FilingEscalationClosureSafeguardExpiryAttestationRow>()
+  filingEscalationClosureBurndownRecalibration =
+    new Map<string, FilingEscalationClosureBurndownRecalibrationRow>()
+  filingEscalationClosureExpiryAttestationQueue =
+    new Map<string, FilingEscalationClosureExpiryAttestationQueueRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

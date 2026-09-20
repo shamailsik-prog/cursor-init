@@ -37,6 +37,8 @@ import type {
   FilingEscalationClosureRebalanceSafeguardExpiryRow,
   FilingEscalationClosureAdjudicationDebtBurndownRow,
   FilingEscalationClosureSafeguardExpiryAttestationRow,
+  FilingEscalationClosureBurndownRecalibrationRow,
+  FilingEscalationClosureExpiryAttestationQueueRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -1277,6 +1279,80 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_closure_safeguard_expiry_attestations"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationClosureSafeguardExpiryAttestationRow)
+          .filter((row) => row.rebalanceId === rebalanceId)
+      },
+    },
+    filingEscalationClosureBurndownRecalibration: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_burndown_recalibration", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureBurndownRecalibrationRow>(
+          db,
+          "filing_escalation_closure_burndown_recalibration",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureBurndownRecalibrationRow>(
+          db,
+          "filing_escalation_closure_burndown_recalibration",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_burndown_recalibration"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureBurndownRecalibrationRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_burndown_recalibration"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureBurndownRecalibrationRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByAdjudicationId(adjudicationId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_burndown_recalibration"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureBurndownRecalibrationRow)
+          .filter((row) => row.adjudicationId === adjudicationId)
+      },
+    },
+    filingEscalationClosureExpiryAttestationQueue: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_expiry_attestation_queue", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureExpiryAttestationQueueRow>(
+          db,
+          "filing_escalation_closure_expiry_attestation_queue",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureExpiryAttestationQueueRow>(
+          db,
+          "filing_escalation_closure_expiry_attestation_queue",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_expiry_attestation_queue"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureExpiryAttestationQueueRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_expiry_attestation_queue"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureExpiryAttestationQueueRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByRebalanceId(rebalanceId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_expiry_attestation_queue"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureExpiryAttestationQueueRow)
           .filter((row) => row.rebalanceId === rebalanceId)
       },
     },

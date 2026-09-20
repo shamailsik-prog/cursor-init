@@ -1497,6 +1497,40 @@ describe("GET/POST /api/d4/filings", () => {
         "bbf5f2c0-5b5f-4d43-94f1-7e1f2ca0f64a"
       )
       expect([200, 404, 422]).toContain(checkpointTierNormalization.status)
+      const rebaselineBurndownForecast = await post(
+        {
+          action: "rebaseline_closure_adjudication_burndown_forecast",
+          actorId: "partner_a",
+          adjudicationId,
+          targetHours: 4,
+          note: "Rebaseline burndown forecast window for staffing projection refresh",
+        },
+        "e34ad2bf-7ff0-4a9b-adcf-84f9b7baf47a"
+      )
+      expect([200, 404, 422]).toContain(rebaselineBurndownForecast.status)
+      const overrideBurndownConfidenceBand = await post(
+        {
+          action: "override_closure_adjudication_burndown_confidence_band",
+          actorId: "partner_a",
+          adjudicationId,
+          lowerHours: 1,
+          upperHours: 6,
+          note: "Override confidence band after recalibration checkpoint drift review",
+        },
+        "3397516b-af77-4f9d-ae49-b666c2d09ec0"
+      )
+      expect([200, 404, 422]).toContain(overrideBurndownConfidenceBand.status)
+      const annotateBurndownRollback = await post(
+        {
+          action: "annotate_closure_adjudication_burndown_checkpoint_rollback",
+          actorId: "partner_a",
+          adjudicationId,
+          rollbackReason: "Rollback checkpoint due to fresh panel evidence churn",
+          note: "Annotate rollback reasoning for burndown checkpoint governance",
+        },
+        "a20adbaa-a4cb-4708-aa9e-e74b7f5cc9f0"
+      )
+      expect([200, 404, 422]).toContain(annotateBurndownRollback.status)
     }
     if (disputeId) {
       const resolveClosureDispute = await post(
@@ -1657,6 +1691,38 @@ describe("GET/POST /api/d4/filings", () => {
         "dbe4a3c4-b760-46f4-933a-d28435055907"
       )
       expect([200, 404, 422]).toContain(reconcileExpiryOverride.status)
+      const triageExpiryAttestationQueue = await post(
+        {
+          action: "triage_closure_safeguard_expiry_attestation_queue",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Triage expiry attestation exception queue item",
+        },
+        "2af24eb9-e83f-485f-a4a3-6b1e556f40f3"
+      )
+      expect([200, 404, 422]).toContain(triageExpiryAttestationQueue.status)
+      const attestExpiryQueueHandoff = await post(
+        {
+          action: "attest_closure_safeguard_expiry_queue_handoff",
+          actorId: "partner_a",
+          rebalanceId,
+          handoffToOwnerId: "partner_b",
+          carryoverNote: "handoff includes override reconciliation carryover",
+          note: "Attest queue handoff for reviewer transfer",
+        },
+        "2ed2fa74-f8d8-4135-a0b9-56122bdd57cb"
+      )
+      expect([200, 404, 422]).toContain(attestExpiryQueueHandoff.status)
+      const checkpointExpiryQueueAutoDrain = await post(
+        {
+          action: "checkpoint_closure_safeguard_expiry_queue_auto_drain",
+          actorId: "partner_a",
+          rebalanceId,
+          note: "Record stale queue auto-drain checkpoint",
+        },
+        "2f84da37-88ca-4f4d-8444-f6efdaed55c2"
+      )
+      expect([200, 404, 422]).toContain(checkpointExpiryQueueAutoDrain.status)
       if (executeOwnerTransfer.status === 200) {
         const executeOwnerTransferReplay = await post(
           executeOwnerTransferPayload,
@@ -2217,6 +2283,11 @@ describe("GET/POST /api/d4/filings", () => {
         closureAdjudicationDebtBurndownVelocityPerDay?: number
         closureSafeguardExpiryAttestationStatus?: string
         closureSafeguardExpiryAttestationBacklogHours?: number
+        closureBurndownRecalibrationStatus?: string
+        closureBurndownConfidenceDriftHours?: number
+        closureExpiryAttestationQueueStatus?: string
+        closureExpiryAttestationQueueAgingHours?: number
+        closureExpiryAttestationQueueOpenExceptions?: number
         closureCriticalPath?: boolean
       }>
     }
@@ -2360,6 +2431,31 @@ describe("GET/POST /api/d4/filings", () => {
             row.closureSafeguardExpiryAttestationBacklogHours === undefined ||
             (Number.isFinite(row.closureSafeguardExpiryAttestationBacklogHours) &&
               row.closureSafeguardExpiryAttestationBacklogHours >= 0)
+          const burndownRecalibrationStatusOk =
+            row.closureBurndownRecalibrationStatus === undefined ||
+            [
+              "recalibration_pending",
+              "confidence_band_overridden",
+              "checkpoint_rollback_noted",
+              "recalibration_settled",
+            ].includes(row.closureBurndownRecalibrationStatus)
+          const burndownDriftOk =
+            row.closureBurndownConfidenceDriftHours === undefined ||
+            (Number.isFinite(row.closureBurndownConfidenceDriftHours) &&
+              row.closureBurndownConfidenceDriftHours >= 0)
+          const expiryQueueStatusOk =
+            row.closureExpiryAttestationQueueStatus === undefined ||
+            ["queue_open", "queue_triaged", "handoff_attested", "queue_auto_drained"].includes(
+              row.closureExpiryAttestationQueueStatus
+            )
+          const expiryQueueAgingOk =
+            row.closureExpiryAttestationQueueAgingHours === undefined ||
+            (Number.isFinite(row.closureExpiryAttestationQueueAgingHours) &&
+              row.closureExpiryAttestationQueueAgingHours >= 0)
+          const expiryQueueOpenExceptionsOk =
+            row.closureExpiryAttestationQueueOpenExceptions === undefined ||
+            (Number.isFinite(row.closureExpiryAttestationQueueOpenExceptions) &&
+              row.closureExpiryAttestationQueueOpenExceptions >= 0)
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -2393,6 +2489,11 @@ describe("GET/POST /api/d4/filings", () => {
             debtBurndownVelocityOk &&
             safeguardAttestationStatusOk &&
             safeguardAttestationBacklogOk &&
+            burndownRecalibrationStatusOk &&
+            burndownDriftOk &&
+            expiryQueueStatusOk &&
+            expiryQueueAgingOk &&
+            expiryQueueOpenExceptionsOk &&
             criticalPathOk
           )
         }
@@ -2776,6 +2877,47 @@ describe("GET/POST /api/d4/filings", () => {
           "attestation_overdue",
           "attestation_reconciled",
         ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureBurndownRecalibrationView = await get(
+      new URLSearchParams({
+        view: "closure_burndown_recalibration",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureBurndownRecalibrationView.status).toBe(200)
+    const closureBurndownRecalibrationViewJson = (await closureBurndownRecalibrationView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureBurndownRecalibrationViewJson.items.every((row) =>
+        [
+          "recalibration_pending",
+          "confidence_band_overridden",
+          "checkpoint_rollback_noted",
+          "recalibration_settled",
+        ].includes(row.status)
+      )
+    ).toBe(true)
+    const closureExpiryAttestationQueueView = await get(
+      new URLSearchParams({
+        view: "closure_expiry_attestation_queue",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureExpiryAttestationQueueView.status).toBe(200)
+    const closureExpiryAttestationQueueViewJson = (await closureExpiryAttestationQueueView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureExpiryAttestationQueueViewJson.items.every((row) =>
+        ["queue_open", "queue_triaged", "handoff_attested", "queue_auto_drained"].includes(row.status)
       )
     ).toBe(true)
   })

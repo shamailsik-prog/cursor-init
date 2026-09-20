@@ -1441,6 +1441,71 @@ describe("Firestore repository adapters", () => {
       const closureSafeguardAttestationByFirm =
         await repos.filingEscalationClosureSafeguardExpiryAttestations.listByFirm("firmA")
       expect(closureSafeguardAttestationByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureBurndownRecalibration.upsert({
+        id: "closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        adjudicationId:
+          "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        burndownId:
+          "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "confidence_band_overridden",
+        rebaselineTargetAt: 76,
+        confidenceBandLowerHours: 1,
+        confidenceBandUpperHours: 4,
+        confidenceOverriddenBy: "partner_a",
+        confidenceOverriddenAt: 76,
+        rollbackNotedBy: null,
+        rollbackNotedAt: null,
+        rollbackReason: null,
+        settledBy: null,
+        settledAt: null,
+        confidenceDriftHours: 1,
+        notes: ["confidence band overridden for recalibration"],
+        lastEvaluatedAt: 76,
+        updatedAt: 76,
+      })
+      const closureBurndownRecalibration = await repos.filingEscalationClosureBurndownRecalibration.get(
+        "closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureBurndownRecalibration?.status).toBe("confidence_band_overridden")
+      const closureBurndownRecalibrationByFirm =
+        await repos.filingEscalationClosureBurndownRecalibration.listByFirm("firmA")
+      expect(closureBurndownRecalibrationByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureExpiryAttestationQueue.upsert({
+        id: "closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        attestationId:
+          "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "handoff_attested",
+        triagedBy: "partner_a",
+        triagedAt: 77,
+        handoffAttestedBy: "partner_a",
+        handoffAttestedAt: 78,
+        handoffToOwnerId: "partner_b",
+        autoDrainCheckpointAt: null,
+        queueAgingHours: 2,
+        openExceptionCount: 1,
+        reconciliationCarryoverNote: "handoff carryover reconciliation note",
+        notes: ["queue handoff attested"],
+        lastEvaluatedAt: 78,
+        updatedAt: 78,
+      })
+      const closureExpiryAttestationQueue = await repos.filingEscalationClosureExpiryAttestationQueue.get(
+        "closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureExpiryAttestationQueue?.status).toBe("handoff_attested")
+      const closureExpiryAttestationQueueByFirm =
+        await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm("firmA")
+      expect(closureExpiryAttestationQueueByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   })
 })
