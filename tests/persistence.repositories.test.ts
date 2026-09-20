@@ -1259,6 +1259,64 @@ describe("Firestore repository adapters", () => {
         "firmA"
       )
       expect(closureExecutionByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureAdjudicationSlo.upsert({
+        id: "closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        adjudicationId:
+          "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "breach_open",
+        escalationTier: "tier_1_partner_watch",
+        baseVerdictDueAt: 62,
+        effectiveVerdictDueAt: 63,
+        extensionCount: 1,
+        lastExtendedBy: "partner_a",
+        lastExtendedAt: 61,
+        breachOpenedAt: 64,
+        breachAcknowledgedBy: null,
+        breachAcknowledgedAt: null,
+        breachDebtHours: 1,
+        notes: ["slo breach open"],
+        lastEvaluatedAt: 64,
+        updatedAt: 64,
+      })
+      const closureSlo = await repos.filingEscalationClosureAdjudicationSlo.get(
+        "closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+      )
+      expect(closureSlo?.status).toBe("breach_open")
+      const closureSloByFirm = await repos.filingEscalationClosureAdjudicationSlo.listByFirm("firmA")
+      expect(closureSloByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
+      await repos.filingEscalationClosureRebalanceSafeguards.upsert({
+        id: "closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "cooldown_locked",
+        cooldownLockUntil: 80,
+        duplicateSuppressionUntil: 90,
+        overrideAttestedBy: null,
+        overrideAttestedAt: null,
+        overrideReason: null,
+        lastAutoExecutedAt: null,
+        autoExecutionEligible: false,
+        suppressionReasons: ["cooldown_lockout_active"],
+        notes: ["safeguard cooldown lock active"],
+        lastEvaluatedAt: 65,
+        updatedAt: 65,
+      })
+      const closureSafeguard = await repos.filingEscalationClosureRebalanceSafeguards.get(
+        "closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureSafeguard?.status).toBe("cooldown_locked")
+      const closureSafeguardByFirm =
+        await repos.filingEscalationClosureRebalanceSafeguards.listByFirm("firmA")
+      expect(closureSafeguardByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   })
 })

@@ -1367,6 +1367,49 @@ describe("GET/POST /api/d4/filings", () => {
         "7a7fe973-3ea2-4fd3-8e0e-cf9b4cb74c53"
       )
       expect([200, 422]).toContain(governQuorum.status)
+      const acknowledgeSloBreachPayload = {
+        action: "acknowledge_closure_adjudication_slo_breach" as const,
+        actorId: "partner_a",
+        adjudicationId,
+        note: "Acknowledge open adjudication SLO breach for panel backlog",
+      }
+      const acknowledgeSloBreach = await post(
+        acknowledgeSloBreachPayload,
+        "6f7d5d3e-51c4-4f49-9fa7-a9836cc5eb81"
+      )
+      expect([200, 422]).toContain(acknowledgeSloBreach.status)
+      const extendSloDeadlinePayload = {
+        action: "extend_closure_adjudication_slo_deadline" as const,
+        actorId: "partner_a",
+        adjudicationId,
+        extensionHours: 2,
+        note: "Extend adjudication SLO deadline after quorum governance check",
+      }
+      const extendSloDeadline = await post(
+        extendSloDeadlinePayload,
+        "fd3eb93f-74a3-4f75-a7ec-b0dc022861ab"
+      )
+      expect([200, 422]).toContain(extendSloDeadline.status)
+      if (extendSloDeadline.status === 200) {
+        const extendSloReplay = await post(
+          extendSloDeadlinePayload,
+          "fd3eb93f-74a3-4f75-a7ec-b0dc022861ab"
+        )
+        expect(extendSloReplay.status).toBe(200)
+        const extendSloReplayJson = (await extendSloReplay.json()) as { reused: boolean }
+        expect(extendSloReplayJson.reused).toBe(true)
+      }
+      const escalateSloTier = await post(
+        {
+          action: "escalate_closure_adjudication_slo_tier",
+          actorId: "partner_a",
+          adjudicationId,
+          escalationTier: "tier_2_management_escalation",
+          note: "Escalate adjudication SLO stewardship tier for operations review",
+        },
+        "9083a071-dae7-43ce-ac22-1092a7ddfac2"
+      )
+      expect([200, 422]).toContain(escalateSloTier.status)
       const recordAdjudicationVerdict = await post(
         {
           action: "record_closure_adjudication_verdict",
@@ -1437,11 +1480,46 @@ describe("GET/POST /api/d4/filings", () => {
         rebalanceId,
         note: "Execute owner reassignment recommendation for closure rebalance",
       }
+      const configureSafeguardPayload = {
+        action: "configure_closure_rebalance_auto_execution_safeguard" as const,
+        actorId: "partner_a",
+        rebalanceId,
+        cooldownLockHours: 1,
+        duplicateSuppressionHours: 1,
+        note: "Configure lockout and duplicate suppression windows before auto-exec",
+      }
+      const configureSafeguard = await post(
+        configureSafeguardPayload,
+        "a793b8fa-7f9d-4140-adad-f6e6ab4953be"
+      )
+      expect([200, 404, 422]).toContain(configureSafeguard.status)
+      if (configureSafeguard.status === 200) {
+        const configureSafeguardReplay = await post(
+          configureSafeguardPayload,
+          "a793b8fa-7f9d-4140-adad-f6e6ab4953be"
+        )
+        expect(configureSafeguardReplay.status).toBe(200)
+        const configureSafeguardReplayJson = (await configureSafeguardReplay.json()) as {
+          reused: boolean
+        }
+        expect(configureSafeguardReplayJson.reused).toBe(true)
+      }
       const executeOwnerTransfer = await post(
         executeOwnerTransferPayload,
         "ca6a53fa-12d5-445a-a6a8-73e68d852bb8"
       )
       expect([200, 422, 404]).toContain(executeOwnerTransfer.status)
+      const attestOverride = await post(
+        {
+          action: "attest_closure_rebalance_auto_execution_override",
+          actorId: "partner_a",
+          rebalanceId,
+          reason: "Controlled partner override after safeguard lockout validation",
+          note: "Attest override to permit guarded auto execution path",
+        },
+        "f1db66f6-2e22-43fd-912a-4c6832388745"
+      )
+      expect([200, 404, 422]).toContain(attestOverride.status)
       if (executeOwnerTransfer.status === 200) {
         const executeOwnerTransferReplay = await post(
           executeOwnerTransferPayload,
@@ -1987,6 +2065,12 @@ describe("GET/POST /api/d4/filings", () => {
         closureRebalanceExecutionMode?: string | null
         closureRebalanceChurnCount?: number
         closureAdjudicationThroughputScore?: number
+        closureAdjudicationSloStatus?: string | null
+        closureAdjudicationSloEscalationTier?: string
+        closureAdjudicationSloDebtHours?: number
+        closureRebalanceSafeguardStatus?: string
+        closureRebalanceAutoExecutionEligible?: boolean
+        closureRebalanceSuppressionReasons?: string[]
         closureCriticalPath?: boolean
       }>
     }
@@ -2055,6 +2139,36 @@ describe("GET/POST /api/d4/filings", () => {
           const throughputMetricOk =
             row.closureAdjudicationThroughputScore === undefined ||
             [0, 1].includes(row.closureAdjudicationThroughputScore)
+          const adjudicationSloStatusOk =
+            row.closureAdjudicationSloStatus === undefined ||
+            row.closureAdjudicationSloStatus === null ||
+            ["within_slo", "deadline_extended", "breach_open", "breach_acknowledged"].includes(
+              row.closureAdjudicationSloStatus
+            )
+          const adjudicationSloTierOk =
+            row.closureAdjudicationSloEscalationTier === undefined ||
+            ["none", "tier_1_partner_watch", "tier_2_management_escalation", "tier_3_executive_escalation"].includes(
+              row.closureAdjudicationSloEscalationTier
+            )
+          const adjudicationSloDebtOk =
+            row.closureAdjudicationSloDebtHours === undefined ||
+            (Number.isFinite(row.closureAdjudicationSloDebtHours) &&
+              row.closureAdjudicationSloDebtHours >= 0)
+          const safeguardStatusOk =
+            row.closureRebalanceSafeguardStatus === undefined ||
+            ["auto_exec_ready", "cooldown_locked", "duplicate_suppressed", "override_attested"].includes(
+              row.closureRebalanceSafeguardStatus
+            )
+          const autoExecEligibleOk =
+            row.closureRebalanceAutoExecutionEligible === undefined ||
+            typeof row.closureRebalanceAutoExecutionEligible === "boolean"
+          const safeguardReasonsOk =
+            row.closureRebalanceSuppressionReasons === undefined ||
+            row.closureRebalanceSuppressionReasons.every((reason) =>
+              ["cooldown_lockout_active", "duplicate_execution_window", "manual_override_required"].includes(
+                reason
+              )
+            )
           const criticalPathOk =
             row.closureCriticalPath === undefined || typeof row.closureCriticalPath === "boolean"
           return (
@@ -2073,6 +2187,12 @@ describe("GET/POST /api/d4/filings", () => {
             executionModeOk &&
             churnMetricOk &&
             throughputMetricOk &&
+            adjudicationSloStatusOk &&
+            adjudicationSloTierOk &&
+            adjudicationSloDebtOk &&
+            safeguardStatusOk &&
+            autoExecEligibleOk &&
+            safeguardReasonsOk &&
             criticalPathOk
           )
         }
@@ -2322,6 +2442,54 @@ describe("GET/POST /api/d4/filings", () => {
           ["queued", "owner_transfer_in_progress", "throttle_release_in_progress", "completed"].includes(
             row.status
           ) && ["owner_transfer", "throttle_release"].includes(row.mode)
+      )
+    ).toBe(true)
+    const closureSloView = await get(
+      new URLSearchParams({
+        view: "closure_adjudication_slo",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSloView.status).toBe(200)
+    const closureSloViewJson = (await closureSloView.json()) as {
+      items: Array<{ ownerId: string; status: string; escalationTier: string }>
+    }
+    expect(
+      closureSloViewJson.items.every(
+        (row) =>
+          ["within_slo", "deadline_extended", "breach_open", "breach_acknowledged"].includes(row.status) &&
+          ["none", "tier_1_partner_watch", "tier_2_management_escalation", "tier_3_executive_escalation"].includes(
+            row.escalationTier
+          )
+      )
+    ).toBe(true)
+    const closureSafeguardView = await get(
+      new URLSearchParams({
+        view: "closure_rebalance_safeguards",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSafeguardView.status).toBe(200)
+    const closureSafeguardViewJson = (await closureSafeguardView.json()) as {
+      items: Array<{ ownerId: string; status: string; suppressionReasons: string[] }>
+    }
+    expect(
+      closureSafeguardViewJson.items.every(
+        (row) =>
+          ["auto_exec_ready", "cooldown_locked", "duplicate_suppressed", "override_attested"].includes(
+            row.status
+          ) &&
+          row.suppressionReasons.every((reason) =>
+            ["cooldown_lockout_active", "duplicate_execution_window", "manual_override_required"].includes(
+              reason
+            )
+          )
       )
     ).toBe(true)
   })
