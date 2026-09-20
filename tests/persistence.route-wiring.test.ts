@@ -59,6 +59,8 @@ const baseStore = {
   filingEscalationClosureSlaWindowConfigs: new Map(),
   filingEscalationClosureAutoAssignmentRules: new Map(),
   filingEscalationClosureSlaWindows: new Map(),
+  filingEscalationClosureAttestations: new Map(),
+  filingEscalationClosureSlaExceptionDigests: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -822,6 +824,73 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByOwnerId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationClosureAttestations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1",
+          sequenceNo: 1,
+          firmId: "firmA",
+          ownerId: "partner_a",
+          digestId: "closure-compliance:firmA:partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          linkedSlaWindowId: "closure-sla-window:closure-compliance:firmA:partner_a",
+          linkedExceptionDigestId: "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "pending_second_review",
+          claimPartnerId: "partner_a",
+          claimAt: Date.now() - 60 * 60 * 1000,
+          resolutionPartnerId: "partner_a",
+          resolutionAt: Date.now() - 15 * 60 * 1000,
+          attestedBy: "partner_a",
+          attestedAt: Date.now() - 10 * 60 * 1000,
+          secondReviewerId: "partner_b",
+          secondReviewedBy: null,
+          secondReviewedAt: null,
+          partnerConcurrence: true,
+          evidenceNote: "claim and resolution evidence attached",
+          notes: ["repo closure attestation row"],
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureSlaExceptionDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          digestId: "closure-compliance:firmA:partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "open_exception",
+          pressureLevel: "critical",
+          reasons: ["ack_deadline_breached", "attestation_pending"],
+          waiverReason: null,
+          waivedBy: null,
+          waivedAt: null,
+          waiverExpiresAt: null,
+          expiredAt: null,
+          linkedSlaWindowId: "closure-sla-window:closure-compliance:firmA:partner_a",
+          linkedAttestationId:
+            "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1",
+          linkedConfigId: "closure-sla-window-config:firmA:default",
+          linkedAutoAssignmentRuleId: "closure-auto-assignment-rule:firmA:default",
+          notes: ["repo closure SLA exception row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -1258,6 +1327,34 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain(
       "closure-sla-window:closure-compliance:firmA:partner_a"
+    )
+  })
+
+  it("filings closure attestations view GET uses repository filingEscalationClosureAttestations listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_attestations&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1"
+    )
+  })
+
+  it("filings closure SLA exception digest view GET uses repository filingEscalationClosureSlaExceptionDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_sla_exception_digests&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a"
     )
   })
 

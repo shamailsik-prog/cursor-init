@@ -25,6 +25,10 @@ Snapshot basis: current `main` as of this branch cut plus repository contents in
 - Extended `app/api/d4/filings/route.ts` with governance surfaces: `view=closure_sla_window_configs`, `view=closure_auto_assignment_rules`, `view=closure_sla_windows`, `set_closure_sla_window_config`, `set_closure_auto_assignment_rule`, and `auto_assign_closure_followup`.
 - Wired closure SLA breach/pressure signals into closure digest + queue responses and into workload severity escalation through `closure_compliance_pressure`.
 - Extended API, route-wiring, repository, and runtime-mode coverage for SLA-window persistence, auto-assignment behavior, cross-firm isolation, and audit write-through.
+- Added durable closure attestation ledger + closure SLA exception digest entities across memory/Firestore repositories and `firestore.rules`.
+- Extended `app/api/d4/filings/route.ts` with governance actions and views: `record_closure_attestation`, `review_closure_attestation`, `waive_closure_sla_exception`, `view=closure_attestations`, and `view=closure_sla_exception_digests`.
+- Wired attestation + SLA-exception pressure into closure digest/queue/window payloads and workload severity escalation as critical-path signals.
+- Extended API, route-wiring, repository, and runtime-mode coverage for closure attestation + exception persistence, firm isolation, reset rehydration, and audit write-through.
 
 ## Recommended immediate slice (Phase B)
 
@@ -39,9 +43,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure attestation governance + SLA exception digest parity**:
+Build **filing escalation closure attestation dispute handling + SLA exception expiry enforcement parity**:
 
-1. Add durable closure follow-up attestation ledger rows (claim-to-resolution evidence, partner concurrence flags, and second-review metadata) linked to SLA windows.
-2. Add closure SLA exception digest rows for waived/overridden windows, with waiver expiry countdowns and policy override reason tracking.
-3. Surface attestation + SLA-exception pressure across closure and workload digest views with explicit critical-path escalation indicators.
-4. Extend emulator/runtime + route-wiring coverage for attestation/exception entities, including audit write-through, firm isolation, and reset rehydration.
+1. Add closure attestation dispute actions for reopen/override flows with immutable reviewer chain metadata and conflict reasons.
+2. Add SLA exception expiry enforcement actions that auto-transition waived rows to expired/open states with explicit reminder and escalation counters.
+3. Wire attestation dispute + exception-expiry countdown indicators into closure/workload digest payloads and severity tagging.
+4. Extend emulator/runtime + route-wiring coverage for dispute and expiry-enforcement transitions, including idempotent replay behavior and audit write-through.

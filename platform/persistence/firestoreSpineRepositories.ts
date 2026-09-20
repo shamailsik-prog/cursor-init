@@ -23,6 +23,8 @@ import type {
   FilingEscalationClosureSlaWindowConfigRow,
   FilingEscalationClosureAutoAssignmentRuleRow,
   FilingEscalationClosureSlaWindowRow,
+  FilingEscalationClosureAttestationRow,
+  FilingEscalationClosureSlaExceptionDigestRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -764,6 +766,68 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationClosureSlaWindowRow)
           .filter((row) => row.ownerId === ownerId)
+      },
+    },
+    filingEscalationClosureAttestations: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_attestations", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureAttestationRow>(
+          db,
+          "filing_escalation_closure_attestations",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureAttestationRow>(
+          db,
+          "filing_escalation_closure_attestations",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_attestations"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAttestationRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_attestations"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAttestationRow)
+          .filter((row) => row.queueId === queueId)
+      },
+    },
+    filingEscalationClosureSlaExceptionDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_sla_exception_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureSlaExceptionDigestRow>(
+          db,
+          "filing_escalation_closure_sla_exception_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureSlaExceptionDigestRow>(
+          db,
+          "filing_escalation_closure_sla_exception_digests",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_sla_exception_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSlaExceptionDigestRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_sla_exception_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSlaExceptionDigestRow)
+          .filter((row) => row.queueId === queueId)
       },
     },
     jobs: {
