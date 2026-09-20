@@ -20,6 +20,9 @@ import type {
   FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationClosureComplianceDigestRow,
   FilingEscalationClosureFollowupQueueRow,
+  FilingEscalationClosureSlaWindowConfigRow,
+  FilingEscalationClosureAutoAssignmentRuleRow,
+  FilingEscalationClosureSlaWindowRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -685,6 +688,81 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_closure_followup_queue"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationClosureFollowupQueueRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+    },
+    filingEscalationClosureSlaWindowConfigs: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_sla_window_configs", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureSlaWindowConfigRow>(
+          db,
+          "filing_escalation_closure_sla_window_configs",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureSlaWindowConfigRow>(
+          db,
+          "filing_escalation_closure_sla_window_configs",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_sla_window_configs"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSlaWindowConfigRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+    },
+    filingEscalationClosureAutoAssignmentRules: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_auto_assignment_rules", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureAutoAssignmentRuleRow>(
+          db,
+          "filing_escalation_closure_auto_assignment_rules",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureAutoAssignmentRuleRow>(
+          db,
+          "filing_escalation_closure_auto_assignment_rules",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_auto_assignment_rules"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAutoAssignmentRuleRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+    },
+    filingEscalationClosureSlaWindows: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_sla_windows", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureSlaWindowRow>(
+          db,
+          "filing_escalation_closure_sla_windows",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureSlaWindowRow>(
+          db,
+          "filing_escalation_closure_sla_windows",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_sla_windows"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSlaWindowRow)
           .filter((row) => row.ownerId === ownerId)
       },
     },

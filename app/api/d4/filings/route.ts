@@ -98,12 +98,25 @@ import {
   requiresSecondApproverForRemediationDecision,
 } from "@/platform/persistence/filingEscalationLifecycleAndReaffirmation"
 import {
+  buildFilingEscalationClosureAutoAssignmentRuleRow,
   buildFilingEscalationClosureComplianceDigestRow,
   buildFilingEscalationClosureFollowupQueueRow,
+  buildFilingEscalationClosureSlaWindowConfigRow,
+  buildFilingEscalationClosureSlaWindowRow,
+  DEFAULT_CLOSURE_ACK_DEADLINE_MS,
+  DEFAULT_CLOSURE_AUTO_ASSIGNMENT_MAX_ACTIVE_CLAIMS,
+  DEFAULT_CLOSURE_AUTO_ESCALATION_MS,
+  DEFAULT_CLOSURE_CLEAR_DEADLINE_MS,
+  filingEscalationClosureAutoAssignmentRuleId,
   filingEscalationClosureComplianceDigestId,
   filingEscalationClosureFollowupQueueId,
+  filingEscalationClosureSlaWindowConfigId,
+  isFilingEscalationClosureAutoAssignmentMode,
   isFilingEscalationClosureComplianceDigestStatus,
   isFilingEscalationClosureFollowupQueueStatus,
+  isFilingEscalationClosureSlaPressureLevel,
+  isFilingEscalationClosureSlaWindowScope,
+  isFilingEscalationClosureSlaWindowStatus,
 } from "@/platform/persistence/filingEscalationClosureCompliance"
 import {
   buildFilingEscalationRemediationExpiryDigestRow,
@@ -488,6 +501,34 @@ type ResolveClosureFollowupBody = {
   note?: string
 }
 
+type SetClosureSlaWindowConfigBody = {
+  action: "set_closure_sla_window_config"
+  actorId?: string
+  ownerId?: string
+  ackDeadlineHours?: number
+  clearDeadlineHours?: number
+  autoEscalationHours?: number
+  note?: string
+}
+
+type SetClosureAutoAssignmentRuleBody = {
+  action: "set_closure_auto_assignment_rule"
+  actorId?: string
+  ownerId?: string
+  mode?: string
+  enabled?: boolean
+  maxActiveClaimsPerPartner?: number
+  note?: string
+}
+
+type AutoAssignClosureFollowupBody = {
+  action: "auto_assign_closure_followup"
+  actorId?: string
+  queueId?: string
+  ownerId?: string
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -529,6 +570,9 @@ type Body =
   | AssignClosureFollowupBody
   | ClaimClosureFollowupBody
   | ResolveClosureFollowupBody
+  | SetClosureSlaWindowConfigBody
+  | SetClosureAutoAssignmentRuleBody
+  | AutoAssignClosureFollowupBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -571,7 +615,10 @@ function parseFilingsView(
   | "remediation_lifecycle"
   | "rollover_reaffirmation_sla"
   | "closure_compliance_digests"
-  | "closure_followup_queue" {
+  | "closure_followup_queue"
+  | "closure_sla_window_configs"
+  | "closure_auto_assignment_rules"
+  | "closure_sla_windows" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -593,6 +640,9 @@ function parseFilingsView(
   if (value === "rollover_reaffirmation_sla") return "rollover_reaffirmation_sla"
   if (value === "closure_compliance_digests") return "closure_compliance_digests"
   if (value === "closure_followup_queue") return "closure_followup_queue"
+  if (value === "closure_sla_window_configs") return "closure_sla_window_configs"
+  if (value === "closure_auto_assignment_rules") return "closure_auto_assignment_rules"
+  if (value === "closure_sla_windows") return "closure_sla_windows"
   return "packages"
 }
 
@@ -701,6 +751,171 @@ function buildEscalationPolicyMaps(
   }
 }
 
+type ClosureSlaWindowConfigShape = {
+  id: string
+  ownerId: string | null
+  ackDeadlineMs: number
+  clearDeadlineMs: number
+  autoEscalationMs: number
+  updatedAt: number
+}
+
+type EffectiveClosureSlaWindowConfig = {
+  ackDeadlineMs: number
+  clearDeadlineMs: number
+  autoEscalationMs: number
+  sourceConfigId: string | null
+}
+
+function buildClosureSlaWindowConfigMaps(
+  rows: Array<{
+    id: string
+    ownerId: string | null
+    scope: string
+    ackDeadlineMs: number
+    clearDeadlineMs: number
+    autoEscalationMs: number
+    updatedAt: number
+  }>
+): {
+  defaultConfig: ClosureSlaWindowConfigShape | null
+  ownerOverrides: Map<string, ClosureSlaWindowConfigShape>
+} {
+  const ownerOverrides = new Map<string, ClosureSlaWindowConfigShape>()
+  const defaultConfig = latestByUpdatedAt(rows.filter((row) => row.scope === "firm_default"))
+  for (const row of rows) {
+    if (row.scope !== "owner_override" || !row.ownerId) continue
+    const existing = ownerOverrides.get(row.ownerId)
+    if (!existing || row.updatedAt > existing.updatedAt) {
+      ownerOverrides.set(row.ownerId, {
+        id: row.id,
+        ownerId: row.ownerId,
+        ackDeadlineMs: row.ackDeadlineMs,
+        clearDeadlineMs: row.clearDeadlineMs,
+        autoEscalationMs: row.autoEscalationMs,
+        updatedAt: row.updatedAt,
+      })
+    }
+  }
+  return {
+    defaultConfig: defaultConfig
+      ? {
+          id: defaultConfig.id,
+          ownerId: defaultConfig.ownerId,
+          ackDeadlineMs: defaultConfig.ackDeadlineMs,
+          clearDeadlineMs: defaultConfig.clearDeadlineMs,
+          autoEscalationMs: defaultConfig.autoEscalationMs,
+          updatedAt: defaultConfig.updatedAt,
+        }
+      : null,
+    ownerOverrides,
+  }
+}
+
+function resolveEffectiveClosureSlaWindowConfig(
+  ownerId: string,
+  ownerOverrides: Map<string, ClosureSlaWindowConfigShape>,
+  defaultConfig: ClosureSlaWindowConfigShape | null
+): EffectiveClosureSlaWindowConfig {
+  const ownerScoped = ownerOverrides.get(ownerId)
+  if (ownerScoped) {
+    return {
+      ackDeadlineMs: ownerScoped.ackDeadlineMs,
+      clearDeadlineMs: ownerScoped.clearDeadlineMs,
+      autoEscalationMs: ownerScoped.autoEscalationMs,
+      sourceConfigId: ownerScoped.id,
+    }
+  }
+  if (defaultConfig) {
+    return {
+      ackDeadlineMs: defaultConfig.ackDeadlineMs,
+      clearDeadlineMs: defaultConfig.clearDeadlineMs,
+      autoEscalationMs: defaultConfig.autoEscalationMs,
+      sourceConfigId: defaultConfig.id,
+    }
+  }
+  return {
+    ackDeadlineMs: DEFAULT_CLOSURE_ACK_DEADLINE_MS,
+    clearDeadlineMs: DEFAULT_CLOSURE_CLEAR_DEADLINE_MS,
+    autoEscalationMs: DEFAULT_CLOSURE_AUTO_ESCALATION_MS,
+    sourceConfigId: null,
+  }
+}
+
+type ClosureAutoAssignmentRuleShape = {
+  id: string
+  ownerId: string | null
+  mode: "owner_rota" | "workload_aware_claim"
+  enabled: boolean
+  maxActiveClaimsPerPartner: number
+  updatedAt: number
+}
+
+type EffectiveClosureAutoAssignmentRule = {
+  mode: "owner_rota" | "workload_aware_claim"
+  enabled: boolean
+  maxActiveClaimsPerPartner: number
+  sourceRuleId: string | null
+}
+
+function buildClosureAutoAssignmentRuleMaps(
+  rows: Array<{
+    id: string
+    ownerId: string | null
+    mode: "owner_rota" | "workload_aware_claim"
+    enabled: boolean
+    maxActiveClaimsPerPartner: number
+    updatedAt: number
+  }>
+): {
+  defaultRule: ClosureAutoAssignmentRuleShape | null
+  ownerOverrides: Map<string, ClosureAutoAssignmentRuleShape>
+} {
+  const ownerOverrides = new Map<string, ClosureAutoAssignmentRuleShape>()
+  const defaultRule = latestByUpdatedAt(rows.filter((row) => row.ownerId === null))
+  for (const row of rows) {
+    if (!row.ownerId) continue
+    const existing = ownerOverrides.get(row.ownerId)
+    if (!existing || row.updatedAt > existing.updatedAt) {
+      ownerOverrides.set(row.ownerId, row)
+    }
+  }
+  return {
+    defaultRule,
+    ownerOverrides,
+  }
+}
+
+function resolveEffectiveClosureAutoAssignmentRule(
+  ownerId: string,
+  ownerOverrides: Map<string, ClosureAutoAssignmentRuleShape>,
+  defaultRule: ClosureAutoAssignmentRuleShape | null
+): EffectiveClosureAutoAssignmentRule {
+  const ownerScoped = ownerOverrides.get(ownerId)
+  if (ownerScoped) {
+    return {
+      mode: ownerScoped.mode,
+      enabled: ownerScoped.enabled,
+      maxActiveClaimsPerPartner: ownerScoped.maxActiveClaimsPerPartner,
+      sourceRuleId: ownerScoped.id,
+    }
+  }
+  if (defaultRule) {
+    return {
+      mode: defaultRule.mode,
+      enabled: defaultRule.enabled,
+      maxActiveClaimsPerPartner: defaultRule.maxActiveClaimsPerPartner,
+      sourceRuleId: defaultRule.id,
+    }
+  }
+  return {
+    mode: "owner_rota",
+    enabled: true,
+    maxActiveClaimsPerPartner: DEFAULT_CLOSURE_AUTO_ASSIGNMENT_MAX_ACTIVE_CLAIMS,
+    sourceRuleId: null,
+  }
+}
+
 function latestActiveRemediationByPackage<T extends {
     packageId: string
     status: string
@@ -754,6 +969,49 @@ function sameStringArray(a: string[], b: string[]): boolean {
   return a.every((value, index) => value === b[index])
 }
 
+function pickClosureAutoAssignee(input: {
+  ownerId: string
+  packageIds: string[]
+  rule: EffectiveClosureAutoAssignmentRule
+  queueLoadByPartner: Map<string, number>
+  partnerIds: string[]
+  rotaByPackage: Map<
+    string,
+    {
+      status: string
+      primaryOwnerId: string | null
+      backupOwnerId: string | null
+    }
+  >
+}): string | null {
+  const underCap = (partnerId: string) =>
+    (input.queueLoadByPartner.get(partnerId) ?? 0) < input.rule.maxActiveClaimsPerPartner
+  const pickLeastLoaded = (candidateIds: string[]): string | null =>
+    [...new Set(candidateIds)]
+      .filter((id) => input.partnerIds.includes(id))
+      .filter((id) => underCap(id))
+      .sort((a, b) => {
+        const loadDiff = (input.queueLoadByPartner.get(a) ?? 0) - (input.queueLoadByPartner.get(b) ?? 0)
+        return loadDiff !== 0 ? loadDiff : a.localeCompare(b)
+      })[0] ?? null
+
+  if (input.rule.mode === "owner_rota") {
+    const backupCandidates: string[] = []
+    for (const packageId of input.packageIds) {
+      const rota = input.rotaByPackage.get(packageId)
+      if (!rota || rota.status === "revoked") continue
+      if (rota.primaryOwnerId !== input.ownerId || !rota.backupOwnerId) continue
+      backupCandidates.push(rota.backupOwnerId)
+    }
+    const backupChoice = pickLeastLoaded(backupCandidates)
+    if (backupChoice) return backupChoice
+    const ownerChoice = pickLeastLoaded([input.ownerId])
+    if (ownerChoice) return ownerChoice
+  }
+
+  return pickLeastLoaded(input.partnerIds)
+}
+
 async function recomputeClosureComplianceState(
   store: ReturnType<typeof getRuntimeStore>,
   repos: Awaited<ReturnType<typeof getRuntimeRepositories>>,
@@ -761,12 +1019,26 @@ async function recomputeClosureComplianceState(
     firmId: string
     packageById: Map<string, { id: string; classification: Classification }>
     now: number
+    forceAutoAssignOwnerIds?: Set<string>
   }
 ): Promise<{
   digestByOwner: Map<string, FilingEscalationClosureComplianceDigestRow>
   queueByOwner: Map<string, FilingEscalationClosureFollowupQueueRow>
+  slaWindowByOwner: Map<string, {
+    id: string
+    ownerId: string
+    status: "within_window" | "ack_breached" | "clear_breached" | "auto_escalation_due" | "cleared"
+    pressureLevel: "baseline" | "elevated" | "critical"
+    ackDeadlineAt: number | null
+    clearDeadlineAt: number | null
+    autoEscalateAt: number | null
+    autoEscalatedToPartnerId: string | null
+    linkedConfigId: string | null
+    linkedAutoAssignmentRuleId: string | null
+  }>
 }> {
   const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(input.firmId)
+  const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
   const ownerByPackage = new Map<string, string>()
   for (const row of rotaRows) {
     if (row.status === "revoked") continue
@@ -822,9 +1094,74 @@ async function recomputeClosureComplianceState(
   const existingDigestByOwner = new Map(existingDigests.map((row) => [row.ownerId, row]))
   const existingQueues = await repos.filingEscalationClosureFollowupQueues.listByFirm(input.firmId)
   const existingQueueByDigestId = new Map(existingQueues.map((row) => [row.digestId, row]))
+  const existingWindows = await repos.filingEscalationClosureSlaWindows.listByFirm(input.firmId)
+  const existingWindowByDigestId = new Map(existingWindows.map((row) => [row.digestId, row]))
+  let closureSlaConfigRows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm(input.firmId)
+  if (!closureSlaConfigRows.some((row) => row.ownerId === null && row.scope === "firm_default")) {
+    const seededDefaultConfig = buildFilingEscalationClosureSlaWindowConfigRow({
+      firmId: input.firmId,
+      ownerId: null,
+      classification: "internal",
+      actorId: "system",
+      ackDeadlineMs: DEFAULT_CLOSURE_ACK_DEADLINE_MS,
+      clearDeadlineMs: DEFAULT_CLOSURE_CLEAR_DEADLINE_MS,
+      autoEscalationMs: DEFAULT_CLOSURE_AUTO_ESCALATION_MS,
+      now: input.now,
+      note: "seeded default closure SLA window policy",
+    })
+    await repos.filingEscalationClosureSlaWindowConfigs.upsert(seededDefaultConfig)
+    store.filingEscalationClosureSlaWindowConfigs.set(seededDefaultConfig.id, seededDefaultConfig)
+    closureSlaConfigRows = [...closureSlaConfigRows, seededDefaultConfig]
+  }
+  let closureAutoRuleRows = await repos.filingEscalationClosureAutoAssignmentRules.listByFirm(input.firmId)
+  if (!closureAutoRuleRows.some((row) => row.ownerId === null)) {
+    const seededDefaultRule = buildFilingEscalationClosureAutoAssignmentRuleRow({
+      firmId: input.firmId,
+      ownerId: null,
+      classification: "internal",
+      actorId: "system",
+      mode: "owner_rota",
+      enabled: true,
+      maxActiveClaimsPerPartner: DEFAULT_CLOSURE_AUTO_ASSIGNMENT_MAX_ACTIVE_CLAIMS,
+      now: input.now,
+      note: "seeded default closure follow-up auto-assignment policy",
+    })
+    await repos.filingEscalationClosureAutoAssignmentRules.upsert(seededDefaultRule)
+    store.filingEscalationClosureAutoAssignmentRules.set(seededDefaultRule.id, seededDefaultRule)
+    closureAutoRuleRows = [...closureAutoRuleRows, seededDefaultRule]
+  }
+  const { defaultConfig: defaultClosureSlaConfig, ownerOverrides: closureSlaConfigByOwner } =
+    buildClosureSlaWindowConfigMaps(closureSlaConfigRows)
+  const { defaultRule: defaultClosureAutoRule, ownerOverrides: closureAutoRuleByOwner } =
+    buildClosureAutoAssignmentRuleMaps(closureAutoRuleRows)
+  const partnerIds = [...store.users.values()]
+    .filter((candidate) => candidate.firmId === input.firmId && candidate.role === "partner")
+    .map((candidate) => candidate.id)
+  const queueLoadByPartner = new Map<string, number>()
+  for (const row of existingQueues) {
+    if (row.status === "resolved") continue
+    const accountablePartner = row.claimedBy ?? row.assignedPartnerId
+    if (!accountablePartner) continue
+    queueLoadByPartner.set(accountablePartner, (queueLoadByPartner.get(accountablePartner) ?? 0) + 1)
+  }
   const ownerIds = new Set<string>([...aggregateByOwner.keys(), ...existingDigestByOwner.keys()])
   const digestByOwner = new Map<string, (typeof existingDigests)[number]>()
   const queueByOwner = new Map<string, (typeof existingQueues)[number]>()
+  const slaWindowByOwner = new Map<
+    string,
+    {
+      id: string
+      ownerId: string
+      status: "within_window" | "ack_breached" | "clear_breached" | "auto_escalation_due" | "cleared"
+      pressureLevel: "baseline" | "elevated" | "critical"
+      ackDeadlineAt: number | null
+      clearDeadlineAt: number | null
+      autoEscalateAt: number | null
+      autoEscalatedToPartnerId: string | null
+      linkedConfigId: string | null
+      linkedAutoAssignmentRuleId: string | null
+    }
+  >()
   for (const owner of ownerIds) {
     const aggregate = aggregateByOwner.get(owner)
     const digestExisting = existingDigestByOwner.get(owner) ?? null
@@ -842,11 +1179,95 @@ async function recomputeClosureComplianceState(
       now: input.now,
     })
     const queueExisting = existingQueueByDigestId.get(digestComputed.id) ?? null
-    const queueComputed = buildFilingEscalationClosureFollowupQueueRow(digestComputed, {
+    let queueComputed = buildFilingEscalationClosureFollowupQueueRow(digestComputed, {
       existing: queueExisting,
       now: input.now,
     })
     const digestNext = { ...digestComputed, linkedFollowupQueueId: queueComputed.id }
+    const effectiveSlaConfig = resolveEffectiveClosureSlaWindowConfig(
+      owner,
+      closureSlaConfigByOwner,
+      defaultClosureSlaConfig
+    )
+    const effectiveAutoRule = resolveEffectiveClosureAutoAssignmentRule(
+      owner,
+      closureAutoRuleByOwner,
+      defaultClosureAutoRule
+    )
+    const resolvedConfigRow = {
+      id:
+        effectiveSlaConfig.sourceConfigId ??
+        filingEscalationClosureSlaWindowConfigId(input.firmId, null),
+      firmId: input.firmId,
+      ownerId: closureSlaConfigByOwner.has(owner) ? owner : null,
+      classification: digestNext.classification,
+      scope: closureSlaConfigByOwner.has(owner) ? ("owner_override" as const) : ("firm_default" as const),
+      ackDeadlineMs: effectiveSlaConfig.ackDeadlineMs,
+      clearDeadlineMs: effectiveSlaConfig.clearDeadlineMs,
+      autoEscalationMs: effectiveSlaConfig.autoEscalationMs,
+      setBy: "system",
+      setAt: input.now,
+      notes: [],
+      updatedAt: input.now,
+    }
+    const existingWindow = existingWindowByDigestId.get(digestNext.id) ?? null
+    let slaWindowComputed = buildFilingEscalationClosureSlaWindowRow({
+      digest: digestNext,
+      queue: queueComputed,
+      config: resolvedConfigRow,
+      existing: existingWindow,
+      linkedAutoAssignmentRuleId: effectiveAutoRule.sourceRuleId,
+      now: input.now,
+    })
+    const forceAutoAssign = input.forceAutoAssignOwnerIds?.has(owner) ?? false
+    const queueNeedsAutoAssignment =
+      effectiveAutoRule.enabled &&
+      queueComputed.status !== "resolved" &&
+      (!queueComputed.assignedPartnerId || forceAutoAssign) &&
+      (!queueComputed.claimedBy || forceAutoAssign) &&
+      (forceAutoAssign ||
+        slaWindowComputed.status === "clear_breached" ||
+        slaWindowComputed.status === "auto_escalation_due")
+    if (queueNeedsAutoAssignment) {
+      const autoAssignee = pickClosureAutoAssignee({
+        ownerId: owner,
+        packageIds: queueComputed.packageIds,
+        rule: effectiveAutoRule,
+        queueLoadByPartner,
+        partnerIds,
+        rotaByPackage,
+      })
+      if (autoAssignee) {
+        if (queueComputed.assignedPartnerId && queueComputed.assignedPartnerId !== autoAssignee) {
+          queueLoadByPartner.set(
+            queueComputed.assignedPartnerId,
+            Math.max(0, (queueLoadByPartner.get(queueComputed.assignedPartnerId) ?? 1) - 1)
+          )
+        }
+        if (queueComputed.assignedPartnerId !== autoAssignee) {
+          queueLoadByPartner.set(autoAssignee, (queueLoadByPartner.get(autoAssignee) ?? 0) + 1)
+        }
+        queueComputed = {
+          ...queueComputed,
+          assignedPartnerId: autoAssignee,
+          notes: [
+            ...queueComputed.notes,
+            `${new Date(input.now).toISOString()} system:auto-assign ${effectiveAutoRule.mode} -> ${autoAssignee}`,
+          ],
+          updatedAt: input.now,
+        }
+        slaWindowComputed = buildFilingEscalationClosureSlaWindowRow({
+          digest: digestNext,
+          queue: queueComputed,
+          config: resolvedConfigRow,
+          existing: existingWindow,
+          linkedAutoAssignmentRuleId: effectiveAutoRule.sourceRuleId,
+          autoEscalatedToPartnerId: autoAssignee,
+          autoEscalationTriggeredAt: input.now,
+          now: input.now,
+        })
+      }
+    }
     const digestChanged =
       !digestExisting ||
       digestExisting.status !== digestNext.status ||
@@ -881,10 +1302,43 @@ async function recomputeClosureComplianceState(
     }
     store.filingEscalationClosureFollowupQueues.set(queueComputed.id, queueComputed)
     queueByOwner.set(owner, queueComputed)
+    const windowChanged =
+      !existingWindow ||
+      existingWindow.queueId !== slaWindowComputed.queueId ||
+      existingWindow.status !== slaWindowComputed.status ||
+      existingWindow.pressureLevel !== slaWindowComputed.pressureLevel ||
+      existingWindow.openedAt !== slaWindowComputed.openedAt ||
+      existingWindow.acknowledgedAt !== slaWindowComputed.acknowledgedAt ||
+      existingWindow.clearedAt !== slaWindowComputed.clearedAt ||
+      existingWindow.ackDeadlineAt !== slaWindowComputed.ackDeadlineAt ||
+      existingWindow.clearDeadlineAt !== slaWindowComputed.clearDeadlineAt ||
+      existingWindow.autoEscalateAt !== slaWindowComputed.autoEscalateAt ||
+      existingWindow.breachedAt !== slaWindowComputed.breachedAt ||
+      existingWindow.autoEscalationTriggeredAt !== slaWindowComputed.autoEscalationTriggeredAt ||
+      existingWindow.autoEscalatedToPartnerId !== slaWindowComputed.autoEscalatedToPartnerId ||
+      existingWindow.linkedConfigId !== slaWindowComputed.linkedConfigId ||
+      existingWindow.linkedAutoAssignmentRuleId !== slaWindowComputed.linkedAutoAssignmentRuleId
+    if (windowChanged) {
+      await repos.filingEscalationClosureSlaWindows.upsert(slaWindowComputed)
+    }
+    store.filingEscalationClosureSlaWindows.set(slaWindowComputed.id, slaWindowComputed)
+    slaWindowByOwner.set(owner, {
+      id: slaWindowComputed.id,
+      ownerId: slaWindowComputed.ownerId,
+      status: slaWindowComputed.status,
+      pressureLevel: slaWindowComputed.pressureLevel,
+      ackDeadlineAt: slaWindowComputed.ackDeadlineAt,
+      clearDeadlineAt: slaWindowComputed.clearDeadlineAt,
+      autoEscalateAt: slaWindowComputed.autoEscalateAt,
+      autoEscalatedToPartnerId: slaWindowComputed.autoEscalatedToPartnerId,
+      linkedConfigId: slaWindowComputed.linkedConfigId,
+      linkedAutoAssignmentRuleId: slaWindowComputed.linkedAutoAssignmentRuleId,
+    })
   }
   return {
     digestByOwner,
     queueByOwner,
+    slaWindowByOwner,
   }
 }
 
@@ -1432,7 +1886,7 @@ export async function GET(request: Request) {
       const digestStatus = url.searchParams.get("digestStatus")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const { digestByOwner } = await recomputeClosureComplianceState(store, repos, {
+      const { digestByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
         packageById,
         now,
@@ -1454,6 +1908,18 @@ export async function GET(request: Request) {
             return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
           })
         })
+        .map((row) => {
+          const window = slaWindowByOwner.get(row.ownerId)
+          return {
+            ...row,
+            slaWindowStatus: window?.status ?? "cleared",
+            slaPressureLevel: window?.pressureLevel ?? "baseline",
+            slaAckDeadlineAt: window?.ackDeadlineAt ?? null,
+            slaClearDeadlineAt: window?.clearDeadlineAt ?? null,
+            slaAutoEscalateAt: window?.autoEscalateAt ?? null,
+            slaAutoEscalatedToPartnerId: window?.autoEscalatedToPartnerId ?? null,
+          }
+        })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor =
@@ -1474,7 +1940,7 @@ export async function GET(request: Request) {
       const assigneeId = url.searchParams.get("assigneeId")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const { queueByOwner } = await recomputeClosureComplianceState(store, repos, {
+      const { queueByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
         packageById,
         now,
@@ -1497,10 +1963,133 @@ export async function GET(request: Request) {
             return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
           })
         })
+        .map((row) => {
+          const window = slaWindowByOwner.get(row.ownerId)
+          return {
+            ...row,
+            slaWindowStatus: window?.status ?? "cleared",
+            slaPressureLevel: window?.pressureLevel ?? "baseline",
+            slaAckDeadlineAt: window?.ackDeadlineAt ?? null,
+            slaClearDeadlineAt: window?.clearDeadlineAt ?? null,
+            slaAutoEscalateAt: window?.autoEscalateAt ?? null,
+            slaAutoEscalatedToPartnerId: window?.autoEscalatedToPartnerId ?? null,
+          }
+        })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor =
         cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_sla_window_configs") {
+      const ownerId = url.searchParams.get("ownerId")
+      const scope = url.searchParams.get("scope")
+      const rows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm(user.firmId)
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (isFilingEscalationClosureSlaWindowScope(scope) ? row.scope === scope : true))
+        .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_auto_assignment_rules") {
+      const ownerId = url.searchParams.get("ownerId")
+      const mode = url.searchParams.get("mode")
+      const rows = await repos.filingEscalationClosureAutoAssignmentRules.listByFirm(user.firmId)
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (isFilingEscalationClosureAutoAssignmentMode(mode) ? row.mode === mode : true))
+        .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_sla_windows") {
+      const ownerId = url.searchParams.get("ownerId")
+      const packageId = url.searchParams.get("packageId")
+      const windowStatus = url.searchParams.get("windowStatus")
+      const pressureLevel = url.searchParams.get("pressureLevel")
+      const now = Date.now()
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const { digestByOwner, queueByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(
+        store,
+        repos,
+        {
+          firmId: user.firmId,
+          packageById,
+          now,
+        }
+      )
+      const visible = [...slaWindowByOwner.values()]
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) =>
+          isFilingEscalationClosureSlaWindowStatus(windowStatus) ? row.status === windowStatus : true
+        )
+        .filter((row) =>
+          isFilingEscalationClosureSlaPressureLevel(pressureLevel)
+            ? row.pressureLevel === pressureLevel
+            : true
+        )
+        .filter((row) => {
+          const digest = digestByOwner.get(row.ownerId)
+          if (!digest) return false
+          return packageId ? digest.linkedPackageIds.includes(packageId) : true
+        })
+        .filter((row) => {
+          const digest = digestByOwner.get(row.ownerId)
+          if (!digest) return false
+          if (digest.linkedPackageIds.length === 0) return user.role === "partner"
+          return digest.linkedPackageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .map((row) => {
+          const digest = digestByOwner.get(row.ownerId)
+          const queue = queueByOwner.get(row.ownerId)
+          return {
+            ...row,
+            digestId: digest?.id ?? null,
+            queueId: queue?.id ?? null,
+            packageIds: digest?.linkedPackageIds ?? [],
+            assignedPartnerId: queue?.assignedPartnerId ?? null,
+            queueStatus: queue?.status ?? "resolved",
+          }
+        })
+        .sort((a, b) => {
+          const aDeadline = a.autoEscalateAt ?? a.clearDeadlineAt ?? a.ackDeadlineAt ?? 0
+          const bDeadline = b.autoEscalateAt ?? b.clearDeadlineAt ?? b.ackDeadlineAt ?? 0
+          return aDeadline - bDeadline || a.id.localeCompare(b.id)
+        })
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
       return NextResponse.json({
         view,
         items,
@@ -1518,7 +2107,7 @@ export async function GET(request: Request) {
       const handoffLagBucket = url.searchParams.get("handoffLagBucket")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const { queueByOwner: closureQueueByOwner } = await recomputeClosureComplianceState(
+      const { queueByOwner: closureQueueByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(
         store,
         repos,
         {
@@ -1798,15 +2387,28 @@ export async function GET(request: Request) {
         const ownerClosureQueue = rota?.primaryOwnerId
           ? closureQueueByOwner.get(rota.primaryOwnerId) ?? null
           : null
+        const ownerClosureSlaWindow = rota?.primaryOwnerId
+          ? slaWindowByOwner.get(rota.primaryOwnerId) ?? null
+          : null
         const closureQueueElevated =
           !!ownerClosureQueue &&
           ownerClosureQueue.status !== "resolved" &&
           (ownerClosureQueue.pendingLifecycleCount > 0 ||
             ownerClosureQueue.breachedReaffirmationCount > 0)
+        const closureSlaElevated =
+          !!ownerClosureSlaWindow &&
+          ownerClosureSlaWindow.status !== "cleared" &&
+          (ownerClosureSlaWindow.pressureLevel === "elevated" ||
+            ownerClosureSlaWindow.pressureLevel === "critical")
+        const closureSlaCritical =
+          !!ownerClosureSlaWindow &&
+          ownerClosureSlaWindow.status !== "cleared" &&
+          ownerClosureSlaWindow.pressureLevel === "critical"
         const closureQueueCritical =
-          closureQueueElevated && !!ownerClosureQueue && ownerClosureQueue.breachedReaffirmationCount > 0
+          (closureQueueElevated && !!ownerClosureQueue && ownerClosureQueue.breachedReaffirmationCount > 0) ||
+          closureSlaCritical
         const computedBaseWithQueue =
-          closureQueueElevated &&
+          (closureQueueElevated || closureSlaElevated) &&
           !computedBase.alertReasons.includes("closure_compliance_pressure")
             ? {
                 ...computedBase,
@@ -1869,7 +2471,8 @@ export async function GET(request: Request) {
             : waiverExpiringCritical ||
                 policyVarianceCritical ||
                 reaffirmationSlaWarning ||
-                closureQueueElevated
+                closureQueueElevated ||
+                closureSlaElevated
               ? "elevated"
               : "baseline"
         let computed =
@@ -5988,6 +6591,218 @@ export async function POST(request: Request) {
         action: "acknowledge_rollover_reaffirmation_sla",
         rolloverReaffirmationSla:
           (await repos.filingEscalationRolloverReaffirmationSlas.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "set_closure_sla_window_config") {
+      if (!parsed.actorId) {
+        return NextResponse.json({ error: "actorId is required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "set_closure_sla_window_config requires partner role" },
+          { status: 403 }
+        )
+      }
+      const owner =
+        parsed.ownerId !== undefined
+          ? store.users.get(parsed.ownerId) ?? (await repos.users.get(parsed.ownerId))
+          : null
+      if (
+        parsed.ownerId !== undefined &&
+        (!owner || owner.firmId !== actor.firmId || owner.role !== "partner")
+      ) {
+        return NextResponse.json({ error: "ownerId must reference a partner in actor firm" }, { status: 422 })
+      }
+      const parseHours = (value: number | undefined): number | undefined => {
+        if (value === undefined) return undefined
+        const numeric = Number(value)
+        if (!Number.isFinite(numeric) || numeric < 0.5 || numeric > 168) {
+          throw new Error("hours must be between 0.5 and 168")
+        }
+        return Math.round(numeric * HOUR_MS)
+      }
+      let ackDeadlineMs: number | undefined
+      let clearDeadlineMs: number | undefined
+      let autoEscalationMs: number | undefined
+      try {
+        ackDeadlineMs = parseHours(parsed.ackDeadlineHours)
+        clearDeadlineMs = parseHours(parsed.clearDeadlineHours)
+        autoEscalationMs = parseHours(parsed.autoEscalationHours)
+      } catch (error) {
+        return NextResponse.json({ error: String((error as Error).message) }, { status: 400 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const existing = await repos.filingEscalationClosureSlaWindowConfigs.get(
+        filingEscalationClosureSlaWindowConfigId(actor.firmId, owner?.id ?? null)
+      )
+      const updated = buildFilingEscalationClosureSlaWindowConfigRow({
+        firmId: actor.firmId,
+        ownerId: owner?.id ?? null,
+        classification: actor.clearanceLevel,
+        actorId: actor.id,
+        ackDeadlineMs,
+        clearDeadlineMs,
+        autoEscalationMs,
+        existing,
+        now,
+        note: parsed.note,
+      })
+      await repos.filingEscalationClosureSlaWindowConfigs.upsert(updated)
+      store.filingEscalationClosureSlaWindowConfigs.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_closure_sla_window_config_set",
+        actorId: actor.id,
+        target: updated.id,
+        classification: updated.classification,
+        reason: updated.ownerId ?? "firm_default",
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "set_closure_sla_window_config",
+        closureSlaWindowConfig:
+          (await repos.filingEscalationClosureSlaWindowConfigs.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "set_closure_auto_assignment_rule") {
+      if (!parsed.actorId) {
+        return NextResponse.json({ error: "actorId is required" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "set_closure_auto_assignment_rule requires partner role" },
+          { status: 403 }
+        )
+      }
+      const owner =
+        parsed.ownerId !== undefined
+          ? store.users.get(parsed.ownerId) ?? (await repos.users.get(parsed.ownerId))
+          : null
+      if (
+        parsed.ownerId !== undefined &&
+        (!owner || owner.firmId !== actor.firmId || owner.role !== "partner")
+      ) {
+        return NextResponse.json({ error: "ownerId must reference a partner in actor firm" }, { status: 422 })
+      }
+      if (!isFilingEscalationClosureAutoAssignmentMode(parsed.mode ?? null) && parsed.mode !== undefined) {
+        return NextResponse.json(
+          { error: "mode must be owner_rota or workload_aware_claim" },
+          { status: 400 }
+        )
+      }
+      const mode = isFilingEscalationClosureAutoAssignmentMode(parsed.mode ?? null)
+        ? parsed.mode
+        : undefined
+      const maxActiveClaims = Number(
+        parsed.maxActiveClaimsPerPartner ?? DEFAULT_CLOSURE_AUTO_ASSIGNMENT_MAX_ACTIVE_CLAIMS
+      )
+      if (!Number.isFinite(maxActiveClaims) || maxActiveClaims < 1 || maxActiveClaims > 50) {
+        return NextResponse.json(
+          { error: "maxActiveClaimsPerPartner must be between 1 and 50" },
+          { status: 400 }
+        )
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const existing = await repos.filingEscalationClosureAutoAssignmentRules.get(
+        filingEscalationClosureAutoAssignmentRuleId(actor.firmId, owner?.id ?? null)
+      )
+      const updated = buildFilingEscalationClosureAutoAssignmentRuleRow({
+        firmId: actor.firmId,
+        ownerId: owner?.id ?? null,
+        classification: actor.clearanceLevel,
+        actorId: actor.id,
+        mode,
+        enabled: parsed.enabled,
+        maxActiveClaimsPerPartner: Math.floor(maxActiveClaims),
+        existing,
+        now,
+        note: parsed.note,
+      })
+      await repos.filingEscalationClosureAutoAssignmentRules.upsert(updated)
+      store.filingEscalationClosureAutoAssignmentRules.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_closure_auto_assignment_rule_set",
+        actorId: actor.id,
+        target: updated.id,
+        classification: updated.classification,
+        reason: `${updated.mode}:${updated.enabled ? "enabled" : "disabled"}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "set_closure_auto_assignment_rule",
+        closureAutoAssignmentRule:
+          (await repos.filingEscalationClosureAutoAssignmentRules.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "auto_assign_closure_followup") {
+      if (!parsed.actorId || (!parsed.queueId && !parsed.ownerId)) {
+        return NextResponse.json(
+          { error: "actorId and queueId or ownerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "auto_assign_closure_followup requires partner role" }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const ownerIdFromQueueId = parsed.queueId
+        ? (await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId))?.ownerId ?? null
+        : null
+      const ownerId = parsed.ownerId ?? ownerIdFromQueueId
+      if (!ownerId) {
+        return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
+      }
+      const queueBefore = parsed.queueId
+        ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+        : null
+      const { queueByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+        forceAutoAssignOwnerIds: new Set([ownerId]),
+      })
+      const queue = queueByOwner.get(ownerId) ?? null
+      if (!queue || queue.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
+      }
+      if (!queue.assignedPartnerId) {
+        return NextResponse.json({ error: "no eligible closure follow-up auto-assignee found" }, { status: 422 })
+      }
+      const assignedChanged = (queueBefore?.assignedPartnerId ?? null) !== queue.assignedPartnerId
+      if (assignedChanged) {
+        store.audit.push({
+          action: "filing_closure_followup_auto_assign",
+          actorId: actor.id,
+          target: queue.id,
+          classification: queue.classification,
+          reason: queue.assignedPartnerId,
+        })
+        await persistAuditEntriesSince(store, repos, priorAuditCount)
+      }
+      const payload = {
+        action: "auto_assign_closure_followup",
+        autoAssigned: assignedChanged,
+        closureFollowupQueue: (await repos.filingEscalationClosureFollowupQueues.get(queue.id)) ?? queue,
+        closureSlaWindow: slaWindowByOwner.get(ownerId) ?? null,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

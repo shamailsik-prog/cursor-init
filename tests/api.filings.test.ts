@@ -1102,6 +1102,44 @@ describe("GET/POST /api/d4/filings", () => {
       )
     ).toBe(true)
 
+    const setClosureSlaConfig = await post(
+      {
+        action: "set_closure_sla_window_config",
+        actorId: "partner_a",
+        ackDeadlineHours: 1,
+        clearDeadlineHours: 2,
+        autoEscalationHours: 3,
+        note: "Configure closure SLA windows for this filing escalation owner",
+      },
+      "0ecfe2eb-d20d-46fd-b39a-3b4f2e83a65a"
+    )
+    expect(setClosureSlaConfig.status).toBe(200)
+    const setClosureSlaConfigJson = (await setClosureSlaConfig.json()) as {
+      result: { closureSlaWindowConfig: { scope: string; ackDeadlineMs: number } }
+    }
+    expect(setClosureSlaConfigJson.result.closureSlaWindowConfig.scope).toBe("firm_default")
+    expect(setClosureSlaConfigJson.result.closureSlaWindowConfig.ackDeadlineMs).toBe(60 * 60 * 1000)
+
+    const setClosureAutoRule = await post(
+      {
+        action: "set_closure_auto_assignment_rule",
+        actorId: "partner_a",
+        mode: "workload_aware_claim",
+        maxActiveClaimsPerPartner: 4,
+        note: "Route auto-assignment by workload-aware claim balancing",
+      },
+      "859ebce4-f588-44f0-a624-c864d769cadf"
+    )
+    expect(setClosureAutoRule.status).toBe(200)
+    const setClosureAutoRuleJson = (await setClosureAutoRule.json()) as {
+      result: {
+        closureAutoAssignmentRule: { mode: string; maxActiveClaimsPerPartner: number; enabled: boolean }
+      }
+    }
+    expect(setClosureAutoRuleJson.result.closureAutoAssignmentRule.mode).toBe("workload_aware_claim")
+    expect(setClosureAutoRuleJson.result.closureAutoAssignmentRule.maxActiveClaimsPerPartner).toBe(4)
+    expect(setClosureAutoRuleJson.result.closureAutoAssignmentRule.enabled).toBe(true)
+
     const assignClosureFollowup = await post(
       {
         action: "assign_closure_followup",
@@ -1113,6 +1151,16 @@ describe("GET/POST /api/d4/filings", () => {
       "5fcbcf14-af92-4126-8581-1f92ec84f894"
     )
     expect(assignClosureFollowup.status).toBe(200)
+    const autoAssignClosureFollowup = await post(
+      {
+        action: "auto_assign_closure_followup",
+        actorId: "partner_a",
+        ownerId: "partner_a",
+        note: "Auto-assign closure follow-up using current owner SLA pressure",
+      },
+      "aa8f31b9-5ad6-49a2-821f-26c2810ca5a6"
+    )
+    expect([200, 422]).toContain(autoAssignClosureFollowup.status)
     const claimClosureFollowup = await post(
       {
         action: "claim_closure_followup",
@@ -1685,12 +1733,27 @@ describe("GET/POST /api/d4/filings", () => {
     )
     expect(closureComplianceView.status).toBe(200)
     const closureComplianceViewJson = (await closureComplianceView.json()) as {
-      items: Array<{ ownerId: string; status: string }>
+      items: Array<{
+        ownerId: string
+        status: string
+        slaWindowStatus?: string
+        slaPressureLevel?: string
+      }>
     }
     expect(
       closureComplianceViewJson.items.some(
-        (row) =>
-          row.ownerId === "partner_a" && ["open_alert", "acknowledged", "cleared"].includes(row.status)
+        (row) => {
+          const digestStatusOk = ["open_alert", "acknowledged", "cleared"].includes(row.status)
+          const slaStatusOk =
+            row.slaWindowStatus === undefined ||
+            ["within_window", "ack_breached", "clear_breached", "auto_escalation_due", "cleared"].includes(
+              row.slaWindowStatus
+            )
+          const pressureOk =
+            row.slaPressureLevel === undefined ||
+            ["baseline", "elevated", "critical"].includes(row.slaPressureLevel)
+          return row.ownerId === "partner_a" && digestStatusOk && slaStatusOk && pressureOk
+        }
       )
     ).toBe(true)
 
@@ -1710,6 +1773,67 @@ describe("GET/POST /api/d4/filings", () => {
     expect(
       closureQueueViewJson.items.some(
         (row) => row.ownerId === "partner_a" && ["open", "claimed", "resolved"].includes(row.status)
+      )
+    ).toBe(true)
+
+    const closureSlaConfigView = await get(
+      new URLSearchParams({
+        view: "closure_sla_window_configs",
+        userId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSlaConfigView.status).toBe(200)
+    const closureSlaConfigViewJson = (await closureSlaConfigView.json()) as {
+      items: Array<{ scope: string; ackDeadlineMs: number }>
+    }
+    expect(
+      closureSlaConfigViewJson.items.some(
+        (row) => row.scope === "firm_default" && row.ackDeadlineMs === 60 * 60 * 1000
+      )
+    ).toBe(true)
+
+    const closureAutoRuleView = await get(
+      new URLSearchParams({
+        view: "closure_auto_assignment_rules",
+        userId: "partner_a",
+        mode: "workload_aware_claim",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureAutoRuleView.status).toBe(200)
+    const closureAutoRuleViewJson = (await closureAutoRuleView.json()) as {
+      items: Array<{ mode: string; maxActiveClaimsPerPartner: number }>
+    }
+    expect(
+      closureAutoRuleViewJson.items.some(
+        (row) => row.mode === "workload_aware_claim" && row.maxActiveClaimsPerPartner === 4
+      )
+    ).toBe(true)
+
+    const closureSlaWindowsView = await get(
+      new URLSearchParams({
+        view: "closure_sla_windows",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSlaWindowsView.status).toBe(200)
+    const closureSlaWindowsViewJson = (await closureSlaWindowsView.json()) as {
+      items: Array<{ ownerId: string; status: string; pressureLevel: string }>
+    }
+    expect(
+      closureSlaWindowsViewJson.items.some(
+        (row) =>
+          row.ownerId === "partner_a" &&
+          ["within_window", "ack_breached", "clear_breached", "auto_escalation_due", "cleared"].includes(
+            row.status
+          ) &&
+          ["baseline", "elevated", "critical"].includes(row.pressureLevel)
       )
     ).toBe(true)
   })

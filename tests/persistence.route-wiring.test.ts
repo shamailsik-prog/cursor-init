@@ -56,6 +56,9 @@ const baseStore = {
   filingEscalationRolloverReaffirmationSlas: new Map(),
   filingEscalationClosureComplianceDigests: new Map(),
   filingEscalationClosureFollowupQueues: new Map(),
+  filingEscalationClosureSlaWindowConfigs: new Map(),
+  filingEscalationClosureAutoAssignmentRules: new Map(),
+  filingEscalationClosureSlaWindows: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -748,6 +751,77 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByOwnerId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationClosureSlaWindowConfigs: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-sla-window-config:firmA:default",
+          firmId: "firmA",
+          ownerId: null,
+          classification: "internal",
+          scope: "firm_default",
+          ackDeadlineMs: 2 * 60 * 60 * 1000,
+          clearDeadlineMs: 8 * 60 * 60 * 1000,
+          autoEscalationMs: 12 * 60 * 60 * 1000,
+          setBy: "partner_a",
+          setAt: 1,
+          notes: ["repo closure SLA window config row"],
+          updatedAt: 1,
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureAutoAssignmentRules: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-auto-assignment-rule:firmA:default",
+          firmId: "firmA",
+          ownerId: null,
+          classification: "internal",
+          mode: "owner_rota",
+          enabled: true,
+          maxActiveClaimsPerPartner: 6,
+          setBy: "partner_a",
+          setAt: 1,
+          notes: ["repo closure auto-assignment rule row"],
+          updatedAt: 1,
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureSlaWindows: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-sla-window:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          digestId: "closure-compliance:firmA:partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          classification: "internal",
+          status: "ack_breached",
+          pressureLevel: "elevated",
+          openedAt: Date.now() - 3 * 60 * 60 * 1000,
+          acknowledgedAt: null,
+          clearedAt: null,
+          ackDeadlineAt: Date.now() - 60 * 60 * 1000,
+          clearDeadlineAt: Date.now() + 4 * 60 * 60 * 1000,
+          autoEscalateAt: Date.now() + 8 * 60 * 60 * 1000,
+          breachedAt: Date.now() - 60 * 60 * 1000,
+          autoEscalationTriggeredAt: null,
+          autoEscalatedToPartnerId: null,
+          linkedConfigId: "closure-sla-window-config:firmA:default",
+          linkedAutoAssignmentRuleId: "closure-auto-assignment-rule:firmA:default",
+          notes: ["repo closure SLA window row"],
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -1146,6 +1220,44 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain(
       "closure-followup:closure-compliance:firmA:partner_a"
+    )
+  })
+
+  it("filings closure SLA window configs view GET uses repository filingEscalationClosureSlaWindowConfigs listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_sla_window_configs&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("closure-sla-window-config:firmA:default")
+  })
+
+  it("filings closure auto-assignment rules view GET uses repository filingEscalationClosureAutoAssignmentRules listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_auto_assignment_rules&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("closure-auto-assignment-rule:firmA:default")
+  })
+
+  it("filings closure SLA windows view GET uses repository filingEscalationClosureSlaWindows listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_sla_windows&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-sla-window:closure-compliance:firmA:partner_a"
     )
   })
 

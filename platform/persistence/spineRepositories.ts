@@ -11,6 +11,9 @@ import type {
   FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationClosureComplianceDigestRow,
   FilingEscalationClosureFollowupQueueRow,
+  FilingEscalationClosureSlaWindowConfigRow,
+  FilingEscalationClosureAutoAssignmentRuleRow,
+  FilingEscalationClosureSlaWindowRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -253,6 +256,27 @@ export type FilingEscalationClosureFollowupQueueRepository = {
   listByOwnerId(ownerId: string): Promise<FilingEscalationClosureFollowupQueueRow[]>
 }
 
+export type FilingEscalationClosureSlaWindowConfigRepository = {
+  upsert(row: FilingEscalationClosureSlaWindowConfigRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureSlaWindowConfigRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureSlaWindowConfigRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSlaWindowConfigRow[]>
+}
+
+export type FilingEscalationClosureAutoAssignmentRuleRepository = {
+  upsert(row: FilingEscalationClosureAutoAssignmentRuleRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureAutoAssignmentRuleRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureAutoAssignmentRuleRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAutoAssignmentRuleRow[]>
+}
+
+export type FilingEscalationClosureSlaWindowRepository = {
+  upsert(row: FilingEscalationClosureSlaWindowRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureSlaWindowRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureSlaWindowRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSlaWindowRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -338,6 +362,9 @@ export type SpineRepositories = {
   filingEscalationRolloverReaffirmationSlas: FilingEscalationRolloverReaffirmationSlaRepository
   filingEscalationClosureComplianceDigests: FilingEscalationClosureComplianceDigestRepository
   filingEscalationClosureFollowupQueues: FilingEscalationClosureFollowupQueueRepository
+  filingEscalationClosureSlaWindowConfigs: FilingEscalationClosureSlaWindowConfigRepository
+  filingEscalationClosureAutoAssignmentRules: FilingEscalationClosureAutoAssignmentRuleRepository
+  filingEscalationClosureSlaWindows: FilingEscalationClosureSlaWindowRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -834,6 +861,60 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByOwnerId(ownerId) {
         return [...store.filingEscalationClosureFollowupQueues.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+    },
+    filingEscalationClosureSlaWindowConfigs: {
+      async upsert(row) {
+        store.filingEscalationClosureSlaWindowConfigs.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureSlaWindowConfigs.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureSlaWindowConfigs.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureSlaWindowConfigs.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+    },
+    filingEscalationClosureAutoAssignmentRules: {
+      async upsert(row) {
+        store.filingEscalationClosureAutoAssignmentRules.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureAutoAssignmentRules.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureAutoAssignmentRules.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureAutoAssignmentRules.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+    },
+    filingEscalationClosureSlaWindows: {
+      async upsert(row) {
+        store.filingEscalationClosureSlaWindows.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureSlaWindows.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureSlaWindows.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureSlaWindows.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },

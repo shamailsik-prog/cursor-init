@@ -908,6 +908,84 @@ describe("Firestore repository adapters", () => {
           (row) => row.id === "closure-followup:closure-compliance:firmA:partner_a"
         )
       ).toBe(true)
+      await repos.filingEscalationClosureSlaWindowConfigs.upsert({
+        id: "closure-sla-window-config:firmA:default",
+        firmId: "firmA",
+        ownerId: null,
+        classification: "internal",
+        scope: "firm_default",
+        ackDeadlineMs: 2 * 60 * 60 * 1000,
+        clearDeadlineMs: 8 * 60 * 60 * 1000,
+        autoEscalationMs: 12 * 60 * 60 * 1000,
+        setBy: "partner_a",
+        setAt: 49,
+        notes: ["closure SLA config row"],
+        updatedAt: 49,
+      })
+      const closureSlaConfig = await repos.filingEscalationClosureSlaWindowConfigs.get(
+        "closure-sla-window-config:firmA:default"
+      )
+      expect(closureSlaConfig?.scope).toBe("firm_default")
+      const closureSlaConfigByFirm =
+        await repos.filingEscalationClosureSlaWindowConfigs.listByFirm("firmA")
+      expect(
+        closureSlaConfigByFirm.some((row) => row.id === "closure-sla-window-config:firmA:default")
+      ).toBe(true)
+      await repos.filingEscalationClosureAutoAssignmentRules.upsert({
+        id: "closure-auto-assignment-rule:firmA:default",
+        firmId: "firmA",
+        ownerId: null,
+        classification: "internal",
+        mode: "owner_rota",
+        enabled: true,
+        maxActiveClaimsPerPartner: 6,
+        setBy: "partner_a",
+        setAt: 50,
+        notes: ["closure auto-assignment rule row"],
+        updatedAt: 50,
+      })
+      const closureAutoRule = await repos.filingEscalationClosureAutoAssignmentRules.get(
+        "closure-auto-assignment-rule:firmA:default"
+      )
+      expect(closureAutoRule?.mode).toBe("owner_rota")
+      const closureAutoRuleByFirm =
+        await repos.filingEscalationClosureAutoAssignmentRules.listByFirm("firmA")
+      expect(
+        closureAutoRuleByFirm.some((row) => row.id === "closure-auto-assignment-rule:firmA:default")
+      ).toBe(true)
+      await repos.filingEscalationClosureSlaWindows.upsert({
+        id: "closure-sla-window:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        digestId: "closure-compliance:firmA:partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        status: "ack_breached",
+        pressureLevel: "elevated",
+        openedAt: 40,
+        acknowledgedAt: null,
+        clearedAt: null,
+        ackDeadlineAt: 42,
+        clearDeadlineAt: 46,
+        autoEscalateAt: 50,
+        breachedAt: 43,
+        autoEscalationTriggeredAt: null,
+        autoEscalatedToPartnerId: null,
+        linkedConfigId: "closure-sla-window-config:firmA:default",
+        linkedAutoAssignmentRuleId: "closure-auto-assignment-rule:firmA:default",
+        notes: ["closure SLA window row"],
+        updatedAt: 51,
+      })
+      const closureSlaWindow = await repos.filingEscalationClosureSlaWindows.get(
+        "closure-sla-window:closure-compliance:firmA:partner_a"
+      )
+      expect(closureSlaWindow?.status).toBe("ack_breached")
+      const closureSlaWindowByFirm = await repos.filingEscalationClosureSlaWindows.listByFirm("firmA")
+      expect(
+        closureSlaWindowByFirm.some(
+          (row) => row.id === "closure-sla-window:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
     })
   })
 })

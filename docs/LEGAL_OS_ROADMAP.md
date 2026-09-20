@@ -21,6 +21,10 @@ Snapshot basis: current `main` as of this branch cut plus repository contents in
 - Extended `app/api/d4/filings/route.ts` with new governance views/actions: `view=closure_compliance_digests`, `view=closure_followup_queue`, `assign_closure_followup`, `claim_closure_followup`, and `resolve_closure_followup`.
 - Correlated closure-compliance follow-up pressure into workload digest unsnooze/severity handling via `closure_compliance_pressure`.
 - Extended API, route-wiring, repository, and runtime-mode persistence coverage (including firm isolation and audit write-through assertions).
+- Added durable closure-compliance SLA-window config + runtime SLA-window entities plus closure follow-up auto-assignment rule entities across memory/Firestore repositories and `firestore.rules`.
+- Extended `app/api/d4/filings/route.ts` with governance surfaces: `view=closure_sla_window_configs`, `view=closure_auto_assignment_rules`, `view=closure_sla_windows`, `set_closure_sla_window_config`, `set_closure_auto_assignment_rule`, and `auto_assign_closure_followup`.
+- Wired closure SLA breach/pressure signals into closure digest + queue responses and into workload severity escalation through `closure_compliance_pressure`.
+- Extended API, route-wiring, repository, and runtime-mode coverage for SLA-window persistence, auto-assignment behavior, cross-firm isolation, and audit write-through.
 
 ## Recommended immediate slice (Phase B)
 
@@ -35,9 +39,9 @@ Rationale: this closes a high-value PARTIAL area already in-tree, improves real 
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **filing escalation closure compliance SLA windows + auto-assignment parity**:
+Build **filing escalation closure attestation governance + SLA exception digest parity**:
 
-1. Add durable closure-compliance SLA window rows tracking owner response/claim/resolution deadlines for each follow-up queue item.
-2. Add automatic partner backup-assignment flow for breached closure-compliance follow-up windows (with attestation notes + second-review metadata).
-3. Feed closure-compliance SLA-window breaches into workload-digest critical escalation and partner drift indicators.
-4. Extend emulator/runtime + route-wiring coverage for closure-compliance SLA windows and auto-assignment rows, including audit write-through and firm isolation under resets.
+1. Add durable closure follow-up attestation ledger rows (claim-to-resolution evidence, partner concurrence flags, and second-review metadata) linked to SLA windows.
+2. Add closure SLA exception digest rows for waived/overridden windows, with waiver expiry countdowns and policy override reason tracking.
+3. Surface attestation + SLA-exception pressure across closure and workload digest views with explicit critical-path escalation indicators.
+4. Extend emulator/runtime + route-wiring coverage for attestation/exception entities, including audit write-through, firm isolation, and reset rehydration.
