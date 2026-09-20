@@ -28,6 +28,8 @@ import type {
   FilingEscalationClosureRebalanceSafeguardExpiryRow,
   FilingEscalationClosureAdjudicationDebtBurndownRow,
   FilingEscalationClosureSafeguardExpiryAttestationRow,
+  FilingEscalationClosureBurndownRecalibrationRow,
+  FilingEscalationClosureExpiryAttestationQueueRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -421,6 +423,28 @@ export type FilingEscalationClosureSafeguardExpiryAttestationRepository = {
   ): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow[]>
 }
 
+export type FilingEscalationClosureBurndownRecalibrationRepository = {
+  upsert(row: FilingEscalationClosureBurndownRecalibrationRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureBurndownRecalibrationRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
+  listByQueueId(queueId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
+  listByAdjudicationId(
+    adjudicationId: string
+  ): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
+}
+
+export type FilingEscalationClosureExpiryAttestationQueueRepository = {
+  upsert(row: FilingEscalationClosureExpiryAttestationQueueRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
+  listByQueueId(queueId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
+  listByRebalanceId(
+    rebalanceId: string
+  ): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -523,6 +547,8 @@ export type SpineRepositories = {
   filingEscalationClosureRebalanceSafeguardExpiry: FilingEscalationClosureRebalanceSafeguardExpiryRepository
   filingEscalationClosureAdjudicationDebtBurndown: FilingEscalationClosureAdjudicationDebtBurndownRepository
   filingEscalationClosureSafeguardExpiryAttestations: FilingEscalationClosureSafeguardExpiryAttestationRepository
+  filingEscalationClosureBurndownRecalibration: FilingEscalationClosureBurndownRecalibrationRepository
+  filingEscalationClosureExpiryAttestationQueue: FilingEscalationClosureExpiryAttestationQueueRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -1445,6 +1471,62 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByRebalanceId(rebalanceId) {
         return [...store.filingEscalationClosureSafeguardExpiryAttestations.values()].filter(
+          (row) => row.rebalanceId === rebalanceId
+        )
+      },
+    },
+    filingEscalationClosureBurndownRecalibration: {
+      async upsert(row) {
+        store.filingEscalationClosureBurndownRecalibration.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureBurndownRecalibration.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureBurndownRecalibration.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureBurndownRecalibration.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+      async listByQueueId(queueId) {
+        return [...store.filingEscalationClosureBurndownRecalibration.values()].filter(
+          (row) => row.queueId === queueId
+        )
+      },
+      async listByAdjudicationId(adjudicationId) {
+        return [...store.filingEscalationClosureBurndownRecalibration.values()].filter(
+          (row) => row.adjudicationId === adjudicationId
+        )
+      },
+    },
+    filingEscalationClosureExpiryAttestationQueue: {
+      async upsert(row) {
+        store.filingEscalationClosureExpiryAttestationQueue.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureExpiryAttestationQueue.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureExpiryAttestationQueue.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureExpiryAttestationQueue.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+      async listByQueueId(queueId) {
+        return [...store.filingEscalationClosureExpiryAttestationQueue.values()].filter(
+          (row) => row.queueId === queueId
+        )
+      },
+      async listByRebalanceId(rebalanceId) {
+        return [...store.filingEscalationClosureExpiryAttestationQueue.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
       },

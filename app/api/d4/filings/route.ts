@@ -179,6 +179,14 @@ import {
   isFilingEscalationClosureSafeguardExpiryAttestationStatus,
 } from "@/platform/persistence/filingEscalationClosureDebtBurndownExpiryAttestations"
 import {
+  buildFilingEscalationClosureBurndownRecalibrationRow,
+  buildFilingEscalationClosureExpiryAttestationQueueRow,
+  filingEscalationClosureBurndownRecalibrationId,
+  filingEscalationClosureExpiryAttestationQueueId,
+  isFilingEscalationClosureBurndownRecalibrationStatus,
+  isFilingEscalationClosureExpiryAttestationQueueStatus,
+} from "@/platform/persistence/filingEscalationClosureBurndownRecalibrationQueueOrchestration"
+import {
   buildFilingEscalationRemediationExpiryDigestRow,
   buildFilingEscalationRolloverBreachWatchRow,
   filingEscalationRemediationExpiryDigestId,
@@ -876,6 +884,78 @@ type ReconcileClosureSafeguardExpiryOverrideBody = {
   note?: string
 }
 
+type RebaselineClosureAdjudicationBurndownForecastBody = {
+  action: "rebaseline_closure_adjudication_burndown_forecast"
+  actorId?: string
+  recalibrationId?: string
+  burndownId?: string
+  remediationId?: string
+  adjudicationId?: string
+  targetHours?: number
+  note?: string
+}
+
+type OverrideClosureAdjudicationBurndownConfidenceBandBody = {
+  action: "override_closure_adjudication_burndown_confidence_band"
+  actorId?: string
+  recalibrationId?: string
+  burndownId?: string
+  remediationId?: string
+  adjudicationId?: string
+  lowerHours?: number
+  upperHours?: number
+  note?: string
+}
+
+type AnnotateClosureAdjudicationBurndownCheckpointRollbackBody = {
+  action: "annotate_closure_adjudication_burndown_checkpoint_rollback"
+  actorId?: string
+  recalibrationId?: string
+  burndownId?: string
+  remediationId?: string
+  adjudicationId?: string
+  rollbackReason?: string
+  note?: string
+}
+
+type TriageClosureSafeguardExpiryAttestationQueueBody = {
+  action: "triage_closure_safeguard_expiry_attestation_queue"
+  actorId?: string
+  queueItemId?: string
+  attestationId?: string
+  expiryId?: string
+  rebalanceId?: string
+  queueId?: string
+  ownerId?: string
+  note?: string
+}
+
+type AttestClosureSafeguardExpiryQueueHandoffBody = {
+  action: "attest_closure_safeguard_expiry_queue_handoff"
+  actorId?: string
+  queueItemId?: string
+  attestationId?: string
+  expiryId?: string
+  rebalanceId?: string
+  queueId?: string
+  ownerId?: string
+  handoffToOwnerId?: string
+  carryoverNote?: string
+  note?: string
+}
+
+type CheckpointClosureSafeguardExpiryQueueAutoDrainBody = {
+  action: "checkpoint_closure_safeguard_expiry_queue_auto_drain"
+  actorId?: string
+  queueItemId?: string
+  attestationId?: string
+  expiryId?: string
+  rebalanceId?: string
+  queueId?: string
+  ownerId?: string
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -949,6 +1029,12 @@ type Body =
   | AcknowledgeClosureSafeguardExpiryAttestationBody
   | QueueClosureSafeguardOverdueExpiryExceptionBody
   | ReconcileClosureSafeguardExpiryOverrideBody
+  | RebaselineClosureAdjudicationBurndownForecastBody
+  | OverrideClosureAdjudicationBurndownConfidenceBandBody
+  | AnnotateClosureAdjudicationBurndownCheckpointRollbackBody
+  | TriageClosureSafeguardExpiryAttestationQueueBody
+  | AttestClosureSafeguardExpiryQueueHandoffBody
+  | CheckpointClosureSafeguardExpiryQueueAutoDrainBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -1008,7 +1094,9 @@ function parseFilingsView(
   | "closure_adjudication_slo_debt_remediation"
   | "closure_rebalance_safeguard_expiry"
   | "closure_adjudication_debt_burndown"
-  | "closure_safeguard_expiry_attestations" {
+  | "closure_safeguard_expiry_attestations"
+  | "closure_burndown_recalibration"
+  | "closure_expiry_attestation_queue" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -1050,6 +1138,8 @@ function parseFilingsView(
     return "closure_adjudication_debt_burndown"
   if (value === "closure_safeguard_expiry_attestations")
     return "closure_safeguard_expiry_attestations"
+  if (value === "closure_burndown_recalibration") return "closure_burndown_recalibration"
+  if (value === "closure_expiry_attestation_queue") return "closure_expiry_attestation_queue"
   return "packages"
 }
 
@@ -1583,6 +1673,22 @@ async function recomputeClosureComplianceState(
     status: "attestation_open" | "attestation_acknowledged" | "attestation_overdue" | "attestation_reconciled"
     openBacklogHours: number
   }>
+  burndownRecalibrationByOwner: Map<string, {
+    id: string
+    status:
+      | "recalibration_pending"
+      | "confidence_band_overridden"
+      | "checkpoint_rollback_noted"
+      | "recalibration_settled"
+    confidenceDriftHours: number
+    rebaselineTargetAt: number | null
+  }>
+  expiryAttestationQueueByOwner: Map<string, {
+    id: string
+    status: "queue_open" | "queue_triaged" | "handoff_attested" | "queue_auto_drained"
+    queueAgingHours: number
+    openExceptionCount: number
+  }>
 }> {
   const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(input.firmId)
   const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
@@ -1726,6 +1832,16 @@ async function recomputeClosureComplianceState(
     await repos.filingEscalationClosureSafeguardExpiryAttestations.listByFirm(input.firmId)
   const existingSafeguardAttestationByExpiryId = new Map(
     existingSafeguardAttestationRows.map((row) => [row.expiryId, row])
+  )
+  const existingBurndownRecalibrationRows =
+    await repos.filingEscalationClosureBurndownRecalibration.listByFirm(input.firmId)
+  const existingBurndownRecalibrationByBurndownId = new Map(
+    existingBurndownRecalibrationRows.map((row) => [row.burndownId, row])
+  )
+  const existingExpiryQueueRows =
+    await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm(input.firmId)
+  const existingExpiryQueueByAttestationId = new Map(
+    existingExpiryQueueRows.map((row) => [row.attestationId, row])
   )
   let closureSlaConfigRows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm(input.firmId)
   if (!closureSlaConfigRows.some((row) => row.ownerId === null && row.scope === "firm_default")) {
@@ -1977,6 +2093,28 @@ async function recomputeClosureComplianceState(
         | "attestation_overdue"
         | "attestation_reconciled"
       openBacklogHours: number
+    }
+  >()
+  const burndownRecalibrationByOwner = new Map<
+    string,
+    {
+      id: string
+      status:
+        | "recalibration_pending"
+        | "confidence_band_overridden"
+        | "checkpoint_rollback_noted"
+        | "recalibration_settled"
+      confidenceDriftHours: number
+      rebaselineTargetAt: number | null
+    }
+  >()
+  const expiryAttestationQueueByOwner = new Map<
+    string,
+    {
+      id: string
+      status: "queue_open" | "queue_triaged" | "handoff_attested" | "queue_auto_drained"
+      queueAgingHours: number
+      openExceptionCount: number
     }
   >()
   for (const owner of ownerIds) {
@@ -2552,6 +2690,77 @@ async function recomputeClosureComplianceState(
         status: safeguardAttestationComputed.status,
         openBacklogHours: safeguardAttestationComputed.openBacklogHours,
       })
+      const existingRecalibration =
+        existingBurndownRecalibrationByBurndownId.get(debtBurndownComputed.id) ?? null
+      const recalibrationComputed = buildFilingEscalationClosureBurndownRecalibrationRow({
+        burndown: debtBurndownComputed,
+        existing: existingRecalibration,
+        now: input.now,
+      })
+      const recalibrationChanged =
+        !existingRecalibration ||
+        existingRecalibration.status !== recalibrationComputed.status ||
+        existingRecalibration.rebaselineTargetAt !== recalibrationComputed.rebaselineTargetAt ||
+        existingRecalibration.confidenceBandLowerHours !==
+          recalibrationComputed.confidenceBandLowerHours ||
+        existingRecalibration.confidenceBandUpperHours !==
+          recalibrationComputed.confidenceBandUpperHours ||
+        existingRecalibration.confidenceOverriddenBy !==
+          recalibrationComputed.confidenceOverriddenBy ||
+        existingRecalibration.confidenceOverriddenAt !==
+          recalibrationComputed.confidenceOverriddenAt ||
+        existingRecalibration.rollbackNotedBy !== recalibrationComputed.rollbackNotedBy ||
+        existingRecalibration.rollbackNotedAt !== recalibrationComputed.rollbackNotedAt ||
+        existingRecalibration.rollbackReason !== recalibrationComputed.rollbackReason ||
+        existingRecalibration.settledBy !== recalibrationComputed.settledBy ||
+        existingRecalibration.settledAt !== recalibrationComputed.settledAt ||
+        existingRecalibration.confidenceDriftHours !== recalibrationComputed.confidenceDriftHours
+      if (recalibrationChanged) {
+        await repos.filingEscalationClosureBurndownRecalibration.upsert(recalibrationComputed)
+      }
+      store.filingEscalationClosureBurndownRecalibration.set(
+        recalibrationComputed.id,
+        recalibrationComputed
+      )
+      burndownRecalibrationByOwner.set(owner, {
+        id: recalibrationComputed.id,
+        status: recalibrationComputed.status,
+        confidenceDriftHours: recalibrationComputed.confidenceDriftHours,
+        rebaselineTargetAt: recalibrationComputed.rebaselineTargetAt,
+      })
+      const existingExpiryQueue =
+        existingExpiryQueueByAttestationId.get(safeguardAttestationComputed.id) ?? null
+      const expiryQueueComputed = buildFilingEscalationClosureExpiryAttestationQueueRow({
+        attestation: safeguardAttestationComputed,
+        existing: existingExpiryQueue,
+        now: input.now,
+      })
+      const expiryQueueChanged =
+        !existingExpiryQueue ||
+        existingExpiryQueue.status !== expiryQueueComputed.status ||
+        existingExpiryQueue.triagedBy !== expiryQueueComputed.triagedBy ||
+        existingExpiryQueue.triagedAt !== expiryQueueComputed.triagedAt ||
+        existingExpiryQueue.handoffAttestedBy !== expiryQueueComputed.handoffAttestedBy ||
+        existingExpiryQueue.handoffAttestedAt !== expiryQueueComputed.handoffAttestedAt ||
+        existingExpiryQueue.handoffToOwnerId !== expiryQueueComputed.handoffToOwnerId ||
+        existingExpiryQueue.autoDrainCheckpointAt !== expiryQueueComputed.autoDrainCheckpointAt ||
+        existingExpiryQueue.queueAgingHours !== expiryQueueComputed.queueAgingHours ||
+        existingExpiryQueue.openExceptionCount !== expiryQueueComputed.openExceptionCount ||
+        existingExpiryQueue.reconciliationCarryoverNote !==
+          expiryQueueComputed.reconciliationCarryoverNote
+      if (expiryQueueChanged) {
+        await repos.filingEscalationClosureExpiryAttestationQueue.upsert(expiryQueueComputed)
+      }
+      store.filingEscalationClosureExpiryAttestationQueue.set(
+        expiryQueueComputed.id,
+        expiryQueueComputed
+      )
+      expiryAttestationQueueByOwner.set(owner, {
+        id: expiryQueueComputed.id,
+        status: expiryQueueComputed.status,
+        queueAgingHours: expiryQueueComputed.queueAgingHours,
+        openExceptionCount: expiryQueueComputed.openExceptionCount,
+      })
     }
   }
   return {
@@ -2572,6 +2781,8 @@ async function recomputeClosureComplianceState(
     rebalanceSafeguardExpiryByOwner,
     adjudicationDebtBurndownByOwner,
     safeguardExpiryAttestationByOwner,
+    burndownRecalibrationByOwner,
+    expiryAttestationQueueByOwner,
   }
 }
 
@@ -3135,6 +3346,8 @@ export async function GET(request: Request) {
         rebalanceSafeguardExpiryByOwner,
         adjudicationDebtBurndownByOwner,
         safeguardExpiryAttestationByOwner,
+        burndownRecalibrationByOwner,
+        expiryAttestationQueueByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
@@ -3173,6 +3386,8 @@ export async function GET(request: Request) {
           const safeguardExpiry = rebalanceSafeguardExpiryByOwner.get(row.ownerId)
           const debtBurndown = adjudicationDebtBurndownByOwner.get(row.ownerId)
           const safeguardAttestation = safeguardExpiryAttestationByOwner.get(row.ownerId)
+          const burndownRecalibration = burndownRecalibrationByOwner.get(row.ownerId)
+          const expiryQueue = expiryAttestationQueueByOwner.get(row.ownerId)
           return {
             ...row,
             slaWindowStatus: window?.status ?? "cleared",
@@ -3225,6 +3440,13 @@ export async function GET(request: Request) {
               safeguardAttestation?.status ?? "attestation_open",
             closureSafeguardExpiryAttestationBacklogHours:
               safeguardAttestation?.openBacklogHours ?? 0,
+            closureBurndownRecalibrationStatus:
+              burndownRecalibration?.status ?? "recalibration_pending",
+            closureBurndownConfidenceDriftHours:
+              burndownRecalibration?.confidenceDriftHours ?? 0,
+            closureExpiryAttestationQueueStatus: expiryQueue?.status ?? "queue_open",
+            closureExpiryAttestationQueueAgingHours: expiryQueue?.queueAgingHours ?? 0,
+            closureExpiryAttestationQueueOpenExceptions: expiryQueue?.openExceptionCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -3267,6 +3489,8 @@ export async function GET(request: Request) {
         rebalanceSafeguardExpiryByOwner,
         adjudicationDebtBurndownByOwner,
         safeguardExpiryAttestationByOwner,
+        burndownRecalibrationByOwner,
+        expiryAttestationQueueByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
@@ -3306,6 +3530,8 @@ export async function GET(request: Request) {
           const safeguardExpiry = rebalanceSafeguardExpiryByOwner.get(row.ownerId)
           const debtBurndown = adjudicationDebtBurndownByOwner.get(row.ownerId)
           const safeguardAttestation = safeguardExpiryAttestationByOwner.get(row.ownerId)
+          const burndownRecalibration = burndownRecalibrationByOwner.get(row.ownerId)
+          const expiryQueue = expiryAttestationQueueByOwner.get(row.ownerId)
           return {
             ...row,
             slaWindowStatus: window?.status ?? "cleared",
@@ -3355,6 +3581,13 @@ export async function GET(request: Request) {
               safeguardAttestation?.status ?? "attestation_open",
             closureSafeguardExpiryAttestationBacklogHours:
               safeguardAttestation?.openBacklogHours ?? 0,
+            closureBurndownRecalibrationStatus:
+              burndownRecalibration?.status ?? "recalibration_pending",
+            closureBurndownConfidenceDriftHours:
+              burndownRecalibration?.confidenceDriftHours ?? 0,
+            closureExpiryAttestationQueueStatus: expiryQueue?.status ?? "queue_open",
+            closureExpiryAttestationQueueAgingHours: expiryQueue?.queueAgingHours ?? 0,
+            closureExpiryAttestationQueueOpenExceptions: expiryQueue?.openExceptionCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -3438,6 +3671,8 @@ export async function GET(request: Request) {
         rebalanceSafeguardExpiryByOwner,
         adjudicationDebtBurndownByOwner,
         safeguardExpiryAttestationByOwner,
+        burndownRecalibrationByOwner,
+        expiryAttestationQueueByOwner,
       } =
         await recomputeClosureComplianceState(
         store,
@@ -3491,6 +3726,8 @@ export async function GET(request: Request) {
           const safeguardExpiry = rebalanceSafeguardExpiryByOwner.get(row.ownerId)
           const debtBurndown = adjudicationDebtBurndownByOwner.get(row.ownerId)
           const safeguardAttestation = safeguardExpiryAttestationByOwner.get(row.ownerId)
+          const burndownRecalibration = burndownRecalibrationByOwner.get(row.ownerId)
+          const expiryQueue = expiryAttestationQueueByOwner.get(row.ownerId)
           return {
             ...row,
             digestId: digest?.id ?? null,
@@ -3539,6 +3776,13 @@ export async function GET(request: Request) {
               safeguardAttestation?.status ?? "attestation_open",
             closureSafeguardExpiryAttestationBacklogHours:
               safeguardAttestation?.openBacklogHours ?? 0,
+            closureBurndownRecalibrationStatus:
+              burndownRecalibration?.status ?? "recalibration_pending",
+            closureBurndownConfidenceDriftHours:
+              burndownRecalibration?.confidenceDriftHours ?? 0,
+            closureExpiryAttestationQueueStatus: expiryQueue?.status ?? "queue_open",
+            closureExpiryAttestationQueueAgingHours: expiryQueue?.queueAgingHours ?? 0,
+            closureExpiryAttestationQueueOpenExceptions: expiryQueue?.openExceptionCount ?? 0,
             closureCriticalPath:
               (adjudication?.status === "panel_in_review" &&
                 (adjudication.dissentNotes.length > 0 || adjudication.panelMemberIds.length < 2)) ||
@@ -4128,6 +4372,78 @@ export async function GET(request: Request) {
         nextCursor,
       })
     }
+    if (view === "closure_burndown_recalibration") {
+      const ownerId = url.searchParams.get("ownerId")
+      const queueId = url.searchParams.get("queueId")
+      const adjudicationId = url.searchParams.get("adjudicationId")
+      const status = url.searchParams.get("status")
+      const rows = await repos.filingEscalationClosureBurndownRecalibration.listByFirm(user.firmId)
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (queueId ? row.queueId === queueId : true))
+        .filter((row) => (adjudicationId ? row.adjudicationId === adjudicationId : true))
+        .filter((row) =>
+          isFilingEscalationClosureBurndownRecalibrationStatus(status) ? row.status === status : true
+        )
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_expiry_attestation_queue") {
+      const ownerId = url.searchParams.get("ownerId")
+      const queueId = url.searchParams.get("queueId")
+      const rebalanceId = url.searchParams.get("rebalanceId")
+      const status = url.searchParams.get("status")
+      const rows = await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm(user.firmId)
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (queueId ? row.queueId === queueId : true))
+        .filter((row) => (rebalanceId ? row.rebalanceId === rebalanceId : true))
+        .filter((row) =>
+          isFilingEscalationClosureExpiryAttestationQueueStatus(status) ? row.status === status : true
+        )
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
     if (view === "escalation_workload_digests") {
       const packageId = url.searchParams.get("packageId")
       const ownerId = url.searchParams.get("ownerId")
@@ -4152,6 +4468,8 @@ export async function GET(request: Request) {
         rebalanceSafeguardExpiryByOwner,
         adjudicationDebtBurndownByOwner,
         safeguardExpiryAttestationByOwner,
+        burndownRecalibrationByOwner,
+        expiryAttestationQueueByOwner,
       } =
         await recomputeClosureComplianceState(store, repos, {
           firmId: user.firmId,
@@ -4471,6 +4789,12 @@ export async function GET(request: Request) {
         const ownerSafeguardAttestation = rota?.primaryOwnerId
           ? safeguardExpiryAttestationByOwner.get(rota.primaryOwnerId) ?? null
           : null
+        const ownerBurndownRecalibration = rota?.primaryOwnerId
+          ? burndownRecalibrationByOwner.get(rota.primaryOwnerId) ?? null
+          : null
+        const ownerExpiryAttestationQueue = rota?.primaryOwnerId
+          ? expiryAttestationQueueByOwner.get(rota.primaryOwnerId) ?? null
+          : null
         const closureQueueElevated =
           !!ownerClosureQueue &&
           ownerClosureQueue.status !== "resolved" &&
@@ -4581,6 +4905,23 @@ export async function GET(request: Request) {
           !!ownerSafeguardAttestation &&
           (ownerSafeguardAttestation.status === "attestation_open" ||
             ownerSafeguardAttestation.status === "attestation_overdue")
+        const burndownRecalibrationCritical =
+          !!ownerBurndownRecalibration &&
+          ownerBurndownRecalibration.status === "checkpoint_rollback_noted"
+        const burndownRecalibrationElevated =
+          !!ownerBurndownRecalibration &&
+          (ownerBurndownRecalibration.status === "confidence_band_overridden" ||
+            ownerBurndownRecalibration.status === "checkpoint_rollback_noted" ||
+            ownerBurndownRecalibration.confidenceDriftHours > 0)
+        const attestationQueueCritical =
+          !!ownerExpiryAttestationQueue &&
+          (ownerExpiryAttestationQueue.openExceptionCount > 0 ||
+            ownerExpiryAttestationQueue.queueAgingHours >= 4)
+        const attestationQueueElevated =
+          !!ownerExpiryAttestationQueue &&
+          (ownerExpiryAttestationQueue.status === "queue_open" ||
+            ownerExpiryAttestationQueue.status === "queue_triaged" ||
+            ownerExpiryAttestationQueue.queueAgingHours > 0)
         const closureQueueCritical =
           (closureQueueElevated && !!ownerClosureQueue && ownerClosureQueue.breachedReaffirmationCount > 0) ||
           closureSlaCritical ||
@@ -4596,7 +4937,9 @@ export async function GET(request: Request) {
           remediationDebtCritical ||
           safeguardExpiryCritical ||
           debtBurndownCritical ||
-          expiryAttestationCritical
+          expiryAttestationCritical ||
+          burndownRecalibrationCritical ||
+          attestationQueueCritical
         const computedBaseWithQueue =
           (
             closureQueueElevated ||
@@ -4613,7 +4956,9 @@ export async function GET(request: Request) {
             remediationDebtElevated ||
             safeguardExpiryElevated ||
             debtBurndownElevated ||
-            expiryAttestationElevated
+            expiryAttestationElevated ||
+            burndownRecalibrationElevated ||
+            attestationQueueElevated
           ) &&
           !computedBase.alertReasons.includes("closure_compliance_pressure")
             ? {
@@ -4777,6 +5122,12 @@ export async function GET(request: Request) {
           const safeguardAttestation = row.ownerId
             ? safeguardExpiryAttestationByOwner.get(row.ownerId) ?? null
             : null
+          const burndownRecalibration = row.ownerId
+            ? burndownRecalibrationByOwner.get(row.ownerId) ?? null
+            : null
+          const expiryQueue = row.ownerId
+            ? expiryAttestationQueueByOwner.get(row.ownerId) ?? null
+            : null
           const adjudication = row.ownerId ? adjudicationByOwner.get(row.ownerId) ?? null : null
           return {
             ...row,
@@ -4808,6 +5159,13 @@ export async function GET(request: Request) {
               safeguardAttestation?.status ?? "attestation_open",
             closureSafeguardExpiryAttestationBacklogHours:
               safeguardAttestation?.openBacklogHours ?? 0,
+            closureBurndownRecalibrationStatus:
+              burndownRecalibration?.status ?? "recalibration_pending",
+            closureBurndownConfidenceDriftHours:
+              burndownRecalibration?.confidenceDriftHours ?? 0,
+            closureExpiryAttestationQueueStatus: expiryQueue?.status ?? "queue_open",
+            closureExpiryAttestationQueueAgingHours: expiryQueue?.queueAgingHours ?? 0,
+            closureExpiryAttestationQueueOpenExceptions: expiryQueue?.openExceptionCount ?? 0,
           }
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -12052,6 +12410,604 @@ export async function POST(request: Request) {
         closureSafeguardExpiryAttestation:
           (await repos.filingEscalationClosureSafeguardExpiryAttestations.get(attestationUpdated.id)) ??
           attestationUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "rebaseline_closure_adjudication_burndown_forecast") {
+      if (
+        !parsed.actorId ||
+        (!parsed.recalibrationId && !parsed.burndownId && !parsed.remediationId && !parsed.adjudicationId) ||
+        parsed.targetHours === undefined
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, targetHours, and recalibrationId/burndownId/remediationId/adjudicationId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const targetHours = Number(parsed.targetHours)
+      if (!Number.isFinite(targetHours) || targetHours < 0 || targetHours > 336) {
+        return NextResponse.json({ error: "targetHours must be between 0 and 336" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "rebaseline_closure_adjudication_burndown_forecast requires partner role" },
+          { status: 403 }
+        )
+      }
+      const existingRecalibration = parsed.recalibrationId
+        ? await repos.filingEscalationClosureBurndownRecalibration.get(parsed.recalibrationId)
+        : null
+      const resolvedBurndownId =
+        parsed.burndownId ??
+        existingRecalibration?.burndownId ??
+        (parsed.remediationId
+          ? filingEscalationClosureAdjudicationDebtBurndownId(parsed.remediationId)
+          : parsed.adjudicationId
+            ? filingEscalationClosureAdjudicationDebtBurndownId(
+                filingEscalationClosureAdjudicationSloDebtRemediationId(
+                  filingEscalationClosureAdjudicationSloId(parsed.adjudicationId)
+                )
+              )
+            : null)
+      const burndown = resolvedBurndownId
+        ? await repos.filingEscalationClosureAdjudicationDebtBurndown.get(resolvedBurndownId)
+        : null
+      if (!burndown || burndown.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const recalibrationExistingByBurndown =
+        await repos.filingEscalationClosureBurndownRecalibration.get(
+          filingEscalationClosureBurndownRecalibrationId(burndown.id)
+        )
+      const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
+        burndown,
+        existing: existingRecalibration ?? recalibrationExistingByBurndown,
+        rebaselineTargetHours: targetHours,
+        now,
+        note: parsed.note ?? `burndown forecast re-baselined to ${targetHours} hours`,
+      })
+      await repos.filingEscalationClosureBurndownRecalibration.upsert(recalibrationUpdated)
+      store.filingEscalationClosureBurndownRecalibration.set(recalibrationUpdated.id, recalibrationUpdated)
+      store.audit.push({
+        action: "filing_closure_burndown_recalibration_rebaseline",
+        actorId: actor.id,
+        target: recalibrationUpdated.id,
+        classification: recalibrationUpdated.classification,
+        reason: String(targetHours),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "rebaseline_closure_adjudication_burndown_forecast",
+        closureBurndownRecalibration:
+          (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
+          recalibrationUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "override_closure_adjudication_burndown_confidence_band") {
+      if (
+        !parsed.actorId ||
+        (!parsed.recalibrationId && !parsed.burndownId && !parsed.remediationId && !parsed.adjudicationId) ||
+        parsed.lowerHours === undefined ||
+        parsed.upperHours === undefined
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, lowerHours, upperHours, and recalibrationId/burndownId/remediationId/adjudicationId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const lowerHours = Number(parsed.lowerHours)
+      const upperHours = Number(parsed.upperHours)
+      if (
+        !Number.isFinite(lowerHours) ||
+        !Number.isFinite(upperHours) ||
+        lowerHours < 0 ||
+        upperHours < lowerHours ||
+        upperHours > 336
+      ) {
+        return NextResponse.json(
+          { error: "confidence band must satisfy 0 <= lowerHours <= upperHours <= 336" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "override_closure_adjudication_burndown_confidence_band requires partner role" },
+          { status: 403 }
+        )
+      }
+      const existingRecalibration = parsed.recalibrationId
+        ? await repos.filingEscalationClosureBurndownRecalibration.get(parsed.recalibrationId)
+        : null
+      const resolvedBurndownId =
+        parsed.burndownId ??
+        existingRecalibration?.burndownId ??
+        (parsed.remediationId
+          ? filingEscalationClosureAdjudicationDebtBurndownId(parsed.remediationId)
+          : parsed.adjudicationId
+            ? filingEscalationClosureAdjudicationDebtBurndownId(
+                filingEscalationClosureAdjudicationSloDebtRemediationId(
+                  filingEscalationClosureAdjudicationSloId(parsed.adjudicationId)
+                )
+              )
+            : null)
+      const burndown = resolvedBurndownId
+        ? await repos.filingEscalationClosureAdjudicationDebtBurndown.get(resolvedBurndownId)
+        : null
+      if (!burndown || burndown.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const recalibrationExistingByBurndown =
+        await repos.filingEscalationClosureBurndownRecalibration.get(
+          filingEscalationClosureBurndownRecalibrationId(burndown.id)
+        )
+      const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
+        burndown,
+        existing: existingRecalibration ?? recalibrationExistingByBurndown,
+        confidenceBandLowerHours: lowerHours,
+        confidenceBandUpperHours: upperHours,
+        confidenceOverriddenBy: actor.id,
+        now,
+        note: parsed.note ?? `confidence band overridden to ${lowerHours}-${upperHours} hours`,
+      })
+      await repos.filingEscalationClosureBurndownRecalibration.upsert(recalibrationUpdated)
+      store.filingEscalationClosureBurndownRecalibration.set(recalibrationUpdated.id, recalibrationUpdated)
+      store.audit.push({
+        action: "filing_closure_burndown_recalibration_confidence_override",
+        actorId: actor.id,
+        target: recalibrationUpdated.id,
+        classification: recalibrationUpdated.classification,
+        reason: `${lowerHours}-${upperHours}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "override_closure_adjudication_burndown_confidence_band",
+        closureBurndownRecalibration:
+          (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
+          recalibrationUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "annotate_closure_adjudication_burndown_checkpoint_rollback") {
+      if (
+        !parsed.actorId ||
+        (!parsed.recalibrationId && !parsed.burndownId && !parsed.remediationId && !parsed.adjudicationId) ||
+        !parsed.rollbackReason?.trim()
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, rollbackReason, and recalibrationId/burndownId/remediationId/adjudicationId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "annotate_closure_adjudication_burndown_checkpoint_rollback requires partner role" },
+          { status: 403 }
+        )
+      }
+      const existingRecalibration = parsed.recalibrationId
+        ? await repos.filingEscalationClosureBurndownRecalibration.get(parsed.recalibrationId)
+        : null
+      const resolvedBurndownId =
+        parsed.burndownId ??
+        existingRecalibration?.burndownId ??
+        (parsed.remediationId
+          ? filingEscalationClosureAdjudicationDebtBurndownId(parsed.remediationId)
+          : parsed.adjudicationId
+            ? filingEscalationClosureAdjudicationDebtBurndownId(
+                filingEscalationClosureAdjudicationSloDebtRemediationId(
+                  filingEscalationClosureAdjudicationSloId(parsed.adjudicationId)
+                )
+              )
+            : null)
+      const burndown = resolvedBurndownId
+        ? await repos.filingEscalationClosureAdjudicationDebtBurndown.get(resolvedBurndownId)
+        : null
+      if (!burndown || burndown.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const recalibrationExistingByBurndown =
+        await repos.filingEscalationClosureBurndownRecalibration.get(
+          filingEscalationClosureBurndownRecalibrationId(burndown.id)
+        )
+      const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
+        burndown,
+        existing: existingRecalibration ?? recalibrationExistingByBurndown,
+        rollbackNotedBy: actor.id,
+        rollbackReason: parsed.rollbackReason.trim(),
+        now,
+        note: parsed.note ?? `checkpoint rollback annotated: ${parsed.rollbackReason.trim()}`,
+      })
+      await repos.filingEscalationClosureBurndownRecalibration.upsert(recalibrationUpdated)
+      store.filingEscalationClosureBurndownRecalibration.set(recalibrationUpdated.id, recalibrationUpdated)
+      store.audit.push({
+        action: "filing_closure_burndown_recalibration_checkpoint_rollback",
+        actorId: actor.id,
+        target: recalibrationUpdated.id,
+        classification: recalibrationUpdated.classification,
+        reason: parsed.rollbackReason.trim(),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "annotate_closure_adjudication_burndown_checkpoint_rollback",
+        closureBurndownRecalibration:
+          (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
+          recalibrationUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "triage_closure_safeguard_expiry_attestation_queue") {
+      if (
+        !parsed.actorId ||
+        (!parsed.queueItemId &&
+          !parsed.attestationId &&
+          !parsed.expiryId &&
+          !parsed.rebalanceId &&
+          !parsed.queueId &&
+          !parsed.ownerId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId and queueItemId/attestationId/expiryId/rebalanceId/queueId/ownerId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "triage_closure_safeguard_expiry_attestation_queue requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const existingQueueItem = parsed.queueItemId
+        ? await repos.filingEscalationClosureExpiryAttestationQueue.get(parsed.queueItemId)
+        : null
+      const existingAttestation =
+        (parsed.attestationId
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(parsed.attestationId)
+          : null) ??
+        (existingQueueItem
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(existingQueueItem.attestationId)
+          : null)
+      const existingExpiry = parsed.expiryId
+        ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(parsed.expiryId)
+        : existingAttestation
+          ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(existingAttestation.expiryId)
+          : null
+      const queueFromSelector =
+        parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null
+      const rebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : queueFromSelector
+            ? await repos.filingEscalationClosureEnforcementRebalance.get(
+                filingEscalationClosureEnforcementRebalanceId(queueFromSelector.id)
+              )
+            : null) ?? null
+      const resolvedAttestation =
+        existingAttestation ??
+        (existingExpiry
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+              filingEscalationClosureSafeguardExpiryAttestationId(existingExpiry.id)
+            )
+          : rebalance
+            ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+                filingEscalationClosureSafeguardExpiryAttestationId(
+                  filingEscalationClosureRebalanceSafeguardExpiryId(
+                    filingEscalationClosureRebalanceSafeguardId(rebalance.id)
+                  )
+                )
+              )
+            : null)
+      if (!resolvedAttestation || resolvedAttestation.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure safeguard expiry attestation row not found" }, { status: 404 })
+      }
+      const existingQueueByAttestation =
+        await repos.filingEscalationClosureExpiryAttestationQueue.get(
+          filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
+        )
+      const priorAuditCount = store.audit.length
+      const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
+        attestation: resolvedAttestation,
+        existing: existingQueueItem ?? existingQueueByAttestation,
+        triagedBy: actor.id,
+        now,
+        note: parsed.note ?? "expiry attestation queue item triaged",
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
+      store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
+      store.audit.push({
+        action: "filing_closure_expiry_attestation_queue_triage",
+        actorId: actor.id,
+        target: queueUpdated.id,
+        classification: queueUpdated.classification,
+        reason: queueUpdated.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "triage_closure_safeguard_expiry_attestation_queue",
+        closureExpiryAttestationQueue:
+          (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
+          queueUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "attest_closure_safeguard_expiry_queue_handoff") {
+      if (
+        !parsed.actorId ||
+        !parsed.handoffToOwnerId?.trim() ||
+        (!parsed.queueItemId &&
+          !parsed.attestationId &&
+          !parsed.expiryId &&
+          !parsed.rebalanceId &&
+          !parsed.queueId &&
+          !parsed.ownerId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, handoffToOwnerId, and queueItemId/attestationId/expiryId/rebalanceId/queueId/ownerId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "attest_closure_safeguard_expiry_queue_handoff requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const existingQueueItem = parsed.queueItemId
+        ? await repos.filingEscalationClosureExpiryAttestationQueue.get(parsed.queueItemId)
+        : null
+      const existingAttestation =
+        (parsed.attestationId
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(parsed.attestationId)
+          : null) ??
+        (existingQueueItem
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(existingQueueItem.attestationId)
+          : null)
+      const existingExpiry = parsed.expiryId
+        ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(parsed.expiryId)
+        : existingAttestation
+          ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(existingAttestation.expiryId)
+          : null
+      const queueFromSelector =
+        parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null
+      const rebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : queueFromSelector
+            ? await repos.filingEscalationClosureEnforcementRebalance.get(
+                filingEscalationClosureEnforcementRebalanceId(queueFromSelector.id)
+              )
+            : null) ?? null
+      const resolvedAttestation =
+        existingAttestation ??
+        (existingExpiry
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+              filingEscalationClosureSafeguardExpiryAttestationId(existingExpiry.id)
+            )
+          : rebalance
+            ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+                filingEscalationClosureSafeguardExpiryAttestationId(
+                  filingEscalationClosureRebalanceSafeguardExpiryId(
+                    filingEscalationClosureRebalanceSafeguardId(rebalance.id)
+                  )
+                )
+              )
+            : null)
+      if (!resolvedAttestation || resolvedAttestation.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure safeguard expiry attestation row not found" }, { status: 404 })
+      }
+      const existingQueueByAttestation =
+        await repos.filingEscalationClosureExpiryAttestationQueue.get(
+          filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
+        )
+      const priorAuditCount = store.audit.length
+      const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
+        attestation: resolvedAttestation,
+        existing: existingQueueItem ?? existingQueueByAttestation,
+        handoffAttestedBy: actor.id,
+        handoffToOwnerId: parsed.handoffToOwnerId.trim(),
+        reconciliationCarryoverNote: parsed.carryoverNote,
+        now,
+        note: parsed.note ?? "expiry attestation queue handoff attested",
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
+      store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
+      store.audit.push({
+        action: "filing_closure_expiry_attestation_queue_handoff_attest",
+        actorId: actor.id,
+        target: queueUpdated.id,
+        classification: queueUpdated.classification,
+        reason: parsed.handoffToOwnerId.trim(),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "attest_closure_safeguard_expiry_queue_handoff",
+        closureExpiryAttestationQueue:
+          (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
+          queueUpdated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "checkpoint_closure_safeguard_expiry_queue_auto_drain") {
+      if (
+        !parsed.actorId ||
+        (!parsed.queueItemId &&
+          !parsed.attestationId &&
+          !parsed.expiryId &&
+          !parsed.rebalanceId &&
+          !parsed.queueId &&
+          !parsed.ownerId)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId and queueItemId/attestationId/expiryId/rebalanceId/queueId/ownerId are required",
+          },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "checkpoint_closure_safeguard_expiry_queue_auto_drain requires partner role" },
+          { status: 403 }
+        )
+      }
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const existingQueueItem = parsed.queueItemId
+        ? await repos.filingEscalationClosureExpiryAttestationQueue.get(parsed.queueItemId)
+        : null
+      const existingAttestation =
+        (parsed.attestationId
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(parsed.attestationId)
+          : null) ??
+        (existingQueueItem
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(existingQueueItem.attestationId)
+          : null)
+      const existingExpiry = parsed.expiryId
+        ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(parsed.expiryId)
+        : existingAttestation
+          ? await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(existingAttestation.expiryId)
+          : null
+      const queueFromSelector =
+        parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null
+      const rebalance =
+        (parsed.rebalanceId
+          ? await repos.filingEscalationClosureEnforcementRebalance.get(parsed.rebalanceId)
+          : queueFromSelector
+            ? await repos.filingEscalationClosureEnforcementRebalance.get(
+                filingEscalationClosureEnforcementRebalanceId(queueFromSelector.id)
+              )
+            : null) ?? null
+      const resolvedAttestation =
+        existingAttestation ??
+        (existingExpiry
+          ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+              filingEscalationClosureSafeguardExpiryAttestationId(existingExpiry.id)
+            )
+          : rebalance
+            ? await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
+                filingEscalationClosureSafeguardExpiryAttestationId(
+                  filingEscalationClosureRebalanceSafeguardExpiryId(
+                    filingEscalationClosureRebalanceSafeguardId(rebalance.id)
+                  )
+                )
+              )
+            : null)
+      if (!resolvedAttestation || resolvedAttestation.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure safeguard expiry attestation row not found" }, { status: 404 })
+      }
+      if (resolvedAttestation.openBacklogHours > 0) {
+        return NextResponse.json(
+          { error: "attestation backlog still open; queue auto-drain checkpoint is unavailable" },
+          { status: 422 }
+        )
+      }
+      const existingQueueByAttestation =
+        await repos.filingEscalationClosureExpiryAttestationQueue.get(
+          filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
+        )
+      const priorAuditCount = store.audit.length
+      const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
+        attestation: resolvedAttestation,
+        existing: existingQueueItem ?? existingQueueByAttestation,
+        autoDrainCheckpointBy: actor.id,
+        now,
+        note: parsed.note ?? "expiry attestation queue auto-drain checkpoint recorded",
+      })
+      await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
+      store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
+      store.audit.push({
+        action: "filing_closure_expiry_attestation_queue_auto_drain_checkpoint",
+        actorId: actor.id,
+        target: queueUpdated.id,
+        classification: queueUpdated.classification,
+        reason: queueUpdated.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "checkpoint_closure_safeguard_expiry_queue_auto_drain",
+        closureExpiryAttestationQueue:
+          (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
+          queueUpdated,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
