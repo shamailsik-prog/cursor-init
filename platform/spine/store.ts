@@ -1123,6 +1123,75 @@ export type FilingEscalationClosureRebalanceExecutionRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureAdjudicationSloStatus =
+  | "within_slo"
+  | "deadline_extended"
+  | "breach_open"
+  | "breach_acknowledged"
+
+export type FilingEscalationClosureAdjudicationSloEscalationTier =
+  | "none"
+  | "tier_1_partner_watch"
+  | "tier_2_management_escalation"
+  | "tier_3_executive_escalation"
+
+export type FilingEscalationClosureAdjudicationSloRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  adjudicationId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureAdjudicationSloStatus
+  escalationTier: FilingEscalationClosureAdjudicationSloEscalationTier
+  baseVerdictDueAt: number
+  effectiveVerdictDueAt: number
+  extensionCount: number
+  lastExtendedBy: string | null
+  lastExtendedAt: number | null
+  breachOpenedAt: number | null
+  breachAcknowledgedBy: string | null
+  breachAcknowledgedAt: number | null
+  breachDebtHours: number
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
+export type FilingEscalationClosureRebalanceSafeguardStatus =
+  | "auto_exec_ready"
+  | "cooldown_locked"
+  | "duplicate_suppressed"
+  | "override_attested"
+
+export type FilingEscalationClosureRebalanceSuppressionReason =
+  | "cooldown_lockout_active"
+  | "duplicate_execution_window"
+  | "manual_override_required"
+
+export type FilingEscalationClosureRebalanceSafeguardRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  rebalanceId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureRebalanceSafeguardStatus
+  cooldownLockUntil: number | null
+  duplicateSuppressionUntil: number | null
+  overrideAttestedBy: string | null
+  overrideAttestedAt: number | null
+  overrideReason: string | null
+  lastAutoExecutedAt: number | null
+  autoExecutionEligible: boolean
+  suppressionReasons: FilingEscalationClosureRebalanceSuppressionReason[]
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -1261,6 +1330,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureAdjudicationQuorumRow>()
   filingEscalationClosureRebalanceExecution =
     new Map<string, FilingEscalationClosureRebalanceExecutionRow>()
+  filingEscalationClosureAdjudicationSlo =
+    new Map<string, FilingEscalationClosureAdjudicationSloRow>()
+  filingEscalationClosureRebalanceSafeguards =
+    new Map<string, FilingEscalationClosureRebalanceSafeguardRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

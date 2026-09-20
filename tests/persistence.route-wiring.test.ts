@@ -67,6 +67,8 @@ const baseStore = {
   filingEscalationClosureEnforcementRebalance: new Map(),
   filingEscalationClosureAdjudicationQuorum: new Map(),
   filingEscalationClosureRebalanceExecution: new Map(),
+  filingEscalationClosureAdjudicationSlo: new Map(),
+  filingEscalationClosureRebalanceSafeguards: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -1086,6 +1088,69 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       listByQueueId: vi.fn().mockResolvedValue([]),
       listByRebalanceId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationClosureAdjudicationSlo: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          adjudicationId:
+            "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "breach_open",
+          escalationTier: "tier_1_partner_watch",
+          baseVerdictDueAt: Date.now() - 60 * 60 * 1000,
+          effectiveVerdictDueAt: Date.now() - 30 * 60 * 1000,
+          extensionCount: 1,
+          lastExtendedBy: "partner_a",
+          lastExtendedAt: Date.now() - 2 * 60 * 60 * 1000,
+          breachOpenedAt: Date.now() - 30 * 60 * 1000,
+          breachAcknowledgedBy: null,
+          breachAcknowledgedAt: null,
+          breachDebtHours: 1,
+          notes: ["repo slo row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByAdjudicationId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureRebalanceSafeguards: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          rebalanceId: "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a",
+          classification: "internal",
+          packageIds: ["pkg_repo"],
+          status: "cooldown_locked",
+          cooldownLockUntil: Date.now() + 60 * 60 * 1000,
+          duplicateSuppressionUntil: null,
+          overrideAttestedBy: null,
+          overrideAttestedAt: null,
+          overrideReason: null,
+          lastAutoExecutedAt: null,
+          autoExecutionEligible: false,
+          suppressionReasons: ["cooldown_lockout_active"],
+          notes: ["repo safeguard row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
+      listByRebalanceId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -1634,6 +1699,34 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain(
       "closure-rebalance-execution:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
+    )
+  })
+
+  it("filings closure adjudication slo view GET uses repository filingEscalationClosureAdjudicationSlo listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_slo&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
+    )
+  })
+
+  it("filings closure rebalance safeguards view GET uses repository filingEscalationClosureRebalanceSafeguards listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_safeguards&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
     )
   })
 

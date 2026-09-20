@@ -31,6 +31,8 @@ import type {
   FilingEscalationClosureEnforcementRebalanceRow,
   FilingEscalationClosureAdjudicationQuorumRow,
   FilingEscalationClosureRebalanceExecutionRow,
+  FilingEscalationClosureAdjudicationSloRow,
+  FilingEscalationClosureRebalanceSafeguardRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -1043,6 +1045,80 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_closure_rebalance_execution"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationClosureRebalanceExecutionRow)
+          .filter((row) => row.rebalanceId === rebalanceId)
+      },
+    },
+    filingEscalationClosureAdjudicationSlo: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_adjudication_slo", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureAdjudicationSloRow>(
+          db,
+          "filing_escalation_closure_adjudication_slo",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureAdjudicationSloRow>(
+          db,
+          "filing_escalation_closure_adjudication_slo",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_adjudication_slo"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAdjudicationSloRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_adjudication_slo"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAdjudicationSloRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByAdjudicationId(adjudicationId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_adjudication_slo"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureAdjudicationSloRow)
+          .filter((row) => row.adjudicationId === adjudicationId)
+      },
+    },
+    filingEscalationClosureRebalanceSafeguards: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_rebalance_safeguards", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureRebalanceSafeguardRow>(
+          db,
+          "filing_escalation_closure_rebalance_safeguards",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureRebalanceSafeguardRow>(
+          db,
+          "filing_escalation_closure_rebalance_safeguards",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_rebalance_safeguards"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureRebalanceSafeguardRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_rebalance_safeguards"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureRebalanceSafeguardRow)
+          .filter((row) => row.queueId === queueId)
+      },
+      async listByRebalanceId(rebalanceId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_rebalance_safeguards"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureRebalanceSafeguardRow)
           .filter((row) => row.rebalanceId === rebalanceId)
       },
     },
