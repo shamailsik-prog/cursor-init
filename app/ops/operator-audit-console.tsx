@@ -50,6 +50,7 @@ export function OperatorAuditConsole() {
   const [attestationId, setAttestationId] = useState("")
   const [disputeId, setDisputeId] = useState("")
   const [adjudicationId, setAdjudicationId] = useState("")
+  const [rebalanceId, setRebalanceId] = useState("")
   const [burndownTargetHours, setBurndownTargetHours] = useState("2")
   const [rebaselineTargetHours, setRebaselineTargetHours] = useState("4")
   const [fileText, setFileText] = useState(DEFAULT_FILE_TEXT)
@@ -1545,6 +1546,702 @@ export function OperatorAuditConsole() {
     })
   }
 
+  async function runBatchFGovernanceLattice() {
+    if (!matterId || !packageId) throw new Error("Run steps 1-10 so matter/package are available.")
+    const allowed = [200, 403, 404, 422]
+
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: set closure SLA window config",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "set_closure_sla_window_config",
+          actorId: partnerId,
+          ackDeadlineHours: 1,
+          clearDeadlineHours: 2,
+          autoEscalationHours: 3,
+          note: "Batch F /ops wiring: set closure SLA windows",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: set closure auto assignment rule",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "set_closure_auto_assignment_rule",
+          actorId: partnerId,
+          mode: "workload_aware_claim",
+          maxActiveClaimsPerPartner: 4,
+          note: "Batch F /ops wiring: set closure auto assignment rule",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: assign closure follow-up",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "assign_closure_followup",
+          actorId: partnerId,
+          ownerId: partnerId,
+          assigneeId: partnerId,
+          note: "Batch F /ops wiring: assign closure follow-up",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: auto-assign closure follow-up",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "auto_assign_closure_followup",
+          actorId: partnerId,
+          ownerId: partnerId,
+          note: "Batch F /ops wiring: auto-assign closure follow-up",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: claim closure follow-up",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "claim_closure_followup",
+          actorId: partnerId,
+          ownerId: partnerId,
+          note: "Batch F /ops wiring: claim closure follow-up",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: waive closure SLA exception",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "waive_closure_sla_exception",
+          actorId: partnerId,
+          ownerId: partnerId,
+          waiverReason: "Temporary policy override during closure reconciliation",
+          waiverHours: 4,
+          note: "Batch F /ops wiring: waive closure SLA exception",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: acknowledge remediation expiry",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "acknowledge_remediation_expiry",
+          actorId: partnerId,
+          packageId,
+          note: "Batch F /ops wiring: acknowledge remediation expiry",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: snooze remediation expiry",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "snooze_remediation_expiry",
+          actorId: partnerId,
+          packageId,
+          snoozeHours: 2,
+          note: "Batch F /ops wiring: snooze remediation expiry",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: attest remediation closure",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "attest_remediation_closure",
+          actorId: partnerId,
+          packageId,
+          closureOutcome: "accepted_risk_retired",
+          note: "Batch F /ops wiring: attest remediation closure",
+        },
+      },
+      allowed
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: resolve closure follow-up",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "resolve_closure_followup",
+          actorId: partnerId,
+          ownerId: partnerId,
+          note: "Batch F /ops wiring: resolve closure follow-up",
+        },
+      },
+      allowed
+    )
+
+    let resolvedAttestationId = attestationId
+    const recordAttestation = await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: record closure attestation",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "record_closure_attestation",
+          actorId: partnerId,
+          ownerId: partnerId,
+          secondReviewerId,
+          partnerConcurrence: true,
+          evidenceNote: "Batch F /ops wiring evidence bundle",
+          note: "Batch F /ops wiring: record closure attestation",
+        },
+      },
+      allowed
+    )
+    if (
+      recordAttestation.ok &&
+      typeof recordAttestation.body === "object" &&
+      recordAttestation.body !== null &&
+      "result" in recordAttestation.body &&
+      recordAttestation.body.result &&
+      typeof recordAttestation.body.result === "object" &&
+      "closureAttestation" in recordAttestation.body.result &&
+      recordAttestation.body.result.closureAttestation &&
+      typeof recordAttestation.body.result.closureAttestation === "object" &&
+      "id" in recordAttestation.body.result.closureAttestation &&
+      typeof recordAttestation.body.result.closureAttestation.id === "string"
+    ) {
+      resolvedAttestationId = recordAttestation.body.result.closureAttestation.id
+      setAttestationId(resolvedAttestationId)
+    }
+    if (resolvedAttestationId) {
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: review closure attestation",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "review_closure_attestation",
+            actorId: secondReviewerId,
+            attestationId: resolvedAttestationId,
+            decision: "approve",
+            note: "Batch F /ops wiring: second review approval",
+          },
+        },
+        allowed
+      )
+    }
+
+    let resolvedDisputeId = disputeId
+    if (resolvedAttestationId) {
+      const openDispute = await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: open closure attestation dispute",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "open_closure_attestation_dispute",
+            actorId: secondReviewerId,
+            attestationId: resolvedAttestationId,
+            conflictReason: "Dispute raised for chronology reconciliation",
+            note: "Batch F /ops wiring: open dispute",
+          },
+        },
+        allowed
+      )
+      if (
+        openDispute.ok &&
+        typeof openDispute.body === "object" &&
+        openDispute.body !== null &&
+        "result" in openDispute.body &&
+        openDispute.body.result &&
+        typeof openDispute.body.result === "object" &&
+        "closureAttestationDispute" in openDispute.body.result &&
+        openDispute.body.result.closureAttestationDispute &&
+        typeof openDispute.body.result.closureAttestationDispute === "object" &&
+        "id" in openDispute.body.result.closureAttestationDispute &&
+        typeof openDispute.body.result.closureAttestationDispute.id === "string"
+      ) {
+        resolvedDisputeId = openDispute.body.result.closureAttestationDispute.id
+        setDisputeId(resolvedDisputeId)
+      }
+    }
+
+    let resolvedAdjudicationId = adjudicationId
+    if (resolvedDisputeId) {
+      const escalateDispute = await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: escalate dispute to panel",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "escalate_closure_dispute_to_panel",
+            actorId: secondReviewerId,
+            disputeId: resolvedDisputeId,
+            panelMemberIds: [partnerId, secondReviewerId],
+            dissentNote: "preserve immutable dissent note for review",
+            note: "Batch F /ops wiring: escalate dispute to panel",
+          },
+        },
+        allowed
+      )
+      if (
+        escalateDispute.ok &&
+        typeof escalateDispute.body === "object" &&
+        escalateDispute.body !== null &&
+        "result" in escalateDispute.body &&
+        escalateDispute.body.result &&
+        typeof escalateDispute.body.result === "object" &&
+        "closureAdjudicationQueue" in escalateDispute.body.result &&
+        escalateDispute.body.result.closureAdjudicationQueue &&
+        typeof escalateDispute.body.result.closureAdjudicationQueue === "object" &&
+        "id" in escalateDispute.body.result.closureAdjudicationQueue &&
+        typeof escalateDispute.body.result.closureAdjudicationQueue.id === "string"
+      ) {
+        resolvedAdjudicationId = escalateDispute.body.result.closureAdjudicationQueue.id
+        setAdjudicationId(resolvedAdjudicationId)
+      }
+    }
+
+    if (resolvedAdjudicationId) {
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: govern closure adjudication quorum",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "govern_closure_adjudication_quorum",
+            actorId: partnerId,
+            adjudicationId: resolvedAdjudicationId,
+            requiredPanelCount: 3,
+            quorumWindowHours: 0,
+            verdictWindowHours: 0,
+            note: "Batch F /ops wiring: govern quorum",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: acknowledge adjudication SLO breach",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "acknowledge_closure_adjudication_slo_breach",
+            actorId: partnerId,
+            adjudicationId: resolvedAdjudicationId,
+            note: "Batch F /ops wiring: acknowledge SLO breach",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: extend adjudication SLO deadline",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "extend_closure_adjudication_slo_deadline",
+            actorId: partnerId,
+            adjudicationId: resolvedAdjudicationId,
+            extensionHours: 2,
+            note: "Batch F /ops wiring: extend SLO deadline",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: escalate adjudication SLO tier",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "escalate_closure_adjudication_slo_tier",
+            actorId: partnerId,
+            adjudicationId: resolvedAdjudicationId,
+            escalationTier: "tier_2_management_escalation",
+            note: "Batch F /ops wiring: escalate SLO tier",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: record adjudication SLO debt remediation",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "record_closure_adjudication_slo_debt_remediation",
+            actorId: partnerId,
+            adjudicationId: resolvedAdjudicationId,
+            note: "Batch F /ops wiring: record SLO debt remediation",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: downshift adjudication SLO tier",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "downshift_closure_adjudication_slo_tier",
+            actorId: partnerId,
+            adjudicationId: resolvedAdjudicationId,
+            escalationTier: "tier_1_partner_watch",
+            note: "Batch F /ops wiring: downshift SLO tier",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: record adjudication verdict",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "record_closure_adjudication_verdict",
+            actorId: partnerId,
+            adjudicationId: resolvedAdjudicationId,
+            verdict: "uphold_dispute",
+            dissentNote: "immutable dissent retained with verdict",
+            note: "Batch F /ops wiring: record verdict",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: attest adjudication SLO breach closure",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "attest_closure_adjudication_slo_breach_closure",
+            actorId: partnerId,
+            adjudicationId: resolvedAdjudicationId,
+            note: "Batch F /ops wiring: attest SLO breach closure",
+          },
+        },
+        allowed
+      )
+    }
+
+    await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: tick closure SLA exception enforcement",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "tick_closure_sla_exception_enforcement",
+          actorId: partnerId,
+          ownerId: partnerId,
+          note: "Batch F /ops wiring: tick exception enforcement",
+        },
+      },
+      [200, 404]
+    )
+
+    let resolvedRebalanceId = rebalanceId
+    const rebalance = await runApiCallAllowingStatuses(
+      {
+        step: "Batch F: rebalance closure enforcement queue",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "rebalance_closure_enforcement_queue",
+          actorId: partnerId,
+          ownerId: partnerId,
+          status: "owner_reassignment_recommended",
+          recommendedOwnerId: secondReviewerId,
+          note: "Batch F /ops wiring: recommend owner reassignment",
+        },
+      },
+      allowed
+    )
+    if (
+      rebalance.ok &&
+      typeof rebalance.body === "object" &&
+      rebalance.body !== null &&
+      "result" in rebalance.body &&
+      rebalance.body.result &&
+      typeof rebalance.body.result === "object" &&
+      "closureEnforcementRebalance" in rebalance.body.result &&
+      rebalance.body.result.closureEnforcementRebalance &&
+      typeof rebalance.body.result.closureEnforcementRebalance === "object" &&
+      "id" in rebalance.body.result.closureEnforcementRebalance &&
+      typeof rebalance.body.result.closureEnforcementRebalance.id === "string"
+    ) {
+      resolvedRebalanceId = rebalance.body.result.closureEnforcementRebalance.id
+      setRebalanceId(resolvedRebalanceId)
+    }
+
+    if (resolvedRebalanceId) {
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: configure closure rebalance safeguard",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "configure_closure_rebalance_auto_execution_safeguard",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            cooldownLockHours: 1,
+            duplicateSuppressionHours: 1,
+            note: "Batch F /ops wiring: configure rebalance safeguard",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: set safeguard override expiry",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "set_closure_rebalance_safeguard_override_expiry",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            overrideExpiryHours: 1,
+            note: "Batch F /ops wiring: set safeguard override expiry",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: execute rebalance owner transfer",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "execute_closure_rebalance_owner_transfer",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            note: "Batch F /ops wiring: execute owner transfer",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: attest rebalance auto-execution override",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "attest_closure_rebalance_auto_execution_override",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            reason: "Controlled partner override after safeguard lockout validation",
+            note: "Batch F /ops wiring: attest rebalance override",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: auto-clear safeguard suppression",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "auto_clear_closure_rebalance_safeguard_suppression",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            note: "Batch F /ops wiring: auto-clear safeguard suppression",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: cleanup stale safeguard lock",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "cleanup_stale_closure_rebalance_safeguard_lock",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            note: "Batch F /ops wiring: cleanup stale safeguard lock",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: acknowledge safeguard expiry attestation",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "acknowledge_closure_safeguard_expiry_attestation",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            note: "Batch F /ops wiring: acknowledge safeguard expiry attestation",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: queue safeguard overdue expiry exception",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "queue_closure_safeguard_overdue_expiry_exception",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            note: "Batch F /ops wiring: queue overdue expiry exception",
+          },
+        },
+        allowed
+      )
+      await runApiCallAllowingStatuses(
+        {
+          step: "Batch F: reconcile safeguard expiry override",
+          method: "POST",
+          path: "/api/d4/filings",
+          body: {
+            action: "reconcile_closure_safeguard_expiry_override",
+            actorId: partnerId,
+            rebalanceId: resolvedRebalanceId,
+            reconciliationNote: "Override expiry reconciled with follow-up governance notes",
+            note: "Batch F /ops wiring: reconcile expiry override",
+          },
+        },
+        allowed
+      )
+    }
+  }
+
+  async function readBatchFGovernanceViews() {
+    if (!matterId) throw new Error("Create a matter first.")
+    const baseQuery = {
+      userId: partnerId,
+      matterId,
+      packageId: packageId || undefined,
+      limit: 10,
+      cursor: 0,
+    }
+    await runApiCall({
+      step: "Batch F view: closure compliance digests",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_compliance_digests", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure follow-up queue",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_followup_queue", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure attestations",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_attestations", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure SLA window configs",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_sla_window_configs", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure auto assignment rules",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_auto_assignment_rules", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure SLA windows",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_sla_windows", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure SLA exception digests",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_sla_exception_digests", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure attestation disputes",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_attestation_disputes", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure SLA exception enforcement",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_sla_exception_enforcement", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure adjudication queue",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_adjudication_queue", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure enforcement rebalance",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_enforcement_rebalance", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure adjudication quorum",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_adjudication_quorum", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure rebalance execution",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_rebalance_execution", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure adjudication SLO",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_adjudication_slo", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure rebalance safeguards",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_rebalance_safeguards", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure adjudication SLO debt remediation",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_adjudication_slo_debt_remediation", ...baseQuery },
+    })
+    await runApiCall({
+      step: "Batch F view: closure rebalance safeguard expiry",
+      method: "GET",
+      path: "/api/d4/filings",
+      query: { view: "closure_rebalance_safeguard_expiry", ...baseQuery },
+    })
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 md:px-8">
       <header className="space-y-3">
@@ -1622,7 +2319,7 @@ export function OperatorAuditConsole() {
               <Input className="rounded-none font-mono text-xs" value={packageId} onChange={(e) => setPackageId(e.target.value)} />
             </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-4">
             <div>
               <p className="mb-1 text-xs tracking-wide uppercase">attestationId</p>
               <Input className="rounded-none font-mono text-xs" value={attestationId} onChange={(e) => setAttestationId(e.target.value)} />
@@ -1634,6 +2331,10 @@ export function OperatorAuditConsole() {
             <div>
               <p className="mb-1 text-xs tracking-wide uppercase">adjudicationId (#70-#73 path)</p>
               <Input className="rounded-none font-mono text-xs" value={adjudicationId} onChange={(e) => setAdjudicationId(e.target.value)} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs tracking-wide uppercase">rebalanceId (#60-#69 path)</p>
+              <Input className="rounded-none font-mono text-xs" value={rebalanceId} onChange={(e) => setRebalanceId(e.target.value)} />
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
@@ -1729,6 +2430,12 @@ export function OperatorAuditConsole() {
             </Button>
             <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch E governance views read", readBatchEGovernanceViews)}>
               24) Batch E views (#48-#59 governance reads)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch F governance action lattice executed", runBatchFGovernanceLattice)}>
+              25) Batch F actions (#60-#69 governance lattice)
+            </Button>
+            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch F governance views read", readBatchFGovernanceViews)}>
+              26) Batch F views (#60-#69 closure governance reads)
             </Button>
           </CardContent>
         </Card>

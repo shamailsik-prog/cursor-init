@@ -8,7 +8,7 @@ Source of truth: forensic audit docs plus post-audit operator UI wiring on `main
 No audited sample phase qualifies as **DONE product**.
 
 - `backend_real`: PASS across sampled batches (#34-#37, #38-#47, #48-#59, #60-#69, #70-#73).
-- `frontend_real`: mixed; PASS for some surfaces via `/ops` but incomplete across several sampled batch-specific APIs.
+- `frontend_real`: mixed; PASS for some surfaces via `/ops`, with #60-#69 and #70-#73 marked pending independent re-audit after follow-up `/ops` coverage lanes.
 - `transport_stub`: still true because filing transport remains `TODO(firm)` + `_stub` + `blocked_todo_firm`.
 
 Because `transport_stub=true`, final status remains **PARTIAL** for all sampled phases.
@@ -136,7 +136,7 @@ The gate fails when either condition is true:
 
 ### Blocking findings
 
-1. `FRONTEND_REAL` fails for the full #60-#69 governance action family (`/ops` does not execute the complete action lattice for this batch).
+1. Auditor baseline for #60-#69 found `FRONTEND_REAL` fail before follow-up `/ops` lattice wiring.
 2. `transport_stub` remains true (`TODO(firm)`, `_stub`, `blocked_todo_firm`) so COMPLETE/product-done remains fail-closed.
 3. Metadata-to-implementation drift appears in #66-#69 claim text vs runtime-affecting merged deltas.
 
@@ -144,14 +144,14 @@ The gate fails when either condition is true:
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real (`/ops`) | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #60 | Remediation expiry + rollover breach watch | `72cc388` | Yes | PASS | FAIL (no `/ops` action coverage) | true | PARTIAL | blocker |
-| #61 | Remediation lifecycle + reaffirmation SLA | `625ccc5` | Yes | PASS | FAIL (no `/ops` action coverage) | true | PARTIAL | blocker |
-| #62 | Closure compliance digest + follow-up queue | `ab9cdca` | Yes | PASS | FAIL (only digest read wired; queue actions absent in `/ops`) | true | PARTIAL | blocker |
-| #63 | Closure SLA windows + auto-assignment | `5b2bd06` | Yes | PASS | FAIL (not driven in `/ops`) | true | PARTIAL | blocker |
-| #64 | Closure attestation + SLA exception digest | `5f0651e` | Yes | PASS | FAIL (not driven in `/ops`) | true | PARTIAL | blocker |
-| #65 | Attestation dispute + exception expiry enforcement | `8733a06` | Yes | PASS | FAIL (not driven in `/ops`) | true | PARTIAL | blocker |
-| #66 | Exception adjudication + enforcement rebalance | `c598fc9` | Yes | PASS | FAIL (not driven in `/ops`) | true | PARTIAL | blocker |
-| #67 | Panel quorum + rebalance execution | `1a3dd2c` | Yes | PASS | FAIL (not driven in `/ops`) | true | PARTIAL | blocker |
-| #68 | Adjudication SLO + rebalance safeguards | `f563876` | Yes | PASS | FAIL (not driven in `/ops`) | true | PARTIAL | blocker |
-| #69 | SLO debt remediation + safeguard expiry | `15254ca` | Yes | PASS | FAIL (not driven in `/ops`) | true | PARTIAL | blocker |
+| #60 | Remediation expiry + rollover breach watch | `72cc388` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #61 | Remediation lifecycle + reaffirmation SLA | `625ccc5` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #62 | Closure compliance digest + follow-up queue | `ab9cdca` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #63 | Closure SLA windows + auto-assignment | `5b2bd06` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #64 | Closure attestation + SLA exception digest | `5f0651e` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #65 | Attestation dispute + exception expiry enforcement | `8733a06` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #66 | Exception adjudication + enforcement rebalance | `c598fc9` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #67 | Panel quorum + rebalance execution | `1a3dd2c` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #68 | Adjudication SLO + rebalance safeguards | `f563876` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
+| #69 | SLO debt remediation + safeguard expiry | `15254ca` | Yes | PASS | PENDING RE-AUDIT (follow-up `/ops` lattice lane added) | true | PARTIAL | blocker |
 

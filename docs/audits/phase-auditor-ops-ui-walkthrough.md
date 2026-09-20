@@ -102,6 +102,60 @@ Route under test: `/ops`
       - `view=waiver_expiry_digests`
       - `view=variance_remediation_ledger`
       - `view=waiver_rollover_attestations`
+25. Click `Batch F actions (#60-#69 governance lattice)`.
+    - Expected APIs (POST `/api/d4/filings`):
+      - `set_closure_sla_window_config`
+      - `set_closure_auto_assignment_rule`
+      - `assign_closure_followup`
+      - `auto_assign_closure_followup`
+      - `claim_closure_followup`
+      - `waive_closure_sla_exception`
+      - `acknowledge_remediation_expiry`
+      - `snooze_remediation_expiry`
+      - `attest_remediation_closure`
+      - `resolve_closure_followup`
+      - `record_closure_attestation`
+      - `review_closure_attestation`
+      - `open_closure_attestation_dispute`
+      - `escalate_closure_dispute_to_panel`
+      - `govern_closure_adjudication_quorum`
+      - `acknowledge_closure_adjudication_slo_breach`
+      - `extend_closure_adjudication_slo_deadline`
+      - `escalate_closure_adjudication_slo_tier`
+      - `record_closure_adjudication_slo_debt_remediation`
+      - `downshift_closure_adjudication_slo_tier`
+      - `record_closure_adjudication_verdict`
+      - `attest_closure_adjudication_slo_breach_closure`
+      - `tick_closure_sla_exception_enforcement`
+      - `rebalance_closure_enforcement_queue`
+      - `configure_closure_rebalance_auto_execution_safeguard`
+      - `set_closure_rebalance_safeguard_override_expiry`
+      - `execute_closure_rebalance_owner_transfer`
+      - `attest_closure_rebalance_auto_execution_override`
+      - `auto_clear_closure_rebalance_safeguard_suppression`
+      - `cleanup_stale_closure_rebalance_safeguard_lock`
+      - `acknowledge_closure_safeguard_expiry_attestation`
+      - `queue_closure_safeguard_overdue_expiry_exception`
+      - `reconcile_closure_safeguard_expiry_override`
+26. Click `Batch F views (#60-#69 closure governance reads)`.
+    - Expected APIs (GET `/api/d4/filings`):
+      - `view=closure_compliance_digests`
+      - `view=closure_followup_queue`
+      - `view=closure_attestations`
+      - `view=closure_sla_window_configs`
+      - `view=closure_auto_assignment_rules`
+      - `view=closure_sla_windows`
+      - `view=closure_sla_exception_digests`
+      - `view=closure_attestation_disputes`
+      - `view=closure_sla_exception_enforcement`
+      - `view=closure_adjudication_queue`
+      - `view=closure_enforcement_rebalance`
+      - `view=closure_adjudication_quorum`
+      - `view=closure_rebalance_execution`
+      - `view=closure_adjudication_slo`
+      - `view=closure_rebalance_safeguards`
+      - `view=closure_adjudication_slo_debt_remediation`
+      - `view=closure_rebalance_safeguard_expiry`
 
 ## Purpose
 
@@ -109,7 +163,7 @@ This walkthrough establishes `frontend_real` evidence for the audited API famili
 
 ## Expected completion state
 
-- API call log panel shows successful responses across steps 1-24 (for Batch E action lattice, some guarded operations may return deterministic 4xx statuses while still proving call-site wiring and fail-closed behavior).
+- API call log panel shows successful responses across steps 1-26 (for Batch E/F action lattices, some guarded operations may return deterministic 4xx statuses while still proving call-site wiring and fail-closed behavior).
 - No red error text is present in the UI.
 - Fixture ids are populated in the operator panel:
   - `matterId` after step 1
