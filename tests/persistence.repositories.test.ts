@@ -879,10 +879,12 @@ describe("Firestore repository adapters", () => {
         digestId: "closure-compliance:firmA:partner_a",
         classification: "internal",
         status: "claimed",
+        openedAt: 47,
         packageIds: ["pkg_1"],
         pendingLifecycleCount: 1,
         breachedReaffirmationCount: 1,
         assignedPartnerId: "partner_a",
+        assignedAt: 47,
         claimedBy: "partner_a",
         claimedAt: 48,
         resolvedBy: null,
@@ -906,6 +908,62 @@ describe("Firestore repository adapters", () => {
       expect(
         closureQueueByOwner.some(
           (row) => row.id === "closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
+      await repos.filingEscalationClosureSlaWindows.upsert({
+        id: "closure-sla:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        digestId: "closure-compliance:firmA:partner_a",
+        classification: "internal",
+        status: "claim_breached",
+        reasons: ["claim_overdue"],
+        responseWindowMs: 2 * 60 * 60 * 1000,
+        claimWindowMs: 4 * 60 * 60 * 1000,
+        resolutionWindowMs: 8 * 60 * 60 * 1000,
+        openedAt: 40,
+        assignedAt: 41,
+        claimedAt: null,
+        resolvedAt: null,
+        responseDueAt: 42,
+        claimDueAt: 45,
+        resolutionDueAt: null,
+        assignedPartnerId: "partner_a",
+        autoAssignedPartnerId: "partner_b",
+        autoAssignedAt: 46,
+        autoAssignmentAttestation: "auto-assigned backup partner partner_b due claim_breached",
+        secondReviewRequired: true,
+        secondReviewedBy: null,
+        secondReviewedAt: null,
+        secondReviewNote: null,
+        linkedPackageIds: ["pkg_1"],
+        notes: ["closure SLA window breached"],
+        lastEvaluatedAt: 46,
+        updatedAt: 46,
+      })
+      const closureSlaWindow = await repos.filingEscalationClosureSlaWindows.get(
+        "closure-sla:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureSlaWindow?.status).toBe("claim_breached")
+      const closureSlaByFirm = await repos.filingEscalationClosureSlaWindows.listByFirm("firmA")
+      expect(
+        closureSlaByFirm.some(
+          (row) => row.id === "closure-sla:closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
+      const closureSlaByOwner = await repos.filingEscalationClosureSlaWindows.listByOwnerId("partner_a")
+      expect(
+        closureSlaByOwner.some(
+          (row) => row.id === "closure-sla:closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
+      const closureSlaByQueue = await repos.filingEscalationClosureSlaWindows.listByQueueId(
+        "closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(
+        closureSlaByQueue.some(
+          (row) => row.id === "closure-sla:closure-followup:closure-compliance:firmA:partner_a"
         )
       ).toBe(true)
     })

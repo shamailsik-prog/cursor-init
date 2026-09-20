@@ -1712,6 +1712,29 @@ describe("GET/POST /api/d4/filings", () => {
         (row) => row.ownerId === "partner_a" && ["open", "claimed", "resolved"].includes(row.status)
       )
     ).toBe(true)
+
+    const closureSlaWindowView = await get(
+      new URLSearchParams({
+        view: "closure_sla_windows",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSlaWindowView.status).toBe(200)
+    const closureSlaWindowViewJson = (await closureSlaWindowView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    expect(
+      closureSlaWindowViewJson.items.some(
+        (row) =>
+          row.ownerId === "partner_a" &&
+          ["within_sla", "response_breached", "claim_breached", "resolution_breached", "cleared"].includes(
+            row.status
+          )
+      )
+    ).toBe(true)
   })
 
   it("replays idempotent create package requests and rejects conflicts", async () => {

@@ -11,6 +11,7 @@ import type {
   FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationClosureComplianceDigestRow,
   FilingEscalationClosureFollowupQueueRow,
+  FilingEscalationClosureSlaWindowRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -253,6 +254,14 @@ export type FilingEscalationClosureFollowupQueueRepository = {
   listByOwnerId(ownerId: string): Promise<FilingEscalationClosureFollowupQueueRow[]>
 }
 
+export type FilingEscalationClosureSlaWindowRepository = {
+  upsert(row: FilingEscalationClosureSlaWindowRow): Promise<void>
+  get(id: string): Promise<FilingEscalationClosureSlaWindowRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationClosureSlaWindowRow[]>
+  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSlaWindowRow[]>
+  listByQueueId(queueId: string): Promise<FilingEscalationClosureSlaWindowRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -338,6 +347,7 @@ export type SpineRepositories = {
   filingEscalationRolloverReaffirmationSlas: FilingEscalationRolloverReaffirmationSlaRepository
   filingEscalationClosureComplianceDigests: FilingEscalationClosureComplianceDigestRepository
   filingEscalationClosureFollowupQueues: FilingEscalationClosureFollowupQueueRepository
+  filingEscalationClosureSlaWindows: FilingEscalationClosureSlaWindowRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -835,6 +845,29 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async listByOwnerId(ownerId) {
         return [...store.filingEscalationClosureFollowupQueues.values()].filter(
           (row) => row.ownerId === ownerId
+        )
+      },
+    },
+    filingEscalationClosureSlaWindows: {
+      async upsert(row) {
+        store.filingEscalationClosureSlaWindows.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationClosureSlaWindows.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationClosureSlaWindows.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        return [...store.filingEscalationClosureSlaWindows.values()].filter(
+          (row) => row.ownerId === ownerId
+        )
+      },
+      async listByQueueId(queueId) {
+        return [...store.filingEscalationClosureSlaWindows.values()].filter(
+          (row) => row.queueId === queueId
         )
       },
     },

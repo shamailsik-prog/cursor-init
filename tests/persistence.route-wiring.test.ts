@@ -56,6 +56,7 @@ const baseStore = {
   filingEscalationRolloverReaffirmationSlas: new Map(),
   filingEscalationClosureComplianceDigests: new Map(),
   filingEscalationClosureFollowupQueues: new Map(),
+  filingEscalationClosureSlaWindows: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -733,10 +734,12 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
           digestId: "closure-compliance:firmA:partner_a",
           classification: "internal",
           status: "open",
+          openedAt: Date.now() - 5 * 60 * 60 * 1000,
           packageIds: ["pkg_repo"],
           pendingLifecycleCount: 1,
           breachedReaffirmationCount: 1,
           assignedPartnerId: "partner_a",
+          assignedAt: Date.now() - 4 * 60 * 60 * 1000,
           claimedBy: null,
           claimedAt: null,
           resolvedBy: null,
@@ -747,6 +750,47 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
       listByOwnerId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationClosureSlaWindows: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "closure-sla:closure-followup:closure-compliance:firmA:partner_a",
+          firmId: "firmA",
+          ownerId: "partner_a",
+          queueId: "closure-followup:closure-compliance:firmA:partner_a",
+          digestId: "closure-compliance:firmA:partner_a",
+          classification: "internal",
+          status: "claim_breached",
+          reasons: ["claim_overdue"],
+          responseWindowMs: 2 * 60 * 60 * 1000,
+          claimWindowMs: 4 * 60 * 60 * 1000,
+          resolutionWindowMs: 8 * 60 * 60 * 1000,
+          openedAt: Date.now() - 5 * 60 * 60 * 1000,
+          assignedAt: Date.now() - 4 * 60 * 60 * 1000,
+          claimedAt: null,
+          resolvedAt: null,
+          responseDueAt: Date.now() - 3 * 60 * 60 * 1000,
+          claimDueAt: Date.now() - 30 * 60 * 1000,
+          resolutionDueAt: null,
+          assignedPartnerId: "partner_a",
+          autoAssignedPartnerId: "partner_b",
+          autoAssignedAt: Date.now() - 20 * 60 * 1000,
+          autoAssignmentAttestation:
+            "auto-assigned backup partner partner_b due claim_breached",
+          secondReviewRequired: true,
+          secondReviewedBy: null,
+          secondReviewedAt: null,
+          secondReviewNote: null,
+          linkedPackageIds: ["pkg_repo"],
+          notes: ["repo closure SLA window row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByOwnerId: vi.fn().mockResolvedValue([]),
+      listByQueueId: vi.fn().mockResolvedValue([]),
     },
     jobs: {
       create: vi.fn(),
@@ -1146,6 +1190,20 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain(
       "closure-followup:closure-compliance:firmA:partner_a"
+    )
+  })
+
+  it("filings closure SLA window view GET uses repository filingEscalationClosureSlaWindows listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=closure_sla_windows&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "closure-sla:closure-followup:closure-compliance:firmA:partner_a"
     )
   })
 

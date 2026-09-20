@@ -20,6 +20,7 @@ import type {
   FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationClosureComplianceDigestRow,
   FilingEscalationClosureFollowupQueueRow,
+  FilingEscalationClosureSlaWindowRow,
   FilingEscalationPolicyVarianceDigestRow,
   FilingEscalationRemediationExpiryDigestRow,
   FilingEscalationRemediationLifecycleRow,
@@ -686,6 +687,37 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationClosureFollowupQueueRow)
           .filter((row) => row.ownerId === ownerId)
+      },
+    },
+    filingEscalationClosureSlaWindows: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_closure_sla_windows", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationClosureSlaWindowRow>(
+          db,
+          "filing_escalation_closure_sla_windows",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationClosureSlaWindowRow>(
+          db,
+          "filing_escalation_closure_sla_windows",
+          firmId
+        )
+      },
+      async listByOwnerId(ownerId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_sla_windows"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSlaWindowRow)
+          .filter((row) => row.ownerId === ownerId)
+      },
+      async listByQueueId(queueId) {
+        const rows = await getDocs(collection(db, "filing_escalation_closure_sla_windows"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationClosureSlaWindowRow)
+          .filter((row) => row.queueId === queueId)
       },
     },
     jobs: {

@@ -444,6 +444,8 @@ export type FilingEscalationWorkloadAlertReason =
   | "unassigned_breach"
   | "handoff_lag"
   | "closure_compliance_pressure"
+  | "closure_sla_window_breach"
+  | "closure_partner_drift"
 
 export type FilingEscalationHandoffLagBucket =
   | "none"
@@ -787,16 +789,63 @@ export type FilingEscalationClosureFollowupQueueRow = {
   digestId: string
   classification: Classification
   status: FilingEscalationClosureFollowupQueueStatus
+  openedAt: number
   packageIds: string[]
   pendingLifecycleCount: number
   breachedReaffirmationCount: number
   assignedPartnerId: string | null
+  assignedAt: number | null
   claimedBy: string | null
   claimedAt: number | null
   resolvedBy: string | null
   resolvedAt: number | null
   resolutionNote: string | null
   notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationClosureSlaWindowStatus =
+  | "within_sla"
+  | "response_breached"
+  | "claim_breached"
+  | "resolution_breached"
+  | "cleared"
+
+export type FilingEscalationClosureSlaWindowReason =
+  | "response_overdue"
+  | "claim_overdue"
+  | "resolution_overdue"
+
+export type FilingEscalationClosureSlaWindowRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  queueId: string
+  digestId: string
+  classification: Classification
+  status: FilingEscalationClosureSlaWindowStatus
+  reasons: FilingEscalationClosureSlaWindowReason[]
+  responseWindowMs: number
+  claimWindowMs: number
+  resolutionWindowMs: number
+  openedAt: number
+  assignedAt: number | null
+  claimedAt: number | null
+  resolvedAt: number | null
+  responseDueAt: number | null
+  claimDueAt: number | null
+  resolutionDueAt: number | null
+  assignedPartnerId: string | null
+  autoAssignedPartnerId: string | null
+  autoAssignedAt: number | null
+  autoAssignmentAttestation: string | null
+  secondReviewRequired: boolean
+  secondReviewedBy: string | null
+  secondReviewedAt: number | null
+  secondReviewNote: string | null
+  linkedPackageIds: string[]
+  notes: string[]
+  lastEvaluatedAt: number
   updatedAt: number
 }
 
@@ -916,6 +965,7 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureComplianceDigestRow>()
   filingEscalationClosureFollowupQueues =
     new Map<string, FilingEscalationClosureFollowupQueueRow>()
+  filingEscalationClosureSlaWindows = new Map<string, FilingEscalationClosureSlaWindowRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
