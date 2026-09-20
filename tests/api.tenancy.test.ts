@@ -46,14 +46,34 @@ describe("GET/POST /api/p5/tenancy", () => {
         view: "session",
         userId: "associate_a",
         firmId: "firmA",
+        authBoundary: "external_session_hint",
+        externalSessionId: "ext-session-a1",
       })
     )
     expect(ok.status).toBe(200)
     const okJson = (await ok.json()) as {
       session: { user: { id: string }; accessibleMatterIds: string[] }
+      sessionReference: { id: string; authBoundary: string; externalSessionId: string | null }
     }
     expect(okJson.session.user.id).toBe("associate_a")
     expect(okJson.session.accessibleMatterIds).toContain(matterId)
+    expect(okJson.sessionReference.authBoundary).toBe("external_session_hint")
+    expect(okJson.sessionReference.externalSessionId).toBe("ext-session-a1")
+
+    const replay = await get(
+      new URLSearchParams({
+        view: "session",
+        sessionRefId: okJson.sessionReference.id,
+      })
+    )
+    expect(replay.status).toBe(200)
+    const replayJson = (await replay.json()) as {
+      session: { user: { id: string }; accessibleMatterIds: string[] }
+      sessionReference: { id: string }
+    }
+    expect(replayJson.session.user.id).toBe("associate_a")
+    expect(replayJson.session.accessibleMatterIds).toContain(matterId)
+    expect(replayJson.sessionReference.id).toBe(okJson.sessionReference.id)
 
     const denied = await get(
       new URLSearchParams({
@@ -63,6 +83,15 @@ describe("GET/POST /api/p5/tenancy", () => {
       })
     )
     expect(denied.status).toBe(400)
+
+    const crossFirmRefDenied = await get(
+      new URLSearchParams({
+        view: "session",
+        sessionRefId: okJson.sessionReference.id,
+        firmId: "firmB",
+      })
+    )
+    expect(crossFirmRefDenied.status).toBe(400)
   })
 
   it("lists users and memberships for partner admins with pagination", async () => {
@@ -112,9 +141,34 @@ describe("GET/POST /api/p5/tenancy", () => {
       })
     )
     expect(denied.status).toBe(400)
+
+    const deniedRefs = await get(
+      new URLSearchParams({
+        view: "session_refs",
+        actorId: "associate_a",
+        firmId: "firmA",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(deniedRefs.status).toBe(400)
   })
 
   it("lists partner-admin audit entries and denies non-partner audit reads", async () => {
+    const sessionRes = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "partner_a",
+        firmId: "firmA",
+        authBoundary: "external_session_hint",
+        externalSessionId: "ext-audit-actor",
+      })
+    )
+    expect(sessionRes.status).toBe(200)
+    const sessionJson = (await sessionRes.json()) as {
+      sessionReference: { id: string }
+    }
+
     const writeRes = await post(
       {
         action: "update_role",
@@ -124,6 +178,9 @@ describe("GET/POST /api/p5/tenancy", () => {
         nextRole: "clerk",
         nextClearance: "internal",
         reason: "Audit list verification",
+        sessionReferenceId: sessionJson.sessionReference.id,
+        authBoundary: "external_session_hint",
+        externalSessionId: "ext-audit-actor",
       },
       "bf379f5f-5e99-4f3b-9617-72d3f3c10f2d"
     )
@@ -140,13 +197,45 @@ describe("GET/POST /api/p5/tenancy", () => {
     )
     expect(auditRes.status).toBe(200)
     const auditJson = (await auditRes.json()) as {
-      items: Array<{ action: string; target: string }>
+      items: Array<{
+        action: string
+        target: string
+        authBoundary?: string
+        sessionReferenceId?: string | null
+        externalSessionId?: string | null
+      }>
       total: number
     }
     expect(auditJson.total).toBeGreaterThan(0)
     expect(
       auditJson.items.some(
         (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
+      )
+    ).toBe(true)
+    const roleAudit = auditJson.items.find(
+      (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
+    )
+    expect(roleAudit?.authBoundary).toBe("external_session_hint")
+    expect(roleAudit?.sessionReferenceId).toBe(sessionJson.sessionReference.id)
+    expect(roleAudit?.externalSessionId).toBe("ext-audit-actor")
+
+    const refsRes = await get(
+      new URLSearchParams({
+        view: "session_refs",
+        actorId: "partner_a",
+        firmId: "firmA",
+        userId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(refsRes.status).toBe(200)
+    const refsJson = (await refsRes.json()) as {
+      items: Array<{ id: string; userId: string; authBoundary: string }>
+    }
+    expect(
+      refsJson.items.some(
+        (row) => row.id === sessionJson.sessionReference.id && row.userId === "partner_a"
       )
     ).toBe(true)
 
@@ -191,6 +280,15 @@ describe("GET/POST /api/p5/tenancy", () => {
   })
 
   it("supports idempotent role updates and writes audit entries", async () => {
+    const sessionRes = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "partner_a",
+        firmId: "firmA",
+      })
+    )
+    expect(sessionRes.status).toBe(200)
+    const sessionJson = (await sessionRes.json()) as { sessionReference: { id: string } }
     const key = "fdf53787-4239-4cb4-ab6e-328eceb06484"
     const payload = {
       action: "update_role",
@@ -200,6 +298,7 @@ describe("GET/POST /api/p5/tenancy", () => {
       nextRole: "clerk",
       nextClearance: "internal",
       reason: "Temporary reduced clearance",
+      sessionReferenceId: sessionJson.sessionReference.id,
     }
     const first = await post(payload, key)
     const second = await post(payload, key)

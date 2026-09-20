@@ -99,7 +99,25 @@ export type AuditEntry = {
   target: string
   classification: Classification
   reason?: string
+  authBoundary?: TenancyAuthBoundary
+  sessionReferenceId?: string | null
+  externalSessionId?: string | null
   at?: number
+}
+
+export type TenancyAuthBoundary = "runtime_local" | "external_session_hint"
+
+export type TenancySessionReferenceRow = {
+  id: string
+  firmId: string
+  userId: string
+  roleSnapshot: Role
+  clearanceSnapshot: Classification
+  authBoundary: TenancyAuthBoundary
+  externalSessionId: string | null
+  issuedAt: number
+  lastSeenAt: number
+  expiresAt: number | null
 }
 
 export type StatuteSectionVersion = {
@@ -1770,6 +1788,7 @@ export class SpineStore {
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
   workflowOpsActivity = new Map<string, WorkflowOpsActivityRow>()
+  tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

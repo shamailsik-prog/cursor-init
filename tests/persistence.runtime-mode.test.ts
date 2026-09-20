@@ -7630,6 +7630,16 @@ describe("Runtime persistence mode", () => {
         "fdccf93b-c5d5-43fe-9445-3573b526c5a6"
       )
 
+      const actorSession = await tenancyGet(
+        new Request(
+          "http://127.0.0.1/api/p5/tenancy?view=session&userId=partner_a&firmId=firmA&authBoundary=external_session_hint&externalSessionId=ext-runtime-actor"
+        )
+      )
+      expect(actorSession.status).toBe(200)
+      const actorSessionJson = (await actorSession.json()) as {
+        sessionReference: { id: string }
+      }
+
       const roleUpdate = await tenancyPost(
         new Request("http://127.0.0.1/api/p5/tenancy", {
           method: "POST",
@@ -7645,6 +7655,9 @@ describe("Runtime persistence mode", () => {
             nextRole: "clerk",
             nextClearance: "internal",
             reason: "Tenancy parity persistence check",
+            sessionReferenceId: actorSessionJson.sessionReference.id,
+            authBoundary: "external_session_hint",
+            externalSessionId: "ext-runtime-actor",
           }),
         })
       )
@@ -7660,6 +7673,7 @@ describe("Runtime persistence mode", () => {
       })
       getRuntimeStore().members = new Map()
       getRuntimeStore().audit = []
+      getRuntimeStore().tenancySessionReferences = new Map()
 
       const sessionRes = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
@@ -7667,8 +7681,20 @@ describe("Runtime persistence mode", () => {
       expect(sessionRes.status).toBe(200)
       const sessionJson = (await sessionRes.json()) as {
         session: { accessibleMatterIds: string[] }
+        sessionReference: { id: string }
       }
       expect(sessionJson.session.accessibleMatterIds).toContain(matterId)
+
+      const replayRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session&sessionRefId=${sessionJson.sessionReference.id}`
+        )
+      )
+      expect(replayRes.status).toBe(200)
+      const replayJson = (await replayRes.json()) as {
+        session: { accessibleMatterIds: string[] }
+      }
+      expect(replayJson.session.accessibleMatterIds).toContain(matterId)
 
       const usersRes = await tenancyGet(
         new Request(
@@ -7704,13 +7730,21 @@ describe("Runtime persistence mode", () => {
       )
       expect(auditRes.status).toBe(200)
       const auditJson = (await auditRes.json()) as {
-        items: Array<{ action: string; target: string }>
+        items: Array<{
+          action: string
+          target: string
+          authBoundary?: string
+          sessionReferenceId?: string | null
+          externalSessionId?: string | null
+        }>
       }
-      expect(
-        auditJson.items.some(
-          (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
-        )
-      ).toBe(true)
+      const roleAudit = auditJson.items.find(
+        (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
+      )
+      expect(roleAudit).toBeDefined()
+      expect(roleAudit?.authBoundary).toBe("external_session_hint")
+      expect(roleAudit?.sessionReferenceId).toBe(actorSessionJson.sessionReference.id)
+      expect(roleAudit?.externalSessionId).toBe("ext-runtime-actor")
 
       const persistedClerk = await getDoc(doc(ctx.firestore(), "users", "clerk_a"))
       expect(persistedClerk.exists()).toBe(true)
@@ -7722,9 +7756,19 @@ describe("Runtime persistence mode", () => {
           (entry) =>
             entry.data()?.action === "tenant_update_role" &&
             entry.data()?.target === "clerk_a" &&
-            entry.data()?.firmId === "firmA"
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.authBoundary === "external_session_hint" &&
+            entry.data()?.sessionReferenceId === actorSessionJson.sessionReference.id &&
+            entry.data()?.externalSessionId === "ext-runtime-actor"
         )
       ).toBe(true)
+
+      const persistedSessionRef = await getDoc(
+        doc(ctx.firestore(), "tenancy_session_references", actorSessionJson.sessionReference.id)
+      )
+      expect(persistedSessionRef.exists()).toBe(true)
+      expect(persistedSessionRef.data()?.firmId).toBe("firmA")
+      expect(persistedSessionRef.data()?.authBoundary).toBe("external_session_hint")
     })
   })
 })

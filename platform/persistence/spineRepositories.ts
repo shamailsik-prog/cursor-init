@@ -57,6 +57,7 @@ import type {
   WorkflowOpsActivityRow,
   AuditEntry,
   CommitteeBrainOutput,
+  TenancySessionReferenceRow,
   Entity,
   EntityLink,
   Matter,
@@ -570,6 +571,13 @@ export type WorkflowOpsActivityRepository = {
   listByFirm(firmId: string): Promise<WorkflowOpsActivityRow[]>
 }
 
+export type TenancySessionReferenceRepository = {
+  upsert(row: TenancySessionReferenceRow): Promise<void>
+  get(id: string): Promise<TenancySessionReferenceRow | null>
+  listByFirm(firmId: string): Promise<TenancySessionReferenceRow[]>
+  listByUserId(userId: string): Promise<TenancySessionReferenceRow[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -636,6 +644,7 @@ export type SpineRepositories = {
   reportingIndex: MatterClientSearchIndexRepository
   draftTemplateAnalytics: DraftTemplateAnalyticsRepository
   workflowOpsActivity: WorkflowOpsActivityRepository
+  tenancySessionReferences: TenancySessionReferenceRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -1894,6 +1903,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsActivity.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    tenancySessionReferences: {
+      async upsert(row) {
+        store.tenancySessionReferences.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancySessionReferences.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancySessionReferences.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByUserId(userId) {
+        return [...store.tenancySessionReferences.values()].filter((row) => row.userId === userId)
       },
     },
   }

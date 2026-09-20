@@ -66,6 +66,7 @@ import type {
   WorkflowOpsActivityRow,
   AuditEntry,
   CommitteeBrainOutput,
+  TenancySessionReferenceRow,
   Entity,
   EntityLink,
   Matter,
@@ -1700,6 +1701,23 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<WorkflowOpsActivityRow>(db, "workflow_ops_activity", firmId)
+      },
+    },
+    tenancySessionReferences: {
+      async upsert(row) {
+        await setById(db, "tenancy_session_references", row)
+      },
+      async get(id) {
+        return getById<TenancySessionReferenceRow>(db, "tenancy_session_references", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancySessionReferenceRow>(db, "tenancy_session_references", firmId)
+      },
+      async listByUserId(userId) {
+        const rows = await getDocs(collection(db, "tenancy_session_references"))
+        return rows.docs
+          .map((entry) => entry.data() as TenancySessionReferenceRow)
+          .filter((row) => row.userId === userId)
       },
     },
   }

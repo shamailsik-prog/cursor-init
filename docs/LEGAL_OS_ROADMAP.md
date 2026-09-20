@@ -96,12 +96,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Wired case-number recording through `services/d6-1/caseNumber.ts` normaliser paths with deterministic `OK`/`AMBIGUOUS`/`REJECT` outcomes and follow-up persistence for rejection triage.
 - Hardened matter lifecycle write paths (confirm engagement and case-number recording) to rehydrate persisted matters after in-memory resets, ensuring Firestore runtime mode parity for long-lived API sessions.
 - Extended API + runtime tests for idempotency conflict handling, pagination cursor behavior, tenant isolation, permission denial, and matter lifecycle audit persistence (`matter_create`, `matter_confirm_engagement`, `matter_record_case_number`).
+- Added durable tenancy session-reference entities (`tenancy_session_references`) across in-memory + Firestore repositories and tenancy API wiring so role/firm context can be replayed after runtime resets via `sessionRefId`.
+- Extended `app/api/p5/tenancy/route.ts` to mint and refresh session references during `view=session`, accept session-reference replay, expose partner-admin `view=session_refs`, and deny cross-firm/session-mismatch reference reuse.
+- Enriched tenancy audit provenance with explicit auth-boundary metadata (`runtime_local` vs `external_session_hint`) plus session-reference/external-session hints on `tenant_update_role` writes and reads.
+- Extended API + runtime persistence tests for session replay/idempotency semantics, cross-firm reference denial, session-reference durability, and audit provenance visibility while keeping scope as internal scaffolding (no external IdP claims).
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy external-session durability + auth boundary scaffolding**:
+Build **tenancy session revocation controls + privileged-boundary drift reporting**:
 
-1. Add durable session-reference persistence in tenancy APIs so role/firm context can be rehydrated without relying on in-memory state.
-2. Introduce explicit auth-boundary metadata on tenancy audit entries to distinguish local runtime actor identity vs external session identity hints.
-3. Extend tenancy route tests for session replay/idempotency semantics, cross-firm denial, and audit provenance visibility.
+1. Add explicit session-reference revocation and expiry enforcement surfaces (admin-only), including durable revocation markers.
+2. Propagate privileged-boundary drift metadata when role/clearance mutations invalidate previously-issued session references.
+3. Extend tenancy route + runtime tests for revocation replay behavior, stale-session denial, and drift telemetry visibility.
 4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.

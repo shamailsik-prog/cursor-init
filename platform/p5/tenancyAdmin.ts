@@ -1,5 +1,14 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
-import { rankOf, type Role, type SpineStore, type User } from "@/platform/spine/store"
+import {
+  rankOf,
+  type Role,
+  type SpineStore,
+  type TenancyAuthBoundary,
+  type TenancySessionReferenceRow,
+  type User,
+} from "@/platform/spine/store"
+
+const DEFAULT_SESSION_REFERENCE_TTL_MS = 8 * 60 * 60 * 1000
 
 function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
   const actor = store.users.get(actorId)
@@ -113,6 +122,9 @@ export function listFirmAudit(
     target: string
     classification: Classification
     reason?: string
+    authBoundary?: TenancyAuthBoundary
+    sessionReferenceId?: string | null
+    externalSessionId?: string | null
     at: number
   }>
   total: number
@@ -129,6 +141,9 @@ export function listFirmAudit(
       target: entry.target,
       classification: entry.classification,
       reason: entry.reason,
+      authBoundary: entry.authBoundary,
+      sessionReferenceId: entry.sessionReferenceId ?? null,
+      externalSessionId: entry.externalSessionId ?? null,
       at: entry.at ?? 0,
     }))
     .sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))
@@ -150,6 +165,9 @@ export function updateUserRole(
     nextRole: Role
     nextClearance: Classification
     reason?: string
+    authBoundary?: TenancyAuthBoundary
+    sessionReferenceId?: string | null
+    externalSessionId?: string | null
   }
 ): { user: User; auditEntry: NonNullable<SpineStore["audit"][number]> } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
@@ -178,8 +196,82 @@ export function updateUserRole(
     target: target.id,
     classification: target.clearanceLevel,
     reason: input.reason,
+    authBoundary: input.authBoundary,
+    sessionReferenceId: input.sessionReferenceId ?? null,
+    externalSessionId: input.externalSessionId ?? null,
     at: Date.now(),
   } as const
   store.audit.push(auditEntry)
   return { user: target, auditEntry }
+}
+
+export function upsertTenancySessionReference(
+  store: SpineStore,
+  input: {
+    user: User
+    sessionReferenceId?: string
+    existing?: TenancySessionReferenceRow | null
+    authBoundary?: TenancyAuthBoundary
+    externalSessionId?: string | null
+    now?: number
+    ttlMs?: number | null
+  }
+): TenancySessionReferenceRow {
+  const now = input.now ?? Date.now()
+  const existing = input.existing ?? null
+  if (existing && existing.userId !== input.user.id) {
+    throw new Error("session reference user mismatch")
+  }
+  if (existing && existing.firmId !== input.user.firmId) {
+    throw new Error("cross-firm session reference denied")
+  }
+  const authBoundary = input.authBoundary ?? existing?.authBoundary ?? "runtime_local"
+  const rawExternalSessionId = input.externalSessionId ?? existing?.externalSessionId ?? null
+  const externalSessionId =
+    authBoundary === "external_session_hint"
+      ? rawExternalSessionId?.trim() || null
+      : null
+  const id = existing?.id ?? input.sessionReferenceId ?? store.id("tsr")
+  const expiresAt =
+    input.ttlMs === null ? null : now + (input.ttlMs ?? DEFAULT_SESSION_REFERENCE_TTL_MS)
+  const row: TenancySessionReferenceRow = {
+    id,
+    firmId: input.user.firmId,
+    userId: input.user.id,
+    roleSnapshot: input.user.role,
+    clearanceSnapshot: input.user.clearanceLevel,
+    authBoundary,
+    externalSessionId,
+    issuedAt: existing?.issuedAt ?? now,
+    lastSeenAt: now,
+    expiresAt,
+  }
+  store.tenancySessionReferences.set(row.id, row)
+  return row
+}
+
+export function listFirmSessionReferences(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  userId: string | undefined,
+  limit: number,
+  cursor: number
+): {
+  items: TenancySessionReferenceRow[]
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const rows = [...store.tenancySessionReferences.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) => (userId ? row.userId === userId : true))
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
+    total: rows.length,
+    nextCursor,
+  }
 }
