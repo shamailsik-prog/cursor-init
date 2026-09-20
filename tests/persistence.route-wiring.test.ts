@@ -50,6 +50,8 @@ const baseStore = {
   filingEscalationWaiverExpiryDigests: new Map(),
   filingEscalationVarianceRemediations: new Map(),
   filingEscalationWaiverRolloverAttestations: new Map(),
+  filingEscalationRemediationExpiryDigests: new Map(),
+  filingEscalationRolloverBreachWatches: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -579,6 +581,60 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationRemediationExpiryDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "remediation-expiry:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "open_expiry",
+          reasons: ["expires_lte_4h"],
+          linkedRemediationId: "remediation:pkg_repo:1",
+          linkedPolicyVarianceDigestId: "policy-variance:pkg_repo",
+          linkedPolicyId: "policy:pkg_repo:override",
+          remediationExpiresAt: Date.now() + 2 * 60 * 60 * 1000,
+          msUntilExpiry: 2 * 60 * 60 * 1000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          snoozeUntil: null,
+          notes: ["repo remediation expiry row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationRolloverBreachWatches: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "rollover-breach:pkg_repo",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          status: "open_breach",
+          reasons: ["reaffirmation_note_stale"],
+          linkedWaiverId: "waiver:pkg_repo:1",
+          linkedAttestationId: "rollover:pkg_repo:1",
+          linkedPolicyId: "policy:pkg_repo:override",
+          policyCapExpiresAt: Date.now() + 4 * 60 * 60 * 1000,
+          waiverExpiresAt: Date.now() + 8 * 60 * 60 * 1000,
+          attestationUpdatedAt: Date.now() - 25 * 60 * 60 * 1000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          notes: ["repo rollover watch row"],
+          lastEvaluatedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -904,6 +960,30 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("rollover:pkg_repo:1")
+  })
+
+  it("filings remediation expiry digests view GET uses repository filingEscalationRemediationExpiryDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=remediation_expiry_digests&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("remediation-expiry:pkg_repo")
+  })
+
+  it("filings rollover breach watches view GET uses repository filingEscalationRolloverBreachWatches listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=rollover_breach_watches&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("rollover-breach:pkg_repo")
   })
 
   it("clients route GET uses repository entities listByFirm", async () => {

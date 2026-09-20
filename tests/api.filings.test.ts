@@ -1080,6 +1080,42 @@ describe("GET/POST /api/d4/filings", () => {
     expect(remediationJson.result.remediation.status).toBe("active")
     expect(remediationJson.result.policyVarianceDigest.status).toBe("snoozed")
 
+    const acknowledgeRemediationExpiry = await post(
+      {
+        action: "acknowledge_remediation_expiry",
+        actorId: "partner_a",
+        packageId,
+        note: "Expiry risk acknowledged and owner notified",
+      },
+      "f4cf175f-dbff-4204-9c87-93012e992c6f"
+    )
+    expect(acknowledgeRemediationExpiry.status).toBe(200)
+    const acknowledgeRemediationExpiryJson = (await acknowledgeRemediationExpiry.json()) as {
+      result: { remediationExpiryDigest: { status: string } }
+    }
+    expect(acknowledgeRemediationExpiryJson.result.remediationExpiryDigest.status).toBe(
+      "acknowledged"
+    )
+
+    const snoozeRemediationExpiry = await post(
+      {
+        action: "snooze_remediation_expiry",
+        actorId: "partner_a",
+        packageId,
+        snoozeHours: 2,
+        note: "Snooze while rollback checklist executes",
+      },
+      "0a607afe-8b95-4b54-a0c0-d31bb6f80320"
+    )
+    expect(snoozeRemediationExpiry.status).toBe(200)
+    const snoozeRemediationExpiryJson = (await snoozeRemediationExpiry.json()) as {
+      result: { remediationExpiryDigest: { status: string; snoozeUntil: number | null } }
+    }
+    expect(snoozeRemediationExpiryJson.result.remediationExpiryDigest.status).toBe("snoozed")
+    expect(typeof snoozeRemediationExpiryJson.result.remediationExpiryDigest.snoozeUntil).toBe(
+      "number"
+    )
+
     const waiverExpiryViewBefore = await get(
       new URLSearchParams({
         view: "waiver_expiry_digests",
@@ -1142,6 +1178,36 @@ describe("GET/POST /api/d4/filings", () => {
       extendWaiverJson.result.waiverExpiryDigest.status
     )
     expect(extendWaiverJson.result.rolloverAttestation?.status).toBe("attested")
+
+    const acknowledgeRolloverBreach = await post(
+      {
+        action: "acknowledge_rollover_breach",
+        actorId: "partner_a",
+        packageId,
+        note: "Rollover breach acknowledged pending reaffirmation note",
+      },
+      "81d5402f-0d15-474f-b956-55963937a2e3"
+    )
+    expect(acknowledgeRolloverBreach.status).toBe(200)
+    const acknowledgeRolloverBreachJson = (await acknowledgeRolloverBreach.json()) as {
+      result: { rolloverBreachWatch: { status: string } }
+    }
+    expect(acknowledgeRolloverBreachJson.result.rolloverBreachWatch.status).toBe("acknowledged")
+
+    const reaffirmRolloverAttestation = await post(
+      {
+        action: "reaffirm_rollover_attestation",
+        actorId: "partner_a",
+        packageId,
+        note: "reaffirm waiver extension with latest court closure memo",
+      },
+      "3be4d4a6-7f4e-4157-b4a6-03ba036149cb"
+    )
+    expect(reaffirmRolloverAttestation.status).toBe(200)
+    const reaffirmRolloverAttestationJson = (await reaffirmRolloverAttestation.json()) as {
+      result: { rolloverBreachWatch: { status: string } }
+    }
+    expect(reaffirmRolloverAttestationJson.result.rolloverBreachWatch.status).toBe("cleared")
 
     const revokeWaiver = await post(
       {
@@ -1358,6 +1424,27 @@ describe("GET/POST /api/d4/filings", () => {
       )
     ).toBe(true)
 
+    const remediationExpiryView = await get(
+      new URLSearchParams({
+        view: "remediation_expiry_digests",
+        userId: "associate_a",
+        packageId,
+        expiryStatus: "snoozed",
+        reason: "expires_lte_4h",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationExpiryView.status).toBe(200)
+    const remediationExpiryViewJson = (await remediationExpiryView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      remediationExpiryViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "snoozed"
+      )
+    ).toBe(true)
+
     const policyView = await get(
       new URLSearchParams({
         view: "escalation_policy_baselines",
@@ -1433,6 +1520,26 @@ describe("GET/POST /api/d4/filings", () => {
     expect(
       rolloverViewJson.items.some(
         (row) => row.packageId === packageId && row.status === "attested"
+      )
+    ).toBe(true)
+
+    const rolloverWatchView = await get(
+      new URLSearchParams({
+        view: "rollover_breach_watches",
+        userId: "associate_a",
+        packageId,
+        watchStatus: "cleared",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(rolloverWatchView.status).toBe(200)
+    const rolloverWatchViewJson = (await rolloverWatchView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      rolloverWatchViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "cleared"
       )
     ).toBe(true)
   })

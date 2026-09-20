@@ -19,6 +19,8 @@ import type {
   FilingEscalationPolicyBaselineRow,
   FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationPolicyVarianceDigestRow,
+  FilingEscalationRemediationExpiryDigestRow,
+  FilingEscalationRolloverBreachWatchRow,
   FilingEscalationVarianceRemediationRow,
   FilingEscalationWaiverRolloverAttestationRow,
   FilingEscalationWaiverExpiryDigestRow,
@@ -529,6 +531,56 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_waiver_rollover_attestations"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationWaiverRolloverAttestationRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationRemediationExpiryDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_remediation_expiry_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationRemediationExpiryDigestRow>(
+          db,
+          "filing_escalation_remediation_expiry_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationRemediationExpiryDigestRow>(
+          db,
+          "filing_escalation_remediation_expiry_digests",
+          firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_remediation_expiry_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationRemediationExpiryDigestRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationRolloverBreachWatches: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_rollover_breach_watches", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationRolloverBreachWatchRow>(
+          db,
+          "filing_escalation_rollover_breach_watches",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationRolloverBreachWatchRow>(
+          db,
+          "filing_escalation_rollover_breach_watches",
+          firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_rollover_breach_watches"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationRolloverBreachWatchRow)
           .filter((row) => row.packageId === packageId)
       },
     },

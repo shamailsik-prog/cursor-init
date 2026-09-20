@@ -710,6 +710,65 @@ describe("Firestore repository adapters", () => {
       const rolloverByPackage =
         await repos.filingEscalationWaiverRolloverAttestations.listByPackageId("pkg_1")
       expect(rolloverByPackage.some((row) => row.id === "rollover:pkg_1:1")).toBe(true)
+      await repos.filingEscalationRemediationExpiryDigests.upsert({
+        id: "remediation-expiry:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "open_expiry",
+        reasons: ["expires_lte_4h"],
+        linkedRemediationId: "remediation:pkg_1:1",
+        linkedPolicyVarianceDigestId: "policy-variance:pkg_1",
+        linkedPolicyId: "policy:pkg_1:override",
+        remediationExpiresAt: 47,
+        msUntilExpiry: 60 * 60 * 1000,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        snoozeUntil: null,
+        notes: ["remediation expiry row"],
+        lastEvaluatedAt: 45,
+        updatedAt: 45,
+      })
+      const remediationExpiry = await repos.filingEscalationRemediationExpiryDigests.get(
+        "remediation-expiry:pkg_1"
+      )
+      expect(remediationExpiry?.status).toBe("open_expiry")
+      const remediationExpiryByFirm =
+        await repos.filingEscalationRemediationExpiryDigests.listByFirm("firmA")
+      expect(remediationExpiryByFirm.some((row) => row.id === "remediation-expiry:pkg_1")).toBe(true)
+      const remediationExpiryByPackage =
+        await repos.filingEscalationRemediationExpiryDigests.listByPackageId("pkg_1")
+      expect(remediationExpiryByPackage.some((row) => row.id === "remediation-expiry:pkg_1")).toBe(
+        true
+      )
+      await repos.filingEscalationRolloverBreachWatches.upsert({
+        id: "rollover-breach:pkg_1",
+        firmId: "firmA",
+        packageId: "pkg_1",
+        matterId: "mat_1",
+        classification: "internal",
+        status: "open_breach",
+        reasons: ["reaffirmation_note_stale"],
+        linkedWaiverId: "waiver:pkg_1:1",
+        linkedAttestationId: "rollover:pkg_1:1",
+        linkedPolicyId: "policy:pkg_1:override",
+        policyCapExpiresAt: 47,
+        waiverExpiresAt: 51,
+        attestationUpdatedAt: 20,
+        acknowledgedBy: null,
+        acknowledgedAt: null,
+        notes: ["rollover breach row"],
+        lastEvaluatedAt: 46,
+        updatedAt: 46,
+      })
+      const rolloverBreach = await repos.filingEscalationRolloverBreachWatches.get("rollover-breach:pkg_1")
+      expect(rolloverBreach?.status).toBe("open_breach")
+      const rolloverBreachByFirm = await repos.filingEscalationRolloverBreachWatches.listByFirm("firmA")
+      expect(rolloverBreachByFirm.some((row) => row.id === "rollover-breach:pkg_1")).toBe(true)
+      const rolloverBreachByPackage =
+        await repos.filingEscalationRolloverBreachWatches.listByPackageId("pkg_1")
+      expect(rolloverBreachByPackage.some((row) => row.id === "rollover-breach:pkg_1")).toBe(true)
     })
   })
 })

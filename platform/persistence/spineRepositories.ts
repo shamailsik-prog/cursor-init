@@ -10,6 +10,8 @@ import type {
   FilingEscalationPolicyBaselineRow,
   FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationPolicyVarianceDigestRow,
+  FilingEscalationRemediationExpiryDigestRow,
+  FilingEscalationRolloverBreachWatchRow,
   FilingEscalationVarianceRemediationRow,
   FilingEscalationWaiverRolloverAttestationRow,
   FilingEscalationWaiverExpiryDigestRow,
@@ -205,6 +207,20 @@ export type FilingEscalationWaiverRolloverAttestationRepository = {
   listByPackageId(packageId: string): Promise<FilingEscalationWaiverRolloverAttestationRow[]>
 }
 
+export type FilingEscalationRemediationExpiryDigestRepository = {
+  upsert(row: FilingEscalationRemediationExpiryDigestRow): Promise<void>
+  get(id: string): Promise<FilingEscalationRemediationExpiryDigestRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationRemediationExpiryDigestRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationRemediationExpiryDigestRow[]>
+}
+
+export type FilingEscalationRolloverBreachWatchRepository = {
+  upsert(row: FilingEscalationRolloverBreachWatchRow): Promise<void>
+  get(id: string): Promise<FilingEscalationRolloverBreachWatchRow | null>
+  listByFirm(firmId: string): Promise<FilingEscalationRolloverBreachWatchRow[]>
+  listByPackageId(packageId: string): Promise<FilingEscalationRolloverBreachWatchRow[]>
+}
+
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
@@ -284,6 +300,8 @@ export type SpineRepositories = {
   filingEscalationWaiverExpiryDigests: FilingEscalationWaiverExpiryDigestRepository
   filingEscalationVarianceRemediations: FilingEscalationVarianceRemediationRepository
   filingEscalationWaiverRolloverAttestations: FilingEscalationWaiverRolloverAttestationRepository
+  filingEscalationRemediationExpiryDigests: FilingEscalationRemediationExpiryDigestRepository
+  filingEscalationRolloverBreachWatches: FilingEscalationRolloverBreachWatchRepository
   jobs: JobRepository
   workflowEvents: WorkflowEventRepository
   followUps: FollowUpRepository
@@ -672,6 +690,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByPackageId(packageId) {
         return [...store.filingEscalationWaiverRolloverAttestations.values()].filter(
+          (row) => row.packageId === packageId
+        )
+      },
+    },
+    filingEscalationRemediationExpiryDigests: {
+      async upsert(row) {
+        store.filingEscalationRemediationExpiryDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationRemediationExpiryDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationRemediationExpiryDigests.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationRemediationExpiryDigests.values()].filter(
+          (row) => row.packageId === packageId
+        )
+      },
+    },
+    filingEscalationRolloverBreachWatches: {
+      async upsert(row) {
+        store.filingEscalationRolloverBreachWatches.set(row.id, row)
+      },
+      async get(id) {
+        return store.filingEscalationRolloverBreachWatches.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.filingEscalationRolloverBreachWatches.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        return [...store.filingEscalationRolloverBreachWatches.values()].filter(
           (row) => row.packageId === packageId
         )
       },
