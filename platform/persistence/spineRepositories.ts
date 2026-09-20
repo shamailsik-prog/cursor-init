@@ -60,6 +60,8 @@ import type {
   TenancySessionReferenceRow,
   TenancyLineageDisputeAttestationRow,
   TenancyLineageReconciliationDigestRow,
+  TenancyLineageReconciliationQueueArbitrationRow,
+  TenancyLineageDigestClosureCheckpointRow,
   Entity,
   EntityLink,
   Matter,
@@ -595,6 +597,24 @@ export type TenancyLineageReconciliationDigestRepository = {
   listByFirm(firmId: string): Promise<TenancyLineageReconciliationDigestRow[]>
 }
 
+export type TenancyLineageReconciliationQueueArbitrationRepository = {
+  upsert(row: TenancyLineageReconciliationQueueArbitrationRow): Promise<void>
+  get(id: string): Promise<TenancyLineageReconciliationQueueArbitrationRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageReconciliationQueueArbitrationRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageReconciliationQueueArbitrationRow[]>
+}
+
+export type TenancyLineageDigestClosureCheckpointRepository = {
+  upsert(row: TenancyLineageDigestClosureCheckpointRow): Promise<void>
+  get(id: string): Promise<TenancyLineageDigestClosureCheckpointRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageDigestClosureCheckpointRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageDigestClosureCheckpointRow[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -664,6 +684,8 @@ export type SpineRepositories = {
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
+  tenancyLineageReconciliationQueueArbitrations: TenancyLineageReconciliationQueueArbitrationRepository
+  tenancyLineageDigestClosureCheckpoints: TenancyLineageDigestClosureCheckpointRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -1966,6 +1988,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async listByFirm(firmId) {
         return [...store.tenancyLineageReconciliationDigests.values()].filter(
           (row) => row.firmId === firmId
+        )
+      },
+    },
+    tenancyLineageReconciliationQueueArbitrations: {
+      async upsert(row) {
+        store.tenancyLineageReconciliationQueueArbitrations.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageReconciliationQueueArbitrations.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageReconciliationQueueArbitrations.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageReconciliationQueueArbitrations.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageDigestClosureCheckpoints: {
+      async upsert(row) {
+        store.tenancyLineageDigestClosureCheckpoints.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageDigestClosureCheckpoints.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageDigestClosureCheckpoints.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageDigestClosureCheckpoints.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
       },
     },

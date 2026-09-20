@@ -69,6 +69,8 @@ import type {
   TenancySessionReferenceRow,
   TenancyLineageDisputeAttestationRow,
   TenancyLineageReconciliationDigestRow,
+  TenancyLineageReconciliationQueueArbitrationRow,
+  TenancyLineageDigestClosureCheckpointRow,
   Entity,
   EntityLink,
   Matter,
@@ -1764,6 +1766,56 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           "tenancy_lineage_reconciliation_digests",
           firmId
         )
+      },
+    },
+    tenancyLineageReconciliationQueueArbitrations: {
+      async upsert(row) {
+        await setById(db, "tenancy_lineage_reconciliation_queue_arbitrations", row)
+      },
+      async get(id) {
+        return getById<TenancyLineageReconciliationQueueArbitrationRow>(
+          db,
+          "tenancy_lineage_reconciliation_queue_arbitrations",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyLineageReconciliationQueueArbitrationRow>(
+          db,
+          "tenancy_lineage_reconciliation_queue_arbitrations",
+          firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        const rows = await getDocs(collection(db, "tenancy_lineage_reconciliation_queue_arbitrations"))
+        return rows.docs
+          .map((entry) => entry.data() as TenancyLineageReconciliationQueueArbitrationRow)
+          .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
+      },
+    },
+    tenancyLineageDigestClosureCheckpoints: {
+      async upsert(row) {
+        await setById(db, "tenancy_lineage_digest_closure_checkpoints", row)
+      },
+      async get(id) {
+        return getById<TenancyLineageDigestClosureCheckpointRow>(
+          db,
+          "tenancy_lineage_digest_closure_checkpoints",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyLineageDigestClosureCheckpointRow>(
+          db,
+          "tenancy_lineage_digest_closure_checkpoints",
+          firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        const rows = await getDocs(collection(db, "tenancy_lineage_digest_closure_checkpoints"))
+        return rows.docs
+          .map((entry) => entry.data() as TenancyLineageDigestClosureCheckpointRow)
+          .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
       },
     },
   }

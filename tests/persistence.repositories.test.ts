@@ -129,6 +129,68 @@ describe("Firestore repository adapters", () => {
       expect(
         tenancyDigestsByFirm.some((row) => row.lineageRootSessionReferenceId === "tsr_1")
       ).toBe(true)
+      await repos.tenancyLineageReconciliationQueueArbitrations.upsert({
+        id: "tenancy-lineage-arbitration:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        digestId: "tenancy-lineage-digest:tsr_1",
+        digestStatus: "needs_review",
+        status: "assigned",
+        assignedPartnerId: "partner_a",
+        assignedBy: "partner_a",
+        assignedAt: 106,
+        slaWindowStartedAt: 106,
+        slaWindowDueAt: 406,
+        disposition: null,
+        dispositionBy: null,
+        dispositionAt: null,
+        notes: ["queue assigned"],
+        updatedAt: 106,
+      })
+      const tenancyQueue = await repos.tenancyLineageReconciliationQueueArbitrations.get(
+        "tenancy-lineage-arbitration:tsr_1"
+      )
+      expect(tenancyQueue?.status).toBe("assigned")
+      const tenancyQueueByFirm =
+        await repos.tenancyLineageReconciliationQueueArbitrations.listByFirm("firmA")
+      expect(
+        tenancyQueueByFirm.some((row) => row.lineageRootSessionReferenceId === "tsr_1")
+      ).toBe(true)
+      const tenancyQueueByRoot =
+        await repos.tenancyLineageReconciliationQueueArbitrations.listByLineageRoot("tsr_1")
+      expect(tenancyQueueByRoot.some((row) => row.id === "tenancy-lineage-arbitration:tsr_1")).toBe(
+        true
+      )
+      await repos.tenancyLineageDigestClosureCheckpoints.upsert({
+        id: "tenancy-lineage-closure:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        digestId: "tenancy-lineage-digest:tsr_1",
+        status: "closed_attested",
+        attestedBy: "partner_a",
+        attestedAt: 107,
+        closureReason: "queue arbitration completed",
+        reopenTrigger: null,
+        reopenedBy: null,
+        reopenedAt: null,
+        notes: ["closure attested"],
+        updatedAt: 107,
+      })
+      const tenancyClosure = await repos.tenancyLineageDigestClosureCheckpoints.get(
+        "tenancy-lineage-closure:tsr_1"
+      )
+      expect(tenancyClosure?.status).toBe("closed_attested")
+      const tenancyClosuresByFirm = await repos.tenancyLineageDigestClosureCheckpoints.listByFirm(
+        "firmA"
+      )
+      expect(tenancyClosuresByFirm.some((row) => row.id === "tenancy-lineage-closure:tsr_1")).toBe(
+        true
+      )
+      const tenancyClosuresByRoot =
+        await repos.tenancyLineageDigestClosureCheckpoints.listByLineageRoot("tsr_1")
+      expect(tenancyClosuresByRoot.some((row) => row.id === "tenancy-lineage-closure:tsr_1")).toBe(
+        true
+      )
       await repos.committeeOutputs.create({
         id: "cbo_1",
         firmId: "firmA",

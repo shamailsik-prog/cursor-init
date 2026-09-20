@@ -112,12 +112,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/p5/tenancy` with dispute lifecycle actions (`attest_session_lineage_dispute`, `resolve_session_lineage_dispute`) and monitoring views (`view=session_lineage_disputes`, `view=session_lineage_reconciliation_digests`) with pagination/filter support.
 - Recompute and persist per-lineage-root reconciliation digests across reissue/revocation/role-drift/dispute transitions, surfacing open-dispute/divergence/revocation pressure signals for partner-admin review.
 - Extended API + runtime persistence tests for dispute lifecycle transitions, digest visibility/filtering, idempotent replay behavior, and audit provenance traceability in Firestore rehydration mode.
+- Added durable reconciliation-arbitration queue rows and digest-closure checkpoint rows to runtime store + memory/Firestore repositories for unresolved lineage-root digests and closure attestation transitions.
+- Extended `/api/p5/tenancy` with arbitration queue lifecycle actions (`assign_lineage_reconciliation_queue`, `arbitrate_lineage_reconciliation_queue`) and closure checkpoint lifecycle actions (`attest_lineage_digest_closure`, `reopen_lineage_digest_closure`).
+- Extended tenancy monitoring surfaces with `view=session_lineage_reconciliation_queue` and `view=session_lineage_digest_closure_checkpoints`, including status/root pagination filters and automatic digest-backed scaffold row synchronization.
+- Extended API + runtime persistence tests for arbitration queue transitions, closure checkpoint idempotency/reopen flows, pagination/filter visibility, and audit provenance traceability in Firestore rehydration mode.
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy reconciliation queue arbitration + digest attestation closure scaffolding**:
+Build **tenancy reconciliation closure adjudication + arbitration debt retirement scaffolding**:
 
-1. Add queue-level arbitration records for unresolved lineage digests (assignment, SLA windows, arbitration dispositions) with durable memory/Firestore persistence.
-2. Introduce digest-attestation closure checkpoints (attested_by, closure_reason, reopen_trigger) per lineage root to track reconciliation closure state transitions.
-3. Extend tenancy route + runtime tests for arbitration queue transitions, closure checkpoint idempotency, pagination/filtering, and audit provenance traceability.
+1. Add reconciliation closure adjudication rows that capture panel quorum expectations, verdict windows, and disposition drift reasons for reopened lineage closure checkpoints.
+2. Introduce arbitration debt-retirement ledgers per lineage root to track unresolved queue pressure, owner assignment debt, retirement attestations, and reopen carryover signals.
+3. Extend tenancy route + runtime tests for adjudication/debt lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.

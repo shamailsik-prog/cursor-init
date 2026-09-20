@@ -177,6 +177,46 @@ export type TenancyLineageReconciliationDigestRow = {
   updatedAt: number
 }
 
+export type TenancyLineageReconciliationQueueArbitrationDisposition =
+  | "confirm_needs_review"
+  | "dismiss_needs_review"
+  | "mark_reconciled"
+
+export type TenancyLineageReconciliationQueueArbitrationRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  digestStatus: "aligned" | "needs_review"
+  status: "queued" | "assigned" | "arbitrated"
+  assignedPartnerId: string | null
+  assignedBy: string | null
+  assignedAt: number | null
+  slaWindowStartedAt: number | null
+  slaWindowDueAt: number | null
+  disposition: TenancyLineageReconciliationQueueArbitrationDisposition | null
+  dispositionBy: string | null
+  dispositionAt: number | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageDigestClosureCheckpointRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  status: "pending_attestation" | "closed_attested" | "reopened"
+  attestedBy: string | null
+  attestedAt: number | null
+  closureReason: string | null
+  reopenTrigger: string | null
+  reopenedBy: string | null
+  reopenedAt: number | null
+  notes: string[]
+  updatedAt: number
+}
+
 export type StatuteSectionVersion = {
   sectionId: string
   versionNo: number
@@ -1848,6 +1888,10 @@ export class SpineStore {
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()
+  tenancyLineageReconciliationQueueArbitrations =
+    new Map<string, TenancyLineageReconciliationQueueArbitrationRow>()
+  tenancyLineageDigestClosureCheckpoints =
+    new Map<string, TenancyLineageDigestClosureCheckpointRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",
