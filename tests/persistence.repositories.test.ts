@@ -986,6 +986,81 @@ describe("Firestore repository adapters", () => {
           (row) => row.id === "closure-sla-window:closure-compliance:firmA:partner_a"
         )
       ).toBe(true)
+      await repos.filingEscalationClosureAttestations.upsert({
+        id: "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1",
+        sequenceNo: 1,
+        firmId: "firmA",
+        ownerId: "partner_a",
+        digestId: "closure-compliance:firmA:partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        linkedSlaWindowId: "closure-sla-window:closure-compliance:firmA:partner_a",
+        linkedExceptionDigestId: "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "pending_second_review",
+        claimPartnerId: "partner_a",
+        claimAt: 48,
+        resolutionPartnerId: "partner_a",
+        resolutionAt: 52,
+        attestedBy: "partner_a",
+        attestedAt: 53,
+        secondReviewerId: "partner_b",
+        secondReviewedBy: null,
+        secondReviewedAt: null,
+        partnerConcurrence: true,
+        evidenceNote: "claim evidence attached",
+        notes: ["attestation row"],
+        updatedAt: 53,
+      })
+      const closureAttestation = await repos.filingEscalationClosureAttestations.get(
+        "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1"
+      )
+      expect(closureAttestation?.status).toBe("pending_second_review")
+      const closureAttestationsByFirm =
+        await repos.filingEscalationClosureAttestations.listByFirm("firmA")
+      expect(
+        closureAttestationsByFirm.some(
+          (row) =>
+            row.id === "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1"
+        )
+      ).toBe(true)
+      await repos.filingEscalationClosureSlaExceptionDigests.upsert({
+        id: "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a",
+        firmId: "firmA",
+        ownerId: "partner_a",
+        digestId: "closure-compliance:firmA:partner_a",
+        queueId: "closure-followup:closure-compliance:firmA:partner_a",
+        classification: "internal",
+        packageIds: ["pkg_1"],
+        status: "open_exception",
+        pressureLevel: "critical",
+        reasons: ["ack_deadline_breached", "attestation_pending"],
+        waiverReason: null,
+        waivedBy: null,
+        waivedAt: null,
+        waiverExpiresAt: null,
+        expiredAt: null,
+        linkedSlaWindowId: "closure-sla-window:closure-compliance:firmA:partner_a",
+        linkedAttestationId:
+          "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1",
+        linkedConfigId: "closure-sla-window-config:firmA:default",
+        linkedAutoAssignmentRuleId: "closure-auto-assignment-rule:firmA:default",
+        notes: ["exception digest row"],
+        lastEvaluatedAt: 54,
+        updatedAt: 54,
+      })
+      const closureExceptionDigest = await repos.filingEscalationClosureSlaExceptionDigests.get(
+        "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a"
+      )
+      expect(closureExceptionDigest?.pressureLevel).toBe("critical")
+      const closureExceptionDigestsByFirm =
+        await repos.filingEscalationClosureSlaExceptionDigests.listByFirm("firmA")
+      expect(
+        closureExceptionDigestsByFirm.some(
+          (row) =>
+            row.id === "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a"
+        )
+      ).toBe(true)
     })
   })
 })

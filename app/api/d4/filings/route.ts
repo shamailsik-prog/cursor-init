@@ -119,6 +119,14 @@ import {
   isFilingEscalationClosureSlaWindowStatus,
 } from "@/platform/persistence/filingEscalationClosureCompliance"
 import {
+  buildFilingEscalationClosureAttestationRow,
+  buildFilingEscalationClosureSlaExceptionDigestRow,
+  filingEscalationClosureSlaExceptionDigestId,
+  isFilingEscalationClosureAttestationStatus,
+  isFilingEscalationClosureSlaExceptionReason,
+  isFilingEscalationClosureSlaExceptionStatus,
+} from "@/platform/persistence/filingEscalationClosureAttestationExceptions"
+import {
   buildFilingEscalationRemediationExpiryDigestRow,
   buildFilingEscalationRolloverBreachWatchRow,
   filingEscalationRemediationExpiryDigestId,
@@ -529,6 +537,35 @@ type AutoAssignClosureFollowupBody = {
   note?: string
 }
 
+type RecordClosureAttestationBody = {
+  action: "record_closure_attestation"
+  actorId?: string
+  queueId?: string
+  ownerId?: string
+  secondReviewerId?: string
+  partnerConcurrence?: boolean
+  evidenceNote?: string
+  note?: string
+}
+
+type ReviewClosureAttestationBody = {
+  action: "review_closure_attestation"
+  actorId?: string
+  attestationId?: string
+  decision?: "approve" | "reject"
+  note?: string
+}
+
+type WaiveClosureSlaExceptionBody = {
+  action: "waive_closure_sla_exception"
+  actorId?: string
+  queueId?: string
+  ownerId?: string
+  waiverReason?: string
+  waiverHours?: number
+  note?: string
+}
+
 type Body =
   | CreateBody
   | DecideBody
@@ -573,6 +610,9 @@ type Body =
   | SetClosureSlaWindowConfigBody
   | SetClosureAutoAssignmentRuleBody
   | AutoAssignClosureFollowupBody
+  | RecordClosureAttestationBody
+  | ReviewClosureAttestationBody
+  | WaiveClosureSlaExceptionBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -618,7 +658,9 @@ function parseFilingsView(
   | "closure_followup_queue"
   | "closure_sla_window_configs"
   | "closure_auto_assignment_rules"
-  | "closure_sla_windows" {
+  | "closure_sla_windows"
+  | "closure_attestations"
+  | "closure_sla_exception_digests" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -643,6 +685,8 @@ function parseFilingsView(
   if (value === "closure_sla_window_configs") return "closure_sla_window_configs"
   if (value === "closure_auto_assignment_rules") return "closure_auto_assignment_rules"
   if (value === "closure_sla_windows") return "closure_sla_windows"
+  if (value === "closure_attestations") return "closure_attestations"
+  if (value === "closure_sla_exception_digests") return "closure_sla_exception_digests"
   return "packages"
 }
 
@@ -1036,6 +1080,36 @@ async function recomputeClosureComplianceState(
     linkedConfigId: string | null
     linkedAutoAssignmentRuleId: string | null
   }>
+  latestAttestationByOwner: Map<string, {
+    id: string
+    status: "pending_second_review" | "attested" | "rejected"
+    secondReviewerId: string | null
+    secondReviewedBy: string | null
+    secondReviewedAt: number | null
+    partnerConcurrence: boolean
+    evidenceNote: string
+    updatedAt: number
+  }>
+  exceptionDigestByOwner: Map<string, {
+    id: string
+    ownerId: string
+    queueId: string
+    status: "open_exception" | "waived" | "expired" | "cleared"
+    pressureLevel: "baseline" | "elevated" | "critical"
+    reasons: Array<
+      | "ack_deadline_breached"
+      | "clear_deadline_breached"
+      | "auto_escalation_due"
+      | "attestation_pending"
+      | "attestation_rejected"
+      | "policy_override_active"
+    >
+    waiverReason: string | null
+    waivedBy: string | null
+    waivedAt: number | null
+    waiverExpiresAt: number | null
+    linkedAttestationId: string | null
+  }>
 }> {
   const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(input.firmId)
   const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
@@ -1096,6 +1170,23 @@ async function recomputeClosureComplianceState(
   const existingQueueByDigestId = new Map(existingQueues.map((row) => [row.digestId, row]))
   const existingWindows = await repos.filingEscalationClosureSlaWindows.listByFirm(input.firmId)
   const existingWindowByDigestId = new Map(existingWindows.map((row) => [row.digestId, row]))
+  const existingAttestations = await repos.filingEscalationClosureAttestations.listByFirm(input.firmId)
+  const latestAttestationByQueueId = new Map<
+    string,
+    (typeof existingAttestations)[number]
+  >()
+  for (const row of existingAttestations) {
+    const existing = latestAttestationByQueueId.get(row.queueId)
+    if (!existing || row.updatedAt > existing.updatedAt) {
+      latestAttestationByQueueId.set(row.queueId, row)
+    }
+  }
+  const existingExceptionDigests = await repos.filingEscalationClosureSlaExceptionDigests.listByFirm(
+    input.firmId
+  )
+  const existingExceptionByQueueId = new Map(
+    existingExceptionDigests.map((row) => [row.queueId, row])
+  )
   let closureSlaConfigRows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm(input.firmId)
   if (!closureSlaConfigRows.some((row) => row.ownerId === null && row.scope === "firm_default")) {
     const seededDefaultConfig = buildFilingEscalationClosureSlaWindowConfigRow({
@@ -1160,6 +1251,42 @@ async function recomputeClosureComplianceState(
       autoEscalatedToPartnerId: string | null
       linkedConfigId: string | null
       linkedAutoAssignmentRuleId: string | null
+    }
+  >()
+  const latestAttestationByOwner = new Map<
+    string,
+    {
+      id: string
+      status: "pending_second_review" | "attested" | "rejected"
+      secondReviewerId: string | null
+      secondReviewedBy: string | null
+      secondReviewedAt: number | null
+      partnerConcurrence: boolean
+      evidenceNote: string
+      updatedAt: number
+    }
+  >()
+  const exceptionDigestByOwner = new Map<
+    string,
+    {
+      id: string
+      ownerId: string
+      queueId: string
+      status: "open_exception" | "waived" | "expired" | "cleared"
+      pressureLevel: "baseline" | "elevated" | "critical"
+      reasons: Array<
+        | "ack_deadline_breached"
+        | "clear_deadline_breached"
+        | "auto_escalation_due"
+        | "attestation_pending"
+        | "attestation_rejected"
+        | "policy_override_active"
+      >
+      waiverReason: string | null
+      waivedBy: string | null
+      waivedAt: number | null
+      waiverExpiresAt: number | null
+      linkedAttestationId: string | null
     }
   >()
   for (const owner of ownerIds) {
@@ -1334,11 +1461,65 @@ async function recomputeClosureComplianceState(
       linkedConfigId: slaWindowComputed.linkedConfigId,
       linkedAutoAssignmentRuleId: slaWindowComputed.linkedAutoAssignmentRuleId,
     })
+    const latestAttestation = latestAttestationByQueueId.get(queueComputed.id) ?? null
+    if (latestAttestation) {
+      latestAttestationByOwner.set(owner, {
+        id: latestAttestation.id,
+        status: latestAttestation.status,
+        secondReviewerId: latestAttestation.secondReviewerId,
+        secondReviewedBy: latestAttestation.secondReviewedBy,
+        secondReviewedAt: latestAttestation.secondReviewedAt,
+        partnerConcurrence: latestAttestation.partnerConcurrence,
+        evidenceNote: latestAttestation.evidenceNote,
+        updatedAt: latestAttestation.updatedAt,
+      })
+    }
+    const existingException = existingExceptionByQueueId.get(queueComputed.id) ?? null
+    const exceptionComputed = buildFilingEscalationClosureSlaExceptionDigestRow({
+      digest: digestNext,
+      queue: queueComputed,
+      slaWindow: slaWindowComputed,
+      latestAttestation,
+      policyOverrideActive: closureSlaConfigByOwner.has(owner) || closureAutoRuleByOwner.has(owner),
+      existing: existingException,
+      now: input.now,
+    })
+    const exceptionChanged =
+      !existingException ||
+      existingException.status !== exceptionComputed.status ||
+      existingException.pressureLevel !== exceptionComputed.pressureLevel ||
+      existingException.waiverReason !== exceptionComputed.waiverReason ||
+      existingException.waivedBy !== exceptionComputed.waivedBy ||
+      existingException.waivedAt !== exceptionComputed.waivedAt ||
+      existingException.waiverExpiresAt !== exceptionComputed.waiverExpiresAt ||
+      existingException.expiredAt !== exceptionComputed.expiredAt ||
+      existingException.linkedAttestationId !== exceptionComputed.linkedAttestationId ||
+      existingException.linkedSlaWindowId !== exceptionComputed.linkedSlaWindowId ||
+      !sameStringArray(existingException.reasons, exceptionComputed.reasons)
+    if (exceptionChanged) {
+      await repos.filingEscalationClosureSlaExceptionDigests.upsert(exceptionComputed)
+    }
+    store.filingEscalationClosureSlaExceptionDigests.set(exceptionComputed.id, exceptionComputed)
+    exceptionDigestByOwner.set(owner, {
+      id: exceptionComputed.id,
+      ownerId: exceptionComputed.ownerId,
+      queueId: exceptionComputed.queueId,
+      status: exceptionComputed.status,
+      pressureLevel: exceptionComputed.pressureLevel,
+      reasons: exceptionComputed.reasons,
+      waiverReason: exceptionComputed.waiverReason,
+      waivedBy: exceptionComputed.waivedBy,
+      waivedAt: exceptionComputed.waivedAt,
+      waiverExpiresAt: exceptionComputed.waiverExpiresAt,
+      linkedAttestationId: exceptionComputed.linkedAttestationId,
+    })
   }
   return {
     digestByOwner,
     queueByOwner,
     slaWindowByOwner,
+    latestAttestationByOwner,
+    exceptionDigestByOwner,
   }
 }
 
@@ -1886,11 +2067,12 @@ export async function GET(request: Request) {
       const digestStatus = url.searchParams.get("digestStatus")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const { digestByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(store, repos, {
+      const { digestByOwner, slaWindowByOwner, exceptionDigestByOwner } =
+        await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
         packageById,
         now,
-      })
+        })
       const visible = [...digestByOwner.values()]
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (packageId ? row.linkedPackageIds.includes(packageId) : true))
@@ -1910,6 +2092,7 @@ export async function GET(request: Request) {
         })
         .map((row) => {
           const window = slaWindowByOwner.get(row.ownerId)
+          const exceptionDigest = exceptionDigestByOwner.get(row.ownerId)
           return {
             ...row,
             slaWindowStatus: window?.status ?? "cleared",
@@ -1918,6 +2101,9 @@ export async function GET(request: Request) {
             slaClearDeadlineAt: window?.clearDeadlineAt ?? null,
             slaAutoEscalateAt: window?.autoEscalateAt ?? null,
             slaAutoEscalatedToPartnerId: window?.autoEscalatedToPartnerId ?? null,
+            slaExceptionStatus: exceptionDigest?.status ?? "cleared",
+            slaExceptionPressureLevel: exceptionDigest?.pressureLevel ?? "baseline",
+            slaExceptionReasons: exceptionDigest?.reasons ?? [],
           }
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -1940,11 +2126,12 @@ export async function GET(request: Request) {
       const assigneeId = url.searchParams.get("assigneeId")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const { queueByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(store, repos, {
+      const { queueByOwner, slaWindowByOwner, exceptionDigestByOwner } =
+        await recomputeClosureComplianceState(store, repos, {
         firmId: user.firmId,
         packageById,
         now,
-      })
+        })
       const visible = [...queueByOwner.values()]
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (assigneeId ? row.assignedPartnerId === assigneeId : true))
@@ -1965,6 +2152,7 @@ export async function GET(request: Request) {
         })
         .map((row) => {
           const window = slaWindowByOwner.get(row.ownerId)
+          const exceptionDigest = exceptionDigestByOwner.get(row.ownerId)
           return {
             ...row,
             slaWindowStatus: window?.status ?? "cleared",
@@ -1973,6 +2161,9 @@ export async function GET(request: Request) {
             slaClearDeadlineAt: window?.clearDeadlineAt ?? null,
             slaAutoEscalateAt: window?.autoEscalateAt ?? null,
             slaAutoEscalatedToPartnerId: window?.autoEscalatedToPartnerId ?? null,
+            slaExceptionStatus: exceptionDigest?.status ?? "cleared",
+            slaExceptionPressureLevel: exceptionDigest?.pressureLevel ?? "baseline",
+            slaExceptionReasons: exceptionDigest?.reasons ?? [],
           }
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -2035,7 +2226,8 @@ export async function GET(request: Request) {
       const pressureLevel = url.searchParams.get("pressureLevel")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const { digestByOwner, queueByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(
+      const { digestByOwner, queueByOwner, slaWindowByOwner, exceptionDigestByOwner } =
+        await recomputeClosureComplianceState(
         store,
         repos,
         {
@@ -2043,7 +2235,7 @@ export async function GET(request: Request) {
           packageById,
           now,
         }
-      )
+        )
       const visible = [...slaWindowByOwner.values()]
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) =>
@@ -2074,6 +2266,7 @@ export async function GET(request: Request) {
         .map((row) => {
           const digest = digestByOwner.get(row.ownerId)
           const queue = queueByOwner.get(row.ownerId)
+          const exceptionDigest = exceptionDigestByOwner.get(row.ownerId)
           return {
             ...row,
             digestId: digest?.id ?? null,
@@ -2081,6 +2274,9 @@ export async function GET(request: Request) {
             packageIds: digest?.linkedPackageIds ?? [],
             assignedPartnerId: queue?.assignedPartnerId ?? null,
             queueStatus: queue?.status ?? "resolved",
+            exceptionDigestStatus: exceptionDigest?.status ?? "cleared",
+            exceptionDigestPressureLevel: exceptionDigest?.pressureLevel ?? "baseline",
+            exceptionDigestReasons: exceptionDigest?.reasons ?? [],
           }
         })
         .sort((a, b) => {
@@ -2088,6 +2284,101 @@ export async function GET(request: Request) {
           const bDeadline = b.autoEscalateAt ?? b.clearDeadlineAt ?? b.ackDeadlineAt ?? 0
           return aDeadline - bDeadline || a.id.localeCompare(b.id)
         })
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_attestations") {
+      const ownerId = url.searchParams.get("ownerId")
+      const queueId = url.searchParams.get("queueId")
+      const packageId = url.searchParams.get("packageId")
+      const attestationStatus = url.searchParams.get("attestationStatus")
+      const rows = await repos.filingEscalationClosureAttestations.listByFirm(user.firmId)
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) => (queueId ? row.queueId === queueId : true))
+        .filter((row) =>
+          isFilingEscalationClosureAttestationStatus(attestationStatus)
+            ? row.status === attestationStatus
+            : true
+        )
+        .filter((row) => (packageId ? row.packageIds.includes(packageId) : true))
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = firmPackages.find((item) => item.id === pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "closure_sla_exception_digests") {
+      const ownerId = url.searchParams.get("ownerId")
+      const queueId = url.searchParams.get("queueId")
+      const packageId = url.searchParams.get("packageId")
+      const exceptionStatus = url.searchParams.get("exceptionStatus")
+      const pressureLevel = url.searchParams.get("pressureLevel")
+      const reason = url.searchParams.get("reason")
+      const now = Date.now()
+      const packageById = new Map(firmPackages.map((row) => [row.id, row]))
+      const { exceptionDigestByOwner } = await recomputeClosureComplianceState(store, repos, {
+        firmId: user.firmId,
+        packageById,
+        now,
+      })
+      const rows = [...exceptionDigestByOwner.values()]
+      const visible = rows
+        .filter((row) => (ownerId ? row.ownerId === ownerId : true))
+        .filter((row) =>
+          isFilingEscalationClosureSlaExceptionStatus(exceptionStatus)
+            ? row.status === exceptionStatus
+            : true
+        )
+        .filter((row) =>
+          isFilingEscalationClosureSlaPressureLevel(pressureLevel)
+            ? row.pressureLevel === pressureLevel
+            : true
+        )
+        .filter((row) =>
+          reason && isFilingEscalationClosureSlaExceptionReason(reason)
+            ? row.reasons.includes(reason)
+            : true
+        )
+        .map((row) => store.filingEscalationClosureSlaExceptionDigests.get(row.id) ?? null)
+        .filter((row): row is NonNullable<typeof row> => row !== null)
+        .filter((row) => (queueId ? row.queueId === queueId : true))
+        .filter((row) => (packageId ? row.packageIds.includes(packageId) : true))
+        .filter((row) => {
+          if (row.packageIds.length === 0) return user.role === "partner"
+          return row.packageIds.some((pkgId) => {
+            const filingPackage = packageById.get(pkgId)
+            if (!filingPackage) return false
+            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
+            if (!permission.allow) return false
+            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+          })
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
       return NextResponse.json({
@@ -2107,15 +2398,12 @@ export async function GET(request: Request) {
       const handoffLagBucket = url.searchParams.get("handoffLagBucket")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const { queueByOwner: closureQueueByOwner, slaWindowByOwner } = await recomputeClosureComplianceState(
-        store,
-        repos,
-        {
+      const { queueByOwner: closureQueueByOwner, slaWindowByOwner, exceptionDigestByOwner } =
+        await recomputeClosureComplianceState(store, repos, {
           firmId: user.firmId,
           packageById,
           now,
-        }
-      )
+        })
       const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(user.firmId)
       const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(rotaRows)
@@ -2390,6 +2678,9 @@ export async function GET(request: Request) {
         const ownerClosureSlaWindow = rota?.primaryOwnerId
           ? slaWindowByOwner.get(rota.primaryOwnerId) ?? null
           : null
+        const ownerClosureException = rota?.primaryOwnerId
+          ? exceptionDigestByOwner.get(rota.primaryOwnerId) ?? null
+          : null
         const closureQueueElevated =
           !!ownerClosureQueue &&
           ownerClosureQueue.status !== "resolved" &&
@@ -2404,11 +2695,23 @@ export async function GET(request: Request) {
           !!ownerClosureSlaWindow &&
           ownerClosureSlaWindow.status !== "cleared" &&
           ownerClosureSlaWindow.pressureLevel === "critical"
+        const closureExceptionElevated =
+          !!ownerClosureException &&
+          ownerClosureException.status !== "cleared" &&
+          (ownerClosureException.pressureLevel === "elevated" ||
+            ownerClosureException.pressureLevel === "critical")
+        const closureExceptionCritical =
+          !!ownerClosureException &&
+          ownerClosureException.status !== "cleared" &&
+          (ownerClosureException.pressureLevel === "critical" ||
+            ownerClosureException.status === "expired" ||
+            ownerClosureException.reasons.includes("attestation_rejected"))
         const closureQueueCritical =
           (closureQueueElevated && !!ownerClosureQueue && ownerClosureQueue.breachedReaffirmationCount > 0) ||
-          closureSlaCritical
+          closureSlaCritical ||
+          closureExceptionCritical
         const computedBaseWithQueue =
-          (closureQueueElevated || closureSlaElevated) &&
+          (closureQueueElevated || closureSlaElevated || closureExceptionElevated) &&
           !computedBase.alertReasons.includes("closure_compliance_pressure")
             ? {
                 ...computedBase,
@@ -2472,7 +2775,8 @@ export async function GET(request: Request) {
                 policyVarianceCritical ||
                 reaffirmationSlaWarning ||
                 closureQueueElevated ||
-                closureSlaElevated
+                closureSlaElevated ||
+                closureExceptionElevated
               ? "elevated"
               : "baseline"
         let computed =
@@ -6989,6 +7293,286 @@ export async function POST(request: Request) {
         action: "resolve_closure_followup",
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "record_closure_attestation") {
+      if (!parsed.actorId || !parsed.evidenceNote?.trim() || (!parsed.queueId && !parsed.ownerId)) {
+        return NextResponse.json(
+          { error: "actorId, evidenceNote, and queueId or ownerId are required" },
+          { status: 400 }
+        )
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "record_closure_attestation requires partner role" }, { status: 403 })
+      }
+      const secondReviewerId = parsed.secondReviewerId?.trim() || null
+      if (secondReviewerId === actor.id) {
+        return NextResponse.json({ error: "second reviewer must differ from actor" }, { status: 422 })
+      }
+      if (secondReviewerId) {
+        const secondReviewer =
+          store.users.get(secondReviewerId) ?? (await repos.users.get(secondReviewerId))
+        if (
+          !secondReviewer ||
+          secondReviewer.firmId !== actor.firmId ||
+          secondReviewer.role !== "partner"
+        ) {
+          return NextResponse.json(
+            { error: "secondReviewerId must reference a partner in actor firm" },
+            { status: 422 }
+          )
+        }
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const queue =
+        (parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null) ?? null
+      if (!queue || queue.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
+      }
+      if (queue.status !== "resolved") {
+        return NextResponse.json(
+          { error: "closure follow-up queue must be resolved before attestation" },
+          { status: 422 }
+        )
+      }
+      const digest = closureState.digestByOwner.get(queue.ownerId) ?? null
+      const slaWindow = store.filingEscalationClosureSlaWindows.get(
+        filingEscalationClosureSlaWindowId(queue.id)
+      )
+      if (!digest || !slaWindow) {
+        return NextResponse.json({ error: "closure compliance state unavailable" }, { status: 422 })
+      }
+      const existingRowsForQueue = await repos.filingEscalationClosureAttestations.listByQueueId(queue.id)
+      const linkedExceptionId = filingEscalationClosureSlaExceptionDigestId(queue.id)
+      const row = buildFilingEscalationClosureAttestationRow({
+        digest,
+        queue,
+        slaWindow,
+        actorId: actor.id,
+        secondReviewerId,
+        partnerConcurrence: parsed.partnerConcurrence ?? true,
+        evidenceNote: parsed.evidenceNote,
+        linkedExceptionDigestId: linkedExceptionId,
+        existingRowsForQueue,
+        now,
+        note: parsed.note,
+      })
+      await repos.filingEscalationClosureAttestations.upsert(row)
+      store.filingEscalationClosureAttestations.set(row.id, row)
+      store.audit.push({
+        action: "filing_closure_attestation_record",
+        actorId: actor.id,
+        target: row.id,
+        classification: row.classification,
+        reason: row.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const refreshedState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const exceptionRef = refreshedState.exceptionDigestByOwner.get(queue.ownerId)
+      const payload = {
+        action: "record_closure_attestation",
+        closureAttestation: (await repos.filingEscalationClosureAttestations.get(row.id)) ?? row,
+        closureSlaExceptionDigest: exceptionRef
+          ? (await repos.filingEscalationClosureSlaExceptionDigests.get(exceptionRef.id)) ??
+            store.filingEscalationClosureSlaExceptionDigests.get(exceptionRef.id) ??
+            null
+          : null,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "review_closure_attestation") {
+      if (!parsed.actorId || !parsed.attestationId || !parsed.decision) {
+        return NextResponse.json(
+          { error: "actorId, attestationId, and decision are required" },
+          { status: 400 }
+        )
+      }
+      if (parsed.decision !== "approve" && parsed.decision !== "reject") {
+        return NextResponse.json({ error: "decision must be approve or reject" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "review_closure_attestation requires partner role" }, { status: 403 })
+      }
+      const attestation = await repos.filingEscalationClosureAttestations.get(parsed.attestationId)
+      if (!attestation) {
+        return NextResponse.json({ error: "closure attestation not found" }, { status: 404 })
+      }
+      if (attestation.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm closure attestation denied" }, { status: 403 })
+      }
+      if (attestation.status !== "pending_second_review") {
+        return NextResponse.json(
+          { error: "closure attestation is not awaiting second review" },
+          { status: 422 }
+        )
+      }
+      if (attestation.secondReviewerId && attestation.secondReviewerId !== actor.id) {
+        return NextResponse.json(
+          { error: "only the designated second reviewer may review this attestation" },
+          { status: 403 }
+        )
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const note =
+        parsed.note?.trim() ||
+        (parsed.decision === "approve"
+          ? "closure attestation second review approved"
+          : "closure attestation second review rejected")
+      const updated = {
+        ...attestation,
+        status: parsed.decision === "approve" ? ("attested" as const) : ("rejected" as const),
+        secondReviewedBy: actor.id,
+        secondReviewedAt: now,
+        notes: [...attestation.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+      }
+      await repos.filingEscalationClosureAttestations.upsert(updated)
+      store.filingEscalationClosureAttestations.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_closure_attestation_review",
+        actorId: actor.id,
+        target: updated.id,
+        classification: updated.classification,
+        reason: updated.status,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const refreshedState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const exceptionRef = refreshedState.exceptionDigestByOwner.get(updated.ownerId)
+      const payload = {
+        action: "review_closure_attestation",
+        closureAttestation:
+          (await repos.filingEscalationClosureAttestations.get(updated.id)) ?? updated,
+        closureSlaExceptionDigest: exceptionRef
+          ? (await repos.filingEscalationClosureSlaExceptionDigests.get(exceptionRef.id)) ??
+            store.filingEscalationClosureSlaExceptionDigests.get(exceptionRef.id) ??
+            null
+          : null,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "waive_closure_sla_exception") {
+      if (
+        !parsed.actorId ||
+        !parsed.waiverReason?.trim() ||
+        parsed.waiverHours === undefined ||
+        (!parsed.queueId && !parsed.ownerId)
+      ) {
+        return NextResponse.json(
+          { error: "actorId, waiverReason, waiverHours, and queueId or ownerId are required" },
+          { status: 400 }
+        )
+      }
+      const waiverHours = Number(parsed.waiverHours)
+      if (!Number.isFinite(waiverHours) || waiverHours < 1 || waiverHours > 168) {
+        return NextResponse.json({ error: "waiverHours must be between 1 and 168" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json({ error: "waive_closure_sla_exception requires partner role" }, { status: 403 })
+      }
+      const priorAuditCount = store.audit.length
+      const now = Date.now()
+      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageById = new Map(packageRows.map((row) => [row.id, row]))
+      const closureState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const queue =
+        (parsed.queueId
+          ? await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId)
+          : parsed.ownerId
+            ? closureState.queueByOwner.get(parsed.ownerId) ?? null
+            : null) ?? null
+      if (!queue || queue.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "closure follow-up queue row not found" }, { status: 404 })
+      }
+      const exceptionRef = closureState.exceptionDigestByOwner.get(queue.ownerId)
+      if (!exceptionRef) {
+        return NextResponse.json({ error: "closure SLA exception digest not found" }, { status: 404 })
+      }
+      const existing =
+        (await repos.filingEscalationClosureSlaExceptionDigests.get(exceptionRef.id)) ??
+        store.filingEscalationClosureSlaExceptionDigests.get(exceptionRef.id) ??
+        null
+      if (!existing) {
+        return NextResponse.json({ error: "closure SLA exception digest not found" }, { status: 404 })
+      }
+      if (existing.status === "cleared") {
+        return NextResponse.json({ error: "no active closure SLA exception to waive" }, { status: 422 })
+      }
+      const note = parsed.note?.trim() || `closure SLA exception waived for ${waiverHours}h`
+      const updated = {
+        ...existing,
+        status: "waived" as const,
+        waiverReason: parsed.waiverReason.trim(),
+        waivedBy: actor.id,
+        waivedAt: now,
+        waiverExpiresAt: now + waiverHours * HOUR_MS,
+        expiredAt: null,
+        notes: [...existing.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
+        updatedAt: now,
+        lastEvaluatedAt: now,
+      }
+      await repos.filingEscalationClosureSlaExceptionDigests.upsert(updated)
+      store.filingEscalationClosureSlaExceptionDigests.set(updated.id, updated)
+      store.audit.push({
+        action: "filing_closure_sla_exception_waive",
+        actorId: actor.id,
+        target: updated.id,
+        classification: updated.classification,
+        reason: parsed.waiverReason.trim(),
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const refreshedState = await recomputeClosureComplianceState(store, repos, {
+        firmId: actor.firmId,
+        packageById,
+        now,
+      })
+      const refreshedRef = refreshedState.exceptionDigestByOwner.get(queue.ownerId)
+      const payload = {
+        action: "waive_closure_sla_exception",
+        closureSlaExceptionDigest: refreshedRef
+          ? (await repos.filingEscalationClosureSlaExceptionDigests.get(refreshedRef.id)) ??
+            store.filingEscalationClosureSlaExceptionDigests.get(refreshedRef.id) ??
+            null
+          : null,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

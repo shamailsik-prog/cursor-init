@@ -866,6 +866,77 @@ export type FilingEscalationClosureSlaWindowRow = {
   updatedAt: number
 }
 
+export type FilingEscalationClosureAttestationStatus =
+  | "pending_second_review"
+  | "attested"
+  | "rejected"
+
+export type FilingEscalationClosureAttestationRow = {
+  id: string
+  sequenceNo: number
+  firmId: string
+  ownerId: string
+  digestId: string
+  queueId: string
+  linkedSlaWindowId: string
+  linkedExceptionDigestId: string | null
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureAttestationStatus
+  claimPartnerId: string | null
+  claimAt: number | null
+  resolutionPartnerId: string | null
+  resolutionAt: number | null
+  attestedBy: string
+  attestedAt: number
+  secondReviewerId: string | null
+  secondReviewedBy: string | null
+  secondReviewedAt: number | null
+  partnerConcurrence: boolean
+  evidenceNote: string
+  notes: string[]
+  updatedAt: number
+}
+
+export type FilingEscalationClosureSlaExceptionStatus =
+  | "open_exception"
+  | "waived"
+  | "expired"
+  | "cleared"
+
+export type FilingEscalationClosureSlaExceptionReason =
+  | "ack_deadline_breached"
+  | "clear_deadline_breached"
+  | "auto_escalation_due"
+  | "attestation_pending"
+  | "attestation_rejected"
+  | "policy_override_active"
+
+export type FilingEscalationClosureSlaExceptionDigestRow = {
+  id: string
+  firmId: string
+  ownerId: string
+  digestId: string
+  queueId: string
+  classification: Classification
+  packageIds: string[]
+  status: FilingEscalationClosureSlaExceptionStatus
+  pressureLevel: FilingEscalationClosureSlaPressureLevel
+  reasons: FilingEscalationClosureSlaExceptionReason[]
+  waiverReason: string | null
+  waivedBy: string | null
+  waivedAt: number | null
+  waiverExpiresAt: number | null
+  expiredAt: number | null
+  linkedSlaWindowId: string | null
+  linkedAttestationId: string | null
+  linkedConfigId: string | null
+  linkedAutoAssignmentRuleId: string | null
+  notes: string[]
+  lastEvaluatedAt: number
+  updatedAt: number
+}
+
 export type CommitteeBrainOutput = {
   id: string
   firmId: string
@@ -988,6 +1059,10 @@ export class SpineStore {
     new Map<string, FilingEscalationClosureAutoAssignmentRuleRow>()
   filingEscalationClosureSlaWindows =
     new Map<string, FilingEscalationClosureSlaWindowRow>()
+  filingEscalationClosureAttestations =
+    new Map<string, FilingEscalationClosureAttestationRow>()
+  filingEscalationClosureSlaExceptionDigests =
+    new Map<string, FilingEscalationClosureSlaExceptionDigestRow>()
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()

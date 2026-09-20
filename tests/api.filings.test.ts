@@ -1171,6 +1171,18 @@ describe("GET/POST /api/d4/filings", () => {
       "bb28f7b4-0947-4f31-88ac-0283365a5d95"
     )
     expect(claimClosureFollowup.status).toBe(200)
+    const waiveClosureSlaException = await post(
+      {
+        action: "waive_closure_sla_exception",
+        actorId: "partner_a",
+        ownerId: "partner_a",
+        waiverReason: "Temporary policy override during closure reconciliation",
+        waiverHours: 4,
+        note: "Waive closure SLA exception while attestations finalize",
+      },
+      "9a220bf4-8353-4efe-9c3a-c8e15e30741b"
+    )
+    expect([200, 422]).toContain(waiveClosureSlaException.status)
 
     const acknowledgeRemediationExpiry = await post(
       {
@@ -1241,6 +1253,44 @@ describe("GET/POST /api/d4/filings", () => {
       "1df96cf6-842e-4c02-8d89-c3982ed1d575"
     )
     expect([200, 422]).toContain(resolveClosureFollowup.status)
+    const recordClosureAttestation = await post(
+      {
+        action: "record_closure_attestation",
+        actorId: "partner_a",
+        ownerId: "partner_a",
+        secondReviewerId: "partner_b",
+        partnerConcurrence: true,
+        evidenceNote: "Claim, dispatch closure, and remediation artifacts reviewed",
+        note: "Record closure attestation evidence bundle",
+      },
+      "6c63f0cb-fa8d-44b4-b1f3-e4300edcece5"
+    )
+    expect([200, 422]).toContain(recordClosureAttestation.status)
+    let attestationId: string | null = null
+    if (recordClosureAttestation.status === 200) {
+      const recordClosureAttestationJson = (await recordClosureAttestation.json()) as {
+        result: { closureAttestation: { id: string; status: string } }
+      }
+      attestationId = recordClosureAttestationJson.result.closureAttestation.id
+      expect(
+        ["pending_second_review", "attested", "rejected"].includes(
+          recordClosureAttestationJson.result.closureAttestation.status
+        )
+      ).toBe(true)
+    }
+    if (attestationId) {
+      const reviewClosureAttestation = await post(
+        {
+          action: "review_closure_attestation",
+          actorId: "partner_b",
+          attestationId,
+          decision: "approve",
+          note: "Second review approved for closure evidence packet",
+        },
+        "3af816e8-b0f2-406d-aed5-e4d5e244ad50"
+      )
+      expect([200, 422]).toContain(reviewClosureAttestation.status)
+    }
 
     const waiverExpiryViewBefore = await get(
       new URLSearchParams({
@@ -1738,6 +1788,8 @@ describe("GET/POST /api/d4/filings", () => {
         status: string
         slaWindowStatus?: string
         slaPressureLevel?: string
+        slaExceptionStatus?: string
+        slaExceptionPressureLevel?: string
       }>
     }
     expect(
@@ -1752,7 +1804,20 @@ describe("GET/POST /api/d4/filings", () => {
           const pressureOk =
             row.slaPressureLevel === undefined ||
             ["baseline", "elevated", "critical"].includes(row.slaPressureLevel)
-          return row.ownerId === "partner_a" && digestStatusOk && slaStatusOk && pressureOk
+          const exceptionStatusOk =
+            row.slaExceptionStatus === undefined ||
+            ["open_exception", "waived", "expired", "cleared"].includes(row.slaExceptionStatus)
+          const exceptionPressureOk =
+            row.slaExceptionPressureLevel === undefined ||
+            ["baseline", "elevated", "critical"].includes(row.slaExceptionPressureLevel)
+          return (
+            row.ownerId === "partner_a" &&
+            digestStatusOk &&
+            slaStatusOk &&
+            pressureOk &&
+            exceptionStatusOk &&
+            exceptionPressureOk
+          )
         }
       )
     ).toBe(true)
@@ -1773,6 +1838,27 @@ describe("GET/POST /api/d4/filings", () => {
     expect(
       closureQueueViewJson.items.some(
         (row) => row.ownerId === "partner_a" && ["open", "claimed", "resolved"].includes(row.status)
+      )
+    ).toBe(true)
+    const closureAttestationsView = await get(
+      new URLSearchParams({
+        view: "closure_attestations",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureAttestationsView.status).toBe(200)
+    const closureAttestationsViewJson = (await closureAttestationsView.json()) as {
+      items: Array<{ ownerId: string; status: string }>
+    }
+    if (attestationId) {
+      expect(closureAttestationsViewJson.items.length).toBeGreaterThan(0)
+    }
+    expect(
+      closureAttestationsViewJson.items.every((row) =>
+        ["pending_second_review", "attested", "rejected"].includes(row.status)
       )
     ).toBe(true)
 
@@ -1833,6 +1919,27 @@ describe("GET/POST /api/d4/filings", () => {
           ["within_window", "ack_breached", "clear_breached", "auto_escalation_due", "cleared"].includes(
             row.status
           ) &&
+          ["baseline", "elevated", "critical"].includes(row.pressureLevel)
+      )
+    ).toBe(true)
+    const closureSlaExceptionView = await get(
+      new URLSearchParams({
+        view: "closure_sla_exception_digests",
+        userId: "partner_a",
+        ownerId: "partner_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureSlaExceptionView.status).toBe(200)
+    const closureSlaExceptionViewJson = (await closureSlaExceptionView.json()) as {
+      items: Array<{ ownerId: string; status: string; pressureLevel: string }>
+    }
+    expect(
+      closureSlaExceptionViewJson.items.some(
+        (row) =>
+          row.ownerId === "partner_a" &&
+          ["open_exception", "waived", "expired", "cleared"].includes(row.status) &&
           ["baseline", "elevated", "critical"].includes(row.pressureLevel)
       )
     ).toBe(true)
