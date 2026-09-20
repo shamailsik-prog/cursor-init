@@ -118,6 +118,17 @@ export type TenancySessionReferenceRow = {
   issuedAt: number
   lastSeenAt: number
   expiresAt: number | null
+  revokedAt: number | null
+  revokedBy: string | null
+  revocationReason: string | null
+  driftedAt: number | null
+  driftedBy: string | null
+  driftReason: "role_changed" | "clearance_changed" | "role_and_clearance_changed" | null
+  driftFromRole: Role | null
+  driftToRole: Role | null
+  driftFromClearance: Classification | null
+  driftToClearance: Classification | null
+  driftAuditEntryId: string | null
 }
 
 export type StatuteSectionVersion = {

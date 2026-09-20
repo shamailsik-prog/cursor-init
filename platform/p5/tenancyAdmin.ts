@@ -9,6 +9,10 @@ import {
 } from "@/platform/spine/store"
 
 const DEFAULT_SESSION_REFERENCE_TTL_MS = 8 * 60 * 60 * 1000
+const SESSION_REFERENCE_EXPIRY_REASON = "expired_enforced"
+const SESSION_REFERENCE_DRIFT_REASON = "privileged_boundary_drift"
+
+export type TenancySessionReferenceState = "active" | "expired" | "revoked" | "drifted"
 
 function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
   const actor = store.users.get(actorId)
@@ -16,6 +20,10 @@ function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string
   if (actor.firmId !== firmId) throw new Error("cross-firm actor denied")
   if (actor.role !== "partner") throw new Error("partner role required")
   return actor
+}
+
+export function assertPartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
+  return requirePartnerInFirm(store, actorId, firmId)
 }
 
 export function buildSessionContext(
@@ -169,7 +177,12 @@ export function updateUserRole(
     sessionReferenceId?: string | null
     externalSessionId?: string | null
   }
-): { user: User; auditEntry: NonNullable<SpineStore["audit"][number]> } {
+): {
+  user: User
+  previousRole: Role
+  previousClearance: Classification
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const target = store.users.get(input.targetUserId)
   if (!target) throw new Error("unknown target user")
@@ -186,6 +199,8 @@ export function updateUserRole(
   if (input.nextRole === "client" && rankOf(input.nextClearance) > rankOf("internal")) {
     throw new Error("client clearance may not exceed internal")
   }
+  const previousRole = target.role
+  const previousClearance = target.clearanceLevel
   target.role = input.nextRole
   target.clearanceLevel = input.nextClearance
   const auditEntry = {
@@ -202,7 +217,133 @@ export function updateUserRole(
     at: Date.now(),
   } as const
   store.audit.push(auditEntry)
-  return { user: target, auditEntry }
+  return { user: target, previousRole, previousClearance, auditEntry }
+}
+
+function inferDriftReason(
+  roleSnapshot: Role,
+  clearanceSnapshot: Classification,
+  user: User
+): TenancySessionReferenceRow["driftReason"] {
+  const roleChanged = roleSnapshot !== user.role
+  const clearanceChanged = clearanceSnapshot !== user.clearanceLevel
+  if (roleChanged && clearanceChanged) return "role_and_clearance_changed"
+  if (roleChanged) return "role_changed"
+  if (clearanceChanged) return "clearance_changed"
+  return null
+}
+
+export function getTenancySessionReferenceState(
+  row: TenancySessionReferenceRow,
+  user: User,
+  now = Date.now()
+): TenancySessionReferenceState {
+  if (row.driftedAt) return "drifted"
+  if (inferDriftReason(row.roleSnapshot, row.clearanceSnapshot, user)) return "drifted"
+  if (row.expiresAt != null && row.expiresAt <= now) return "expired"
+  if (row.revokedAt) return "revoked"
+  return "active"
+}
+
+export function assertUsableTenancySessionReference(
+  row: TenancySessionReferenceRow,
+  user: User,
+  now = Date.now()
+): void {
+  const state = getTenancySessionReferenceState(row, user, now)
+  if (state === "active") return
+  if (state === "expired") {
+    throw new Error("expired session reference")
+  }
+  if (state === "revoked") {
+    throw new Error("revoked session reference")
+  }
+  throw new Error("privileged-boundary drift invalidated session reference")
+}
+
+export function revokeTenancySessionReference(
+  store: SpineStore,
+  input: {
+    row: TenancySessionReferenceRow
+    actorId: string
+    reason?: string
+    now?: number
+  }
+): TenancySessionReferenceRow {
+  const now = input.now ?? Date.now()
+  const row: TenancySessionReferenceRow = {
+    ...input.row,
+    revokedAt: input.row.revokedAt ?? now,
+    revokedBy: input.row.revokedBy ?? input.actorId,
+    revocationReason: input.reason ?? input.row.revocationReason ?? "admin_revocation",
+  }
+  store.tenancySessionReferences.set(row.id, row)
+  return row
+}
+
+export function invalidateSessionReferencesForPrivilegeDrift(
+  store: SpineStore,
+  input: {
+    actorId: string
+    updatedUser: User
+    auditEntryId: string
+    now?: number
+    excludeReferenceIds?: string[]
+  }
+): Array<{ id: string; driftReason: NonNullable<TenancySessionReferenceRow["driftReason"]> }> {
+  const now = input.now ?? Date.now()
+  const excluded = new Set(input.excludeReferenceIds ?? [])
+  const invalidated: Array<{ id: string; driftReason: NonNullable<TenancySessionReferenceRow["driftReason"]> }> =
+    []
+  for (const row of store.tenancySessionReferences.values()) {
+    if (row.userId !== input.updatedUser.id || row.firmId !== input.updatedUser.firmId) continue
+    if (excluded.has(row.id)) continue
+    const driftReason = inferDriftReason(row.roleSnapshot, row.clearanceSnapshot, input.updatedUser)
+    if (!driftReason) continue
+    const next: TenancySessionReferenceRow = {
+      ...row,
+      revokedAt: row.revokedAt ?? now,
+      revokedBy: row.revokedBy ?? input.actorId,
+      revocationReason: row.revocationReason ?? SESSION_REFERENCE_DRIFT_REASON,
+      driftedAt: row.driftedAt ?? now,
+      driftedBy: input.actorId,
+      driftReason,
+      driftFromRole: row.driftFromRole ?? row.roleSnapshot,
+      driftToRole: input.updatedUser.role,
+      driftFromClearance: row.driftFromClearance ?? row.clearanceSnapshot,
+      driftToClearance: input.updatedUser.clearanceLevel,
+      driftAuditEntryId: input.auditEntryId,
+    }
+    store.tenancySessionReferences.set(next.id, next)
+    invalidated.push({ id: next.id, driftReason })
+  }
+  return invalidated
+}
+
+export function enforceFirmSessionReferenceExpiry(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    now?: number
+  }
+): string[] {
+  requirePartnerInFirm(store, input.actorId, input.firmId)
+  const now = input.now ?? Date.now()
+  const revoked: string[] = []
+  for (const row of store.tenancySessionReferences.values()) {
+    if (row.firmId !== input.firmId) continue
+    if (row.expiresAt == null || row.expiresAt > now) continue
+    if (row.revokedAt || row.driftedAt) continue
+    const next = revokeTenancySessionReference(store, {
+      row,
+      actorId: input.actorId,
+      reason: SESSION_REFERENCE_EXPIRY_REASON,
+      now,
+    })
+    revoked.push(next.id)
+  }
+  return revoked
 }
 
 export function upsertTenancySessionReference(
@@ -245,6 +386,17 @@ export function upsertTenancySessionReference(
     issuedAt: existing?.issuedAt ?? now,
     lastSeenAt: now,
     expiresAt,
+    revokedAt: existing?.revokedAt ?? null,
+    revokedBy: existing?.revokedBy ?? null,
+    revocationReason: existing?.revocationReason ?? null,
+    driftedAt: existing?.driftedAt ?? null,
+    driftedBy: existing?.driftedBy ?? null,
+    driftReason: existing?.driftReason ?? null,
+    driftFromRole: existing?.driftFromRole ?? null,
+    driftToRole: existing?.driftToRole ?? null,
+    driftFromClearance: existing?.driftFromClearance ?? null,
+    driftToClearance: existing?.driftToClearance ?? null,
+    driftAuditEntryId: existing?.driftAuditEntryId ?? null,
   }
   store.tenancySessionReferences.set(row.id, row)
   return row

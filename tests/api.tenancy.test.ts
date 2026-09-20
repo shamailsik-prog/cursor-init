@@ -129,6 +129,115 @@ describe("GET/POST /api/p5/tenancy", () => {
     expect(m.items.some((row) => row.matterId === matterId)).toBe(true)
   })
 
+  it("supports admin-driven session revocation and denies stale replay", async () => {
+    const sessionRes = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "associate_a",
+        firmId: "firmA",
+      })
+    )
+    expect(sessionRes.status).toBe(200)
+    const sessionJson = (await sessionRes.json()) as { sessionReference: { id: string } }
+
+    const deniedNonPartner = await post(
+      {
+        action: "revoke_session_reference",
+        actorId: "associate_a",
+        firmId: "firmA",
+        sessionReferenceId: sessionJson.sessionReference.id,
+      },
+      "5ef853aa-a2b8-4f15-9303-c87bfd0a13e6"
+    )
+    expect(deniedNonPartner.status).toBe(400)
+
+    const revoked = await post(
+      {
+        action: "revoke_session_reference",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: sessionJson.sessionReference.id,
+        reason: "manual security revoke",
+      },
+      "0a0ea66d-91b3-4742-a459-51fd13f4dad7"
+    )
+    expect(revoked.status).toBe(200)
+    const revokedJson = (await revoked.json()) as {
+      result: { sessionReference: { state: string; revocationReason: string | null } }
+    }
+    expect(revokedJson.result.sessionReference.state).toBe("revoked")
+    expect(revokedJson.result.sessionReference.revocationReason).toBe("manual security revoke")
+
+    const replayDenied = await get(
+      new URLSearchParams({
+        view: "session",
+        sessionRefId: sessionJson.sessionReference.id,
+      })
+    )
+    expect(replayDenied.status).toBe(400)
+    const deniedJson = (await replayDenied.json()) as { error: string }
+    expect(deniedJson.error).toContain("revoked session reference")
+  })
+
+  it("enforces session-reference expiry and marks rows durably", async () => {
+    const sessionRes = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "associate_a",
+        firmId: "firmA",
+      })
+    )
+    expect(sessionRes.status).toBe(200)
+    const sessionJson = (await sessionRes.json()) as { sessionReference: { id: string } }
+    const row = getRuntimeStore().tenancySessionReferences.get(sessionJson.sessionReference.id)
+    expect(row).toBeDefined()
+    if (!row) throw new Error("expected session reference")
+    row.expiresAt = Date.now() - 1
+    getRuntimeStore().tenancySessionReferences.set(row.id, row)
+
+    const enforce = await post(
+      {
+        action: "enforce_session_expiry",
+        actorId: "partner_a",
+        firmId: "firmA",
+      },
+      "74a7af8d-c13f-4d76-b89f-5f0ce9f9e2b0"
+    )
+    expect(enforce.status).toBe(200)
+    const enforceJson = (await enforce.json()) as {
+      result: { revokedSessionReferenceIds: string[] }
+    }
+    expect(enforceJson.result.revokedSessionReferenceIds).toContain(sessionJson.sessionReference.id)
+
+    const replayDenied = await get(
+      new URLSearchParams({
+        view: "session",
+        sessionRefId: sessionJson.sessionReference.id,
+      })
+    )
+    expect(replayDenied.status).toBe(400)
+    const deniedJson = (await replayDenied.json()) as { error: string }
+    expect(deniedJson.error).toContain("expired session reference")
+
+    const refsRes = await get(
+      new URLSearchParams({
+        view: "session_refs",
+        actorId: "partner_a",
+        firmId: "firmA",
+        userId: "associate_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(refsRes.status).toBe(200)
+    const refsJson = (await refsRes.json()) as {
+      items: Array<{ id: string; state: string; revocationReason: string | null }>
+    }
+    const expired = refsJson.items.find((item) => item.id === sessionJson.sessionReference.id)
+    expect(expired?.state).toBe("expired")
+    expect(expired?.revocationReason).toBe("expired_enforced")
+  })
+
   it("denies non-partner admin reads", async () => {
     seedMatterMembership()
     const denied = await get(
@@ -317,5 +426,86 @@ describe("GET/POST /api/p5/tenancy", () => {
     expect(audit.some((row) => row.action === "tenant_update_role" && row.target === "clerk_a")).toBe(
       true
     )
+  })
+
+  it("invalidates target-user session refs on privileged-boundary drift", async () => {
+    const targetSession = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "clerk_a",
+        firmId: "firmA",
+      })
+    )
+    expect(targetSession.status).toBe(200)
+    const targetSessionJson = (await targetSession.json()) as { sessionReference: { id: string } }
+
+    const actorSession = await get(
+      new URLSearchParams({
+        view: "session",
+        userId: "partner_a",
+        firmId: "firmA",
+      })
+    )
+    expect(actorSession.status).toBe(200)
+    const actorSessionJson = (await actorSession.json()) as { sessionReference: { id: string } }
+
+    const roleUpdate = await post(
+      {
+        action: "update_role",
+        actorId: "partner_a",
+        firmId: "firmA",
+        targetUserId: "clerk_a",
+        nextRole: "clerk",
+        nextClearance: "public",
+        reason: "drift invalidation check",
+        sessionReferenceId: actorSessionJson.sessionReference.id,
+      },
+      "ff3c87c3-c8bb-49f8-8db3-311dc6f1f442"
+    )
+    expect(roleUpdate.status).toBe(200)
+    const updateJson = (await roleUpdate.json()) as {
+      result: {
+        driftInvalidations: Array<{ id: string; driftReason: string }>
+      }
+    }
+    expect(
+      updateJson.result.driftInvalidations.some(
+        (item) => item.id === targetSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+
+    const replayDenied = await get(
+      new URLSearchParams({
+        view: "session",
+        sessionRefId: targetSessionJson.sessionReference.id,
+      })
+    )
+    expect(replayDenied.status).toBe(400)
+    const deniedJson = (await replayDenied.json()) as { error: string }
+    expect(deniedJson.error).toContain("privileged-boundary drift")
+
+    const refs = await get(
+      new URLSearchParams({
+        view: "session_refs",
+        actorId: "partner_a",
+        firmId: "firmA",
+        userId: "clerk_a",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(refs.status).toBe(200)
+    const refsJson = (await refs.json()) as {
+      items: Array<{
+        id: string
+        state: string
+        driftReason: string | null
+        driftToClearance: string | null
+      }>
+    }
+    const drifted = refsJson.items.find((item) => item.id === targetSessionJson.sessionReference.id)
+    expect(drifted?.state).toBe("drifted")
+    expect(drifted?.driftReason).toBe("clearance_changed")
+    expect(drifted?.driftToClearance).toBe("public")
   })
 })

@@ -7771,4 +7771,122 @@ describe("Runtime persistence mode", () => {
       expect(persistedSessionRef.data()?.authBoundary).toBe("external_session_hint")
     })
   })
+
+  it("persists tenancy revocation, expiry enforcement, and drift telemetry across reset", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+
+      const actorSession = await tenancyGet(
+        new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=partner_a&firmId=firmA")
+      )
+      expect(actorSession.status).toBe(200)
+      const actorSessionJson = (await actorSession.json()) as {
+        sessionReference: { id: string }
+      }
+
+      const targetSession = await tenancyGet(
+        new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
+      )
+      expect(targetSession.status).toBe(200)
+      const targetSessionJson = (await targetSession.json()) as {
+        sessionReference: { id: string }
+      }
+
+      const roleUpdate = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "cdfadf8d-06d3-45d2-b6df-847a290045db",
+          },
+          body: JSON.stringify({
+            action: "update_role",
+            actorId: "partner_a",
+            firmId: "firmA",
+            targetUserId: "associate_a",
+            nextRole: "associate",
+            nextClearance: "public",
+            reason: "drift telemetry persistence check",
+            sessionReferenceId: actorSessionJson.sessionReference.id,
+          }),
+        })
+      )
+      expect(roleUpdate.status).toBe(200)
+
+      const driftReplayDenied = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session&sessionRefId=${targetSessionJson.sessionReference.id}`
+        )
+      )
+      expect(driftReplayDenied.status).toBe(400)
+
+      getRuntimeStore().tenancySessionReferences = new Map()
+      getRuntimeStore().users = new Map()
+
+      const refsRes = await tenancyGet(
+        new Request(
+          "http://127.0.0.1/api/p5/tenancy?view=session_refs&actorId=partner_a&firmId=firmA&userId=associate_a&limit=10&cursor=0"
+        )
+      )
+      expect(refsRes.status).toBe(200)
+      const refsJson = (await refsRes.json()) as {
+        items: Array<{ id: string; state: string; driftReason: string | null }>
+      }
+      const driftRow = refsJson.items.find((row) => row.id === targetSessionJson.sessionReference.id)
+      expect(driftRow?.state).toBe("drifted")
+      expect(driftRow?.driftReason).toBe("clearance_changed")
+
+      const persistedDriftRef = await getDoc(
+        doc(ctx.firestore(), "tenancy_session_references", targetSessionJson.sessionReference.id)
+      )
+      expect(persistedDriftRef.exists()).toBe(true)
+      expect(persistedDriftRef.data()?.driftReason).toBe("clearance_changed")
+      expect(persistedDriftRef.data()?.revocationReason).toBe("privileged_boundary_drift")
+
+      const expiryCandidate = await tenancyGet(
+        new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=clerk_a&firmId=firmA")
+      )
+      expect(expiryCandidate.status).toBe(200)
+      const expiryCandidateJson = (await expiryCandidate.json()) as {
+        sessionReference: { id: string }
+      }
+      const runtimeRef = getRuntimeStore().tenancySessionReferences.get(expiryCandidateJson.sessionReference.id)
+      if (!runtimeRef) throw new Error("expected runtime session reference")
+      const expiredRef = { ...runtimeRef, expiresAt: Date.now() - 1000 }
+      getRuntimeStore().tenancySessionReferences.set(expiredRef.id, expiredRef)
+      await setDoc(doc(ctx.firestore(), "tenancy_session_references", expiredRef.id), expiredRef)
+
+      const enforceExpiry = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f58fd9c2-7a86-4d5d-bc49-0e2c4f0d6ca9",
+          },
+          body: JSON.stringify({
+            action: "enforce_session_expiry",
+            actorId: "partner_a",
+            firmId: "firmA",
+          }),
+        })
+      )
+      expect(enforceExpiry.status).toBe(200)
+
+      const expiredReplayDenied = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session&sessionRefId=${expiryCandidateJson.sessionReference.id}`
+        )
+      )
+      expect(expiredReplayDenied.status).toBe(400)
+      const expiredReplayJson = (await expiredReplayDenied.json()) as { error: string }
+      expect(expiredReplayJson.error).toContain("expired session reference")
+
+      const persistedExpiredRef = await getDoc(
+        doc(ctx.firestore(), "tenancy_session_references", expiryCandidateJson.sessionReference.id)
+      )
+      expect(persistedExpiredRef.exists()).toBe(true)
+      expect(persistedExpiredRef.data()?.revocationReason).toBe("expired_enforced")
+      expect(typeof persistedExpiredRef.data()?.revokedAt).toBe("number")
+    })
+  })
 })

@@ -13,11 +13,17 @@ import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { syncFirmAudit } from "@/platform/persistence/auditSync"
 import { syncFirmTenancySessionReferences } from "@/platform/persistence/tenancySessionReferenceSync"
 import {
+  assertPartnerInFirm,
+  assertUsableTenancySessionReference,
   buildSessionContext,
+  enforceFirmSessionReferenceExpiry,
+  getTenancySessionReferenceState,
+  invalidateSessionReferencesForPrivilegeDrift,
   listFirmAudit,
   listFirmMemberships,
   listFirmSessionReferences,
   listFirmUsers,
+  revokeTenancySessionReference,
   upsertTenancySessionReference,
   updateUserRole,
 } from "@/platform/p5/tenancyAdmin"
@@ -37,7 +43,22 @@ type UpdateRoleBody = {
   externalSessionId?: string
 }
 
-type Body = UpdateRoleBody
+type RevokeSessionReferenceBody = {
+  action: "revoke_session_reference"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  reason?: string
+}
+
+type EnforceSessionExpiryBody = {
+  action: "enforce_session_expiry"
+  actorId?: string
+  firmId?: string
+  now?: number
+}
+
+type Body = UpdateRoleBody | RevokeSessionReferenceBody | EnforceSessionExpiryBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -84,6 +105,34 @@ async function loadUser(
   if (!row) return null
   store.users.set(row.id, row)
   return row
+}
+
+function sessionReferencePayload(
+  row: ReturnType<typeof upsertTenancySessionReference>,
+  state: "active" | "expired" | "revoked" | "drifted"
+) {
+  return {
+    id: row.id,
+    firmId: row.firmId,
+    userId: row.userId,
+    authBoundary: row.authBoundary,
+    externalSessionId: row.externalSessionId,
+    issuedAt: row.issuedAt,
+    lastSeenAt: row.lastSeenAt,
+    expiresAt: row.expiresAt,
+    state,
+    revokedAt: row.revokedAt,
+    revokedBy: row.revokedBy,
+    revocationReason: row.revocationReason,
+    driftedAt: row.driftedAt,
+    driftedBy: row.driftedBy,
+    driftReason: row.driftReason,
+    driftFromRole: row.driftFromRole,
+    driftToRole: row.driftToRole,
+    driftFromClearance: row.driftFromClearance,
+    driftToClearance: row.driftToClearance,
+    driftAuditEntryId: row.driftAuditEntryId,
+  }
 }
 
 export async function GET(request: Request) {
@@ -139,6 +188,9 @@ export async function GET(request: Request) {
       if (resolvedFirmId && resolvedFirmId !== user.firmId) {
         return NextResponse.json({ error: "firm scope mismatch" }, { status: 400 })
       }
+      if (existingReference) {
+        assertUsableTenancySessionReference(existingReference, user)
+      }
       await syncFirmUsers(store, repos, user.firmId)
       await syncFirmMembers(store, repos, user.firmId)
       const session = buildSessionContext(store, user.id, resolvedFirmId ?? user.firmId)
@@ -150,19 +202,11 @@ export async function GET(request: Request) {
         externalSessionId,
       })
       await repos.tenancySessionReferences.upsert(sessionReference)
+      const sessionState = getTenancySessionReferenceState(sessionReference, session.user)
       return NextResponse.json({
         view: "session",
         session,
-        sessionReference: {
-          id: sessionReference.id,
-          firmId: sessionReference.firmId,
-          userId: sessionReference.userId,
-          authBoundary: sessionReference.authBoundary,
-          externalSessionId: sessionReference.externalSessionId,
-          issuedAt: sessionReference.issuedAt,
-          lastSeenAt: sessionReference.lastSeenAt,
-          expiresAt: sessionReference.expiresAt,
-        },
+        sessionReference: sessionReferencePayload(sessionReference, sessionState),
         limit,
         cursor,
       })
@@ -243,9 +287,14 @@ export async function GET(request: Request) {
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
       const refs = listFirmSessionReferences(store, actorId, firmId, userId, limit, cursor)
+      const items = refs.items.map((row) => {
+        const currentUser = store.users.get(row.userId)
+        const state = currentUser ? getTenancySessionReferenceState(row, currentUser) : "drifted"
+        return sessionReferencePayload(row, state)
+      })
       return NextResponse.json({
         view: "session_refs",
-        items: refs.items,
+        items,
         total: refs.total,
         limit,
         cursor,
@@ -279,25 +328,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
   }
 
-  if (parsed.action !== "update_role") {
-    return NextResponse.json({ error: "unknown action" }, { status: 400 })
-  }
-  if (!parsed.actorId || !parsed.firmId || !parsed.targetUserId || !isRole(parsed.nextRole)) {
-    return NextResponse.json(
-      { error: "actorId, firmId, targetUserId, and nextRole are required" },
-      { status: 400 }
-    )
-  }
-  if (!isClassification(parsed.nextClearance)) {
-    return NextResponse.json(
-      { error: "nextClearance must be a rank-0–4 label" },
-      { status: 400 }
-    )
-  }
-
   const fingerprint = JSON.stringify({
     route: "/api/p5/tenancy",
-    action: parsed.action,
+    action: parsed.action ?? "unknown",
     body: parsed,
   })
   const replay = idempotency.getReplay(key, fingerprint)
@@ -312,71 +345,184 @@ export async function POST(request: Request) {
   }
 
   try {
-    const sessionReferenceId = normalizeOptionalString(parsed.sessionReferenceId)
-    const authBoundary = parseAuthBoundary(parsed.authBoundary)
-    const externalSessionId = normalizeOptionalString(parsed.externalSessionId)
-    await syncFirmUsers(store, repos, parsed.firmId)
-    await syncFirmMembers(store, repos, parsed.firmId)
-    let existingReference = null
-    if (sessionReferenceId) {
-      existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
-      if (!existingReference) throw new Error("unknown session reference")
-      store.tenancySessionReferences.set(existingReference.id, existingReference)
-      if (existingReference.firmId !== parsed.firmId) {
-        throw new Error("cross-firm session reference denied")
+    if (parsed.action === "update_role") {
+      if (!parsed.actorId || !parsed.firmId || !parsed.targetUserId || !isRole(parsed.nextRole)) {
+        return NextResponse.json(
+          { error: "actorId, firmId, targetUserId, and nextRole are required" },
+          { status: 400 }
+        )
       }
-      if (existingReference.userId !== parsed.actorId) {
-        throw new Error("session reference actor mismatch")
+      if (!isClassification(parsed.nextClearance)) {
+        return NextResponse.json(
+          { error: "nextClearance must be a rank-0–4 label" },
+          { status: 400 }
+        )
       }
-    }
-    const actor = await loadUser(store, repos, parsed.actorId)
-    if (!actor) throw new Error("unknown actor")
-    const sessionReference = upsertTenancySessionReference(store, {
-      user: actor,
-      existing: existingReference,
-      sessionReferenceId,
-      authBoundary,
-      externalSessionId,
-    })
-    await repos.tenancySessionReferences.upsert(sessionReference)
-    const updated = updateUserRole(store, {
-      actorId: parsed.actorId,
-      firmId: parsed.firmId,
-      targetUserId: parsed.targetUserId,
-      nextRole: parsed.nextRole,
-      nextClearance: parsed.nextClearance,
-      reason: parsed.reason,
-      authBoundary: sessionReference.authBoundary,
-      sessionReferenceId: sessionReference.id,
-      externalSessionId: sessionReference.externalSessionId,
-    })
-    const refreshedActor = await loadUser(store, repos, parsed.actorId)
-    if (refreshedActor) {
-      const refreshedReference = upsertTenancySessionReference(store, {
-        user: refreshedActor,
-        existing: sessionReference,
-        sessionReferenceId: sessionReference.id,
-        authBoundary: sessionReference.authBoundary,
-        externalSessionId: sessionReference.externalSessionId ?? undefined,
+
+      const sessionReferenceId = normalizeOptionalString(parsed.sessionReferenceId)
+      const authBoundary = parseAuthBoundary(parsed.authBoundary)
+      const externalSessionId = normalizeOptionalString(parsed.externalSessionId)
+      await syncFirmUsers(store, repos, parsed.firmId)
+      await syncFirmMembers(store, repos, parsed.firmId)
+      let existingReference = null
+      if (sessionReferenceId) {
+        existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
+        if (!existingReference) throw new Error("unknown session reference")
+        store.tenancySessionReferences.set(existingReference.id, existingReference)
+        if (existingReference.firmId !== parsed.firmId) {
+          throw new Error("cross-firm session reference denied")
+        }
+        if (existingReference.userId !== parsed.actorId) {
+          throw new Error("session reference actor mismatch")
+        }
+      }
+      const actor = await loadUser(store, repos, parsed.actorId)
+      if (!actor) throw new Error("unknown actor")
+      if (existingReference) {
+        assertUsableTenancySessionReference(existingReference, actor)
+      }
+      const sessionReference = upsertTenancySessionReference(store, {
+        user: actor,
+        existing: existingReference,
+        sessionReferenceId,
+        authBoundary,
+        externalSessionId,
       })
-      await repos.tenancySessionReferences.upsert(refreshedReference)
+      await repos.tenancySessionReferences.upsert(sessionReference)
+      const updated = updateUserRole(store, {
+        actorId: parsed.actorId,
+        firmId: parsed.firmId,
+        targetUserId: parsed.targetUserId,
+        nextRole: parsed.nextRole,
+        nextClearance: parsed.nextClearance,
+        reason: parsed.reason,
+        authBoundary: sessionReference.authBoundary,
+        sessionReferenceId: sessionReference.id,
+        externalSessionId: sessionReference.externalSessionId,
+      })
+      await repos.users.upsert(updated.user)
+      await repos.audit.append(updated.auditEntry)
+
+      const driftInvalidations = invalidateSessionReferencesForPrivilegeDrift(store, {
+        actorId: parsed.actorId,
+        updatedUser: updated.user,
+        auditEntryId: updated.auditEntry.id ?? "",
+      })
+      for (const invalidated of driftInvalidations) {
+        const row = store.tenancySessionReferences.get(invalidated.id)
+        if (row) {
+          await repos.tenancySessionReferences.upsert(row)
+        }
+      }
+
+      let responseReference = sessionReference
+      if (
+        parsed.targetUserId === parsed.actorId &&
+        (updated.previousRole !== updated.user.role ||
+          updated.previousClearance !== updated.user.clearanceLevel)
+      ) {
+        responseReference = upsertTenancySessionReference(store, {
+          user: updated.user,
+          authBoundary: sessionReference.authBoundary,
+          externalSessionId: sessionReference.externalSessionId ?? undefined,
+        })
+        await repos.tenancySessionReferences.upsert(responseReference)
+      } else {
+        const refreshedActor = await loadUser(store, repos, parsed.actorId)
+        if (refreshedActor) {
+          const refreshedReference = upsertTenancySessionReference(store, {
+            user: refreshedActor,
+            existing: sessionReference,
+            sessionReferenceId: sessionReference.id,
+            authBoundary: sessionReference.authBoundary,
+            externalSessionId: sessionReference.externalSessionId ?? undefined,
+          })
+          await repos.tenancySessionReferences.upsert(refreshedReference)
+          responseReference = refreshedReference
+        }
+      }
+
+      const payload = {
+        action: "update_role",
+        user: {
+          id: updated.user.id,
+          firmId: updated.user.firmId,
+          role: updated.user.role,
+          clearanceLevel: updated.user.clearanceLevel,
+        },
+        authBoundary: updated.auditEntry.authBoundary ?? "runtime_local",
+        sessionReferenceId: updated.auditEntry.sessionReferenceId ?? null,
+        externalSessionId: updated.auditEntry.externalSessionId ?? null,
+        activeSessionReference: sessionReferencePayload(
+          responseReference,
+          getTenancySessionReferenceState(responseReference, updated.user)
+        ),
+        driftInvalidations,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
-    await repos.users.upsert(updated.user)
-    await repos.audit.append(updated.auditEntry)
-    const payload = {
-      action: "update_role",
-      user: {
-        id: updated.user.id,
-        firmId: updated.user.firmId,
-        role: updated.user.role,
-        clearanceLevel: updated.user.clearanceLevel,
-      },
-      authBoundary: updated.auditEntry.authBoundary ?? "runtime_local",
-      sessionReferenceId: updated.auditEntry.sessionReferenceId ?? null,
-      externalSessionId: updated.auditEntry.externalSessionId ?? null,
+
+    if (parsed.action === "revoke_session_reference") {
+      if (!parsed.actorId || !parsed.firmId || !parsed.sessionReferenceId) {
+        return NextResponse.json(
+          { error: "actorId, firmId, and sessionReferenceId are required" },
+          { status: 400 }
+        )
+      }
+      await syncFirmUsers(store, repos, parsed.firmId)
+      assertPartnerInFirm(store, parsed.actorId, parsed.firmId)
+      const existing = await repos.tenancySessionReferences.get(parsed.sessionReferenceId)
+      if (!existing) throw new Error("unknown session reference")
+      if (existing.firmId !== parsed.firmId) throw new Error("cross-firm session reference denied")
+      store.tenancySessionReferences.set(existing.id, existing)
+      const revoked = revokeTenancySessionReference(store, {
+        row: existing,
+        actorId: parsed.actorId,
+        reason: normalizeOptionalString(parsed.reason) ?? "admin_revocation",
+      })
+      await repos.tenancySessionReferences.upsert(revoked)
+      const user = await loadUser(store, repos, revoked.userId)
+      if (!user) throw new Error("unknown user")
+      const payload = {
+        action: "revoke_session_reference",
+        sessionReference: sessionReferencePayload(
+          revoked,
+          getTenancySessionReferenceState(revoked, user)
+        ),
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
-    idempotency.set(key, payload, fingerprint)
-    return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+
+    if (parsed.action === "enforce_session_expiry") {
+      if (!parsed.actorId || !parsed.firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, parsed.firmId)
+      await syncFirmTenancySessionReferences(store, repos, parsed.firmId)
+      const now = typeof parsed.now === "number" ? parsed.now : undefined
+      const revokedIds = enforceFirmSessionReferenceExpiry(store, {
+        actorId: parsed.actorId,
+        firmId: parsed.firmId,
+        now,
+      })
+      for (const id of revokedIds) {
+        const row = store.tenancySessionReferences.get(id)
+        if (row) {
+          await repos.tenancySessionReferences.upsert(row)
+        }
+      }
+      const payload = {
+        action: "enforce_session_expiry",
+        firmId: parsed.firmId,
+        revokedSessionReferenceIds: revokedIds,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
     const message = err instanceof Error ? err.message : "role update failed"
     return NextResponse.json({ error: message }, { status: 400 })
