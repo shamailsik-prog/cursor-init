@@ -140,6 +140,43 @@ export type TenancySessionReferenceRow = {
   privilegedBoundaryDriftReason: string | null
 }
 
+export type TenancyLineageDisputeDisposition =
+  | "confirm_divergence"
+  | "dismiss_dispute"
+  | "mark_reconciled"
+
+export type TenancyLineageDisputeAttestationRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  sessionReferenceId: string
+  parentSessionReferenceId: string | null
+  raisedBy: string
+  raisedAt: number
+  reason: string
+  notes: string[]
+  status: "open" | "resolved"
+  reviewedBy: string | null
+  reviewedAt: number | null
+  disposition: TenancyLineageDisputeDisposition | null
+  resolutionNote: string | null
+}
+
+export type TenancyLineageReconciliationDigestRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  lineageNodeCount: number
+  lineageDepthMax: number
+  divergedHopCount: number
+  openDisputeCount: number
+  resolvedDisputeCount: number
+  unresolvedRevocationCount: number
+  status: "aligned" | "needs_review"
+  reasons: string[]
+  updatedAt: number
+}
+
 export type StatuteSectionVersion = {
   sectionId: string
   versionNo: number
@@ -1809,6 +1846,8 @@ export class SpineStore {
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
   workflowOpsActivity = new Map<string, WorkflowOpsActivityRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
+  tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
+  tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

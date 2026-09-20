@@ -5,7 +5,12 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
-import type { Role, TenancyAuthBoundary, User } from "@/platform/spine/store"
+import type {
+  Role,
+  TenancyAuthBoundary,
+  TenancyLineageDisputeDisposition,
+  User,
+} from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -13,15 +18,24 @@ import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { syncFirmAudit } from "@/platform/persistence/auditSync"
 import { syncFirmTenancySessionReferences } from "@/platform/persistence/tenancySessionReferenceSync"
 import {
+  syncFirmTenancyLineageDisputeAttestations,
+  syncFirmTenancyLineageReconciliationDigests,
+} from "@/platform/persistence/tenancyLineageSync"
+import {
+  attestSessionLineageDispute,
   buildSessionContext,
   getTenancySessionReferenceState,
   invalidateSessionReferencesForPrivilegeDrift,
+  listLineageReconciliationDigests,
   listFirmAudit,
   listFirmMemberships,
   listFirmSessionReferences,
+  listSessionLineageDisputes,
   listSessionReferenceLineage,
+  recomputeLineageReconciliationDigest,
   listFirmUsers,
   reissueTenancySessionReference,
+  resolveSessionLineageDispute,
   revokeTenancySessionReference,
   upsertTenancySessionReference,
   updateUserRole,
@@ -60,7 +74,30 @@ type ReissueSessionReferenceBody = {
   reason?: string
 }
 
-type Body = UpdateRoleBody | RevokeSessionReferenceBody | ReissueSessionReferenceBody
+type AttestLineageDisputeBody = {
+  action: "attest_session_lineage_dispute"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  reason?: string
+  note?: string
+}
+
+type ResolveLineageDisputeBody = {
+  action: "resolve_session_lineage_dispute"
+  actorId?: string
+  firmId?: string
+  disputeId?: string
+  disposition?: string
+  resolutionNote?: string
+}
+
+type Body =
+  | UpdateRoleBody
+  | RevokeSessionReferenceBody
+  | ReissueSessionReferenceBody
+  | AttestLineageDisputeBody
+  | ResolveLineageDisputeBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -76,6 +113,32 @@ function parseCursor(value: string | null): number {
 
 function parseBoolean(value: string | null): boolean {
   return value === "1" || value === "true" || value === "yes"
+}
+
+function parseLineageDisputeStatus(value: string | null): "open" | "resolved" | undefined {
+  if (!value) return undefined
+  if (value === "open" || value === "resolved") return value
+  throw new Error("status must be open or resolved")
+}
+
+function parseLineageDigestStatus(value: string | null): "aligned" | "needs_review" | undefined {
+  if (!value) return undefined
+  if (value === "aligned" || value === "needs_review") return value
+  throw new Error("status must be aligned or needs_review")
+}
+
+function parseLineageDisputeDisposition(
+  value: unknown
+): TenancyLineageDisputeDisposition | undefined {
+  if (value == null || value === "") return undefined
+  if (
+    value === "confirm_divergence" ||
+    value === "dismiss_dispute" ||
+    value === "mark_reconciled"
+  ) {
+    return value
+  }
+  throw new Error("disposition must be confirm_divergence, dismiss_dispute, or mark_reconciled")
 }
 
 function isRole(value: unknown): value is Role {
@@ -352,6 +415,87 @@ export async function GET(request: Request) {
       })
     }
 
+    if (view === "session_lineage_disputes") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const lineageRootSessionReferenceId = normalizeOptionalString(
+        url.searchParams.get("rootSessionRefId")
+      )
+      const status = parseLineageDisputeStatus(url.searchParams.get("status"))
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      const disputes = listSessionLineageDisputes(
+        store,
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        status,
+        limit,
+        cursor
+      )
+      return NextResponse.json({
+        view: "session_lineage_disputes",
+        items: disputes.items,
+        total: disputes.total,
+        limit,
+        cursor,
+        nextCursor: disputes.nextCursor,
+      })
+    }
+
+    if (view === "session_lineage_reconciliation_digests") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const lineageRootSessionReferenceId = normalizeOptionalString(
+        url.searchParams.get("rootSessionRefId")
+      )
+      const status = parseLineageDigestStatus(url.searchParams.get("status"))
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      const rootIds = new Set<string>()
+      for (const row of store.tenancySessionReferences.values()) {
+        if (row.firmId !== firmId) continue
+        if (
+          lineageRootSessionReferenceId &&
+          row.lineageRootSessionReferenceId !== lineageRootSessionReferenceId
+        ) {
+          continue
+        }
+        rootIds.add(row.lineageRootSessionReferenceId)
+      }
+      for (const rootId of rootIds) {
+        const digest = recomputeLineageReconciliationDigest(store, {
+          firmId,
+          lineageRootSessionReferenceId: rootId,
+        })
+        await repos.tenancyLineageReconciliationDigests.upsert(digest)
+      }
+      const digests = listLineageReconciliationDigests(
+        store,
+        actorId,
+        firmId,
+        status,
+        limit,
+        cursor
+      )
+      return NextResponse.json({
+        view: "session_lineage_reconciliation_digests",
+        items: digests.items,
+        total: digests.total,
+        limit,
+        cursor,
+        nextCursor: digests.nextCursor,
+      })
+    }
+
     return NextResponse.json({ error: "unknown view" }, { status: 400 })
   } catch (err) {
     const message = err instanceof Error ? err.message : "tenancy read failed"
@@ -381,7 +525,9 @@ export async function POST(request: Request) {
   if (
     parsed.action !== "update_role" &&
     parsed.action !== "revoke_session_reference" &&
-    parsed.action !== "reissue_session_reference"
+    parsed.action !== "reissue_session_reference" &&
+    parsed.action !== "attest_session_lineage_dispute" &&
+    parsed.action !== "resolve_session_lineage_dispute"
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -396,6 +542,23 @@ export async function POST(request: Request) {
     if (!isClassification(parsed.nextClearance)) {
       return NextResponse.json(
         { error: "nextClearance must be a rank-0–4 label" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "resolve_session_lineage_dispute") {
+    if (!parsed.actorId || !parsed.firmId || !parsed.disputeId) {
+      return NextResponse.json(
+        { error: "actorId, firmId, and disputeId are required" },
+        { status: 400 }
+      )
+    }
+    if (
+      parsed.disposition !== "confirm_divergence" &&
+      parsed.disposition !== "dismiss_dispute" &&
+      parsed.disposition !== "mark_reconciled"
+    ) {
+      return NextResponse.json(
+        { error: "disposition must be confirm_divergence, dismiss_dispute, or mark_reconciled" },
         { status: 400 }
       )
     }
@@ -432,6 +595,7 @@ export async function POST(request: Request) {
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
       const revoked = revokeTenancySessionReference(store, {
         actorId,
         firmId,
@@ -440,6 +604,11 @@ export async function POST(request: Request) {
       })
       await repos.tenancySessionReferences.upsert(revoked.reference)
       await repos.audit.append(revoked.auditEntry)
+      const digest = recomputeLineageReconciliationDigest(store, {
+        firmId,
+        lineageRootSessionReferenceId: revoked.reference.lineageRootSessionReferenceId,
+      })
+      await repos.tenancyLineageReconciliationDigests.upsert(digest)
       const payload = {
         action: "revoke_session_reference",
         sessionReference: {
@@ -449,6 +618,16 @@ export async function POST(request: Request) {
           revokedAt: revoked.reference.revokedAt,
           revokedBy: revoked.reference.revokedBy,
           revokedReason: revoked.reference.revokedReason,
+        },
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          lineageNodeCount: digest.lineageNodeCount,
+          divergedHopCount: digest.divergedHopCount,
+          openDisputeCount: digest.openDisputeCount,
+          unresolvedRevocationCount: digest.unresolvedRevocationCount,
+          status: digest.status,
+          reasons: digest.reasons,
         },
       }
       idempotency.set(key, payload, fingerprint)
@@ -464,6 +643,7 @@ export async function POST(request: Request) {
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
       const reissued = reissueTenancySessionReference(store, {
         actorId,
         firmId,
@@ -474,6 +654,11 @@ export async function POST(request: Request) {
       })
       await repos.tenancySessionReferences.upsert(reissued.reference)
       await repos.audit.append(reissued.auditEntry)
+      const digest = recomputeLineageReconciliationDigest(store, {
+        firmId,
+        lineageRootSessionReferenceId: reissued.reference.lineageRootSessionReferenceId,
+      })
+      await repos.tenancyLineageReconciliationDigests.upsert(digest)
       const payload = {
         action: "reissue_session_reference",
         sessionReference: {
@@ -491,6 +676,114 @@ export async function POST(request: Request) {
             reissued.reference.delegatedBoundaryDivergenceReasons,
           delegatedBoundaryReconciledAt: reissued.reference.delegatedBoundaryReconciledAt,
           delegatedBoundaryReconciledBy: reissued.reference.delegatedBoundaryReconciledBy,
+        },
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          lineageNodeCount: digest.lineageNodeCount,
+          divergedHopCount: digest.divergedHopCount,
+          openDisputeCount: digest.openDisputeCount,
+          unresolvedRevocationCount: digest.unresolvedRevocationCount,
+          status: digest.status,
+          reasons: digest.reasons,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "attest_session_lineage_dispute") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const sessionReferenceId = parsed.sessionReferenceId
+      const reason = normalizeOptionalString(parsed.reason)
+      if (!actorId || !firmId || !sessionReferenceId || !reason) {
+        throw new Error("actorId, firmId, sessionReferenceId, and reason are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      const attested = attestSessionLineageDispute(store, {
+        actorId,
+        firmId,
+        sessionReferenceId,
+        reason,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyLineageDisputeAttestations.upsert(attested.dispute)
+      await repos.audit.append(attested.auditEntry)
+      const digest = recomputeLineageReconciliationDigest(store, {
+        firmId,
+        lineageRootSessionReferenceId: attested.dispute.lineageRootSessionReferenceId,
+      })
+      await repos.tenancyLineageReconciliationDigests.upsert(digest)
+      const payload = {
+        action: "attest_session_lineage_dispute",
+        dispute: attested.dispute,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          lineageNodeCount: digest.lineageNodeCount,
+          divergedHopCount: digest.divergedHopCount,
+          openDisputeCount: digest.openDisputeCount,
+          unresolvedRevocationCount: digest.unresolvedRevocationCount,
+          status: digest.status,
+          reasons: digest.reasons,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_session_lineage_dispute") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const disputeId = parsed.disputeId
+      const disposition = parseLineageDisputeDisposition(parsed.disposition)
+      if (!actorId || !firmId || !disputeId || !disposition) {
+        throw new Error("actorId, firmId, disputeId, and disposition are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      const resolved = resolveSessionLineageDispute(store, {
+        actorId,
+        firmId,
+        disputeId,
+        disposition,
+        resolutionNote: normalizeOptionalString(parsed.resolutionNote),
+      })
+      await repos.tenancyLineageDisputeAttestations.upsert(resolved.dispute)
+      if (resolved.relatedSessionReference) {
+        await repos.tenancySessionReferences.upsert(resolved.relatedSessionReference)
+      }
+      await repos.audit.append(resolved.auditEntry)
+      const digest = recomputeLineageReconciliationDigest(store, {
+        firmId,
+        lineageRootSessionReferenceId: resolved.dispute.lineageRootSessionReferenceId,
+      })
+      await repos.tenancyLineageReconciliationDigests.upsert(digest)
+      const payload = {
+        action: "resolve_session_lineage_dispute",
+        dispute: resolved.dispute,
+        relatedSessionReference: resolved.relatedSessionReference
+          ? {
+              id: resolved.relatedSessionReference.id,
+              delegatedBoundaryReconciliationStatus:
+                resolved.relatedSessionReference.delegatedBoundaryReconciliationStatus,
+              delegatedBoundaryDivergenceReasons:
+                resolved.relatedSessionReference.delegatedBoundaryDivergenceReasons,
+            }
+          : null,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          lineageNodeCount: digest.lineageNodeCount,
+          divergedHopCount: digest.divergedHopCount,
+          openDisputeCount: digest.openDisputeCount,
+          unresolvedRevocationCount: digest.unresolvedRevocationCount,
+          status: digest.status,
+          reasons: digest.reasons,
         },
       }
       idempotency.set(key, payload, fingerprint)
@@ -520,6 +813,7 @@ export async function POST(request: Request) {
     await syncFirmUsers(store, repos, firmId)
     await syncFirmMembers(store, repos, firmId)
     await syncFirmTenancySessionReferences(store, repos, firmId)
+    await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
     let existingReference = null
     if (sessionReferenceId) {
       existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
@@ -566,6 +860,10 @@ export async function POST(request: Request) {
     for (const drifted of driftedReferences) {
       await repos.tenancySessionReferences.upsert(drifted)
     }
+    const digestRootIds = new Set<string>([
+      sessionReference.lineageRootSessionReferenceId,
+      ...driftedReferences.map((row) => row.lineageRootSessionReferenceId),
+    ])
     const enrichedAuditEntry = {
       ...updated.auditEntry,
       privilegedBoundaryDriftCount: driftedReferences.length,
@@ -595,6 +893,33 @@ export async function POST(request: Request) {
     }
     await repos.users.upsert(updated.user)
     await repos.audit.append(enrichedAuditEntry)
+    const digestSummaries: Array<{
+      id: string
+      lineageRootSessionReferenceId: string
+      lineageNodeCount: number
+      divergedHopCount: number
+      openDisputeCount: number
+      unresolvedRevocationCount: number
+      status: "aligned" | "needs_review"
+      reasons: string[]
+    }> = []
+    for (const rootId of digestRootIds) {
+      const digest = recomputeLineageReconciliationDigest(store, {
+        firmId,
+        lineageRootSessionReferenceId: rootId,
+      })
+      await repos.tenancyLineageReconciliationDigests.upsert(digest)
+      digestSummaries.push({
+        id: digest.id,
+        lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+        lineageNodeCount: digest.lineageNodeCount,
+        divergedHopCount: digest.divergedHopCount,
+        openDisputeCount: digest.openDisputeCount,
+        unresolvedRevocationCount: digest.unresolvedRevocationCount,
+        status: digest.status,
+        reasons: digest.reasons,
+      })
+    }
     const payload = {
       action: "update_role",
       user: {
@@ -617,6 +942,7 @@ export async function POST(request: Request) {
         enrichedAuditEntry.delegatedBoundaryReconciliationStatus ?? "aligned",
       delegatedBoundaryDivergenceReasons:
         enrichedAuditEntry.delegatedBoundaryDivergenceReasons ?? [],
+      digests: digestSummaries,
     }
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

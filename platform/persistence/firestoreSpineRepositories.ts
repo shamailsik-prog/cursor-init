@@ -67,6 +67,8 @@ import type {
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
+  TenancyLineageDisputeAttestationRow,
+  TenancyLineageReconciliationDigestRow,
   Entity,
   EntityLink,
   Matter,
@@ -1718,6 +1720,50 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return rows.docs
           .map((entry) => entry.data() as TenancySessionReferenceRow)
           .filter((row) => row.userId === userId)
+      },
+    },
+    tenancyLineageDisputeAttestations: {
+      async upsert(row) {
+        await setById(db, "tenancy_lineage_dispute_attestations", row)
+      },
+      async get(id) {
+        return getById<TenancyLineageDisputeAttestationRow>(
+          db,
+          "tenancy_lineage_dispute_attestations",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyLineageDisputeAttestationRow>(
+          db,
+          "tenancy_lineage_dispute_attestations",
+          firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        const rows = await getDocs(collection(db, "tenancy_lineage_dispute_attestations"))
+        return rows.docs
+          .map((entry) => entry.data() as TenancyLineageDisputeAttestationRow)
+          .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
+      },
+    },
+    tenancyLineageReconciliationDigests: {
+      async upsert(row) {
+        await setById(db, "tenancy_lineage_reconciliation_digests", row)
+      },
+      async get(id) {
+        return getById<TenancyLineageReconciliationDigestRow>(
+          db,
+          "tenancy_lineage_reconciliation_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyLineageReconciliationDigestRow>(
+          db,
+          "tenancy_lineage_reconciliation_digests",
+          firmId
+        )
       },
     },
   }

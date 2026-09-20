@@ -58,6 +58,8 @@ import type {
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
+  TenancyLineageDisputeAttestationRow,
+  TenancyLineageReconciliationDigestRow,
   Entity,
   EntityLink,
   Matter,
@@ -578,6 +580,21 @@ export type TenancySessionReferenceRepository = {
   listByUserId(userId: string): Promise<TenancySessionReferenceRow[]>
 }
 
+export type TenancyLineageDisputeAttestationRepository = {
+  upsert(row: TenancyLineageDisputeAttestationRow): Promise<void>
+  get(id: string): Promise<TenancyLineageDisputeAttestationRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageDisputeAttestationRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageDisputeAttestationRow[]>
+}
+
+export type TenancyLineageReconciliationDigestRepository = {
+  upsert(row: TenancyLineageReconciliationDigestRow): Promise<void>
+  get(id: string): Promise<TenancyLineageReconciliationDigestRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageReconciliationDigestRow[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -645,6 +662,8 @@ export type SpineRepositories = {
   draftTemplateAnalytics: DraftTemplateAnalyticsRepository
   workflowOpsActivity: WorkflowOpsActivityRepository
   tenancySessionReferences: TenancySessionReferenceRepository
+  tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
+  tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -1917,6 +1936,37 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByUserId(userId) {
         return [...store.tenancySessionReferences.values()].filter((row) => row.userId === userId)
+      },
+    },
+    tenancyLineageDisputeAttestations: {
+      async upsert(row) {
+        store.tenancyLineageDisputeAttestations.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageDisputeAttestations.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageDisputeAttestations.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageDisputeAttestations.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageReconciliationDigests: {
+      async upsert(row) {
+        store.tenancyLineageReconciliationDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageReconciliationDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageReconciliationDigests.values()].filter(
+          (row) => row.firmId === firmId
+        )
       },
     },
   }

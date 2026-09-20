@@ -479,6 +479,126 @@ describe("GET/POST /api/p5/tenancy", () => {
     )
     expect(lineageCrossFirmDenied.status).toBe(400)
 
+    const disputePayload = {
+      action: "attest_session_lineage_dispute",
+      actorId: "partner_a",
+      firmId: "firmA",
+      sessionReferenceId: lineageDivergedJson.result.sessionReference.id,
+      reason: "Delegated boundary mismatch requires review",
+      note: "Escalate for lineage attestation",
+    }
+    const disputeFirst = await post(disputePayload, "1f727de8-bf4f-4268-89fe-41363f5f8946")
+    const disputeReplay = await post(disputePayload, "1f727de8-bf4f-4268-89fe-41363f5f8946")
+    expect(disputeFirst.status).toBe(200)
+    expect(disputeReplay.status).toBe(200)
+    const disputeFirstJson = (await disputeFirst.json()) as {
+      reused: boolean
+      result: {
+        dispute: { id: string; status: string; lineageRootSessionReferenceId: string }
+        digest: {
+          openDisputeCount: number
+          status: string
+          reasons: string[]
+        }
+      }
+    }
+    const disputeReplayJson = (await disputeReplay.json()) as { reused: boolean }
+    expect(disputeFirstJson.reused).toBe(false)
+    expect(disputeReplayJson.reused).toBe(true)
+    expect(disputeFirstJson.result.dispute.status).toBe("open")
+    expect(disputeFirstJson.result.digest.openDisputeCount).toBeGreaterThanOrEqual(1)
+    expect(disputeFirstJson.result.digest.reasons).toContain("open_lineage_dispute")
+
+    const openDisputesView = await get(
+      new URLSearchParams({
+        view: "session_lineage_disputes",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "open",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(openDisputesView.status).toBe(200)
+    const openDisputesJson = (await openDisputesView.json()) as {
+      items: Array<{ id: string; status: string }>
+    }
+    expect(
+      openDisputesJson.items.some(
+        (row) => row.id === disputeFirstJson.result.dispute.id && row.status === "open"
+      )
+    ).toBe(true)
+
+    const resolvePayload = {
+      action: "resolve_session_lineage_dispute",
+      actorId: "partner_a",
+      firmId: "firmA",
+      disputeId: disputeFirstJson.result.dispute.id,
+      disposition: "mark_reconciled",
+      resolutionNote: "Lineage divergence reconciled after review",
+    }
+    const resolveRes = await post(resolvePayload, "31d2a9f6-74f4-4ac8-9347-0bc79710fece")
+    expect(resolveRes.status).toBe(200)
+    const resolveJson = (await resolveRes.json()) as {
+      result: {
+        dispute: { status: string; disposition: string }
+        relatedSessionReference: {
+          delegatedBoundaryReconciliationStatus: string
+          delegatedBoundaryDivergenceReasons: string[]
+        } | null
+        digest: { openDisputeCount: number }
+      }
+    }
+    expect(resolveJson.result.dispute.status).toBe("resolved")
+    expect(resolveJson.result.dispute.disposition).toBe("mark_reconciled")
+    expect(resolveJson.result.relatedSessionReference?.delegatedBoundaryReconciliationStatus).toBe(
+      "aligned"
+    )
+    expect(resolveJson.result.relatedSessionReference?.delegatedBoundaryDivergenceReasons).toEqual([])
+    expect(resolveJson.result.digest.openDisputeCount).toBe(0)
+
+    const digestView = await get(
+      new URLSearchParams({
+        view: "session_lineage_reconciliation_digests",
+        actorId: "partner_a",
+        firmId: "firmA",
+        status: "needs_review",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(digestView.status).toBe(200)
+    const digestJson = (await digestView.json()) as {
+      items: Array<{ lineageRootSessionReferenceId: string }>
+    }
+    expect(
+      digestJson.items.some(
+        (row) => row.lineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+
+    const resolvedDisputesView = await get(
+      new URLSearchParams({
+        view: "session_lineage_disputes",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "resolved",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(resolvedDisputesView.status).toBe(200)
+    const resolvedDisputesJson = (await resolvedDisputesView.json()) as {
+      items: Array<{ id: string; disposition: string }>
+    }
+    expect(
+      resolvedDisputesJson.items.some(
+        (row) => row.id === disputeFirstJson.result.dispute.id && row.disposition === "mark_reconciled"
+      )
+    ).toBe(true)
+
     const revokedReplay = await get(
       new URLSearchParams({
         view: "session",
@@ -534,6 +654,22 @@ describe("GET/POST /api/p5/tenancy", () => {
             lineageAlignedJson.result.sessionReference.id &&
           row.delegatedBoundaryReconciliationStatus === "diverged" &&
           (row.delegatedBoundaryDivergenceReasons ?? []).includes("auth_boundary_changed")
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_attest_lineage_dispute" &&
+          row.sessionReferenceId === lineageDivergedJson.result.sessionReference.id &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_resolve_lineage_dispute" &&
+          row.sessionReferenceId === lineageDivergedJson.result.sessionReference.id &&
+          row.delegatedBoundaryReconciliationStatus === "aligned"
       )
     ).toBe(true)
   })
