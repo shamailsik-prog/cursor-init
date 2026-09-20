@@ -1,8 +1,8 @@
-# Independent Phase Auditor re-audit: #70-#73 after Stream 1 `/ops` lands (`#79`, `#86`, `#88`, `#90`)
+# Independent Phase Auditor re-audit: #70-#73 after Stream 1 `/ops` lands (`#79`, `#86`, `#88`, `#90`, `#92`)
 
 Date: 2026-09-20  
 Repo: `shamail-sikander/cursor-init`  
-Audited main tip: `3eee096`
+Audited main tip: `2dd668d`
 
 ## Overall verdict (lead)
 
@@ -25,6 +25,11 @@ Verified on current `origin/main`:
 - PR `#86` tip commit `f8e8e9321e72` is ancestor of `origin/main`.
 - PR `#88` tip commit `fbeba2c0de41` is ancestor of `origin/main`.
 - PR `#90` tip commit `835578cb3742` is ancestor of `origin/main`.
+- PR `#92` tip commit `453d7929fcb9` is ancestor of `origin/main`.
+
+Batch D note:
+
+- PR `#92` is already merged to `main` (not a pending/off-main branch in this re-audit window), so Batch D secondary verdict is based on current `origin/main` call-site state.
 
 ## Required per-phase verdicts (#70-#73)
 

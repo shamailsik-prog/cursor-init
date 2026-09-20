@@ -33,8 +33,9 @@ Because `transport_stub=true`, final status remains **PARTIAL** for all sampled 
   - PR #86 tip `f8e8e9321e72`
   - PR #88 tip `fbeba2c0de41`
   - PR #90 tip `835578cb3742`
+  - PR #92 tip `453d7929fcb9`
 - #70-#73 now satisfy frontend call-site requirements in `/ops` with phase-specific actions + views.
-- Widened-scope follow-up found a blocker for Batch D/E/F action lattices: `/ops` references `runApiCallAllowingStatuses` repeatedly but no definition exists in `app/ops/operator-audit-console.tsx`, so those lanes remain partial pending fix.
+- Widened-scope follow-up found a blocker for Batch D/E/F action lattices (including Batch D follow-up PR #92): `/ops` references `runApiCallAllowingStatuses` repeatedly but no definition exists in `app/ops/operator-audit-console.tsx`, so those lanes remain partial pending fix.
 - COMPLETE claim hard-fail remains enforced while transport stubs exist via:
   - `ci_gates/check_pr_phase_claims.py`
   - `.github/workflows/pr-phase-claim-gate.yml`
