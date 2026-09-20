@@ -19,6 +19,8 @@ import type {
   FilingEscalationPolicyBaselineRow,
   FilingEscalationBreachWaiverLedgerRow,
   FilingEscalationPolicyVarianceDigestRow,
+  FilingEscalationVarianceRemediationRow,
+  FilingEscalationWaiverRolloverAttestationRow,
   FilingEscalationWaiverExpiryDigestRow,
   FilingEscalationWorkloadDigestRow,
   FilingSubmissionReceiptRow,
@@ -477,6 +479,56 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "filing_escalation_waiver_expiry_digests"))
         return rows.docs
           .map((entry) => entry.data() as FilingEscalationWaiverExpiryDigestRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationVarianceRemediations: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_variance_remediations", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationVarianceRemediationRow>(
+          db,
+          "filing_escalation_variance_remediations",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationVarianceRemediationRow>(
+          db,
+          "filing_escalation_variance_remediations",
+          firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_variance_remediations"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationVarianceRemediationRow)
+          .filter((row) => row.packageId === packageId)
+      },
+    },
+    filingEscalationWaiverRolloverAttestations: {
+      async upsert(row) {
+        await setDoc(doc(db, "filing_escalation_waiver_rollover_attestations", row.id), row)
+      },
+      async get(id) {
+        return getById<FilingEscalationWaiverRolloverAttestationRow>(
+          db,
+          "filing_escalation_waiver_rollover_attestations",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<FilingEscalationWaiverRolloverAttestationRow>(
+          db,
+          "filing_escalation_waiver_rollover_attestations",
+          firmId
+        )
+      },
+      async listByPackageId(packageId) {
+        const rows = await getDocs(collection(db, "filing_escalation_waiver_rollover_attestations"))
+        return rows.docs
+          .map((entry) => entry.data() as FilingEscalationWaiverRolloverAttestationRow)
           .filter((row) => row.packageId === packageId)
       },
     },

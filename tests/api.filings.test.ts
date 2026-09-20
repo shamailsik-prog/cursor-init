@@ -1056,6 +1056,30 @@ describe("GET/POST /api/d4/filings", () => {
     expect(snoozeVarianceJson.result.policyVarianceDigest.status).toBe("snoozed")
     expect(typeof snoozeVarianceJson.result.policyVarianceDigest.snoozeUntil).toBe("number")
 
+    const recordRemediation = await post(
+      {
+        action: "record_variance_remediation",
+        actorId: "partner_a",
+        packageId,
+        decision: "temporary_override",
+        justification: "Controlled override while court transport backlog is resolved",
+        expiresInHours: 4,
+        secondApproverId: "partner_a",
+        note: "Remediation ledger capture for policy variance governance",
+      },
+      "f0c3020d-65a8-4f6c-8bb9-6e8ce8b8ef31"
+    )
+    expect(recordRemediation.status).toBe(200)
+    const remediationJson = (await recordRemediation.json()) as {
+      result: {
+        remediation: { decision: string; status: string }
+        policyVarianceDigest: { status: string }
+      }
+    }
+    expect(remediationJson.result.remediation.decision).toBe("temporary_override")
+    expect(remediationJson.result.remediation.status).toBe("active")
+    expect(remediationJson.result.policyVarianceDigest.status).toBe("snoozed")
+
     const waiverExpiryViewBefore = await get(
       new URLSearchParams({
         view: "waiver_expiry_digests",
@@ -1098,6 +1122,9 @@ describe("GET/POST /api/d4/filings", () => {
         actorId: "partner_a",
         packageId,
         extendHours: 8,
+        secondApproverId: "partner_a",
+        rolloverJustification: "Waiver cap exceeded due documented registry closure period",
+        rolloverNote: "Rollover attestation captured with partner signoff",
         note: "Extending waiver pending registry reopening",
       },
       "0b2da76f-47d7-4902-b5cd-faf6c2af9a56"
@@ -1107,12 +1134,14 @@ describe("GET/POST /api/d4/filings", () => {
       result: {
         waiver: { status: string }
         waiverExpiryDigest: { status: string }
+        rolloverAttestation: { status: string } | null
       }
     }
     expect(extendWaiverJson.result.waiver.status).toBe("active")
     expect(["extended", "open_expiry", "cleared"]).toContain(
       extendWaiverJson.result.waiverExpiryDigest.status
     )
+    expect(extendWaiverJson.result.rolloverAttestation?.status).toBe("attested")
 
     const revokeWaiver = await post(
       {
@@ -1305,6 +1334,30 @@ describe("GET/POST /api/d4/filings", () => {
       )
     ).toBe(true)
 
+    const remediationView = await get(
+      new URLSearchParams({
+        view: "variance_remediation_ledger",
+        userId: "associate_a",
+        packageId,
+        remediationStatus: "active",
+        decision: "temporary_override",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationView.status).toBe(200)
+    const remediationViewJson = (await remediationView.json()) as {
+      items: Array<{ packageId: string; status: string; decision: string }>
+    }
+    expect(
+      remediationViewJson.items.some(
+        (row) =>
+          row.packageId === packageId &&
+          row.status === "active" &&
+          row.decision === "temporary_override"
+      )
+    ).toBe(true)
+
     const policyView = await get(
       new URLSearchParams({
         view: "escalation_policy_baselines",
@@ -1360,6 +1413,26 @@ describe("GET/POST /api/d4/filings", () => {
     expect(
       waiverExpiryViewJson.items.some(
         (row) => row.packageId === packageId && row.status === "cleared"
+      )
+    ).toBe(true)
+
+    const rolloverView = await get(
+      new URLSearchParams({
+        view: "waiver_rollover_attestations",
+        userId: "associate_a",
+        packageId,
+        rolloverStatus: "attested",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(rolloverView.status).toBe(200)
+    const rolloverViewJson = (await rolloverView.json()) as {
+      items: Array<{ packageId: string; status: string }>
+    }
+    expect(
+      rolloverViewJson.items.some(
+        (row) => row.packageId === packageId && row.status === "attested"
       )
     ).toBe(true)
   })

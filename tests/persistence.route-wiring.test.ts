@@ -48,6 +48,8 @@ const baseStore = {
   filingEscalationBreachWaivers: new Map(),
   filingEscalationPolicyVarianceDigests: new Map(),
   filingEscalationWaiverExpiryDigests: new Map(),
+  filingEscalationVarianceRemediations: new Map(),
+  filingEscalationWaiverRolloverAttestations: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
   workflowOpsActivity: new Map(),
@@ -526,6 +528,57 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByPackageId: vi.fn().mockResolvedValue([]),
     },
+    filingEscalationVarianceRemediations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "remediation:pkg_repo:1",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          decision: "temporary_override",
+          status: "active",
+          linkedPolicyVarianceDigestId: "policy-variance:pkg_repo",
+          linkedPolicyId: "policy:pkg_repo:override",
+          justification: "Controlled override for known filing backlog",
+          decidedBy: "partner_a",
+          decidedAt: Date.now(),
+          expiresAt: Date.now() + 2 * 60 * 60 * 1000,
+          secondApproverId: "partner_b",
+          notes: ["repo remediation row"],
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
+    filingEscalationWaiverRolloverAttestations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "rollover:pkg_repo:1",
+          firmId: "firmA",
+          packageId: "pkg_repo",
+          matterId: "mat_1",
+          classification: "internal",
+          waiverId: "waiver:pkg_repo:1",
+          status: "attested",
+          extensionHours: 8,
+          previousExpiresAt: Date.now(),
+          newExpiresAt: Date.now() + 8 * 60 * 60 * 1000,
+          policyCapExpiresAt: Date.now() + 4 * 60 * 60 * 1000,
+          attestedBy: "partner_a",
+          secondApproverId: "partner_b",
+          justification: "Court closure extends beyond baseline waiver window",
+          attestedAt: Date.now(),
+          notes: ["repo rollover row"],
+          updatedAt: Date.now(),
+        },
+      ]),
+      listByPackageId: vi.fn().mockResolvedValue([]),
+    },
     jobs: {
       create: vi.fn(),
       listByFirm: vi.fn().mockResolvedValue([]),
@@ -827,6 +880,30 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("waiver-expiry:pkg_repo")
+  })
+
+  it("filings variance remediation ledger view GET uses repository filingEscalationVarianceRemediations listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=variance_remediation_ledger&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("remediation:pkg_repo:1")
+  })
+
+  it("filings waiver rollover attestations view GET uses repository filingEscalationWaiverRolloverAttestations listByFirm", async () => {
+    const { GET } = await import("@/app/api/d4/filings/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d4/filings?view=waiver_rollover_attestations&userId=associate_a&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string }> }
+    expect(json.items.map((item) => item.id)).toContain("rollover:pkg_repo:1")
   })
 
   it("clients route GET uses repository entities listByFirm", async () => {

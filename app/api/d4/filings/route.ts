@@ -75,6 +75,13 @@ import {
   isFilingEscalationPolicyVarianceDigestStatus,
   isFilingEscalationWaiverExpiryDigestStatus,
 } from "@/platform/persistence/filingEscalationGovernanceDigests"
+import {
+  buildFilingEscalationVarianceRemediationRow,
+  buildFilingEscalationWaiverRolloverAttestationRow,
+  isFilingEscalationVarianceRemediationDecision,
+  isFilingEscalationVarianceRemediationStatus,
+  isFilingEscalationWaiverRolloverStatus,
+} from "@/platform/persistence/filingEscalationRemediationLedger"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
@@ -361,6 +368,20 @@ type ExtendBreachWaiverBody = {
   packageId?: string
   waiverId?: string
   extendHours?: number
+  secondApproverId?: string
+  rolloverJustification?: string
+  rolloverNote?: string
+  note?: string
+}
+
+type RecordVarianceRemediationBody = {
+  action: "record_variance_remediation"
+  actorId?: string
+  packageId?: string
+  decision?: string
+  justification?: string
+  expiresInHours?: number
+  secondApproverId?: string
   note?: string
 }
 
@@ -395,6 +416,7 @@ type Body =
   | SnoozePolicyVarianceBody
   | AcknowledgeWaiverExpiryBody
   | ExtendBreachWaiverBody
+  | RecordVarianceRemediationBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -429,7 +451,9 @@ function parseFilingsView(
   | "escalation_policy_baselines"
   | "breach_waiver_ledger"
   | "policy_variance_digests"
-  | "waiver_expiry_digests" {
+  | "waiver_expiry_digests"
+  | "variance_remediation_ledger"
+  | "waiver_rollover_attestations" {
   if (value === "dispatch") return "dispatch"
   if (value === "annexures") return "annexures"
   if (value === "submission_receipts") return "submission_receipts"
@@ -443,6 +467,8 @@ function parseFilingsView(
   if (value === "breach_waiver_ledger") return "breach_waiver_ledger"
   if (value === "policy_variance_digests") return "policy_variance_digests"
   if (value === "waiver_expiry_digests") return "waiver_expiry_digests"
+  if (value === "variance_remediation_ledger") return "variance_remediation_ledger"
+  if (value === "waiver_rollover_attestations") return "waiver_rollover_attestations"
   return "packages"
 }
 
@@ -549,6 +575,27 @@ function buildEscalationPolicyMaps(
       : null,
     packageOverrides,
   }
+}
+
+function latestActiveRemediationByPackage<T extends {
+    packageId: string
+    status: string
+    expiresAt: number
+    updatedAt: number
+  }>(
+  rows: T[],
+  now: number
+): Map<string, T> {
+  const result = new Map<string, T>()
+  for (const row of rows) {
+    if (row.status !== "active") continue
+    if (row.expiresAt <= now) continue
+    const existing = result.get(row.packageId)
+    if (!existing || row.updatedAt > existing.updatedAt) {
+      result.set(row.packageId, row)
+    }
+  }
+  return result
 }
 
 export async function GET(request: Request) {
@@ -1128,6 +1175,26 @@ export async function GET(request: Request) {
       const policyVarianceByPackage = new Map(policyVarianceRows.map((row) => [row.packageId, row]))
       const waiverExpiryRows = await repos.filingEscalationWaiverExpiryDigests.listByFirm(user.firmId)
       const waiverExpiryByPackage = new Map(waiverExpiryRows.map((row) => [row.packageId, row]))
+      const remediationRows = await repos.filingEscalationVarianceRemediations.listByFirm(user.firmId)
+      for (const row of remediationRows) {
+        if (row.status === "active" && row.expiresAt <= now) {
+          const expired = { ...row, status: "expired" as const, updatedAt: now }
+          await repos.filingEscalationVarianceRemediations.upsert(expired)
+          store.filingEscalationVarianceRemediations.set(expired.id, expired)
+        }
+      }
+      const activeRemediationByPackage = latestActiveRemediationByPackage(
+        await repos.filingEscalationVarianceRemediations.listByFirm(user.firmId),
+        now
+      )
+      const rolloverRows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm(user.firmId)
+      const rolloverByWaiverId = new Map<string, (typeof rolloverRows)[number]>()
+      for (const row of rolloverRows) {
+        const existing = rolloverByWaiverId.get(row.waiverId)
+        if (!existing || row.updatedAt > existing.updatedAt) {
+          rolloverByWaiverId.set(row.waiverId, row)
+        }
+      }
       const persistedRows = await repos.filingEscalationWorkloadDigests.listByFirm(user.firmId)
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
@@ -1138,6 +1205,7 @@ export async function GET(request: Request) {
         ...activeWaiverByPackage.keys(),
         ...policyVarianceByPackage.keys(),
         ...waiverExpiryByPackage.keys(),
+        ...activeRemediationByPackage.keys(),
       ])
       for (const pkgId of candidatePackageIds) {
         const filingPackage = packageById.get(pkgId)
@@ -1231,6 +1299,21 @@ export async function GET(request: Request) {
           !!nextPolicyVariance &&
           nextPolicyVariance.status !== "cleared" &&
           nextPolicyVariance.varianceReasons.includes("handoff_sla_override")
+        const activeRemediation = activeRemediationByPackage.get(pkgId) ?? null
+        const noActiveRemediationForVariance =
+          !!nextPolicyVariance &&
+          nextPolicyVariance.status !== "cleared" &&
+          !activeRemediation
+        const longLivedTemporaryOverride =
+          !!activeRemediation &&
+          activeRemediation.decision === "temporary_override" &&
+          activeRemediation.expiresAt - activeRemediation.decidedAt > policy.waiverWindowMs
+        const rolloverCapCrossed =
+          !!activeWaiver && activeWaiver.expiresAt > activeWaiver.grantedAt + policy.waiverWindowMs
+        const hasRolloverAttestation =
+          !!activeWaiver &&
+          !!rolloverByWaiverId.get(activeWaiver.id)?.secondApproverId
+        const rolloverWithoutAttestation = rolloverCapCrossed && !hasRolloverAttestation
         let computed =
           activeWaiver && computedBase.alertReasons.length > 0
             ? {
@@ -1241,7 +1324,16 @@ export async function GET(request: Request) {
                 lastEvaluatedAt: now,
               }
             : computedBase
-        if ((waiverExpiringCritical || policyVarianceCritical) && computed.status === "snoozed") {
+        if (
+          (
+            waiverExpiringCritical ||
+            policyVarianceCritical ||
+            noActiveRemediationForVariance ||
+            longLivedTemporaryOverride ||
+            rolloverWithoutAttestation
+          ) &&
+          computed.status === "snoozed"
+        ) {
           computed = {
             ...computed,
             status: "open_alert",
@@ -1525,6 +1617,83 @@ export async function GET(request: Request) {
         .filter((row) =>
           reason ? row.reasons.includes(reason as (typeof row.reasons)[number]) : true
         )
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "variance_remediation_ledger") {
+      const packageId = url.searchParams.get("packageId")
+      const remediationStatus = url.searchParams.get("remediationStatus")
+      const decision = url.searchParams.get("decision")
+      const now = Date.now()
+      const rows = await repos.filingEscalationVarianceRemediations.listByFirm(user.firmId)
+      const normalized: typeof rows = []
+      for (const row of rows) {
+        if (row.status === "active" && row.expiresAt <= now) {
+          const expired = { ...row, status: "expired" as const, updatedAt: now }
+          await repos.filingEscalationVarianceRemediations.upsert(expired)
+          store.filingEscalationVarianceRemediations.set(expired.id, expired)
+          normalized.push(expired)
+          continue
+        }
+        normalized.push(row)
+      }
+      const visible = normalized
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => {
+          if (!isFilingEscalationVarianceRemediationStatus(remediationStatus)) return true
+          return row.status === remediationStatus
+        })
+        .filter((row) => {
+          if (!isFilingEscalationVarianceRemediationDecision(decision)) return true
+          return row.decision === decision
+        })
+        .filter((row) => {
+          const permission = checkPermission(store, user.id, "draft", row.matterId)
+          if (!permission.allow) return false
+          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      const items = visible.slice(cursor, cursor + limit)
+      const nextCursor =
+        cursor + items.length < visible.length ? String(cursor + items.length) : null
+      return NextResponse.json({
+        view,
+        items,
+        total: visible.length,
+        limit,
+        cursor,
+        nextCursor,
+      })
+    }
+    if (view === "waiver_rollover_attestations") {
+      const packageId = url.searchParams.get("packageId")
+      const rolloverStatus = url.searchParams.get("rolloverStatus")
+      const waiverId = url.searchParams.get("waiverId")
+      const rows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm(user.firmId)
+      const visible = rows
+        .filter((row) => (matterId ? row.matterId === matterId : true))
+        .filter((row) => (packageId ? row.packageId === packageId : true))
+        .filter((row) => (waiverId ? row.waiverId === waiverId : true))
+        .filter((row) => {
+          if (!isFilingEscalationWaiverRolloverStatus(rolloverStatus)) return true
+          return row.status === rolloverStatus
+        })
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
@@ -4200,6 +4369,163 @@ export async function POST(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
+    if (parsed.action === "record_variance_remediation") {
+      if (
+        !parsed.actorId ||
+        !parsed.packageId ||
+        !parsed.justification?.trim() ||
+        !isFilingEscalationVarianceRemediationDecision(parsed.decision ?? null) ||
+        parsed.expiresInHours === undefined
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "actorId, packageId, decision, justification, and expiresInHours are required",
+          },
+          { status: 400 }
+        )
+      }
+      const expiresInHours = Number(parsed.expiresInHours)
+      if (!Number.isFinite(expiresInHours) || expiresInHours < 1 || expiresInHours > 168) {
+        return NextResponse.json({ error: "expiresInHours must be between 1 and 168" }, { status: 400 })
+      }
+      const actor = store.users.get(parsed.actorId)
+      if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "record_variance_remediation requires partner role" },
+          { status: 403 }
+        )
+      }
+      await syncFirmMembers(store, repos, actor.firmId)
+      const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
+      if (!filingPackage) {
+        return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
+      }
+      if (filingPackage.firmId !== actor.firmId) {
+        return NextResponse.json({ error: "cross-firm remediation denied" }, { status: 403 })
+      }
+      const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
+      if (!permission.allow) {
+        return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
+      }
+      const secondApprover =
+        parsed.secondApproverId !== undefined ? store.users.get(parsed.secondApproverId) : null
+      if (parsed.secondApproverId && !secondApprover) {
+        return NextResponse.json({ error: "unknown second approver" }, { status: 404 })
+      }
+      if (secondApprover) {
+        if (
+          secondApprover.firmId !== actor.firmId ||
+          secondApprover.role !== "partner"
+        ) {
+          return NextResponse.json(
+            { error: "second approver must be a partner in the same firm" },
+            { status: 403 }
+          )
+        }
+      }
+      const now = Date.now()
+      const priorAuditCount = store.audit.length
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
+      const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
+      if (parsed.decision === "temporary_override" && !secondApprover) {
+        return NextResponse.json(
+          { error: "temporary_override remediation requires a second approver" },
+          { status: 422 }
+        )
+      }
+      const existingRemediations = await repos.filingEscalationVarianceRemediations.listByPackageId(
+        filingPackage.id
+      )
+      for (const row of existingRemediations) {
+        if (row.status !== "active") continue
+        const superseded = { ...row, status: "superseded" as const, updatedAt: now }
+        await repos.filingEscalationVarianceRemediations.upsert(superseded)
+        store.filingEscalationVarianceRemediations.set(superseded.id, superseded)
+      }
+      const policyVarianceDigest = await repos.filingEscalationPolicyVarianceDigests.get(
+        filingEscalationPolicyVarianceDigestId(filingPackage.id)
+      )
+      const remediation = buildFilingEscalationVarianceRemediationRow(filingPackage, {
+        sequenceNo: existingRemediations.length + 1,
+        decision: parsed.decision,
+        justification: parsed.justification,
+        actorId: actor.id,
+        expiresAt: now + expiresInHours * 60 * 60 * 1000,
+        now,
+        linkedPolicyVarianceDigestId: policyVarianceDigest?.id ?? null,
+        linkedPolicyId: policy.sourcePolicyId,
+        secondApproverId: secondApprover?.id ?? null,
+        note: parsed.note ?? null,
+      })
+      await repos.filingEscalationVarianceRemediations.upsert(remediation)
+      store.filingEscalationVarianceRemediations.set(remediation.id, remediation)
+      if (parsed.decision === "rollback") {
+        const rollbackOwnerLoad = defaultPolicy?.ownerLoadThreshold ?? DEFAULT_ESCALATION_OWNER_LOAD_THRESHOLD
+        const rollbackHandoffSla = defaultPolicy?.handoffSlaMs ?? DEFAULT_ESCALATION_HANDOFF_SLA_MS
+        const rollbackWaiverWindow = defaultPolicy?.waiverWindowMs ?? DEFAULT_ESCALATION_WAIVER_WINDOW_MS
+        const rollbackPolicy = buildFilingEscalationPolicyBaselineRow({
+          firmId: actor.firmId,
+          actorId: actor.id,
+          packageId: filingPackage.id,
+          matterId: filingPackage.matterId,
+          classification: filingPackage.classification,
+          ownerLoadThreshold: rollbackOwnerLoad,
+          handoffSlaMs: rollbackHandoffSla,
+          waiverWindowMs: rollbackWaiverWindow,
+          note: "rollback remediation recorded",
+          now,
+        })
+        await repos.filingEscalationPolicyBaselines.upsert(rollbackPolicy)
+        store.filingEscalationPolicyBaselines.set(rollbackPolicy.id, rollbackPolicy)
+      }
+      const recomputedVariance = buildFilingEscalationPolicyVarianceDigestRow(filingPackage, {
+        firmDefaultPolicy:
+          defaultPolicy ? policyRows.find((row) => row.id === defaultPolicy.id) ?? null : null,
+        packagePolicy: latestByUpdatedAt(
+          policyRows.filter((row) => row.scope === "package_override" && row.packageId === filingPackage.id)
+        ),
+        existing: policyVarianceDigest,
+        now,
+      })
+      const varianceDigest =
+        remediation.decision === "accepted_risk" || remediation.decision === "temporary_override"
+          ? {
+              ...recomputedVariance,
+              status: "snoozed" as const,
+              snoozeUntil: remediation.expiresAt,
+              updatedAt: now,
+              lastEvaluatedAt: now,
+              notes: [
+                ...recomputedVariance.notes,
+                `${new Date(now).toISOString()} ${actor.id}: remediation recorded (${remediation.id})`,
+              ],
+            }
+          : recomputedVariance
+      await repos.filingEscalationPolicyVarianceDigests.upsert(varianceDigest)
+      store.filingEscalationPolicyVarianceDigests.set(varianceDigest.id, varianceDigest)
+      store.audit.push({
+        action: "filing_variance_remediation_record",
+        actorId: actor.id,
+        target: remediation.id,
+        classification: filingPackage.classification,
+        reason: remediation.decision,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: "record_variance_remediation",
+        remediation:
+          (await repos.filingEscalationVarianceRemediations.get(remediation.id)) ?? remediation,
+        policyVarianceDigest:
+          (await repos.filingEscalationPolicyVarianceDigests.get(varianceDigest.id)) ??
+          varianceDigest,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
     if (parsed.action === "acknowledge_policy_variance") {
       if (!parsed.actorId || !parsed.packageId) {
         return NextResponse.json({ error: "actorId and packageId are required" }, { status: 400 })
@@ -4474,17 +4800,70 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "no matching active waiver found for extension" }, { status: 404 })
       }
       const note = parsed.note?.trim() || `waiver extended by ${extendHours}h`
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
+      const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
+      const previousExpiresAt = target.expiresAt
+      const nextExpiresAt = target.expiresAt + extendHours * 60 * 60 * 1000
+      const policyCapExpiresAt = target.grantedAt + policy.waiverWindowMs
+      const rolloverCrossesCap = nextExpiresAt > policyCapExpiresAt
+      let secondApprover: (typeof actor) | null = null
+      if (rolloverCrossesCap) {
+        if (!parsed.secondApproverId || !parsed.rolloverJustification?.trim()) {
+          return NextResponse.json(
+            {
+              error:
+                "secondApproverId and rolloverJustification are required when extension exceeds policy cap window",
+            },
+            { status: 422 }
+          )
+        }
+        secondApprover = store.users.get(parsed.secondApproverId) ?? null
+        if (!secondApprover) {
+          return NextResponse.json({ error: "unknown second approver" }, { status: 404 })
+        }
+        if (
+          secondApprover.firmId !== actor.firmId ||
+          secondApprover.role !== "partner"
+        ) {
+          return NextResponse.json(
+            { error: "second approver must be a partner in the same firm" },
+            { status: 403 }
+          )
+        }
+      }
       const extendedWaiver = {
         ...target,
-        expiresAt: target.expiresAt + extendHours * 60 * 60 * 1000,
+        expiresAt: nextExpiresAt,
         notes: [...target.notes, `${new Date(now).toISOString()} ${actor.id}: ${note}`],
         updatedAt: now,
       }
       await repos.filingEscalationBreachWaivers.upsert(extendedWaiver)
       store.filingEscalationBreachWaivers.set(extendedWaiver.id, extendedWaiver)
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
-      const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
-      const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
+      let rolloverAttestation: Awaited<
+        ReturnType<typeof repos.filingEscalationWaiverRolloverAttestations.get>
+      > | null = null
+      if (rolloverCrossesCap && secondApprover) {
+        const existingAttestations = await repos.filingEscalationWaiverRolloverAttestations.listByPackageId(
+          filingPackage.id
+        )
+        const attestation = buildFilingEscalationWaiverRolloverAttestationRow(filingPackage, {
+          sequenceNo: existingAttestations.length + 1,
+          waiverId: extendedWaiver.id,
+          extensionHours: extendHours,
+          previousExpiresAt,
+          newExpiresAt: nextExpiresAt,
+          policyCapExpiresAt,
+          actorId: actor.id,
+          secondApproverId: secondApprover.id,
+          justification: parsed.rolloverJustification ?? "",
+          now,
+          note: parsed.rolloverNote ?? null,
+        })
+        await repos.filingEscalationWaiverRolloverAttestations.upsert(attestation)
+        store.filingEscalationWaiverRolloverAttestations.set(attestation.id, attestation)
+        rolloverAttestation = attestation
+      }
       const existingExpiry = await repos.filingEscalationWaiverExpiryDigests.get(
         filingEscalationWaiverExpiryDigestId(filingPackage.id)
       )
@@ -4545,12 +4924,26 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: String(extendHours),
       })
+      if (rolloverAttestation) {
+        store.audit.push({
+          action: "filing_waiver_rollover_attest",
+          actorId: actor.id,
+          target: rolloverAttestation.id,
+          classification: filingPackage.classification,
+          reason: rolloverAttestation.secondApproverId,
+        })
+      }
       await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "extend_breach_waiver",
         waiver: (await repos.filingEscalationBreachWaivers.get(extendedWaiver.id)) ?? extendedWaiver,
         waiverExpiryDigest:
           (await repos.filingEscalationWaiverExpiryDigests.get(expiryDigest.id)) ?? expiryDigest,
+        rolloverAttestation:
+          rolloverAttestation
+            ? (await repos.filingEscalationWaiverRolloverAttestations.get(rolloverAttestation.id)) ??
+              rolloverAttestation
+            : null,
         workloadDigest:
           (await repos.filingEscalationWorkloadDigests.get(workloadDigest.id)) ?? workloadDigest,
       }
