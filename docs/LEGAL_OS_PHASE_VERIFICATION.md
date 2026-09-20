@@ -1,7 +1,7 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
 Last updated: 2026-09-20  
-Primary source: `docs/audits/phase-reaudit-70-73-after-stream1.md`.
+Primary source: `docs/audits/phase-reaudit-48-59-after-stream2.md` plus `docs/audits/phase-reaudit-70-73-after-stream1.md`.
 
 Requested re-audit anchor commit: `2dd668d4d061fbca490aca10393cb7c8c61058c9` (PR #92 merge tip state).
 
@@ -10,7 +10,7 @@ Requested re-audit anchor commit: `2dd668d4d061fbca490aca10393cb7c8c61058c9` (PR
 No audited sample phase qualifies as **DONE product**.
 
 - `backend_real`: PASS across sampled batches (#34-#37, #38-#47, #48-#59, #60-#69, #70-#73).
-- `frontend_real`: mixed; #34-#37 and #70-#73 pass via `/ops`; Batch D/E/F widened-scope lanes remain partial because `runApiCallAllowingStatuses` is referenced but not defined in `/ops` action-lattice paths.
+- `frontend_real`: mixed; #34-#37, #48-#59, and #70-#73 pass via `/ops`; Batch D/F widened-scope lanes remain pending dedicated independent refresh re-audits.
 - `transport_stub`: still true because filing transport remains `TODO(firm)` + `_stub` + `blocked_todo_firm`.
 
 Because `transport_stub=true`, final status remains **PARTIAL** for all sampled phases.
@@ -37,7 +37,8 @@ Because `transport_stub=true`, final status remains **PARTIAL** for all sampled 
   - PR #90 tip `835578cb3742`
   - PR #92 tip `453d7929fcb9`
 - #70-#73 now satisfy frontend call-site requirements in `/ops` with phase-specific actions + views.
-- Widened-scope follow-up found a blocker for Batch D/E/F action lattices (including Batch D follow-up PR #92): `/ops` references `runApiCallAllowingStatuses` repeatedly but no definition exists in `app/ops/operator-audit-console.tsx`, so those lanes remain partial pending fix.
+- Stream 2 follow-up landed additional Batch E remediation/rollover `/ops` call sites and views; Batch E is now independently re-audited as `FRONTEND_REAL=PASS` while retaining `transport_stub=true` cap.
+- Batch D/F still require dedicated independent refresh re-audits in their owning streams before their partial verdicts can be revised.
 - COMPLETE claim hard-fail remains enforced while transport stubs exist via:
   - `ci_gates/check_pr_phase_claims.py`
   - `.github/workflows/pr-phase-claim-gate.yml`
@@ -85,20 +86,22 @@ The gate fails when either condition is true:
 
 ## Batch E ledger — PR #48-#59 (independent audit)
 
-- Audit file: `docs/audits/phase-sample-48-59-findings.md`
-- Verdict: **NOT COMPLETE / PARTIAL only**
+- Audit files:
+  - `docs/audits/phase-sample-48-59-findings.md` (baseline forensic sample)
+  - `docs/audits/phase-reaudit-48-59-after-stream2.md` (post-`/ops` frontend wiring re-audit)
+- Verdict: **PARTIAL only** (not COMPLETE)
 - Date: 2026-09-20
 
 ### Blocking findings
 
-1. Auditor baseline found `FRONTEND_REAL` not met for this batch (audited merge diffs had no corresponding product UI coverage for these capabilities).
+1. Baseline forensic sample originally found `FRONTEND_REAL` missing; Stream 2 re-audit now verifies Batch E action+view call sites are wired in `/ops`.
 2. Filing transport across `#49-#53` remains explicit stub/TODO(firm) boundary (`_stub` channels, `blocked_todo_firm`, `todo_firm_external_transport_blocked`), so transport realism is incomplete and must stay fail-closed.
 
 ### DoD summary
 
 - `SHA on main`: PASS (`#48-#59` confirmed on `main` by audit).
 - `BACKEND_REAL`: PASS/PARTIAL (transport-related items are internal parity only while external transport remains blocked).
-- `FRONTEND_REAL`: PARTIAL (call-site lane landed, but action execution is blocked by undefined `runApiCallAllowingStatuses` in `/ops`).
+- `FRONTEND_REAL`: PASS (`/ops` Batch E action lattice + governance read lattice now exercised through real `/api/d4/filings` call paths).
 - `stubs policy`: PASS (explicit and fail-closed).
 
 ## Batch D ledger — PR #38-#47 (independent audit)
@@ -106,6 +109,8 @@ The gate fails when either condition is true:
 - Audit file: `docs/audits/phase-sample-38-47-findings.md`
 - Verdict: **PARTIAL** (major overall; blockers present on filing-linked items)
 - Date: 2026-09-20
+
+> Note: Batch D rows below are historical at the time of that audit pass. A dedicated refresh re-audit is still required in the Batch D stream before changing these ledger verdicts.
 
 ### DoD summary
 
@@ -134,6 +139,8 @@ The gate fails when either condition is true:
 - Audit file: `docs/audits/phase-sample-60-69-findings.md`
 - Verdict: **PARTIAL (blocker severity)** for COMPLETE-product classification
 - Date: 2026-09-20
+
+> Note: Batch F rows below are historical at the time of that audit pass. A dedicated refresh re-audit is still required in the Batch F stream before changing these ledger verdicts.
 
 ### Blocking findings
 
