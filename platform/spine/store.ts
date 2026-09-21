@@ -2508,6 +2508,83 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow 
   updatedAt: number
 }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipStatus =
+  | "not_required"
+  | "watch"
+  | "deadline_extended"
+  | "breach_acknowledged"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow = {
+  id: string
+  firmId: string
+  matterId: string
+  waiverExpiryDisputeAdjudicationId: string
+  classification: Classification
+  sloStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipStatus
+  adjudicationStatusSnapshot: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationStatus
+  panelOwnerIdSnapshot: string | null
+  dueAtSnapshot: number | null
+  dueWindowDebtMs: number
+  stewardId: string | null
+  openedAt: number | null
+  deadlineExtendedAt: number | null
+  extendedDueAt: number | null
+  breachAcknowledgedAt: number | null
+  sloNote: string | null
+  reopenPressureCount: number
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationStatus =
+  | "not_required"
+  | "open"
+  | "attested"
+  | "expiry_acknowledged"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryRiskStatus =
+  | "no_risk"
+  | "expires_soon"
+  | "expired"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow = {
+  id: string
+  firmId: string
+  matterId: string
+  remediationSlaBreachResolutionCheckpointId: string
+  classification: Classification
+  attestationStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationStatus
+  checkpointStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointStatus
+  dueAtSnapshot: number | null
+  expiryRiskStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryRiskStatus
+  attestedBy: string | null
+  attestedAt: number | null
+  expiryAcknowledgedBy: string | null
+  expiryAcknowledgedAt: number | null
+  attestationNote: string | null
+  reopenPressureCount: number
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2641,6 +2718,10 @@ export class SpineStore {
     new Map<string, WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow>()
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints =
     new Map<string, WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow>()
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships =
+    new Map<string, WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow>()
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations =
+    new Map<string, WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()

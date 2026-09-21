@@ -103,6 +103,8 @@ const baseStore = {
   workflowOpsAlertVarianceRemediationSlaBreachEscalations: new Map(),
   workflowOpsAlertWaiverExpiryDisputeAdjudications: new Map(),
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints: new Map(),
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships: new Map(),
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -2225,6 +2227,72 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          waiverExpiryDisputeAdjudicationId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication:mat_1",
+          classification: "internal",
+          sloStatus: "breach_acknowledged",
+          adjudicationStatusSnapshot: "panel_assigned",
+          panelOwnerIdSnapshot: "partner_a",
+          dueAtSnapshot: Date.now() + 60_000,
+          dueWindowDebtMs: 0,
+          stewardId: "partner_a",
+          openedAt: Date.now(),
+          deadlineExtendedAt: Date.now(),
+          extendedDueAt: Date.now() + 120_000,
+          breachAcknowledgedAt: Date.now(),
+          sloNote: "repo slo stewardship",
+          reopenPressureCount: 1,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "waiver_expiry_dispute_adjudication_slo"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 21,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          remediationSlaBreachResolutionCheckpointId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint:mat_1",
+          classification: "internal",
+          attestationStatus: "expiry_acknowledged",
+          checkpointStatusSnapshot: "reopened",
+          dueAtSnapshot: Date.now() + 30_000,
+          expiryRiskStatus: "expires_soon",
+          attestedBy: "partner_a",
+          attestedAt: Date.now(),
+          expiryAcknowledgedBy: "partner_a",
+          expiryAcknowledgedAt: Date.now(),
+          attestationNote: "repo checkpoint expiry attested",
+          reopenPressureCount: 2,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "variance_sla_breach_resolution_checkpoint_expiry_attestation"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 22,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -3159,5 +3227,35 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint:mat_1"
     )
     expect(json.items[0]?.checkpointStatus).toBe("reopened")
+  })
+
+  it("ops reporting waiver-expiry dispute adjudication SLO stewardship view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_stewardships&actorId=associate_a&waiverExpiryDisputeAdjudicationSloStatus=breach_acknowledged&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; sloStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo:mat_1"
+    )
+    expect(json.items[0]?.sloStatus).toBe("breach_acknowledged")
+  })
+
+  it("ops reporting remediation-SLA breach resolution-checkpoint expiry-attestation view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestations&actorId=associate_a&remediationSlaBreachResolutionCheckpointExpiryAttestationStatus=expiry_acknowledged&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; attestationStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1"
+    )
+    expect(json.items[0]?.attestationStatus).toBe("expiry_acknowledged")
   })
 })

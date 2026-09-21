@@ -1097,6 +1097,109 @@ describe("Firestore repository adapters", () => {
           (row) => row.recomputeReason === "ops_variance_sla_breach_resolution_checkpoint_seed"
         )
       ).toBe(true)
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.upsert({
+        id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        waiverExpiryDisputeAdjudicationId:
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication:mat_1",
+        classification: "internal",
+        sloStatus: "breach_acknowledged",
+        adjudicationStatusSnapshot: "panel_assigned",
+        panelOwnerIdSnapshot: "associate_a",
+        dueAtSnapshot: 65 + 28_800_000,
+        dueWindowDebtMs: 3_600_000,
+        stewardId: "partner_a",
+        openedAt: 65,
+        deadlineExtendedAt: 65,
+        extendedDueAt: 65 + 57_600_000,
+        breachAcknowledgedAt: 65,
+        sloNote: "ops_waiver_expiry_dispute_adjudication_slo_seed",
+        reopenPressureCount: 1,
+        lastStatusChangedAt: 65,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "waiver_expiry_dispute_adjudication_slo"],
+        recomputedAt: 65,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_waiver_expiry_dispute_adjudication_slo_seed",
+        updatedAt: 65,
+      })
+      const waiverExpiryDisputeAdjudicationSlo =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.get(
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo:mat_1"
+        )
+      expect(waiverExpiryDisputeAdjudicationSlo?.sloStatus).toBe("breach_acknowledged")
+      const waiverExpiryDisputeAdjudicationSlosByFirm =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.listByFirm("firmA")
+      expect(waiverExpiryDisputeAdjudicationSlosByFirm.some((row) => row.matterId === "mat_1")).toBe(
+        true
+      )
+      const waiverExpiryDisputeAdjudicationSlosByMatter =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.listByMatter(
+          "mat_1"
+        )
+      expect(
+        waiverExpiryDisputeAdjudicationSlosByMatter.some(
+          (row) => row.recomputeReason === "ops_waiver_expiry_dispute_adjudication_slo_seed"
+        )
+      ).toBe(true)
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.upsert(
+        {
+          id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          remediationSlaBreachResolutionCheckpointId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint:mat_1",
+          classification: "internal",
+          attestationStatus: "expiry_acknowledged",
+          checkpointStatusSnapshot: "reopened",
+          dueAtSnapshot: 66 + 21_600_000,
+          expiryRiskStatus: "expires_soon",
+          attestedBy: "partner_a",
+          attestedAt: 66,
+          expiryAcknowledgedBy: "partner_a",
+          expiryAcknowledgedAt: 66,
+          attestationNote: "ops_variance_sla_breach_resolution_checkpoint_expiry_attestation_seed",
+          reopenPressureCount: 2,
+          lastStatusChangedAt: 66,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation",
+          ],
+          recomputedAt: 66,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_variance_sla_breach_resolution_checkpoint_expiry_attestation_seed",
+          updatedAt: 66,
+        }
+      )
+      const remediationSlaBreachResolutionCheckpointExpiryAttestation =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1"
+        )
+      expect(remediationSlaBreachResolutionCheckpointExpiryAttestation?.attestationStatus).toBe(
+        "expiry_acknowledged"
+      )
+      const remediationSlaBreachResolutionCheckpointExpiryAttestationsByFirm =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.listByFirm(
+          "firmA"
+        )
+      expect(
+        remediationSlaBreachResolutionCheckpointExpiryAttestationsByFirm.some(
+          (row) => row.matterId === "mat_1"
+        )
+      ).toBe(true)
+      const remediationSlaBreachResolutionCheckpointExpiryAttestationsByMatter =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.listByMatter(
+          "mat_1"
+        )
+      expect(
+        remediationSlaBreachResolutionCheckpointExpiryAttestationsByMatter.some(
+          (row) =>
+            row.recomputeReason ===
+            "ops_variance_sla_breach_resolution_checkpoint_expiry_attestation_seed"
+        )
+      ).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

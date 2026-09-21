@@ -228,11 +228,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert waiver-expiry dispute adjudication SLO stewardship rows and remediation-SLA breach resolution-checkpoint expiry-attestation rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_stewardships`, `workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestations`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with SLO/expiry-attestation monitoring views (`view=alert_waiver_expiry_dispute_adjudication_slo_stewardships`, `view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestations`) and partner-governed lifecycle actions (`open_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_stewardship`, `extend_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_deadline`, `acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_breach`, `open_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation`, `attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry`, `acknowledge_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry`) filterable by matter, SLO status, expiry/attestation status, and freshness state.
+- Captured due-window debt, deadline-extension posture, and reopen-pressure expiry attestation while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_stewardship_opened`, `ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_deadline_extended`, `ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_breach_acknowledged`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_opened`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attested`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_acknowledged`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for SLO/expiry-attestation lifecycle transitions, idempotent replay behavior, pagination/filtering, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for this slice (pending PR + merge SHA assignment):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert waiver-expiry dispute adjudication SLO stewardship + remediation SLA breach resolution-checkpoint expiry attestation scaffolding**:
+Build **workflow alert waiver-expiry dispute adjudication SLO debt-remediation + remediation SLA breach resolution-checkpoint expiry-attestation exception reconciliation scaffolding**:
 
-1. Add adjudication SLO stewardship rows plus resolution-checkpoint expiry/attestation rows to track due-window debt, expiry risk, and reopen-pressure attestation.
-2. Extend `app/api/d2/ops-reporting/route.ts` with SLO/expiry-attestation actions and paginated views filterable by matter, SLO status, expiry/attestation status, and freshness state.
-3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for SLO/expiry-attestation transitions, idempotent replay, and audit provenance traceability.
+1. Add adjudication SLO debt-remediation rows plus checkpoint expiry-attestation exception/reconciliation rows to track remaining due-window debt retirement and overdue expiry exceptions.
+2. Extend `app/api/d2/ops-reporting/route.ts` with debt-remediation/exception-reconciliation actions and paginated views filterable by matter, debt status, exception status, and freshness state.
+3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for debt-remediation/exception-reconciliation transitions, idempotent replay, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding only (no external pager/on-call transport claims) while preserving scaffold-claim gate behavior.
