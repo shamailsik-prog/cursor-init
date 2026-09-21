@@ -3132,6 +3132,86 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     updatedAt: number
   }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerStatus =
+  | "external_distribution_audit_pending"
+  | "distribution_channel_registered"
+  | "attestation_signer_roster_recorded"
+  | "publication_freeze_checkpointed"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    publicationGovernanceId: string
+    classification: Classification
+    externalDistributionAuditLedgerStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerStatus
+    publicationGovernanceStatusSnapshot: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceStatus
+    distributionChannelRegistry: string | null
+    distributionChannelRegisteredBy: string | null
+    distributionChannelRegisteredAt: number | null
+    attestationSignerRoster: string | null
+    attestationSignerRosterRecordedBy: string | null
+    attestationSignerRosterRecordedAt: number | null
+    publicationFreezeCheckpointedBy: string | null
+    publicationFreezeCheckpointedAt: number | null
+    publicationFreezeReason: string | null
+    distributionAttestationBacklogCount: number
+    arbitrationPublicationExceptionBacklogCountSnapshot: number
+    auditLedgerNote: string | null
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationStatus =
+  | "closure_verification_pending"
+  | "reconciliation_closure_attested"
+  | "rollback_verification_checkpointed"
+  | "dispute_archive_checkpointed"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    disputeReconciliationId: string
+    classification: Classification
+    closureVerificationStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationStatus
+    disputeReconciliationStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationStatus
+    reconciliationClosureAttestedBy: string | null
+    reconciliationClosureAttestedAt: number | null
+    rollbackVerificationCheckpointedBy: string | null
+    rollbackVerificationCheckpointedAt: number | null
+    rollbackVerificationNote: string | null
+    disputeArchiveCheckpointedBy: string | null
+    disputeArchiveCheckpointedAt: number | null
+    disputeArchiveReference: string | null
+    reconciliationClosureLagHours: number
+    reconciliationClosureLagCount: number
+    queueReentryRetirementReconciliationDriftCountSnapshot: number
+    closureVerificationNote: string | null
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -3329,6 +3409,16 @@ export class SpineStore {
     new Map<
       string,
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationRow
+    >()
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers =
+    new Map<
+      string,
+      WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow
+    >()
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications =
+    new Map<
+      string,
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow
     >()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
