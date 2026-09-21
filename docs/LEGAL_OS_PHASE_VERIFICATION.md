@@ -59,6 +59,19 @@ The repository now includes a lightweight PR metadata gate:
 
 - Script: `ci_gates/check_pr_phase_claims.py`
 - Workflow: `.github/workflows/pr-phase-claim-gate.yml`
+
+### PR body template (copy for every feature slice)
+
+Phase Auditor replay and CI use **machine-readable** `key=value` lines (markdown tables are optional documentation only; the gate also parses common table rows as belt-and-suspenders):
+
+```text
+backend_real=true
+frontend_real=false
+transport_stub=true
+classification=PARTIAL
+```
+
+Add bounded claim text (e.g. `no COMPLETE/product-done claim`, `Never COMPLETE while transport_stub=true`). When `frontend_real=true` or the PR touches `app/ops/**`, include action-name→call-site evidence for `/ops` and concrete `/api/...` fetch paths.
 - `/ops` action/view → call-site evidence is required only when either:
   - `frontend_real=true` is claimed, or
   - the PR diff changes `app/ops/**`.
@@ -659,4 +672,76 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #156 | workflow alert adjudication SLO settlement-attestation + checkpoint expiry-attestation queue-drain-reconciliation | `419d9a3` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
+## Targeted ledger — PR #158 workflow alert adjudication SLO settlement-arbitration + checkpoint expiry-attestation queue-reentry-compliance
+
+- Audit file: `docs/audits/phase-pr158-workflow-slo-settlement-arbitration-queue-reentry.md` (initial audit + **re-audit addendum** 2026-09-21)
+- Date: 2026-09-21 (re-audit addendum same day)
+- Merge SHA on `main`: `caad961d3c475b9fd45de59e4400458868aacd33` (parent-2 / final PR head `0fbdc29`; stacked on PR #156 lane via base `48823fc`)
+- Process-flag remediation on `main`: `ede9a9c4abe95eb5ae9a4c92a703d815cc8a99d6` (markdown-table label parsing + `key=value` PR template; follows audit ledger `9f59d99` / PR #159)
+- Claim-gate anchor: `ede9a9c` (supersedes `90b0996` for table-row parsing behavior)
+- Verdict: **PASS (auditor closure)** — A–F green including live PR #158 claim-gate replay exit 0 @ `ede9a9c`. Product scope remains **PARTIAL** (`transport_stub=true`; not COMPLETE).
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `caad961`; parent-2 `0fbdc29`).
+- `BACKEND_REAL`: PASS (settlement-arbitration + queue-reentry-compliance rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through; governance `workflowOpsAlertSettlementArbitrationQueueReentryComplianceGovernance.ts`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `48823fc..0fbdc29` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring 86; Firestore repos/runtime/rules 22; `G-0`; `G-1`). Non-blocking: three partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
+- `process flags`: **PASS** (`ci_gates/check_pr_phase_claims.py` verbatim PR #158 body replay with `48823fc..0fbdc29` exits 0 @ `ede9a9c`; PR body includes `key=value` block plus table). Claim-gate vitest **20/20**. Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #158 | workflow alert adjudication SLO settlement-arbitration + checkpoint expiry-attestation queue-reentry-compliance | `caad961` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
+## Targeted ledger — PR #160 workflow alert adjudication SLO settlement-arbitration disposition-finalization + checkpoint expiry-attestation queue-reentry debt-retirement
+
+- Audit file: `docs/audits/phase-pr160-workflow-slo-disposition-finalization-debt-retirement.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `dd6abaf75e115a57a6c0d37c6441a83bd112cd19` (parent-2 / slice head `3ce4023ccce144399da1c25b86c7d8accf7b384f`; stacked on PR #158 lane via base `caad961`)
+- Main tip at audit close: `9427706d04f00501711cf2806a533aed9574ef3b`
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main` with PR #160 stack)
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Product classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (`9427706` tip contains PR #160 merge `dd6abaf`; slice head `3ce4023` on lineage).
+- `BACKEND_REAL`: PASS (disposition-finalization + queue-reentry debt-retirement rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through; governance `workflowOpsAlertSettlementArbitrationDispositionFinalizationQueueReentryDebtRetirementGovernance.ts`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `caad961..3ce4023` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring 88; Firestore repos/runtime/rules 22; `G-0`; `G-1`; claim-gate unit 20). Non-blocking: four partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #160 metadata with `caad961..3ce4023` exits 0). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #160 | workflow alert adjudication SLO settlement-arbitration disposition-finalization + checkpoint expiry-attestation queue-reentry debt-retirement | `9427706` / slice `3ce4023` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
+## Targeted ledger — PR #164 workflow alert adjudication SLO settlement-arbitration disposition publication-governance + checkpoint expiry-attestation queue-reentry debt-retirement dispute-reconciliation
+
+- Audit file: `docs/audits/phase-pr164-workflow-slo-publication-governance-dispute-recon.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `a986d46de1fbbbb65c54b1819da0e947098615fd` (squash landed commit; parent `2f41e7e`; PR head before squash `e18c9d8`)
+- Main tip at audit close: `a986d46`
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (`a986d46` @ `origin/main`; stack base `2f41e7e`).
+- `BACKEND_REAL`: PASS (disposition publication-governance + debt-retirement dispute-reconciliation rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through; governance `workflowOpsAlertSettlementArbitrationDispositionPublicationGovernanceQueueReentryDebtRetirementDisputeReconciliationGovernance.ts`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `2f41e7e..a986d46` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring 90; Firestore repos/runtime/rules 22; `G-0`; `G-1`; claim-gate unit 20). Non-blocking: four partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #164 metadata with `2f41e7e..a986d46` exits 0). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #164 | workflow alert adjudication SLO disposition publication-governance + queue-reentry debt-retirement dispute-reconciliation | `a986d46` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 

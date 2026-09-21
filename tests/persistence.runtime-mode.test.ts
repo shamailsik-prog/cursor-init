@@ -8448,6 +8448,14 @@ describe("Runtime persistence mode", () => {
         new Map()
       getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances =
         new Map()
+      getRuntimeStore().workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations =
+        new Map()
+      getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements =
+        new Map()
+      getRuntimeStore().workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances =
+        new Map()
+      getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations =
+        new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -9287,6 +9295,126 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.matterId === matterId &&
             entry.data()?.complianceStatus === "compliance_pending"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalizations"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.dispositionFinalizationStatus === "disposition_pending"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirements =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirements"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirements.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.debtRetirementStatus === "retirement_pending"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governances"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.publicationGovernanceStatus === "publication_governance_pending"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliations =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliations"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.disputeReconciliationStatus === "reconciliation_pending"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledgers"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.externalDistributionAuditLedgerStatus === "external_distribution_audit_pending"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verifications"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.closureVerificationStatus === "closure_verification_pending"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestations"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.partnerHandoffAttestationStatus === "partner_handoff_attestation_pending"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_exports"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.archivalExportStatus === "archival_export_pending"
         )
       ).toBe(true)
     })
