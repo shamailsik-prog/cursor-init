@@ -5,8 +5,13 @@ import {
   type SpineStore,
   type TenancyAuthBoundary,
   type TenancyLineageArbitrationDebtRetirementLedgerRow,
+  type TenancyLineageArbitrationDebtRetirementDisputeLedgerRow,
+  type TenancyLineageArbitrationDebtRetirementDisputeResolutionOutcome,
+  type TenancyLineageArbitrationDebtRetirementDisputeStatus,
   type TenancyLineageArbitrationDebtRetirementStatus,
   type TenancyLineageClosureAdjudicationRow,
+  type TenancyLineageClosureAdjudicationSettlementRow,
+  type TenancyLineageClosureAdjudicationSettlementStatus,
   type TenancyLineageClosureAdjudicationStatus,
   type TenancyLineageDisputeAttestationRow,
   type TenancyLineageDisputeDisposition,
@@ -30,6 +35,10 @@ export type TenancyLineageDigestClosureCheckpointStatus =
 export type TenancyClosureAdjudicationStatus = TenancyLineageClosureAdjudicationStatus
 export type TenancyArbitrationDebtRetirementStatus =
   TenancyLineageArbitrationDebtRetirementStatus
+export type TenancyClosureAdjudicationSettlementStatus =
+  TenancyLineageClosureAdjudicationSettlementStatus
+export type TenancyArbitrationDebtRetirementDisputeStatus =
+  TenancyLineageArbitrationDebtRetirementDisputeStatus
 
 function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
   const actor = store.users.get(actorId)
@@ -787,6 +796,16 @@ function lineageArbitrationDebtRetirementLedgerId(lineageRootSessionReferenceId:
   return `tenancy-lineage-arbitration-debt:${lineageRootSessionReferenceId}`
 }
 
+function lineageClosureAdjudicationSettlementId(lineageRootSessionReferenceId: string): string {
+  return `tenancy-lineage-closure-settlement:${lineageRootSessionReferenceId}`
+}
+
+function lineageArbitrationDebtRetirementDisputeLedgerId(
+  lineageRootSessionReferenceId: string
+): string {
+  return `tenancy-lineage-arbitration-debt-dispute:${lineageRootSessionReferenceId}`
+}
+
 function computeLineageDispositionDriftReasons(input: {
   digest: TenancyLineageReconciliationDigestRow
   queue: TenancyLineageReconciliationQueueArbitrationRow
@@ -914,6 +933,8 @@ export function ensureLineageReconciliationMonitoringRows(
   closureCheckpoint: TenancyLineageDigestClosureCheckpointRow
   closureAdjudication: TenancyLineageClosureAdjudicationRow
   arbitrationDebtRetirementLedger: TenancyLineageArbitrationDebtRetirementLedgerRow
+  closureAdjudicationSettlement: TenancyLineageClosureAdjudicationSettlementRow
+  arbitrationDebtRetirementDisputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow
 } {
   const now = input.now ?? Date.now()
   const queueId = lineageArbitrationQueueId(input.digest.lineageRootSessionReferenceId)
@@ -1134,11 +1155,91 @@ export function ensureLineageReconciliationMonitoringRows(
     arbitrationDebtRetirementLedger
   )
 
+  const settlementId = lineageClosureAdjudicationSettlementId(
+    input.digest.lineageRootSessionReferenceId
+  )
+  const existingSettlement = store.tenancyLineageClosureAdjudicationSettlements.get(settlementId)
+  const settlementConfirmationSlaStartedAt =
+    existingSettlement?.settlementConfirmationSlaStartedAt ??
+    closureAdjudication.verdictRecordedAt ??
+    null
+  const settlementConfirmationSlaDueAt =
+    settlementConfirmationSlaStartedAt !== null
+      ? (existingSettlement?.settlementConfirmationSlaDueAt ??
+        settlementConfirmationSlaStartedAt + 24 * 60 * 60 * 1000)
+      : null
+  const settlementSlaBreached =
+    settlementConfirmationSlaDueAt !== null &&
+    settlementConfirmationSlaDueAt < now &&
+    (existingSettlement?.settlementConfirmedAt ?? null) === null
+  const closureAdjudicationSettlement: TenancyLineageClosureAdjudicationSettlementRow = {
+    id: settlementId,
+    firmId: input.firmId,
+    lineageRootSessionReferenceId: input.digest.lineageRootSessionReferenceId,
+    digestId: input.digest.id,
+    adjudicationId: closureAdjudication.id,
+    status: existingSettlement?.status ?? "draft",
+    verdictPublicationCheckpointedBy: existingSettlement?.verdictPublicationCheckpointedBy ?? null,
+    verdictPublicationCheckpointedAt: existingSettlement?.verdictPublicationCheckpointedAt ?? null,
+    verdictPublicationChannel: existingSettlement?.verdictPublicationChannel ?? null,
+    publicationCorrectionNote: existingSettlement?.publicationCorrectionNote ?? null,
+    publicationCorrectionBy: existingSettlement?.publicationCorrectionBy ?? null,
+    publicationCorrectionAt: existingSettlement?.publicationCorrectionAt ?? null,
+    settlementConfirmationSlaStartedAt,
+    settlementConfirmationSlaDueAt,
+    settlementConfirmedBy: existingSettlement?.settlementConfirmedBy ?? null,
+    settlementConfirmedAt: existingSettlement?.settlementConfirmedAt ?? null,
+    settlementSlaBreached,
+    notes: existingSettlement?.notes ?? [],
+    updatedAt: now,
+  }
+  store.tenancyLineageClosureAdjudicationSettlements.set(
+    closureAdjudicationSettlement.id,
+    closureAdjudicationSettlement
+  )
+
+  const disputeLedgerId = lineageArbitrationDebtRetirementDisputeLedgerId(
+    input.digest.lineageRootSessionReferenceId
+  )
+  const existingDisputeLedger = store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(
+    disputeLedgerId
+  )
+  const arbitrationDebtRetirementDisputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow =
+    {
+      id: disputeLedgerId,
+      firmId: input.firmId,
+      lineageRootSessionReferenceId: input.digest.lineageRootSessionReferenceId,
+      digestId: input.digest.id,
+      debtLedgerId: arbitrationDebtRetirementLedger.id,
+      status: existingDisputeLedger?.status ?? "open",
+      challengeReason: existingDisputeLedger?.challengeReason ?? "pending_challenge_intake",
+      challengeOpenedBy: existingDisputeLedger?.challengeOpenedBy ?? "system",
+      challengeOpenedAt: existingDisputeLedger?.challengeOpenedAt ?? now,
+      reviewerId: existingDisputeLedger?.reviewerId ?? null,
+      reviewerAssignedBy: existingDisputeLedger?.reviewerAssignedBy ?? null,
+      reviewerAssignedAt: existingDisputeLedger?.reviewerAssignedAt ?? null,
+      resolutionOutcome: existingDisputeLedger?.resolutionOutcome ?? null,
+      resolvedBy: existingDisputeLedger?.resolvedBy ?? null,
+      resolvedAt: existingDisputeLedger?.resolvedAt ?? null,
+      resolutionNote: existingDisputeLedger?.resolutionNote ?? null,
+      rollbackControlBy: existingDisputeLedger?.rollbackControlBy ?? null,
+      rollbackControlAt: existingDisputeLedger?.rollbackControlAt ?? null,
+      rollbackControlNote: existingDisputeLedger?.rollbackControlNote ?? null,
+      notes: existingDisputeLedger?.notes ?? [],
+      updatedAt: now,
+    }
+  store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(
+    arbitrationDebtRetirementDisputeLedger.id,
+    arbitrationDebtRetirementDisputeLedger
+  )
+
   return {
     arbitrationQueue: queue,
     closureCheckpoint: checkpoint,
     closureAdjudication,
     arbitrationDebtRetirementLedger,
+    closureAdjudicationSettlement,
+    arbitrationDebtRetirementDisputeLedger,
   }
 }
 
@@ -1691,6 +1792,413 @@ export function reopenLineageArbitrationDebtRetirement(
   return { ledger, auditEntry }
 }
 
+export function checkpointLineageClosureAdjudicationSettlementPublication(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    publicationChannel: string
+    note?: string
+    now?: number
+  }
+): {
+  settlement: TenancyLineageClosureAdjudicationSettlementRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const publicationChannel = input.publicationChannel.trim()
+  if (!publicationChannel) throw new Error("publicationChannel is required")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const settlement: TenancyLineageClosureAdjudicationSettlementRow = {
+    ...monitoring.closureAdjudicationSettlement,
+    status: "publication_checkpointed",
+    verdictPublicationCheckpointedBy: actor.id,
+    verdictPublicationCheckpointedAt: now,
+    verdictPublicationChannel: publicationChannel,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.closureAdjudicationSettlement.notes, input.note]
+      : monitoring.closureAdjudicationSettlement.notes,
+  }
+  store.tenancyLineageClosureAdjudicationSettlements.set(settlement.id, settlement)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_checkpoint_lineage_closure_adjudication_settlement_publication",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: publicationChannel,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { settlement, auditEntry }
+}
+
+export function logLineageClosureAdjudicationSettlementCorrection(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    correctionNote: string
+    note?: string
+    now?: number
+  }
+): {
+  settlement: TenancyLineageClosureAdjudicationSettlementRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const correctionNote = input.correctionNote.trim()
+  if (!correctionNote) throw new Error("correctionNote is required")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const settlement: TenancyLineageClosureAdjudicationSettlementRow = {
+    ...monitoring.closureAdjudicationSettlement,
+    status: "correction_logged",
+    publicationCorrectionNote: correctionNote,
+    publicationCorrectionBy: actor.id,
+    publicationCorrectionAt: now,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.closureAdjudicationSettlement.notes, input.note]
+      : monitoring.closureAdjudicationSettlement.notes,
+  }
+  store.tenancyLineageClosureAdjudicationSettlements.set(settlement.id, settlement)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_log_lineage_closure_adjudication_settlement_correction",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: correctionNote,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { settlement, auditEntry }
+}
+
+export function confirmLineageClosureAdjudicationSettlementSla(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    note?: string
+    now?: number
+  }
+): {
+  settlement: TenancyLineageClosureAdjudicationSettlementRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const settlement: TenancyLineageClosureAdjudicationSettlementRow = {
+    ...monitoring.closureAdjudicationSettlement,
+    status: "sla_confirmed",
+    settlementConfirmedBy: actor.id,
+    settlementConfirmedAt: now,
+    settlementSlaBreached:
+      monitoring.closureAdjudicationSettlement.settlementConfirmationSlaDueAt !== null &&
+      monitoring.closureAdjudicationSettlement.settlementConfirmationSlaDueAt < now,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.closureAdjudicationSettlement.notes, input.note]
+      : monitoring.closureAdjudicationSettlement.notes,
+  }
+  store.tenancyLineageClosureAdjudicationSettlements.set(settlement.id, settlement)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_confirm_lineage_closure_adjudication_settlement_sla",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: input.note,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { settlement, auditEntry }
+}
+
+export function openLineageArbitrationDebtRetirementDispute(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    challengeReason: string
+    note?: string
+    now?: number
+  }
+): {
+  disputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const challengeReason = input.challengeReason.trim()
+  if (!challengeReason) throw new Error("challengeReason is required")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const disputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow = {
+    ...monitoring.arbitrationDebtRetirementDisputeLedger,
+    status: "open",
+    challengeReason,
+    challengeOpenedBy: actor.id,
+    challengeOpenedAt: now,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.arbitrationDebtRetirementDisputeLedger.notes, input.note]
+      : monitoring.arbitrationDebtRetirementDisputeLedger.notes,
+  }
+  store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(disputeLedger.id, disputeLedger)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_open_lineage_arbitration_debt_retirement_dispute",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: challengeReason,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { disputeLedger, auditEntry }
+}
+
+export function assignLineageArbitrationDebtRetirementDisputeReviewer(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    reviewerId: string
+    note?: string
+    now?: number
+  }
+): {
+  disputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const reviewer = store.users.get(input.reviewerId)
+  if (!reviewer) throw new Error("unknown reviewer")
+  if (reviewer.firmId !== input.firmId) throw new Error("cross-firm reviewer denied")
+  if (reviewer.role !== "partner") throw new Error("reviewer must be a partner")
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const disputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow = {
+    ...monitoring.arbitrationDebtRetirementDisputeLedger,
+    status: "reviewer_assigned",
+    reviewerId: reviewer.id,
+    reviewerAssignedBy: actor.id,
+    reviewerAssignedAt: now,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.arbitrationDebtRetirementDisputeLedger.notes, input.note]
+      : monitoring.arbitrationDebtRetirementDisputeLedger.notes,
+  }
+  store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(disputeLedger.id, disputeLedger)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_assign_lineage_arbitration_debt_retirement_dispute_reviewer",
+    actorId: actor.id,
+    target: reviewer.id,
+    classification: actor.clearanceLevel,
+    reason: input.note,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { disputeLedger, auditEntry }
+}
+
+export function resolveLineageArbitrationDebtRetirementDispute(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    resolutionOutcome: TenancyLineageArbitrationDebtRetirementDisputeResolutionOutcome
+    resolutionNote?: string
+    note?: string
+    now?: number
+  }
+): {
+  disputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const disputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow = {
+    ...monitoring.arbitrationDebtRetirementDisputeLedger,
+    status: "resolved",
+    resolutionOutcome: input.resolutionOutcome,
+    resolvedBy: actor.id,
+    resolvedAt: now,
+    resolutionNote: input.resolutionNote ?? null,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.arbitrationDebtRetirementDisputeLedger.notes, input.note]
+      : monitoring.arbitrationDebtRetirementDisputeLedger.notes,
+  }
+  store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(disputeLedger.id, disputeLedger)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_resolve_lineage_arbitration_debt_retirement_dispute",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: input.resolutionNote ?? input.note,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { disputeLedger, auditEntry }
+}
+
+export function controlLineageArbitrationDebtRetirementDisputeRollback(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    rollbackControlNote: string
+    note?: string
+    now?: number
+  }
+): {
+  disputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const rollbackControlNote = input.rollbackControlNote.trim()
+  if (!rollbackControlNote) throw new Error("rollbackControlNote is required")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const disputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow = {
+    ...monitoring.arbitrationDebtRetirementDisputeLedger,
+    status: "rollback_controlled",
+    rollbackControlBy: actor.id,
+    rollbackControlAt: now,
+    rollbackControlNote,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.arbitrationDebtRetirementDisputeLedger.notes, input.note]
+      : monitoring.arbitrationDebtRetirementDisputeLedger.notes,
+  }
+  store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(disputeLedger.id, disputeLedger)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_control_lineage_arbitration_debt_retirement_dispute_rollback",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: rollbackControlNote,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { disputeLedger, auditEntry }
+}
+
 export function listLineageClosureAdjudications(
   store: SpineStore,
   actorId: string,
@@ -1738,6 +2246,70 @@ export function listLineageArbitrationDebtRetirementLedgers(
 } {
   requirePartnerInFirm(store, actorId, firmId)
   const rows = [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) => (status ? row.status === status : true))
+    .filter((row) =>
+      lineageRootSessionReferenceId
+        ? row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        : true
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
+    total: rows.length,
+    nextCursor,
+  }
+}
+
+export function listLineageClosureAdjudicationSettlements(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  status: TenancyClosureAdjudicationSettlementStatus | undefined,
+  lineageRootSessionReferenceId: string | undefined,
+  limit: number,
+  cursor: number
+): {
+  items: TenancyLineageClosureAdjudicationSettlementRow[]
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const rows = [...store.tenancyLineageClosureAdjudicationSettlements.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) => (status ? row.status === status : true))
+    .filter((row) =>
+      lineageRootSessionReferenceId
+        ? row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        : true
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
+    total: rows.length,
+    nextCursor,
+  }
+}
+
+export function listLineageArbitrationDebtRetirementDisputeLedgers(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  status: TenancyArbitrationDebtRetirementDisputeStatus | undefined,
+  lineageRootSessionReferenceId: string | undefined,
+  limit: number,
+  cursor: number
+): {
+  items: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const rows = [...store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.values()]
     .filter((row) => row.firmId === firmId)
     .filter((row) => (status ? row.status === status : true))
     .filter((row) =>

@@ -121,12 +121,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/p5/tenancy` with closure/debt lifecycle actions (`govern_lineage_closure_adjudication`, `record_lineage_closure_adjudication_verdict`, `attest_lineage_arbitration_debt_retirement`, `reopen_lineage_arbitration_debt_retirement`) and monitoring views (`view=session_lineage_closure_adjudications`, `view=session_lineage_arbitration_debt_retirement_ledgers`).
 - Captured panel quorum expectations, verdict windows, disposition drift reasons, unresolved queue pressure, owner-assignment debt, retirement attestations, and carryover reopen signals across digest-backed synchronization paths.
 - Extended API + runtime persistence tests for closure/debt lifecycle transitions, idempotent replay behavior, pagination/filter visibility, Firestore rehydration parity, and audit provenance traceability.
+- Added durable closure-adjudication settlement rows and debt-retirement dispute ledger rows to runtime store + memory/Firestore repositories (`tenancy_lineage_closure_adjudication_settlements`, `tenancy_lineage_arbitration_debt_retirement_dispute_ledgers`) with deny-by-default Firestore write posture.
+- Extended `/api/p5/tenancy` with settlement/dispute lifecycle actions (`checkpoint_lineage_closure_adjudication_settlement_publication`, `log_lineage_closure_adjudication_settlement_correction`, `confirm_lineage_closure_adjudication_settlement_sla`, `open_lineage_arbitration_debt_retirement_dispute`, `assign_lineage_arbitration_debt_retirement_dispute_reviewer`, `resolve_lineage_arbitration_debt_retirement_dispute`, `control_lineage_arbitration_debt_retirement_dispute_rollback`) and monitoring views (`view=session_lineage_closure_adjudication_settlements`, `view=session_lineage_arbitration_debt_retirement_dispute_ledgers`).
+- Captured verdict publication checkpoints, correction provenance, SLA confirmation/breach state, dispute challenge intake, reviewer assignment, resolution outcomes, and rollback-control attestations across digest-backed synchronization paths.
+- Extended API + runtime persistence tests for settlement/dispute lifecycle transitions, idempotent replay behavior, pagination/filter visibility, Firestore rehydration parity, and audit provenance traceability.
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy closure adjudication settlement + debt retirement dispute scaffolding**:
+Build **tenancy external-session identity bridge + IdP parity scaffolding**:
 
-1. Add closure adjudication settlement rows that track verdict publication checkpoints, correction notes, and settlement confirmation SLAs per lineage root.
-2. Introduce arbitration debt-retirement dispute ledgers to capture retirement challenge intake, reviewer assignment, resolution outcomes, and rollback controls.
-3. Extend tenancy route + runtime tests for settlement/dispute lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
-4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.
+1. Add external-session identity bridge rows linking tenancy session references to asserted IdP subject/issuer snapshots with mismatch reason telemetry.
+2. Extend `/api/p5/tenancy` with partner-governed identity bridge actions (attest, quarantine, clear) and monitoring views scoped by mismatch status per lineage root.
+3. Extend tenancy route + runtime tests for identity bridge lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+4. Keep this scoped to internal scaffolding (no production IdP token exchange claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.

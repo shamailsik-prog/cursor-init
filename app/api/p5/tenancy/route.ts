@@ -20,7 +20,9 @@ import { syncFirmAudit } from "@/platform/persistence/auditSync"
 import { syncFirmTenancySessionReferences } from "@/platform/persistence/tenancySessionReferenceSync"
 import {
   syncFirmTenancyLineageArbitrationDebtRetirementLedgers,
+  syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers,
   syncFirmTenancyLineageClosureAdjudications,
+  syncFirmTenancyLineageClosureAdjudicationSettlements,
   syncFirmTenancyLineageDisputeAttestations,
   syncFirmTenancyLineageDigestClosureCheckpoints,
   syncFirmTenancyLineageReconciliationQueueArbitrations,
@@ -32,12 +34,20 @@ import {
   attestLineageArbitrationDebtRetirement,
   attestSessionLineageDispute,
   buildSessionContext,
+  checkpointLineageClosureAdjudicationSettlementPublication,
+  confirmLineageClosureAdjudicationSettlementSla,
+  controlLineageArbitrationDebtRetirementDisputeRollback,
   ensureLineageReconciliationMonitoringRows,
   governLineageClosureAdjudication,
+  assignLineageArbitrationDebtRetirementDisputeReviewer,
   getTenancySessionReferenceState,
   listLineageArbitrationDebtRetirementLedgers,
+  listLineageArbitrationDebtRetirementDisputeLedgers,
   listLineageClosureAdjudications,
+  listLineageClosureAdjudicationSettlements,
   invalidateSessionReferencesForPrivilegeDrift,
+  logLineageClosureAdjudicationSettlementCorrection,
+  openLineageArbitrationDebtRetirementDispute,
   listLineageDigestClosureCheckpoints,
   listLineageReconciliationQueueArbitrations,
   listLineageReconciliationDigests,
@@ -49,6 +59,7 @@ import {
   listSessionReferenceLineage,
   reopenLineageDigestClosureCheckpoint,
   reopenLineageArbitrationDebtRetirement,
+  resolveLineageArbitrationDebtRetirementDispute,
   recomputeLineageReconciliationDigest,
   listFirmUsers,
   reissueTenancySessionReference,
@@ -186,6 +197,69 @@ type ReopenLineageArbitrationDebtRetirementBody = {
   note?: string
 }
 
+type CheckpointLineageClosureAdjudicationSettlementPublicationBody = {
+  action: "checkpoint_lineage_closure_adjudication_settlement_publication"
+  actorId?: string
+  firmId?: string
+  lineageRootSessionReferenceId?: string
+  publicationChannel?: string
+  note?: string
+}
+
+type LogLineageClosureAdjudicationSettlementCorrectionBody = {
+  action: "log_lineage_closure_adjudication_settlement_correction"
+  actorId?: string
+  firmId?: string
+  lineageRootSessionReferenceId?: string
+  correctionNote?: string
+  note?: string
+}
+
+type ConfirmLineageClosureAdjudicationSettlementSlaBody = {
+  action: "confirm_lineage_closure_adjudication_settlement_sla"
+  actorId?: string
+  firmId?: string
+  lineageRootSessionReferenceId?: string
+  note?: string
+}
+
+type OpenLineageArbitrationDebtRetirementDisputeBody = {
+  action: "open_lineage_arbitration_debt_retirement_dispute"
+  actorId?: string
+  firmId?: string
+  lineageRootSessionReferenceId?: string
+  challengeReason?: string
+  note?: string
+}
+
+type AssignLineageArbitrationDebtRetirementDisputeReviewerBody = {
+  action: "assign_lineage_arbitration_debt_retirement_dispute_reviewer"
+  actorId?: string
+  firmId?: string
+  lineageRootSessionReferenceId?: string
+  reviewerId?: string
+  note?: string
+}
+
+type ResolveLineageArbitrationDebtRetirementDisputeBody = {
+  action: "resolve_lineage_arbitration_debt_retirement_dispute"
+  actorId?: string
+  firmId?: string
+  lineageRootSessionReferenceId?: string
+  resolutionOutcome?: string
+  resolutionNote?: string
+  note?: string
+}
+
+type ControlLineageArbitrationDebtRetirementDisputeRollbackBody = {
+  action: "control_lineage_arbitration_debt_retirement_dispute_rollback"
+  actorId?: string
+  firmId?: string
+  lineageRootSessionReferenceId?: string
+  rollbackControlNote?: string
+  note?: string
+}
+
 type Body =
   | UpdateRoleBody
   | RevokeSessionReferenceBody
@@ -200,6 +274,13 @@ type Body =
   | RecordLineageClosureAdjudicationVerdictBody
   | AttestLineageArbitrationDebtRetirementBody
   | ReopenLineageArbitrationDebtRetirementBody
+  | CheckpointLineageClosureAdjudicationSettlementPublicationBody
+  | LogLineageClosureAdjudicationSettlementCorrectionBody
+  | ConfirmLineageClosureAdjudicationSettlementSlaBody
+  | OpenLineageArbitrationDebtRetirementDisputeBody
+  | AssignLineageArbitrationDebtRetirementDisputeReviewerBody
+  | ResolveLineageArbitrationDebtRetirementDisputeBody
+  | ControlLineageArbitrationDebtRetirementDisputeRollbackBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -306,6 +387,59 @@ function parseLineageDebtRetirementStatus(
   throw new Error("status must be pressure_open, retirement_attested, or carryover_reopened")
 }
 
+function parseLineageSettlementStatus(
+  value: string | null
+):
+  | "draft"
+  | "publication_checkpointed"
+  | "correction_logged"
+  | "sla_confirmed"
+  | undefined {
+  if (!value) return undefined
+  if (
+    value === "draft" ||
+    value === "publication_checkpointed" ||
+    value === "correction_logged" ||
+    value === "sla_confirmed"
+  ) {
+    return value
+  }
+  throw new Error(
+    "status must be draft, publication_checkpointed, correction_logged, or sla_confirmed"
+  )
+}
+
+function parseLineageDebtRetirementDisputeStatus(
+  value: string | null
+): "open" | "reviewer_assigned" | "resolved" | "rollback_controlled" | undefined {
+  if (!value) return undefined
+  if (
+    value === "open" ||
+    value === "reviewer_assigned" ||
+    value === "resolved" ||
+    value === "rollback_controlled"
+  ) {
+    return value
+  }
+  throw new Error("status must be open, reviewer_assigned, resolved, or rollback_controlled")
+}
+
+function parseDebtRetirementDisputeResolutionOutcome(
+  value: unknown
+): "uphold_retirement" | "reopen_debt" | "require_rollback_review" | undefined {
+  if (value == null || value === "") return undefined
+  if (
+    value === "uphold_retirement" ||
+    value === "reopen_debt" ||
+    value === "require_rollback_review"
+  ) {
+    return value
+  }
+  throw new Error(
+    "resolutionOutcome must be uphold_retirement, reopen_debt, or require_rollback_review"
+  )
+}
+
 function isRole(value: unknown): value is Role {
   return (
     value === "partner" ||
@@ -363,6 +497,12 @@ async function recomputeAndPersistLineageDigestState(
   await repos.tenancyLineageClosureAdjudications.upsert(monitoring.closureAdjudication)
   await repos.tenancyLineageArbitrationDebtRetirementLedgers.upsert(
     monitoring.arbitrationDebtRetirementLedger
+  )
+  await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+    monitoring.closureAdjudicationSettlement
+  )
+  await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+    monitoring.arbitrationDebtRetirementDisputeLedger
   )
   return { digest, monitoring }
 }
@@ -655,6 +795,8 @@ export async function GET(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const rootIds = new Set<string>()
       for (const row of store.tenancySessionReferences.values()) {
         if (row.firmId !== firmId) continue
@@ -708,6 +850,8 @@ export async function GET(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const rootIds = new Set<string>()
       for (const row of store.tenancySessionReferences.values()) {
         if (row.firmId !== firmId) continue
@@ -762,6 +906,8 @@ export async function GET(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const rootIds = new Set<string>()
       for (const row of store.tenancySessionReferences.values()) {
         if (row.firmId !== firmId) continue
@@ -816,6 +962,8 @@ export async function GET(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const rootIds = new Set<string>()
       for (const row of store.tenancySessionReferences.values()) {
         if (row.firmId !== firmId) continue
@@ -870,6 +1018,8 @@ export async function GET(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const rootIds = new Set<string>()
       for (const row of store.tenancySessionReferences.values()) {
         if (row.firmId !== firmId) continue
@@ -903,6 +1053,118 @@ export async function GET(request: Request) {
         limit,
         cursor,
         nextCursor: ledgers.nextCursor,
+      })
+    }
+
+    if (view === "session_lineage_closure_adjudication_settlements") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const lineageRootSessionReferenceId = normalizeOptionalString(
+        url.searchParams.get("rootSessionRefId")
+      )
+      const status = parseLineageSettlementStatus(url.searchParams.get("status"))
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const rootIds = new Set<string>()
+      for (const row of store.tenancySessionReferences.values()) {
+        if (row.firmId !== firmId) continue
+        if (
+          lineageRootSessionReferenceId &&
+          row.lineageRootSessionReferenceId !== lineageRootSessionReferenceId
+        ) {
+          continue
+        }
+        rootIds.add(row.lineageRootSessionReferenceId)
+      }
+      for (const rootId of rootIds) {
+        await recomputeAndPersistLineageDigestState(store, repos, {
+          firmId,
+          lineageRootSessionReferenceId: rootId,
+        })
+      }
+      const settlements = listLineageClosureAdjudicationSettlements(
+        store,
+        actorId,
+        firmId,
+        status,
+        lineageRootSessionReferenceId,
+        limit,
+        cursor
+      )
+      return NextResponse.json({
+        view: "session_lineage_closure_adjudication_settlements",
+        items: settlements.items,
+        total: settlements.total,
+        limit,
+        cursor,
+        nextCursor: settlements.nextCursor,
+      })
+    }
+
+    if (view === "session_lineage_arbitration_debt_retirement_dispute_ledgers") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const lineageRootSessionReferenceId = normalizeOptionalString(
+        url.searchParams.get("rootSessionRefId")
+      )
+      const status = parseLineageDebtRetirementDisputeStatus(url.searchParams.get("status"))
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const rootIds = new Set<string>()
+      for (const row of store.tenancySessionReferences.values()) {
+        if (row.firmId !== firmId) continue
+        if (
+          lineageRootSessionReferenceId &&
+          row.lineageRootSessionReferenceId !== lineageRootSessionReferenceId
+        ) {
+          continue
+        }
+        rootIds.add(row.lineageRootSessionReferenceId)
+      }
+      for (const rootId of rootIds) {
+        await recomputeAndPersistLineageDigestState(store, repos, {
+          firmId,
+          lineageRootSessionReferenceId: rootId,
+        })
+      }
+      const disputeLedgers = listLineageArbitrationDebtRetirementDisputeLedgers(
+        store,
+        actorId,
+        firmId,
+        status,
+        lineageRootSessionReferenceId,
+        limit,
+        cursor
+      )
+      return NextResponse.json({
+        view: "session_lineage_arbitration_debt_retirement_dispute_ledgers",
+        items: disputeLedgers.items,
+        total: disputeLedgers.total,
+        limit,
+        cursor,
+        nextCursor: disputeLedgers.nextCursor,
       })
     }
 
@@ -945,7 +1207,14 @@ export async function POST(request: Request) {
     parsed.action !== "govern_lineage_closure_adjudication" &&
     parsed.action !== "record_lineage_closure_adjudication_verdict" &&
     parsed.action !== "attest_lineage_arbitration_debt_retirement" &&
-    parsed.action !== "reopen_lineage_arbitration_debt_retirement"
+    parsed.action !== "reopen_lineage_arbitration_debt_retirement" &&
+    parsed.action !== "checkpoint_lineage_closure_adjudication_settlement_publication" &&
+    parsed.action !== "log_lineage_closure_adjudication_settlement_correction" &&
+    parsed.action !== "confirm_lineage_closure_adjudication_settlement_sla" &&
+    parsed.action !== "open_lineage_arbitration_debt_retirement_dispute" &&
+    parsed.action !== "assign_lineage_arbitration_debt_retirement_dispute_reviewer" &&
+    parsed.action !== "resolve_lineage_arbitration_debt_retirement_dispute" &&
+    parsed.action !== "control_lineage_arbitration_debt_retirement_dispute_rollback"
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -1096,6 +1365,93 @@ export async function POST(request: Request) {
         { status: 400 }
       )
     }
+  } else if (parsed.action === "checkpoint_lineage_closure_adjudication_settlement_publication") {
+    if (
+      !parsed.actorId ||
+      !parsed.firmId ||
+      !parsed.lineageRootSessionReferenceId ||
+      !normalizeOptionalString(parsed.publicationChannel)
+    ) {
+      return NextResponse.json(
+        { error: "actorId, firmId, lineageRootSessionReferenceId, and publicationChannel are required" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "log_lineage_closure_adjudication_settlement_correction") {
+    if (
+      !parsed.actorId ||
+      !parsed.firmId ||
+      !parsed.lineageRootSessionReferenceId ||
+      !normalizeOptionalString(parsed.correctionNote)
+    ) {
+      return NextResponse.json(
+        { error: "actorId, firmId, lineageRootSessionReferenceId, and correctionNote are required" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "confirm_lineage_closure_adjudication_settlement_sla") {
+    if (!parsed.actorId || !parsed.firmId || !parsed.lineageRootSessionReferenceId) {
+      return NextResponse.json(
+        { error: "actorId, firmId, and lineageRootSessionReferenceId are required" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "open_lineage_arbitration_debt_retirement_dispute") {
+    if (
+      !parsed.actorId ||
+      !parsed.firmId ||
+      !parsed.lineageRootSessionReferenceId ||
+      !normalizeOptionalString(parsed.challengeReason)
+    ) {
+      return NextResponse.json(
+        { error: "actorId, firmId, lineageRootSessionReferenceId, and challengeReason are required" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "assign_lineage_arbitration_debt_retirement_dispute_reviewer") {
+    if (
+      !parsed.actorId ||
+      !parsed.firmId ||
+      !parsed.lineageRootSessionReferenceId ||
+      !normalizeOptionalString(parsed.reviewerId)
+    ) {
+      return NextResponse.json(
+        { error: "actorId, firmId, lineageRootSessionReferenceId, and reviewerId are required" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "resolve_lineage_arbitration_debt_retirement_dispute") {
+    if (!parsed.actorId || !parsed.firmId || !parsed.lineageRootSessionReferenceId) {
+      return NextResponse.json(
+        { error: "actorId, firmId, and lineageRootSessionReferenceId are required" },
+        { status: 400 }
+      )
+    }
+    if (
+      parsed.resolutionOutcome !== "uphold_retirement" &&
+      parsed.resolutionOutcome !== "reopen_debt" &&
+      parsed.resolutionOutcome !== "require_rollback_review"
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "resolutionOutcome must be uphold_retirement, reopen_debt, or require_rollback_review",
+        },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "control_lineage_arbitration_debt_retirement_dispute_rollback") {
+    if (
+      !parsed.actorId ||
+      !parsed.firmId ||
+      !parsed.lineageRootSessionReferenceId ||
+      !normalizeOptionalString(parsed.rollbackControlNote)
+    ) {
+      return NextResponse.json(
+        { error: "actorId, firmId, lineageRootSessionReferenceId, and rollbackControlNote are required" },
+        { status: 400 }
+      )
+    }
   } else if (!parsed.actorId || !parsed.firmId || !parsed.sessionReferenceId) {
     return NextResponse.json(
       { error: "actorId, firmId, and sessionReferenceId are required" },
@@ -1134,6 +1490,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const revoked = revokeTenancySessionReference(store, {
         actorId,
         firmId,
@@ -1197,6 +1555,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const reissued = reissueTenancySessionReference(store, {
         actorId,
         firmId,
@@ -1271,6 +1631,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const attested = attestSessionLineageDispute(store, {
         actorId,
         firmId,
@@ -1329,6 +1691,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const resolved = resolveSessionLineageDispute(store, {
         actorId,
         firmId,
@@ -1402,6 +1766,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
         firmId,
         lineageRootSessionReferenceId,
@@ -1451,6 +1817,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
         firmId,
         lineageRootSessionReferenceId,
@@ -1499,6 +1867,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
         firmId,
         lineageRootSessionReferenceId,
@@ -1547,6 +1917,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
         firmId,
         lineageRootSessionReferenceId,
@@ -1595,6 +1967,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
         firmId,
         lineageRootSessionReferenceId,
@@ -1611,6 +1985,12 @@ export async function POST(request: Request) {
       await repos.tenancyLineageClosureAdjudications.upsert(governed.adjudication)
       await repos.tenancyLineageArbitrationDebtRetirementLedgers.upsert(
         monitoring.arbitrationDebtRetirementLedger
+      )
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+        monitoring.closureAdjudicationSettlement
+      )
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        monitoring.arbitrationDebtRetirementDisputeLedger
       )
       await repos.audit.append(governed.auditEntry)
       const payload = {
@@ -1648,6 +2028,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
         firmId,
         lineageRootSessionReferenceId,
@@ -1663,6 +2045,12 @@ export async function POST(request: Request) {
       await repos.tenancyLineageClosureAdjudications.upsert(verdict.adjudication)
       await repos.tenancyLineageArbitrationDebtRetirementLedgers.upsert(
         monitoring.arbitrationDebtRetirementLedger
+      )
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+        monitoring.closureAdjudicationSettlement
+      )
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        monitoring.arbitrationDebtRetirementDisputeLedger
       )
       await repos.audit.append(verdict.auditEntry)
       const payload = {
@@ -1700,6 +2088,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
         firmId,
         lineageRootSessionReferenceId,
@@ -1713,6 +2103,12 @@ export async function POST(request: Request) {
       })
       await repos.tenancyLineageArbitrationDebtRetirementLedgers.upsert(attested.ledger)
       await repos.tenancyLineageClosureAdjudications.upsert(monitoring.closureAdjudication)
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+        monitoring.closureAdjudicationSettlement
+      )
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        monitoring.arbitrationDebtRetirementDisputeLedger
+      )
       await repos.audit.append(attested.auditEntry)
       const payload = {
         action: "attest_lineage_arbitration_debt_retirement",
@@ -1749,6 +2145,8 @@ export async function POST(request: Request) {
       await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
       await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
       await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
       const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
         firmId,
         lineageRootSessionReferenceId,
@@ -1762,6 +2160,12 @@ export async function POST(request: Request) {
       })
       await repos.tenancyLineageArbitrationDebtRetirementLedgers.upsert(reopened.ledger)
       await repos.tenancyLineageClosureAdjudications.upsert(monitoring.closureAdjudication)
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+        monitoring.closureAdjudicationSettlement
+      )
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        monitoring.arbitrationDebtRetirementDisputeLedger
+      )
       await repos.audit.append(reopened.auditEntry)
       const payload = {
         action: "reopen_lineage_arbitration_debt_retirement",
@@ -1774,6 +2178,366 @@ export async function POST(request: Request) {
           reasons: digest.reasons,
           openDisputeCount: digest.openDisputeCount,
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "checkpoint_lineage_closure_adjudication_settlement_publication") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
+      const publicationChannel = normalizeOptionalString(parsed.publicationChannel)
+      if (!actorId || !firmId || !lineageRootSessionReferenceId || !publicationChannel) {
+        throw new Error(
+          "actorId, firmId, lineageRootSessionReferenceId, and publicationChannel are required"
+        )
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
+        firmId,
+        lineageRootSessionReferenceId,
+      })
+      const checkpointed = checkpointLineageClosureAdjudicationSettlementPublication(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        publicationChannel,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(checkpointed.settlement)
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        monitoring.arbitrationDebtRetirementDisputeLedger
+      )
+      await repos.audit.append(checkpointed.auditEntry)
+      const payload = {
+        action: "checkpoint_lineage_closure_adjudication_settlement_publication",
+        settlement: checkpointed.settlement,
+        disputeLedger: monitoring.arbitrationDebtRetirementDisputeLedger,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          status: digest.status,
+          reasons: digest.reasons,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "log_lineage_closure_adjudication_settlement_correction") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
+      const correctionNote = normalizeOptionalString(parsed.correctionNote)
+      if (!actorId || !firmId || !lineageRootSessionReferenceId || !correctionNote) {
+        throw new Error(
+          "actorId, firmId, lineageRootSessionReferenceId, and correctionNote are required"
+        )
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
+        firmId,
+        lineageRootSessionReferenceId,
+      })
+      const corrected = logLineageClosureAdjudicationSettlementCorrection(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        correctionNote,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(corrected.settlement)
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        monitoring.arbitrationDebtRetirementDisputeLedger
+      )
+      await repos.audit.append(corrected.auditEntry)
+      const payload = {
+        action: "log_lineage_closure_adjudication_settlement_correction",
+        settlement: corrected.settlement,
+        disputeLedger: monitoring.arbitrationDebtRetirementDisputeLedger,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          status: digest.status,
+          reasons: digest.reasons,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "confirm_lineage_closure_adjudication_settlement_sla") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
+      if (!actorId || !firmId || !lineageRootSessionReferenceId) {
+        throw new Error("actorId, firmId, and lineageRootSessionReferenceId are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
+        firmId,
+        lineageRootSessionReferenceId,
+      })
+      const confirmed = confirmLineageClosureAdjudicationSettlementSla(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(confirmed.settlement)
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        monitoring.arbitrationDebtRetirementDisputeLedger
+      )
+      await repos.audit.append(confirmed.auditEntry)
+      const payload = {
+        action: "confirm_lineage_closure_adjudication_settlement_sla",
+        settlement: confirmed.settlement,
+        disputeLedger: monitoring.arbitrationDebtRetirementDisputeLedger,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          status: digest.status,
+          reasons: digest.reasons,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "open_lineage_arbitration_debt_retirement_dispute") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
+      const challengeReason = normalizeOptionalString(parsed.challengeReason)
+      if (!actorId || !firmId || !lineageRootSessionReferenceId || !challengeReason) {
+        throw new Error(
+          "actorId, firmId, lineageRootSessionReferenceId, and challengeReason are required"
+        )
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
+        firmId,
+        lineageRootSessionReferenceId,
+      })
+      const opened = openLineageArbitrationDebtRetirementDispute(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        challengeReason,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(opened.disputeLedger)
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+        monitoring.closureAdjudicationSettlement
+      )
+      await repos.audit.append(opened.auditEntry)
+      const payload = {
+        action: "open_lineage_arbitration_debt_retirement_dispute",
+        disputeLedger: opened.disputeLedger,
+        settlement: monitoring.closureAdjudicationSettlement,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          status: digest.status,
+          reasons: digest.reasons,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "assign_lineage_arbitration_debt_retirement_dispute_reviewer") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
+      const reviewerId = normalizeOptionalString(parsed.reviewerId)
+      if (!actorId || !firmId || !lineageRootSessionReferenceId || !reviewerId) {
+        throw new Error(
+          "actorId, firmId, lineageRootSessionReferenceId, and reviewerId are required"
+        )
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
+        firmId,
+        lineageRootSessionReferenceId,
+      })
+      const assigned = assignLineageArbitrationDebtRetirementDisputeReviewer(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        reviewerId,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        assigned.disputeLedger
+      )
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+        monitoring.closureAdjudicationSettlement
+      )
+      await repos.audit.append(assigned.auditEntry)
+      const payload = {
+        action: "assign_lineage_arbitration_debt_retirement_dispute_reviewer",
+        disputeLedger: assigned.disputeLedger,
+        settlement: monitoring.closureAdjudicationSettlement,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          status: digest.status,
+          reasons: digest.reasons,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_lineage_arbitration_debt_retirement_dispute") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
+      const resolutionOutcome = parseDebtRetirementDisputeResolutionOutcome(parsed.resolutionOutcome)
+      if (!actorId || !firmId || !lineageRootSessionReferenceId || !resolutionOutcome) {
+        throw new Error(
+          "actorId, firmId, lineageRootSessionReferenceId, and resolutionOutcome are required"
+        )
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
+        firmId,
+        lineageRootSessionReferenceId,
+      })
+      const resolved = resolveLineageArbitrationDebtRetirementDispute(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        resolutionOutcome,
+        resolutionNote: normalizeOptionalString(parsed.resolutionNote),
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        resolved.disputeLedger
+      )
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+        monitoring.closureAdjudicationSettlement
+      )
+      await repos.audit.append(resolved.auditEntry)
+      const payload = {
+        action: "resolve_lineage_arbitration_debt_retirement_dispute",
+        disputeLedger: resolved.disputeLedger,
+        settlement: monitoring.closureAdjudicationSettlement,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          status: digest.status,
+          reasons: digest.reasons,
+        },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "control_lineage_arbitration_debt_retirement_dispute_rollback") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
+      const rollbackControlNote = normalizeOptionalString(parsed.rollbackControlNote)
+      if (!actorId || !firmId || !lineageRootSessionReferenceId || !rollbackControlNote) {
+        throw new Error(
+          "actorId, firmId, lineageRootSessionReferenceId, and rollbackControlNote are required"
+        )
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
+      await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
+      await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+      await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+      await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
+      const { digest, monitoring } = await recomputeAndPersistLineageDigestState(store, repos, {
+        firmId,
+        lineageRootSessionReferenceId,
+      })
+      const rollback = controlLineageArbitrationDebtRetirementDisputeRollback(store, {
+        actorId,
+        firmId,
+        lineageRootSessionReferenceId,
+        rollbackControlNote,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert(
+        rollback.disputeLedger
+      )
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert(
+        monitoring.closureAdjudicationSettlement
+      )
+      await repos.audit.append(rollback.auditEntry)
+      const payload = {
+        action: "control_lineage_arbitration_debt_retirement_dispute_rollback",
+        disputeLedger: rollback.disputeLedger,
+        settlement: monitoring.closureAdjudicationSettlement,
+        digest: {
+          id: digest.id,
+          lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
+          status: digest.status,
+          reasons: digest.reasons,
         },
       }
       idempotency.set(key, payload, fingerprint)
@@ -1809,6 +2573,8 @@ export async function POST(request: Request) {
     await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
     await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
     await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
+    await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
+    await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
     let existingReference = null
     if (sessionReferenceId) {
       existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)

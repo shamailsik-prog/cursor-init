@@ -8095,6 +8095,139 @@ describe("Runtime persistence mode", () => {
       )
       expect(reopenDebtRetirementRes.status).toBe(200)
 
+      const checkpointSettlementPublicationRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1a5857ba-4adf-45f8-85ea-6ce2f9cc2513",
+          },
+          body: JSON.stringify({
+            action: "checkpoint_lineage_closure_adjudication_settlement_publication",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            publicationChannel: "runtime_workboard",
+            note: "Runtime publication checkpoint",
+          }),
+        })
+      )
+      expect(checkpointSettlementPublicationRes.status).toBe(200)
+
+      const settlementCorrectionRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "26af7f6c-0ce5-4b07-85eb-f9e6f599a5d6",
+          },
+          body: JSON.stringify({
+            action: "log_lineage_closure_adjudication_settlement_correction",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            correctionNote: "Runtime correction before settlement confirmation",
+            note: "Runtime correction trace",
+          }),
+        })
+      )
+      expect(settlementCorrectionRes.status).toBe(200)
+
+      const settlementConfirmRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "2a0f8e1e-f66d-4dc9-a133-177cf2eb38b7",
+          },
+          body: JSON.stringify({
+            action: "confirm_lineage_closure_adjudication_settlement_sla",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            note: "Runtime settlement confirmation",
+          }),
+        })
+      )
+      expect(settlementConfirmRes.status).toBe(200)
+
+      const openDebtDisputeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8bd83f8f-e744-477b-8be2-3d6da4e8cfa3",
+          },
+          body: JSON.stringify({
+            action: "open_lineage_arbitration_debt_retirement_dispute",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            challengeReason: "Runtime debt retirement evidence challenge",
+            note: "Runtime dispute intake",
+          }),
+        })
+      )
+      expect(openDebtDisputeRes.status).toBe(200)
+
+      const assignDebtDisputeReviewerRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f007639c-ee2a-4ef0-af7e-aa0d34904801",
+          },
+          body: JSON.stringify({
+            action: "assign_lineage_arbitration_debt_retirement_dispute_reviewer",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            reviewerId: "partner_a",
+            note: "Runtime reviewer assignment",
+          }),
+        })
+      )
+      expect(assignDebtDisputeReviewerRes.status).toBe(200)
+
+      const resolveDebtDisputeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "50028312-5e53-4018-9ad2-1e84f19195ca",
+          },
+          body: JSON.stringify({
+            action: "resolve_lineage_arbitration_debt_retirement_dispute",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            resolutionOutcome: "require_rollback_review",
+            resolutionNote: "Runtime dispute resolved with rollback review",
+            note: "Runtime dispute resolution",
+          }),
+        })
+      )
+      expect(resolveDebtDisputeRes.status).toBe(200)
+
+      const rollbackDebtDisputeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "62b88f88-a2f7-485c-b663-22cdb52e81e1",
+          },
+          body: JSON.stringify({
+            action: "control_lineage_arbitration_debt_retirement_dispute_rollback",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            rollbackControlNote: "Runtime rollback control engaged",
+            note: "Runtime rollback guardrail",
+          }),
+        })
+      )
+      expect(rollbackDebtDisputeRes.status).toBe(200)
+
       const resolveDispute = await tenancyPost(
         new Request("http://127.0.0.1/api/p5/tenancy", {
           method: "POST",
@@ -8225,6 +8358,38 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const settlementViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_closure_adjudication_settlements&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=sla_confirmed&limit=10&cursor=0`
+        )
+      )
+      expect(settlementViewRes.status).toBe(200)
+      const settlementViewJson = (await settlementViewRes.json()) as {
+        items: Array<{ status: string; settlementConfirmedBy: string | null }>
+      }
+      expect(
+        settlementViewJson.items.some(
+          (row) => row.status === "sla_confirmed" && row.settlementConfirmedBy === "partner_a"
+        )
+      ).toBe(true)
+
+      const disputeLedgerViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_arbitration_debt_retirement_dispute_ledgers&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=rollback_controlled&limit=10&cursor=0`
+        )
+      )
+      expect(disputeLedgerViewRes.status).toBe(200)
+      const disputeLedgerViewJson = (await disputeLedgerViewRes.json()) as {
+        items: Array<{ status: string; rollbackControlNote: string | null }>
+      }
+      expect(
+        disputeLedgerViewJson.items.some(
+          (row) =>
+            row.status === "rollback_controlled" &&
+            row.rollbackControlNote === "Runtime rollback control engaged"
+        )
+      ).toBe(true)
+
       const digestViewRes = await tenancyGet(
         new Request(
           `http://127.0.0.1/api/p5/tenancy?view=session_lineage_reconciliation_digests&actorId=partner_a&firmId=firmA&limit=10&cursor=0`
@@ -8304,7 +8469,7 @@ describe("Runtime persistence mode", () => {
 
       const auditRes = await tenancyGet(
         new Request(
-          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=30&cursor=0"
+          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=60&cursor=0"
         )
       )
       expect(auditRes.status).toBe(200)
@@ -8419,6 +8584,57 @@ describe("Runtime persistence mode", () => {
         auditJson.items.some(
           (row) =>
             row.action === "tenant_reopen_lineage_arbitration_debt_retirement" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action ===
+              "tenant_checkpoint_lineage_closure_adjudication_settlement_publication" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_log_lineage_closure_adjudication_settlement_correction" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_confirm_lineage_closure_adjudication_settlement_sla" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_open_lineage_arbitration_debt_retirement_dispute" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action ===
+              "tenant_assign_lineage_arbitration_debt_retirement_dispute_reviewer" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_resolve_lineage_arbitration_debt_retirement_dispute" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_control_lineage_arbitration_debt_retirement_dispute_rollback" &&
             row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
         )
       ).toBe(true)
@@ -8542,6 +8758,34 @@ describe("Runtime persistence mode", () => {
       expect(persistedDebtLedger.data()?.status).toBe("retirement_attested")
       expect(persistedDebtLedger.data()?.carryoverSignals).toContain(
         "Runtime carryover reopened after attestation"
+      )
+
+      const persistedSettlement = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_closure_adjudication_settlements",
+          `tenancy-lineage-closure-settlement:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedSettlement.exists()).toBe(true)
+      expect(persistedSettlement.data()?.status).toBe("sla_confirmed")
+      expect(persistedSettlement.data()?.verdictPublicationChannel).toBe("runtime_workboard")
+      expect(persistedSettlement.data()?.publicationCorrectionNote).toBe(
+        "Runtime correction before settlement confirmation"
+      )
+
+      const persistedDebtDisputeLedger = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_arbitration_debt_retirement_dispute_ledgers",
+          `tenancy-lineage-arbitration-debt-dispute:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedDebtDisputeLedger.exists()).toBe(true)
+      expect(persistedDebtDisputeLedger.data()?.status).toBe("rollback_controlled")
+      expect(persistedDebtDisputeLedger.data()?.resolutionOutcome).toBe("require_rollback_review")
+      expect(persistedDebtDisputeLedger.data()?.rollbackControlNote).toBe(
+        "Runtime rollback control engaged"
       )
 
       const persistedClerkSessionRef = await getDoc(

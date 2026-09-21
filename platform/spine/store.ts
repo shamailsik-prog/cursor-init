@@ -270,6 +270,69 @@ export type TenancyLineageArbitrationDebtRetirementLedgerRow = {
   updatedAt: number
 }
 
+export type TenancyLineageClosureAdjudicationSettlementStatus =
+  | "draft"
+  | "publication_checkpointed"
+  | "correction_logged"
+  | "sla_confirmed"
+
+export type TenancyLineageClosureAdjudicationSettlementRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  adjudicationId: string
+  status: TenancyLineageClosureAdjudicationSettlementStatus
+  verdictPublicationCheckpointedBy: string | null
+  verdictPublicationCheckpointedAt: number | null
+  verdictPublicationChannel: string | null
+  publicationCorrectionNote: string | null
+  publicationCorrectionBy: string | null
+  publicationCorrectionAt: number | null
+  settlementConfirmationSlaStartedAt: number | null
+  settlementConfirmationSlaDueAt: number | null
+  settlementConfirmedBy: string | null
+  settlementConfirmedAt: number | null
+  settlementSlaBreached: boolean
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageArbitrationDebtRetirementDisputeStatus =
+  | "open"
+  | "reviewer_assigned"
+  | "resolved"
+  | "rollback_controlled"
+
+export type TenancyLineageArbitrationDebtRetirementDisputeResolutionOutcome =
+  | "uphold_retirement"
+  | "reopen_debt"
+  | "require_rollback_review"
+
+export type TenancyLineageArbitrationDebtRetirementDisputeLedgerRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  debtLedgerId: string
+  status: TenancyLineageArbitrationDebtRetirementDisputeStatus
+  challengeReason: string
+  challengeOpenedBy: string
+  challengeOpenedAt: number
+  reviewerId: string | null
+  reviewerAssignedBy: string | null
+  reviewerAssignedAt: number | null
+  resolutionOutcome: TenancyLineageArbitrationDebtRetirementDisputeResolutionOutcome | null
+  resolvedBy: string | null
+  resolvedAt: number | null
+  resolutionNote: string | null
+  rollbackControlBy: string | null
+  rollbackControlAt: number | null
+  rollbackControlNote: string | null
+  notes: string[]
+  updatedAt: number
+}
+
 export type StatuteSectionVersion = {
   sectionId: string
   versionNo: number
@@ -1948,6 +2011,10 @@ export class SpineStore {
   tenancyLineageClosureAdjudications = new Map<string, TenancyLineageClosureAdjudicationRow>()
   tenancyLineageArbitrationDebtRetirementLedgers =
     new Map<string, TenancyLineageArbitrationDebtRetirementLedgerRow>()
+  tenancyLineageClosureAdjudicationSettlements =
+    new Map<string, TenancyLineageClosureAdjudicationSettlementRow>()
+  tenancyLineageArbitrationDebtRetirementDisputeLedgers =
+    new Map<string, TenancyLineageArbitrationDebtRetirementDisputeLedgerRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",
