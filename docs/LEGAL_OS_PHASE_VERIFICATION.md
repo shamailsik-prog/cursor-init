@@ -198,3 +198,38 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #114 | tenancy external-session identity bridge + IdP parity scaffolding | `ce57557` | Yes | true | false | true | PARTIAL | major |
 
+## Re-audit addendum — PR #114 after label amend PR #117
+
+- Audit file: `docs/audits/phase-pr114-tenancy-identity-bridge.md`
+- Date: 2026-09-21
+- Main tip audited: `bf24a57e6056`
+- Verdict: **PARTIAL (minor)** — accepted transport-stub cap with corrected label honesty.
+
+### Re-audit findings
+
+1. Label amend is landed on `main` and docs now explicitly declare:
+   - `backend_real=true`
+   - `frontend_real=false`
+   - `transport_stub=true`
+   - `status=PARTIAL`
+   - NOT COMPLETE / NOT product-done wording
+2. Claim-gate replay outcome:
+   - historical PR #114 metadata shape still fails as expected (missing explicit flags + COMPLETE overclaim while stubs exist),
+   - amended honest metadata passes `ci_gates/check_pr_phase_claims.py`.
+3. Backend reality still holds for this phase:
+   - tenancy route action/view surfaces present,
+   - tenancy admin handlers + mismatch computation present,
+   - persistence + Firestore rules wiring present.
+4. No regressions observed in targeted checks:
+   - `tests/api.tenancy.test.ts` PASS,
+   - `tests/persistence.repositories.test.ts` PASS,
+   - `tests/persistence.runtime-mode.test.ts` PASS,
+   - Gate `G-0` PASS,
+   - Gate `G-1` PASS.
+
+### Updated targeted matrix entry
+
+| PR | Audit pass | Main tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #114 | Re-audit after PR #117 label amend | `bf24a57` | true | false | true | PARTIAL | minor |
+
