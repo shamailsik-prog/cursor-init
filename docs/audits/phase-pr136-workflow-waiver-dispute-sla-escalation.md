@@ -1,22 +1,33 @@
-# Independent Phase Auditor forensic audit: PR #136 workflow waiver-expiry disputes + remediation-SLA breach escalation
+# Independent Phase Auditor forensic audit: PR #136 workflow alert waiver-expiry disputes + remediation SLA breach escalation
 
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
-PR: `#136` (`cursor/workflow-waiver-expiry-disputes-sla-1f10` → `main`)  
-Main merge SHA audited: `f20cdf1f78c349c3c65a0e0f24459fbab0e2102f`  
-PR head SHA: `42e7b0b72728c842d0aa04285395ca1480bb11c6`
+PR: `#136` (`cursor/workflow-waiver-expiry-disputes-sla-1f10` → `main`, merged)  
+Feature merge SHA on `main`: `f20cdf1f78c349c3c65a0e0f24459fbab0e2102f`  
+PR head SHA (merge parent-2): `42e7b0b72728c842d0aa04285395ca1480bb11c6`  
+Claim gate replay base/head: `0b9152155b0b45fb067e6432811f6106d8d88f04` → `42e7b0b72728c842d0aa04285395ca1480bb11c6`  
+Post-#135 gate script: `ci_gates/check_pr_phase_claims.py` at `origin/main` tip `f270e0b` (includes negated-disclaimer fix from PR #135)
 
 ## Verdict (lead)
 
 **PARTIAL (severity: medium).**
 
-`BACKEND_REAL` is verified from code and focused runtime evidence.  
-`FRONTEND_REAL` honesty is verified for a backend-only slice (`frontend_real=false`).  
-`COMPLETE/product-done` is not claimed semantically.  
-`SHA` integrity is verified on `main`.  
-Focused tests and gates are green on replay, with one observed flaky timeout on a first run of the Firestore runtime suite.  
-Process flags fail on claim-gate replay due wording-triggered regex hits in PR metadata; this is a process/compliance outcome and does not invalidate backend reality.  
-PR #135 (claim-gate negation) is already on `main` (`15f0a08` / merge `f270e0b`) and does not clear these residual wording matches. Re-audit process flags after further gate hardening.
+Backend implementation, SHA integrity, frontend honesty, semantic classification, and focused tests/gates are verified green. **Process-flag replay still FAILs** under the current claim gate: PR #136 metadata contains `(docs-only queue update)` (triggers scaffold/docs-only vs route/test delta rule) and `(never COMPLETE while transport_stub=true)` (literal `COMPLETE` is not covered by the post-#135 negation regex, which only strips `no|not|without … claims`). This is **not** the PR #133 false-positive pattern alone; gate PASS was not observed, so overall **PASS (low) is not warranted**.
+
+Product classification remains **PARTIAL** (`transport_stub=true`; filing transport TODO/stub markers unchanged). **Not product-done.**
+
+---
+
+## Recovery note
+
+Prior agent `bc-559654a1` left no unpushed local commits on this workspace (`git status` clean on `main` before audit branch). Audit work is fresh from merged `main`.
+
+---
+
+## Scope and evidence policy
+
+- Independent verification used merged code at `f20cdf1`, PR #136 metadata from Origin, `git diff` file list, and local reruns only.
+- Builder stub `docs/audits/phase-prXXX-workflow-waiver-expiry-remediation-sla.md` was not used as implementation evidence.
 
 ---
 
@@ -26,83 +37,127 @@ PR #135 (claim-gate negation) is already on `main` (`15f0a08` / merge `f270e0b`)
 
 Status: **PASS**
 
-Evidence verified directly in merged code:
+Evidence:
 
-1. Spine row models and store maps exist for both new surfaces:
+1. Durable row models in `platform/spine/store.ts`:
    - `WorkflowOpsAlertWaiverExpiryDisputeRow`
    - `WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow`
-   - store maps for `workflowOpsAlertWaiverExpiryDisputes`
-   - store maps for `workflowOpsAlertVarianceRemediationSlaBreachEscalations`
-2. Memory repository interfaces and implementations are present:
+2. Runtime maps on spine store:
    - `workflowOpsAlertWaiverExpiryDisputes`
    - `workflowOpsAlertVarianceRemediationSlaBreachEscalations`
-3. Firestore repository adapters are present for both collections.
-4. `firestore.rules` includes read-guarded entries for:
-   - `/workflow_ops_alert_waiver_expiry_disputes/{id}`
-   - `/workflow_ops_alert_variance_remediation_sla_breach_escalations/{id}`
-5. `/api/d2/ops-reporting` exposes both views and all open/assign/resolve actions:
+3. Memory repository wiring in `platform/persistence/spineRepositories.ts`:
+   - `workflowOpsAlertWaiverExpiryDisputes`
+   - `workflowOpsAlertVarianceRemediationSlaBreachEscalations`
+4. Firestore adapters in `platform/persistence/firestoreSpineRepositories.ts` for collections:
+   - `workflow_ops_alert_waiver_expiry_disputes`
+   - `workflow_ops_alert_variance_remediation_sla_breach_escalations`
+5. Firestore rules (deny-write posture) in `firestore.rules` for both collections.
+6. `/api/d2/ops-reporting` views:
    - `alert_waiver_expiry_disputes`
    - `alert_variance_remediation_sla_breach_escalations`
-   - `open/assign/resolve` for dispute and escalation.
-6. Route path maintains idempotency and audit write-through:
-   - idempotency key required + replay/cache behavior
-   - `persistAuditEntriesSince(...)` on action paths.
+7. Partner lifecycle actions (open / assign / resolve) for both surfaces in `app/api/d2/ops-reporting/route.ts`, with audit events such as:
+   - `ops_reporting_alert_waiver_expiry_dispute_opened`
+   - `ops_reporting_alert_waiver_expiry_dispute_reviewer_assigned`
+   - `ops_reporting_alert_waiver_expiry_dispute_resolved`
+   - `ops_reporting_alert_variance_remediation_sla_breach_escalation_opened`
+   - `ops_reporting_alert_variance_remediation_sla_breach_escalation_owner_assigned`
+   - `ops_reporting_alert_variance_remediation_sla_breach_escalation_resolved`
+8. Route wiring tests assert repository-backed reads for both views (`tests/persistence.route-wiring.test.ts`).
 
 ### B) FE honesty (`frontend_real=false`)
 
 Status: **PASS**
 
-1. PR metadata declares backend-only labels (`frontend_real=false`, `transport_stub=true`, `classification=PARTIAL`).
-2. PR delta does not include `app/ops/**`; backend-only scope claim is consistent with changed files.
+Evidence:
 
-### C) No COMPLETE overclaim (semantic)
+1. PR metadata declares `frontend_real: false`.
+2. PR #136 diff excludes `app/ops/**`; `/ops` call-site evidence is not required when `frontend_real=false` and no ops UI files changed.
 
-Status: **PASS (semantic)** with **process wording hazard**
+### C) No COMPLETE / product-done overclaim (semantic)
 
-1. Metadata frames the slice as PARTIAL and transport-stub constrained.
-2. No affirmative "product done" delivery state is substantiated in the implementation.
-3. Claim-gate regex still interprets specific wording patterns (including `COMPLETE` token and `docs-only` token in a scoped bullet) as violations.
+Status: **PASS (semantic)** / **WARNING (machine-gate wording)**
 
-### D) SHA `f20cdf1` on `main`
+Evidence:
+
+1. Required labels present in PR body:
+   - `backend_real=true`
+   - `frontend_real=false`
+   - `transport_stub=true`
+   - `classification=PARTIAL (never COMPLETE while transport_stub=true)`
+2. No affirmative product-done narrative; global transport-stub cap remains explicit in repo policy docs.
+3. Wording hazards for automated gate (see F): `docs-only` substring and bare `COMPLETE` inside a “never …” clause.
+
+### D) SHA on `main` integrity
 
 Status: **PASS**
 
-1. `f20cdf1` is a merge commit on `origin/main`.
-2. Parent-2 is PR head `42e7b0b`, matching the audited phase head.
-3. Both merge SHA and phase head are ancestors of `origin/main`.
+Evidence:
+
+1. Merge commit `f20cdf1f78c349c3c65a0e0f24459fbab0e2102f` is on `main` (`git merge-base --is-ancestor f20cdf1 main`).
+2. Merge parent-2 resolves to PR head `42e7b0b72728c842d0aa04285395ca1480bb11c6`.
+3. Ledger feature SHA recorded as **`f20cdf1`** (not post-merge tip `f270e0b`, which is the PR #135 claim-gate merge).
 
 ### E) Focused tests + gates
 
-Status: **PASS** (with stability note)
+Status: **PASS**
 
-Independent replay:
+Independent reruns on audit workspace (`origin/main` at `f270e0b`, includes PR #136 feature):
 
-1. `npx vitest run tests/api.ops-reporting.test.ts tests/persistence.route-wiring.test.ts` → PASS.
-2. `npx firebase-tools emulators:exec --only firestore --project demo-sikander "npx vitest run tests/persistence.repositories.test.ts tests/persistence.runtime-mode.test.ts"`
-   - first replay: one timeout at 5000ms in a single runtime-mode test,
-   - retry replay: PASS.
-3. `npm run gate:g0` → PASS.
-4. `npm run gate:g1` → PASS.
+1. `npm run test:unit -- tests/api.ops-reporting.test.ts tests/persistence.route-wiring.test.ts`  
+   - PASS (`72` tests)
+2. `npx firebase-tools emulators:exec --only firestore --project demo-sikander "npm run test:unit -- tests/persistence.repositories.test.ts tests/persistence.runtime-mode.test.ts"`  
+   - PASS (`15` tests) on second run (first run hit an unrelated `5000ms` timeout in an older runtime-mode case; retry green)
+3. `npm run gate:g0`  
+   - PASS
+4. `npm run gate:g1`  
+   - PASS (`10` tests)
 
-Stability note: runtime-mode suite is near timeout threshold for one test and behaves flakily at default 5s budget.
+Transport-stub policy scan (representative): `platform/persistence/filingDispatchQueue.ts` still contains `TODO(firm)` and `blocked_todo_firm` — consistent with `transport_stub=true`.
 
-### F) Process flags
+### F) Process flags (claim gate replay, post-#135)
 
-Status: **FAIL (process-only)**
+Status: **FAIL**
 
-Replay of `ci_gates/check_pr_phase_claims.py` against actual PR #136 metadata (`PR_TITLE`, `PR_BODY`, `BASE_SHA`, `HEAD_SHA`) on current `main` (post-#135) returns:
+Evidence:
 
-- scaffold/docs-only claim conflict from the scoped phrase `docs-only queue update` in the PR body
-- COMPLETE/product-done conflicts from the disclaimer phrase `never COMPLETE while transport_stub=true`
+1. Backend-only `/ops` policy satisfied (`frontend_real=false`, no `app/ops/**` in diff).
+2. Replay:
 
-PR #135's negation regex only excludes `no|not|without ... claims` spans. It does not treat `never COMPLETE while ...` as a negated complete-claim, and it does not ignore scoped `docs-only` wording.
+```bash
+PR_TITLE='Add workflow waiver-expiry dispute and SLA breach escalation scaffolding'
+PR_BODY='<PR #136 agent body including Required release labels>'
+BASE_SHA='0b9152155b0b45fb067e6432811f6106d8d88f04'
+HEAD_SHA='42e7b0b72728c842d0aa04285395ca1480bb11c6'
+python3 ci_gates/check_pr_phase_claims.py
+```
 
-This is a policy-gate/phrasing failure class and does **not** negate `BACKEND_REAL`.
+Observed failures:
+
+- `PR claim says scaffold/docs-only or no runtime changes, but route/tests changed.`  
+  Root cause: summary bullet `(docs-only queue update)` matches `docs-only` in `SCAFFOLD_ONLY_RE` while `app/api/**` and `tests/**` changed.
+- `PR claims COMPLETE/product-done while filing transport TODO/stub markers still exist.`
+- `PR claims COMPLETE/product-done while frontend_real=false.`
+- `PR claims COMPLETE/product-done while transport_stub=true.`  
+  Root cause: `classification=PARTIAL (never COMPLETE while transport_stub=true)` — token `COMPLETE` matches `COMPLETE_CLAIM_RE` and is **not** inside `NEGATED_COMPLETE_DISCLAIMER_RE` (which requires `no|not|without`, not `never`).
+
+3. Post-#135 negation fix **does** address PR #133-style `no COMPLETE/product-done claim` disclaimers, but **does not** clear PR #136’s `never COMPLETE` or incidental `docs-only` phrases. Gate **does not PASS** for #136 metadata as merged.
 
 ---
 
 ## Final adjudication
 
-- **Verdict:** `PARTIAL`
-- **Severity:** `medium`
-- **Disposition:** backend implementation accepted as real; phase remains process-blocked pending claim-gate-compatible metadata phrasing and/or additional regex hardening. Re-audit process flags after further gate work beyond #135.
+| Check | Result |
+|---|---|
+| A BACKEND_REAL | PASS |
+| B FE honesty | PASS |
+| C Semantic overclaim | PASS (with gate wording warnings) |
+| D SHA (`f20cdf1`) | PASS |
+| E Tests/gates | PASS |
+| F Process flags | **FAIL** |
+| Product classification | **PARTIAL** (transport stub cap) |
+| Auditor overall | **PARTIAL** (medium) — not PASS (low) |
+
+**Remediation (metadata hygiene, no runtime required for audit closure):**
+
+- Remove or rephrase `(docs-only queue update)` when routes/tests change (e.g. “roadmap queue note only”).
+- Replace `never COMPLETE while …` with negation forms recognized by the gate (e.g. `no COMPLETE/product-done claims`) or drop the literal `COMPLETE` token from label lines.
