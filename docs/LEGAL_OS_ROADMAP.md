@@ -152,7 +152,7 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d2/ops-reporting` with attestation/escalation monitoring views (`view=alert_attestations`, `view=alert_escalation_ledgers`) and partner-governed lifecycle actions (`attest_workflow_ops_alert_digest`, `open_workflow_ops_alert_escalation`, `assign_workflow_ops_alert_escalation_owner`, `resolve_workflow_ops_alert_escalation`) filterable by matter, lifecycle status, and freshness state.
 - Captured stale-digest attestation checkpoints, escalation-owner assignment state, and escalation-resolution provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_attested`, `ops_reporting_alert_escalation_opened`, `ops_reporting_alert_escalation_owner_assigned`, `ops_reporting_alert_escalation_resolved`) in internal scaffolding mode.
 - Extended API, route-wiring, repository, and runtime-mode persistence coverage for attestation/escalation lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
-- Phase-auditor release labels for PR #122 (`d4e1d25`):
+- Phase-auditor release labels for PR #122 (`19d3916`):
   - backend_real: true
   - frontend_real: false
   - transport_stub: true
