@@ -1895,6 +1895,96 @@ describe("GET /api/d2/ops-reporting", () => {
         .debtRetirementStatus
     ).toBe("exception_debt_assigned")
 
+    const settlementArbitrationRulingPublication = await postOpsReport(
+      {
+        action:
+          "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_ruling_publication",
+        actorId: "partner_a",
+        matterId,
+        rulingPublicationChannel: "internal_panel_registry",
+        reason: "adjudication SLO settlement arbitration ruling publication checkpointed",
+      },
+      "f1ae660f-91ab-4e22-a8f6-0b4c5d8e9a60"
+    )
+    expect(settlementArbitrationRulingPublication.status).toBe(200)
+
+    const settlementArbitrationPublicationCorrection = await postOpsReport(
+      {
+        action:
+          "log_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_publication_correction",
+        actorId: "partner_a",
+        matterId,
+        correctionNote: "runtime publication correction for governance slice",
+        reason: "adjudication SLO settlement arbitration publication correction logged",
+      },
+      "f2be770f-91ab-4e22-a9f6-0b4c5d8e9a61"
+    )
+    expect(settlementArbitrationPublicationCorrection.status).toBe(200)
+    const settlementArbitrationPublicationCorrectionJson =
+      (await settlementArbitrationPublicationCorrection.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernance: {
+            publicationGovernanceStatus: string
+            arbitrationPublicationExceptionBacklogCount: number
+          }
+        }
+      }
+    expect(
+      settlementArbitrationPublicationCorrectionJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernance
+        .publicationGovernanceStatus
+    ).toBe("publication_correction_logged")
+    expect(
+      settlementArbitrationPublicationCorrectionJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernance
+        .arbitrationPublicationExceptionBacklogCount
+    ).toBeGreaterThanOrEqual(1)
+
+    const queueReentryDebtRetirementAttest = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement",
+        actorId: "partner_a",
+        matterId,
+        debtRetiredCount: 1,
+        reason: "checkpoint expiry attestation queue reentry debt retirement attested",
+      },
+      "f3ce880f-91ab-4e22-aaf6-0b4c5d8e9a62"
+    )
+    expect(queueReentryDebtRetirementAttest.status).toBe(200)
+
+    const queueReentryDebtRetirementDisputeOpen = await postOpsReport(
+      {
+        action:
+          "open_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute",
+        actorId: "partner_a",
+        matterId,
+        disputeReason: "runtime retirement dispute for reconciliation slice",
+        reason: "checkpoint expiry attestation queue reentry debt retirement dispute opened",
+      },
+      "f4de990f-91ab-4e22-abf6-0b4c5d8e9a63"
+    )
+    expect(queueReentryDebtRetirementDisputeOpen.status).toBe(200)
+    const queueReentryDebtRetirementDisputeOpenJson =
+      (await queueReentryDebtRetirementDisputeOpen.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliation: {
+            disputeReconciliationStatus: string
+            queueReentryRetirementReconciliationDriftCount: number
+          }
+        }
+      }
+    expect(
+      queueReentryDebtRetirementDisputeOpenJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliation
+        .disputeReconciliationStatus
+    ).toBe("retirement_dispute_opened")
+    expect(
+      queueReentryDebtRetirementDisputeOpenJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliation
+        .queueReentryRetirementReconciliationDriftCount
+    ).toBeGreaterThanOrEqual(1)
+
     const remediationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_variance_remediation",
