@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-21 (PR #172 independent audit appended)  
+Last updated: 2026-09-21 (PR #175 independent audit appended)  
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -840,4 +840,28 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #172 | workflow alert adjudication SLO partner-delivery receipt freeze-override seal verification + archival-export partner-delivery transport-boundary receipt reconciliation | `ab27a3c` / merge `13c37e5` / slice `8fec696` | Yes | true (overclaimed for Firestore) | false | true | **FAIL** (not COMPLETE) | major |
+
+## Targeted ledger — PR #175 archival-export custody handoff + transport-boundary receipt closure attestation
+
+- Audit file: `docs/audits/phase-pr175-workflow-slo-custody-handoff-closure-attestation.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `40366e0bcb3b46a09beae1c24b1efe4b1e7cddeb` (merge parent-2 / feature tip `966bf1b`; stack base `62c863b` PR #174 Firestore chained doc-id helper)
+- Main tip at audit close: `40366e0`
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **FAIL (major)** — backend-real custody + closure attestation wiring and Firestore **≤1500-byte** hashed ids verified (runtime-mode mega green post-#172/#174); label-honest PARTIAL release; standard Firestore emulator trio **blocked** — `tests/persistence.repositories.test.ts` fails to compile (duplicate `closureAttestation` @ `eb44829`). G-0/G-1 green; partial Vitest lanes green.
+
+### DoD summary
+
+- `SHA on main`: PASS (slice `966bf1b` + merge `40366e0`; base `62c863b` on lineage).
+- `BACKEND_REAL`: PASS (custody-handoff + closure-attestation rows, memory/Firestore repos, Firestore deny-write rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through; governance uses `buildWorkflowOpsChainedDocumentId`; runtime-mode mega passes under emulator).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `62c863b..966bf1b` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, negated product-done posture).
+- `focused tests+gates`: **FAIL** (API/route-wiring/custody-id/claim-gate **124**; Firestore trio **21/22** — repositories suite transform error; G-0/G-1 green). Non-blocking: six partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on representative PR #175 `key=value` metadata with `62c863b..966bf1b` exits 0 @ `ede9a9c`). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #175 | archival-export custody handoff + transport-boundary receipt closure attestation | `40366e0` / slice `966bf1b` / base `62c863b` | Yes | true | false | true | **FAIL** (not COMPLETE) | major |
 
