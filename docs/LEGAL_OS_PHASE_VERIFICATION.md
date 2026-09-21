@@ -636,3 +636,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #154 | workflow alert adjudication SLO burndown-settlement + checkpoint expiry-attestation queue-drain | `1554433` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #156 workflow alert adjudication SLO settlement-attestation + checkpoint expiry-attestation queue-drain-reconciliation
+
+- Audit file: `docs/audits/phase-pr156-workflow-slo-settlement-attestation-drain-recon.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `419d9a3f93d974f128d4f8996cb1848f2d2ce2f2` (parent-2 / final PR head `9ee7dad`; stacked on PR #154 lane via base `c91dcd1`)
+- Main tip at audit close: `419d9a3`
+- Claim-gate anchor: `90b0996` (PR #135 negation hardening; preserved on merge)
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `419d9a3`; parent-2 `9ee7dad`).
+- `BACKEND_REAL`: PASS (settlement-attestation + queue-drain-reconciliation rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through; governance `workflowOpsAlertSettlementAttestationQueueDrainReconciliationGovernance.ts`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `c91dcd1..9ee7dad` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring 84; Firestore repos/runtime/rules 22; `G-0`; `G-1`). Non-blocking: two partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #156 metadata with `c91dcd1..9ee7dad` exits 0). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #156 | workflow alert adjudication SLO settlement-attestation + checkpoint expiry-attestation queue-drain-reconciliation | `419d9a3` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
