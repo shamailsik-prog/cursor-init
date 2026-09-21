@@ -513,6 +513,88 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(closureReopenJson.result.closure.closureStatus).toBe("reopened")
     expect(closureReopenJson.result.closure.reopenedAt).not.toBeNull()
 
+    const enforcementStart = await postOpsReport(
+      {
+        action: "start_workflow_ops_alert_dispute_enforcement",
+        actorId: "partner_a",
+        matterId,
+        ownerId: "associate_a",
+        reason: "start enforcement review",
+      },
+      "9b54222d-2a29-4743-8245-6b7ec6f46418"
+    )
+    expect(enforcementStart.status).toBe(200)
+    const enforcementStartJson = (await enforcementStart.json()) as {
+      result: { enforcement: { enforcementStatus: string; ownerId: string | null } }
+    }
+    expect(enforcementStartJson.result.enforcement.enforcementStatus).toBe("in_progress")
+    expect(enforcementStartJson.result.enforcement.ownerId).toBe("associate_a")
+
+    const enforcementComplete = await postOpsReport(
+      {
+        action: "complete_workflow_ops_alert_dispute_enforcement",
+        actorId: "partner_a",
+        matterId,
+        reason: "enforcement completed",
+      },
+      "0f1de97d-c6a0-42c6-a4da-8f7af5edf6cf"
+    )
+    expect(enforcementComplete.status).toBe(200)
+    const enforcementCompleteJson = (await enforcementComplete.json()) as {
+      result: { enforcement: { enforcementStatus: string; enforcedAt: number | null } }
+    }
+    expect(enforcementCompleteJson.result.enforcement.enforcementStatus).toBe("enforced")
+    expect(enforcementCompleteJson.result.enforcement.enforcedAt).not.toBeNull()
+
+    const reconciliationFlag = await postOpsReport(
+      {
+        action: "flag_workflow_ops_alert_closure_reopen_debt",
+        actorId: "partner_a",
+        matterId,
+        reason: "reopen debt identified",
+      },
+      "d7ec1e76-93d0-4292-87a1-0263f5d96ab9"
+    )
+    expect(reconciliationFlag.status).toBe(200)
+    const reconciliationFlagJson = (await reconciliationFlag.json()) as {
+      result: { reconciliation: { reconciliationStatus: string; outstandingDebtCount: number } }
+    }
+    expect(reconciliationFlagJson.result.reconciliation.reconciliationStatus).toBe("debt_open")
+    expect(reconciliationFlagJson.result.reconciliation.outstandingDebtCount).toBeGreaterThanOrEqual(1)
+
+    const reconciliationStart = await postOpsReport(
+      {
+        action: "start_workflow_ops_alert_closure_debt_reconciliation",
+        actorId: "partner_a",
+        matterId,
+        ownerId: "clerk_a",
+        reason: "start reconciliation",
+      },
+      "0e04089d-e7cb-4fa9-aecf-454d043fbd8f"
+    )
+    expect(reconciliationStart.status).toBe(200)
+    const reconciliationStartJson = (await reconciliationStart.json()) as {
+      result: { reconciliation: { reconciliationStatus: string; reconcilingOwnerId: string | null } }
+    }
+    expect(reconciliationStartJson.result.reconciliation.reconciliationStatus).toBe("reconciling")
+    expect(reconciliationStartJson.result.reconciliation.reconcilingOwnerId).toBe("clerk_a")
+
+    const reconciliationResolve = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_closure_debt_reconciliation",
+        actorId: "partner_a",
+        matterId,
+        reason: "debt reconciled",
+      },
+      "426f607e-5ebd-4407-af66-49c05398d4e2"
+    )
+    expect(reconciliationResolve.status).toBe(200)
+    const reconciliationResolveJson = (await reconciliationResolve.json()) as {
+      result: { reconciliation: { reconciliationStatus: string; outstandingDebtCount: number } }
+    }
+    expect(reconciliationResolveJson.result.reconciliation.reconciliationStatus).toBe("reconciled")
+    expect(reconciliationResolveJson.result.reconciliation.outstandingDebtCount).toBe(0)
+
     const attestationView = await getOpsReport(
       new URLSearchParams({
         view: "alert_attestations",
@@ -597,6 +679,54 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(
       closureViewJson.items.some(
         (row) => row.matterId === matterId && row.closureStatus === "reopened"
+      )
+    ).toBe(true)
+
+    const enforcementView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_dispute_enforcement_ledgers",
+        actorId: "associate_a",
+        matterId,
+        enforcementStatus: "enforced",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(enforcementView.status).toBe(200)
+    const enforcementViewJson = (await enforcementView.json()) as {
+      items: Array<{ matterId: string; enforcementStatus: string; ownerId: string | null }>
+    }
+    expect(
+      enforcementViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.enforcementStatus === "enforced" &&
+          row.ownerId === "associate_a"
+      )
+    ).toBe(true)
+
+    const reconciliationView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_closure_debt_reconciliation_digests",
+        actorId: "associate_a",
+        matterId,
+        reconciliationStatus: "reconciled",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(reconciliationView.status).toBe(200)
+    const reconciliationViewJson = (await reconciliationView.json()) as {
+      items: Array<{ matterId: string; reconciliationStatus: string; outstandingDebtCount: number }>
+    }
+    expect(
+      reconciliationViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.reconciliationStatus === "reconciled" &&
+          row.outstandingDebtCount === 0
       )
     ).toBe(true)
   })

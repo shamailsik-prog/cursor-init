@@ -7307,11 +7307,110 @@ describe("Runtime persistence mode", () => {
       expect(closureReopenJson.result.closure.reopenedAt).not.toBeNull()
       expect(closureReopenJson.result.escalation.escalationStatus).toBe("open")
 
+      const enforcementStart = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "ca7ab7f8-bf77-47fe-bfbc-4639fef47ef7",
+          },
+          body: JSON.stringify({
+            action: "start_workflow_ops_alert_dispute_enforcement",
+            actorId: "partner_a",
+            matterId,
+            ownerId: "associate_a",
+            reason: "runtime enforcement start",
+          }),
+        })
+      )
+      expect(enforcementStart.status).toBe(200)
+
+      const enforcementComplete = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f0db6a12-6de0-4d66-ba8f-cff528f0aef0",
+          },
+          body: JSON.stringify({
+            action: "complete_workflow_ops_alert_dispute_enforcement",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime enforcement complete",
+          }),
+        })
+      )
+      expect(enforcementComplete.status).toBe(200)
+      const enforcementCompleteJson = (await enforcementComplete.json()) as {
+        result: { enforcement: { enforcementStatus: string; ownerId: string | null } }
+      }
+      expect(enforcementCompleteJson.result.enforcement.enforcementStatus).toBe("enforced")
+      expect(enforcementCompleteJson.result.enforcement.ownerId).toBe("associate_a")
+
+      const reconciliationFlag = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "359decae-5952-444b-a7b6-ddf169fef9dc",
+          },
+          body: JSON.stringify({
+            action: "flag_workflow_ops_alert_closure_reopen_debt",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime debt flagged",
+          }),
+        })
+      )
+      expect(reconciliationFlag.status).toBe(200)
+
+      const reconciliationStart = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "982c0e15-fc35-45f4-bad6-587f9f31ca77",
+          },
+          body: JSON.stringify({
+            action: "start_workflow_ops_alert_closure_debt_reconciliation",
+            actorId: "partner_a",
+            matterId,
+            ownerId: "clerk_a",
+            reason: "runtime debt reconciling",
+          }),
+        })
+      )
+      expect(reconciliationStart.status).toBe(200)
+
+      const reconciliationResolve = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "e2eb6b50-cf8b-4c88-8cac-5f31ad8b882f",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow_ops_alert_closure_debt_reconciliation",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime debt reconciled",
+          }),
+        })
+      )
+      expect(reconciliationResolve.status).toBe(200)
+      const reconciliationResolveJson = (await reconciliationResolve.json()) as {
+        result: { reconciliation: { reconciliationStatus: string; outstandingDebtCount: number } }
+      }
+      expect(reconciliationResolveJson.result.reconciliation.reconciliationStatus).toBe("reconciled")
+      expect(reconciliationResolveJson.result.reconciliation.outstandingDebtCount).toBe(0)
+
       getRuntimeStore().workflowOpsAlertDigests = new Map()
       getRuntimeStore().workflowOpsAlertAttestations = new Map()
       getRuntimeStore().workflowOpsAlertEscalationLedgers = new Map()
       getRuntimeStore().workflowOpsAlertAttestationDisputes = new Map()
       getRuntimeStore().workflowOpsAlertEscalationClosures = new Map()
+      getRuntimeStore().workflowOpsAlertDisputeEnforcementLedgers = new Map()
+      getRuntimeStore().workflowOpsAlertClosureDebtReconciliationDigests = new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -7401,6 +7500,42 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const enforcementView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_dispute_enforcement_ledgers&actorId=associate_a&matterId=${matterId}&enforcementStatus=enforced&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(enforcementView.status).toBe(200)
+      const enforcementViewJson = (await enforcementView.json()) as {
+        items: Array<{ matterId: string; enforcementStatus: string; ownerId: string | null }>
+      }
+      expect(
+        enforcementViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.enforcementStatus === "enforced" &&
+            row.ownerId === "associate_a"
+        )
+      ).toBe(true)
+
+      const reconciliationView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_closure_debt_reconciliation_digests&actorId=associate_a&matterId=${matterId}&reconciliationStatus=reconciled&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(reconciliationView.status).toBe(200)
+      const reconciliationViewJson = (await reconciliationView.json()) as {
+        items: Array<{ matterId: string; reconciliationStatus: string; outstandingDebtCount: number }>
+      }
+      expect(
+        reconciliationViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.reconciliationStatus === "reconciled" &&
+            row.outstandingDebtCount === 0
+        )
+      ).toBe(true)
+
       const persistedOps = await getDocs(collection(ctx.firestore(), "workflow_ops_activity"))
       expect(
         persistedOps.docs.some(
@@ -7470,6 +7605,30 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.matterId === matterId &&
             entry.data()?.closureStatus === "reopened"
+        )
+      ).toBe(true)
+      const persistedEnforcement = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_dispute_enforcement_ledgers")
+      )
+      expect(
+        persistedEnforcement.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.enforcementStatus === "enforced" &&
+            entry.data()?.ownerId === "associate_a"
+        )
+      ).toBe(true)
+      const persistedReconciliation = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_closure_debt_reconciliation_digests")
+      )
+      expect(
+        persistedReconciliation.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.reconciliationStatus === "reconciled" &&
+            entry.data()?.outstandingDebtCount === 0
         )
       ).toBe(true)
     })

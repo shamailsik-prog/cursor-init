@@ -91,6 +91,8 @@ const baseStore = {
   workflowOpsAlertEscalationLedgers: new Map(),
   workflowOpsAlertAttestationDisputes: new Map(),
   workflowOpsAlertEscalationClosures: new Map(),
+  workflowOpsAlertDisputeEnforcementLedgers: new Map(),
+  workflowOpsAlertClosureDebtReconciliationDigests: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -1853,6 +1855,63 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertDisputeEnforcementLedgers: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_dispute_enforcement:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          alertAttestationDisputeId: "workflow_ops_alert_attestation_dispute:mat_1",
+          classification: "internal",
+          enforcementStatus: "pending_enforcement",
+          requiredOutcome: "upheld",
+          ownerId: null,
+          checkpointAt: Date.now(),
+          enforcedAt: null,
+          waivedAt: null,
+          waiverReason: null,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "dispute_enforcement"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 9,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertClosureDebtReconciliationDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_closure_debt_reconciliation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          alertEscalationClosureId: "workflow_ops_alert_escalation_closure:mat_1",
+          classification: "internal",
+          reconciliationStatus: "debt_open",
+          reopenDebtCount: 1,
+          outstandingDebtCount: 1,
+          lastReopenedAt: Date.now(),
+          reconcilingOwnerId: null,
+          reconciliationCheckpointAt: null,
+          reconciledAt: null,
+          reconciliationReason: null,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "closure_debt"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 10,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -2621,5 +2680,33 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string; closureStatus: string }> }
     expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_escalation_closure:mat_1")
     expect(json.items[0]?.closureStatus).toBe("pending_closure")
+  })
+
+  it("ops reporting dispute-enforcement view uses repository workflowOpsAlertDisputeEnforcementLedgers", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_dispute_enforcement_ledgers&actorId=associate_a&enforcementStatus=pending_enforcement&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; enforcementStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_dispute_enforcement:mat_1")
+    expect(json.items[0]?.enforcementStatus).toBe("pending_enforcement")
+  })
+
+  it("ops reporting closure-debt reconciliation view uses repository workflowOpsAlertClosureDebtReconciliationDigests", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_closure_debt_reconciliation_digests&actorId=associate_a&reconciliationStatus=debt_open&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; reconciliationStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_closure_debt_reconciliation:mat_1"
+    )
+    expect(json.items[0]?.reconciliationStatus).toBe("debt_open")
   })
 })

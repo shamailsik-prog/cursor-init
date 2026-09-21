@@ -71,6 +71,8 @@ import type {
   WorkflowOpsAlertEscalationLedgerRow,
   WorkflowOpsAlertAttestationDisputeRow,
   WorkflowOpsAlertEscalationClosureRow,
+  WorkflowOpsAlertDisputeEnforcementLedgerRow,
+  WorkflowOpsAlertClosureDebtReconciliationDigestRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -1863,6 +1865,58 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "workflow_ops_alert_escalation_closures"))
         return rows.docs
           .map((entry) => entry.data() as WorkflowOpsAlertEscalationClosureRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertDisputeEnforcementLedgers: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_dispute_enforcement_ledgers", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertDisputeEnforcementLedgerRow>(
+          db,
+          "workflow_ops_alert_dispute_enforcement_ledgers",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertDisputeEnforcementLedgerRow>(
+          db,
+          "workflow_ops_alert_dispute_enforcement_ledgers",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_dispute_enforcement_ledgers"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertDisputeEnforcementLedgerRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertClosureDebtReconciliationDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_closure_debt_reconciliation_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertClosureDebtReconciliationDigestRow>(
+          db,
+          "workflow_ops_alert_closure_debt_reconciliation_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertClosureDebtReconciliationDigestRow>(
+          db,
+          "workflow_ops_alert_closure_debt_reconciliation_digests",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(
+          collection(db, "workflow_ops_alert_closure_debt_reconciliation_digests")
+        )
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertClosureDebtReconciliationDigestRow)
           .filter((row) => row.matterId === matterId)
       },
     },

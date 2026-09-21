@@ -660,6 +660,71 @@ describe("Firestore repository adapters", () => {
       expect(closuresByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const closuresByMatter = await repos.workflowOpsAlertEscalationClosures.listByMatter("mat_1")
       expect(closuresByMatter.some((row) => row.recomputeReason === "ops_closure_seed")).toBe(true)
+      await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert({
+        id: "workflow_ops_alert_dispute_enforcement:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        alertAttestationDisputeId: "workflow_ops_alert_attestation_dispute:mat_1",
+        classification: "internal",
+        enforcementStatus: "pending_enforcement",
+        requiredOutcome: "upheld",
+        ownerId: "associate_a",
+        checkpointAt: 53,
+        enforcedAt: null,
+        waivedAt: null,
+        waiverReason: null,
+        lastStatusChangedAt: 53,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "dispute_enforcement"],
+        recomputedAt: 53,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_enforcement_seed",
+        updatedAt: 53,
+      })
+      const enforcement = await repos.workflowOpsAlertDisputeEnforcementLedgers.get(
+        "workflow_ops_alert_dispute_enforcement:mat_1"
+      )
+      expect(enforcement?.enforcementStatus).toBe("pending_enforcement")
+      const enforcementByFirm = await repos.workflowOpsAlertDisputeEnforcementLedgers.listByFirm("firmA")
+      expect(enforcementByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const enforcementByMatter = await repos.workflowOpsAlertDisputeEnforcementLedgers.listByMatter("mat_1")
+      expect(enforcementByMatter.some((row) => row.recomputeReason === "ops_enforcement_seed")).toBe(true)
+      await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert({
+        id: "workflow_ops_alert_closure_debt_reconciliation:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        alertEscalationClosureId: "workflow_ops_alert_escalation_closure:mat_1",
+        classification: "internal",
+        reconciliationStatus: "debt_open",
+        reopenDebtCount: 1,
+        outstandingDebtCount: 1,
+        lastReopenedAt: 54,
+        reconcilingOwnerId: "clerk_a",
+        reconciliationCheckpointAt: 54,
+        reconciledAt: null,
+        reconciliationReason: null,
+        lastStatusChangedAt: 54,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "closure_debt"],
+        recomputedAt: 54,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_reconciliation_seed",
+        updatedAt: 54,
+      })
+      const reconciliation = await repos.workflowOpsAlertClosureDebtReconciliationDigests.get(
+        "workflow_ops_alert_closure_debt_reconciliation:mat_1"
+      )
+      expect(reconciliation?.reconciliationStatus).toBe("debt_open")
+      const reconciliationByFirm = await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByFirm(
+        "firmA"
+      )
+      expect(reconciliationByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const reconciliationByMatter = await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByMatter(
+        "mat_1"
+      )
+      expect(reconciliationByMatter.some((row) => row.recomputeReason === "ops_reconciliation_seed")).toBe(
+        true
+      )
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
