@@ -9357,6 +9357,36 @@ describe("Runtime persistence mode", () => {
             entry.data()?.disputeReconciliationStatus === "reconciliation_pending"
         )
       ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledgers"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.externalDistributionAuditLedgerStatus === "external_distribution_audit_pending"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verifications"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.closureVerificationStatus === "closure_verification_pending"
+        )
+      ).toBe(true)
     })
   }, 45_000)
 

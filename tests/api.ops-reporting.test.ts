@@ -1985,6 +1985,71 @@ describe("GET /api/d2/ops-reporting", () => {
         .queueReentryRetirementReconciliationDriftCount
     ).toBeGreaterThanOrEqual(1)
 
+    const externalDistributionChannelRegister = await postOpsReport(
+      {
+        action:
+          "register_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_channel",
+        actorId: "partner_a",
+        matterId,
+        distributionChannelRegistry: "partner_external_registry_stub",
+        reason: "adjudication SLO external distribution channel registered",
+      },
+      "f5efaa0f-91ab-4e22-acf7-0b4c5d8e9a64"
+    )
+    expect(externalDistributionChannelRegister.status).toBe(200)
+    const externalDistributionChannelRegisterJson =
+      (await externalDistributionChannelRegister.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedger: {
+            externalDistributionAuditLedgerStatus: string
+            distributionAttestationBacklogCount: number
+          }
+        }
+      }
+    expect(
+      externalDistributionChannelRegisterJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedger
+        .externalDistributionAuditLedgerStatus
+    ).toBe("distribution_channel_registered")
+
+    const queueReentryDebtRetirementDisputeResolve = await postOpsReport(
+      {
+        action:
+          "resolve_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute",
+        actorId: "partner_a",
+        matterId,
+        resolution: "uphold_retirement",
+        reason: "checkpoint expiry attestation queue reentry debt retirement dispute resolved",
+      },
+      "f6ffbb1f-91ab-4e22-adf8-0b4c5d8e9a65"
+    )
+    expect(queueReentryDebtRetirementDisputeResolve.status).toBe(200)
+
+    const disputeReconciliationClosureAttest = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure",
+        actorId: "partner_a",
+        matterId,
+        reason: "checkpoint expiry attestation queue reentry debt retirement dispute reconciliation closure attested",
+      },
+      "f7aac21f-91ab-4e22-aef9-0b4c5d8e9a66"
+    )
+    expect(disputeReconciliationClosureAttest.status).toBe(200)
+    const disputeReconciliationClosureAttestJson =
+      (await disputeReconciliationClosureAttest.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerification: {
+            closureVerificationStatus: string
+          }
+        }
+      }
+    expect(
+      disputeReconciliationClosureAttestJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerification
+        .closureVerificationStatus
+    ).toBe("reconciliation_closure_attested")
+
     const remediationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_variance_remediation",
