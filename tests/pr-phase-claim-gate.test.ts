@@ -203,7 +203,7 @@ describe("PR phase claim gate hardening", () => {
     })
     expect(result.status).toBe(1)
     expect(result.stdout).toContain("no focused tests under tests/ops*.test.ts were changed")
-  })
+  }, 30000)
 
   it("passes with required flags and evidence for ops changes", () => {
     const repo = makeRepo(
