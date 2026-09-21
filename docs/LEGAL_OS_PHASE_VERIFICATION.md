@@ -526,3 +526,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #139 | workflow alert waiver-expiry dispute adjudication + SLA breach resolution checkpoints | `f541ae7` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #143 workflow adjudication SLO stewardship + resolution-checkpoint expiry attestation
+
+- Audit file: `docs/audits/phase-pr143-workflow-slo-expiry-attestation.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `9fd7dca51b68cc25d7a11972242491e5aaf1f35d` (parent-2 / final PR head `18a8ffe`; Origin pre-rebase head `f8dfa00`; stacked on PR #139 lane)
+- Main tip at audit close: `9fd7dca`
+- Claim-gate anchor: `aca861c` (PR #141)
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `9fd7dca`; parent-2 `18a8ffe`).
+- `BACKEND_REAL`: PASS (SLO stewardship + checkpoint expiry attestation rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` views + six partner actions, idempotency + audit write-through).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; merge diff excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`).
+- `focused tests+gates`: PASS (API/route-wiring 76; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #143 metadata with `88da76f..18a8ffe` exits 0; gate semantics at `aca861c`).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #143 | workflow adjudication SLO stewardship + remediation-SLA breach resolution-checkpoint expiry attestation | `9fd7dca` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
