@@ -44,3 +44,25 @@ export async function syncFirmTenancyLineageDigestClosureCheckpoints(
     store.tenancyLineageDigestClosureCheckpoints.set(row.id, row)
   }
 }
+
+export async function syncFirmTenancyLineageClosureAdjudications(
+  store: SpineStore,
+  repos: SpineRepositories,
+  firmId: string
+): Promise<void> {
+  const rows = await repos.tenancyLineageClosureAdjudications.listByFirm(firmId)
+  for (const row of rows) {
+    store.tenancyLineageClosureAdjudications.set(row.id, row)
+  }
+}
+
+export async function syncFirmTenancyLineageArbitrationDebtRetirementLedgers(
+  store: SpineStore,
+  repos: SpineRepositories,
+  firmId: string
+): Promise<void> {
+  const rows = await repos.tenancyLineageArbitrationDebtRetirementLedgers.listByFirm(firmId)
+  for (const row of rows) {
+    store.tenancyLineageArbitrationDebtRetirementLedgers.set(row.id, row)
+  }
+}

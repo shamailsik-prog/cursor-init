@@ -117,11 +117,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended tenancy monitoring surfaces with `view=session_lineage_reconciliation_queue` and `view=session_lineage_digest_closure_checkpoints`, including status/root pagination filters and automatic digest-backed scaffold row synchronization.
 - Extended API + runtime persistence tests for arbitration queue transitions, closure checkpoint idempotency/reopen flows, pagination/filter visibility, and audit provenance traceability in Firestore rehydration mode.
 
+- Added durable closure-adjudication and arbitration-debt-retirement governance rows to runtime store + memory/Firestore repositories (`tenancy_lineage_closure_adjudications`, `tenancy_lineage_arbitration_debt_retirement_ledgers`) with Firestore deny-by-default read posture.
+- Extended `/api/p5/tenancy` with closure/debt lifecycle actions (`govern_lineage_closure_adjudication`, `record_lineage_closure_adjudication_verdict`, `attest_lineage_arbitration_debt_retirement`, `reopen_lineage_arbitration_debt_retirement`) and monitoring views (`view=session_lineage_closure_adjudications`, `view=session_lineage_arbitration_debt_retirement_ledgers`).
+- Captured panel quorum expectations, verdict windows, disposition drift reasons, unresolved queue pressure, owner-assignment debt, retirement attestations, and carryover reopen signals across digest-backed synchronization paths.
+- Extended API + runtime persistence tests for closure/debt lifecycle transitions, idempotent replay behavior, pagination/filter visibility, Firestore rehydration parity, and audit provenance traceability.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy reconciliation closure adjudication + arbitration debt retirement scaffolding**:
+Build **tenancy closure adjudication settlement + debt retirement dispute scaffolding**:
 
-1. Add reconciliation closure adjudication rows that capture panel quorum expectations, verdict windows, and disposition drift reasons for reopened lineage closure checkpoints.
-2. Introduce arbitration debt-retirement ledgers per lineage root to track unresolved queue pressure, owner assignment debt, retirement attestations, and reopen carryover signals.
-3. Extend tenancy route + runtime tests for adjudication/debt lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+1. Add closure adjudication settlement rows that track verdict publication checkpoints, correction notes, and settlement confirmation SLAs per lineage root.
+2. Introduce arbitration debt-retirement dispute ledgers to capture retirement challenge intake, reviewer assignment, resolution outcomes, and rollback controls.
+3. Extend tenancy route + runtime tests for settlement/dispute lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external IdP integration claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.

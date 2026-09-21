@@ -4,6 +4,10 @@ import {
   type Role,
   type SpineStore,
   type TenancyAuthBoundary,
+  type TenancyLineageArbitrationDebtRetirementLedgerRow,
+  type TenancyLineageArbitrationDebtRetirementStatus,
+  type TenancyLineageClosureAdjudicationRow,
+  type TenancyLineageClosureAdjudicationStatus,
   type TenancyLineageDisputeAttestationRow,
   type TenancyLineageDisputeDisposition,
   type TenancyLineageReconciliationDigestRow,
@@ -23,6 +27,9 @@ export type TenancyLineageReconciliationQueueArbitrationStatus =
   TenancyLineageReconciliationQueueArbitrationRow["status"]
 export type TenancyLineageDigestClosureCheckpointStatus =
   TenancyLineageDigestClosureCheckpointRow["status"]
+export type TenancyClosureAdjudicationStatus = TenancyLineageClosureAdjudicationStatus
+export type TenancyArbitrationDebtRetirementStatus =
+  TenancyLineageArbitrationDebtRetirementStatus
 
 function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
   const actor = store.users.get(actorId)
@@ -772,6 +779,52 @@ function lineageClosureCheckpointId(lineageRootSessionReferenceId: string): stri
   return `tenancy-lineage-closure:${lineageRootSessionReferenceId}`
 }
 
+function lineageClosureAdjudicationId(lineageRootSessionReferenceId: string): string {
+  return `tenancy-lineage-closure-adjudication:${lineageRootSessionReferenceId}`
+}
+
+function lineageArbitrationDebtRetirementLedgerId(lineageRootSessionReferenceId: string): string {
+  return `tenancy-lineage-arbitration-debt:${lineageRootSessionReferenceId}`
+}
+
+function computeLineageDispositionDriftReasons(input: {
+  digest: TenancyLineageReconciliationDigestRow
+  queue: TenancyLineageReconciliationQueueArbitrationRow
+  checkpoint: TenancyLineageDigestClosureCheckpointRow
+}): string[] {
+  const reasons: string[] = []
+  if (input.checkpoint.status === "reopened") {
+    reasons.push("closure_checkpoint_reopened")
+  }
+  if (input.checkpoint.reopenTrigger) {
+    reasons.push(`closure_reopen_trigger:${input.checkpoint.reopenTrigger}`)
+  }
+  if (input.queue.disposition === "dismiss_needs_review" && input.digest.status === "needs_review") {
+    reasons.push("queue_dismissed_while_digest_needs_review")
+  }
+  if (input.queue.disposition === "confirm_needs_review" && input.digest.status === "aligned") {
+    reasons.push("queue_confirmed_review_while_digest_aligned")
+  }
+  return [...new Set(reasons)]
+}
+
+function computeLineageCarryoverSignals(input: {
+  digest: TenancyLineageReconciliationDigestRow
+  queue: TenancyLineageReconciliationQueueArbitrationRow
+  checkpoint: TenancyLineageDigestClosureCheckpointRow
+}): string[] {
+  const signals: string[] = []
+  if (input.digest.status === "needs_review") signals.push("digest_needs_review")
+  if (input.digest.openDisputeCount > 0) signals.push("open_dispute_pressure")
+  if (input.digest.unresolvedRevocationCount > 0) signals.push("revocation_pressure")
+  if (!input.queue.assignedPartnerId) signals.push("owner_assignment_debt")
+  if (input.checkpoint.status === "reopened") signals.push("closure_checkpoint_reopened")
+  if (input.checkpoint.reopenTrigger) {
+    signals.push(`closure_reopen_trigger:${input.checkpoint.reopenTrigger}`)
+  }
+  return [...new Set(signals)]
+}
+
 export function recomputeLineageReconciliationDigest(
   store: SpineStore,
   input: {
@@ -859,6 +912,8 @@ export function ensureLineageReconciliationMonitoringRows(
 ): {
   arbitrationQueue: TenancyLineageReconciliationQueueArbitrationRow
   closureCheckpoint: TenancyLineageDigestClosureCheckpointRow
+  closureAdjudication: TenancyLineageClosureAdjudicationRow
+  arbitrationDebtRetirementLedger: TenancyLineageArbitrationDebtRetirementLedgerRow
 } {
   const now = input.now ?? Date.now()
   const queueId = lineageArbitrationQueueId(input.digest.lineageRootSessionReferenceId)
@@ -950,7 +1005,141 @@ export function ensureLineageReconciliationMonitoringRows(
         updatedAt: now,
       }
   store.tenancyLineageDigestClosureCheckpoints.set(checkpoint.id, checkpoint)
-  return { arbitrationQueue: queue, closureCheckpoint: checkpoint }
+
+  const adjudicationId = lineageClosureAdjudicationId(input.digest.lineageRootSessionReferenceId)
+  const existingAdjudication = store.tenancyLineageClosureAdjudications.get(adjudicationId)
+  const requiredPanelQuorum = existingAdjudication?.requiredPanelQuorum ?? 2
+  const confirmedPanelPartnerIds = existingAdjudication?.confirmedPanelPartnerIds ?? []
+  const checkpointReopened = checkpoint.status === "reopened"
+  const quorumMet = confirmedPanelPartnerIds.length >= requiredPanelQuorum
+  const adjudicationStatus: TenancyLineageClosureAdjudicationStatus = checkpointReopened
+    ? quorumMet
+      ? "verdict_window_open"
+      : "quorum_pending"
+    : "standby"
+  const resetVerdict =
+    checkpointReopened &&
+    existingAdjudication?.status === "verdict_recorded" &&
+    (existingAdjudication.verdictRecordedAt ?? 0) < (checkpoint.reopenedAt ?? 0)
+  const existingWindowMs =
+    (existingAdjudication?.verdictWindowStartedAt ?? null) !== null &&
+    (existingAdjudication?.verdictWindowDueAt ?? null) !== null
+      ? Math.max(
+          60 * 1000,
+          (existingAdjudication?.verdictWindowDueAt ?? 0) -
+            (existingAdjudication?.verdictWindowStartedAt ?? 0)
+        )
+      : 4 * 60 * 60 * 1000
+  const verdictWindowStartedAt =
+    adjudicationStatus === "verdict_window_open"
+      ? existingAdjudication?.status === "verdict_window_open" &&
+        existingAdjudication.verdictWindowStartedAt !== null
+        ? existingAdjudication.verdictWindowStartedAt
+        : now
+      : existingAdjudication?.status === "verdict_recorded" && !resetVerdict
+        ? existingAdjudication.verdictWindowStartedAt
+        : null
+  const verdictWindowDueAt =
+    adjudicationStatus === "verdict_window_open" && verdictWindowStartedAt !== null
+      ? verdictWindowStartedAt + existingWindowMs
+      : existingAdjudication?.status === "verdict_recorded" && !resetVerdict
+        ? existingAdjudication.verdictWindowDueAt
+        : null
+  const baseDispositionDriftReasons = computeLineageDispositionDriftReasons({
+    digest: input.digest,
+    queue,
+    checkpoint,
+  })
+  const closureAdjudication: TenancyLineageClosureAdjudicationRow = {
+    id: adjudicationId,
+    firmId: input.firmId,
+    lineageRootSessionReferenceId: input.digest.lineageRootSessionReferenceId,
+    digestId: input.digest.id,
+    arbitrationQueueId: queue.id,
+    closureCheckpointId: checkpoint.id,
+    status:
+      !resetVerdict && existingAdjudication?.status === "verdict_recorded"
+        ? "verdict_recorded"
+        : adjudicationStatus,
+    requiredPanelQuorum,
+    confirmedPanelPartnerIds,
+    verdictWindowStartedAt,
+    verdictWindowDueAt,
+    verdictDisposition: resetVerdict ? null : existingAdjudication?.verdictDisposition ?? null,
+    verdictRecordedBy: resetVerdict ? null : existingAdjudication?.verdictRecordedBy ?? null,
+    verdictRecordedAt: resetVerdict ? null : existingAdjudication?.verdictRecordedAt ?? null,
+    dispositionDriftReasons: [
+      ...new Set([...(existingAdjudication?.dispositionDriftReasons ?? []), ...baseDispositionDriftReasons]),
+    ],
+    reopenedClosureTrigger: checkpoint.reopenTrigger ?? null,
+    notes: existingAdjudication?.notes ?? [],
+    updatedAt: now,
+  }
+  store.tenancyLineageClosureAdjudications.set(closureAdjudication.id, closureAdjudication)
+
+  const debtLedgerId = lineageArbitrationDebtRetirementLedgerId(
+    input.digest.lineageRootSessionReferenceId
+  )
+  const existingDebtLedger = store.tenancyLineageArbitrationDebtRetirementLedgers.get(debtLedgerId)
+  const unresolvedQueuePressureCount =
+    (input.digest.status === "needs_review" ? 1 : 0) +
+    input.digest.openDisputeCount +
+    input.digest.unresolvedRevocationCount
+  const ownerAssignmentDebtCount =
+    unresolvedQueuePressureCount > 0 && !queue.assignedPartnerId ? 1 : 0
+  const carryoverSignals = computeLineageCarryoverSignals({
+    digest: input.digest,
+    queue,
+    checkpoint,
+  })
+  let debtStatus: TenancyLineageArbitrationDebtRetirementStatus =
+    existingDebtLedger?.status ?? "pressure_open"
+  const transitionedToCarryover =
+    existingDebtLedger?.status === "retirement_attested" && unresolvedQueuePressureCount > 0
+  if (transitionedToCarryover) {
+    debtStatus = "carryover_reopened"
+  } else if (existingDebtLedger?.status === "carryover_reopened") {
+    debtStatus = unresolvedQueuePressureCount > 0 ? "carryover_reopened" : "retirement_attested"
+  } else if (existingDebtLedger?.status === "retirement_attested") {
+    debtStatus = "retirement_attested"
+  } else {
+    debtStatus = "pressure_open"
+  }
+  const arbitrationDebtRetirementLedger: TenancyLineageArbitrationDebtRetirementLedgerRow = {
+    id: debtLedgerId,
+    firmId: input.firmId,
+    lineageRootSessionReferenceId: input.digest.lineageRootSessionReferenceId,
+    digestId: input.digest.id,
+    arbitrationQueueId: queue.id,
+    closureCheckpointId: checkpoint.id,
+    status: debtStatus,
+    unresolvedQueuePressureCount,
+    ownerAssignmentDebtCount,
+    assignedPartnerId: queue.assignedPartnerId,
+    retirementAttestedBy: existingDebtLedger?.retirementAttestedBy ?? null,
+    retirementAttestedAt: existingDebtLedger?.retirementAttestedAt ?? null,
+    retirementNote: existingDebtLedger?.retirementNote ?? null,
+    carryoverSignals: [...new Set([...(existingDebtLedger?.carryoverSignals ?? []), ...carryoverSignals])],
+    carryoverReopenedBy: transitionedToCarryover
+      ? "system"
+      : existingDebtLedger?.carryoverReopenedBy ?? null,
+    carryoverReopenedAt: transitionedToCarryover
+      ? now
+      : existingDebtLedger?.carryoverReopenedAt ?? null,
+    notes: existingDebtLedger?.notes ?? [],
+    updatedAt: now,
+  }
+  store.tenancyLineageArbitrationDebtRetirementLedgers.set(
+    arbitrationDebtRetirementLedger.id,
+    arbitrationDebtRetirementLedger
+  )
+
+  return {
+    arbitrationQueue: queue,
+    closureCheckpoint: checkpoint,
+    closureAdjudication,
+    arbitrationDebtRetirementLedger,
+  }
 }
 
 export function assignLineageReconciliationArbitration(
@@ -1200,6 +1389,370 @@ export function reopenLineageDigestClosureCheckpoint(
   } as const
   store.audit.push(auditEntry)
   return { checkpoint, auditEntry }
+}
+
+export function governLineageClosureAdjudication(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    panelPartnerIds: string[]
+    requiredPanelQuorum?: number
+    verdictWindowMinutes?: number
+    note?: string
+    now?: number
+  }
+): {
+  adjudication: TenancyLineageClosureAdjudicationRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const panelPartnerIds = [...new Set(input.panelPartnerIds.map((id) => id.trim()).filter(Boolean))]
+  if (panelPartnerIds.length === 0) throw new Error("panelPartnerIds must include at least one partner")
+  for (const partnerId of panelPartnerIds) {
+    const user = store.users.get(partnerId)
+    if (!user) throw new Error(`unknown panel partner: ${partnerId}`)
+    if (user.firmId !== input.firmId) throw new Error("cross-firm panel partner denied")
+    if (user.role !== "partner") throw new Error("panel partner must have partner role")
+  }
+  const requiredPanelQuorum = Math.max(1, Math.min(input.requiredPanelQuorum ?? 2, 12))
+  const quorumMet = panelPartnerIds.length >= requiredPanelQuorum
+  const verdictWindowMinutes = Math.max(15, Math.min(input.verdictWindowMinutes ?? 240, 30 * 24 * 60))
+  const status: TenancyLineageClosureAdjudicationStatus =
+    monitoring.closureCheckpoint.status !== "reopened"
+      ? "standby"
+      : quorumMet
+        ? "verdict_window_open"
+        : "quorum_pending"
+  const baseDispositionDriftReasons = computeLineageDispositionDriftReasons({
+    digest,
+    queue: monitoring.arbitrationQueue,
+    checkpoint: monitoring.closureCheckpoint,
+  })
+  const adjudication: TenancyLineageClosureAdjudicationRow = {
+    ...monitoring.closureAdjudication,
+    status,
+    requiredPanelQuorum,
+    confirmedPanelPartnerIds: panelPartnerIds,
+    verdictWindowStartedAt: status === "verdict_window_open" ? now : null,
+    verdictWindowDueAt:
+      status === "verdict_window_open" ? now + verdictWindowMinutes * 60 * 1000 : null,
+    verdictDisposition:
+      monitoring.closureCheckpoint.status === "reopened"
+        ? monitoring.closureAdjudication.verdictDisposition
+        : null,
+    verdictRecordedBy:
+      monitoring.closureCheckpoint.status === "reopened"
+        ? monitoring.closureAdjudication.verdictRecordedBy
+        : null,
+    verdictRecordedAt:
+      monitoring.closureCheckpoint.status === "reopened"
+        ? monitoring.closureAdjudication.verdictRecordedAt
+        : null,
+    dispositionDriftReasons: [
+      ...new Set([
+        ...monitoring.closureAdjudication.dispositionDriftReasons,
+        ...baseDispositionDriftReasons,
+      ]),
+    ],
+    reopenedClosureTrigger: monitoring.closureCheckpoint.reopenTrigger ?? null,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.closureAdjudication.notes, input.note]
+      : monitoring.closureAdjudication.notes,
+  }
+  store.tenancyLineageClosureAdjudications.set(adjudication.id, adjudication)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_govern_lineage_closure_adjudication",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: input.note,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { adjudication, auditEntry }
+}
+
+export function recordLineageClosureAdjudicationVerdict(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    disposition: TenancyLineageReconciliationQueueArbitrationDisposition
+    dispositionDriftReasons?: string[]
+    note?: string
+    now?: number
+  }
+): {
+  adjudication: TenancyLineageClosureAdjudicationRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  if (monitoring.closureCheckpoint.status !== "reopened") {
+    throw new Error("closure checkpoint must be reopened before recording a verdict")
+  }
+  const explicitDriftReasons = (input.dispositionDriftReasons ?? [])
+    .map((reason) => reason.trim())
+    .filter(Boolean)
+  const driftReasons = computeLineageDispositionDriftReasons({
+    digest,
+    queue: monitoring.arbitrationQueue,
+    checkpoint: monitoring.closureCheckpoint,
+  })
+  if (
+    monitoring.arbitrationQueue.disposition &&
+    monitoring.arbitrationQueue.disposition !== input.disposition
+  ) {
+    driftReasons.push("queue_disposition_mismatch_with_verdict")
+  }
+  const adjudication: TenancyLineageClosureAdjudicationRow = {
+    ...monitoring.closureAdjudication,
+    status: "verdict_recorded",
+    verdictDisposition: input.disposition,
+    verdictRecordedBy: actor.id,
+    verdictRecordedAt: now,
+    dispositionDriftReasons: [
+      ...new Set([
+        ...monitoring.closureAdjudication.dispositionDriftReasons,
+        ...driftReasons,
+        ...explicitDriftReasons,
+      ]),
+    ],
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.closureAdjudication.notes, input.note]
+      : monitoring.closureAdjudication.notes,
+  }
+  store.tenancyLineageClosureAdjudications.set(adjudication.id, adjudication)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_record_lineage_closure_adjudication_verdict",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: input.note,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { adjudication, auditEntry }
+}
+
+export function attestLineageArbitrationDebtRetirement(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    retirementNote: string
+    note?: string
+    now?: number
+  }
+): {
+  ledger: TenancyLineageArbitrationDebtRetirementLedgerRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const retirementNote = input.retirementNote.trim()
+  if (!retirementNote) throw new Error("retirementNote is required")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const ledger: TenancyLineageArbitrationDebtRetirementLedgerRow = {
+    ...monitoring.arbitrationDebtRetirementLedger,
+    status: "retirement_attested",
+    retirementAttestedBy: actor.id,
+    retirementAttestedAt: now,
+    retirementNote,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.arbitrationDebtRetirementLedger.notes, input.note]
+      : monitoring.arbitrationDebtRetirementLedger.notes,
+  }
+  store.tenancyLineageArbitrationDebtRetirementLedgers.set(ledger.id, ledger)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_attest_lineage_arbitration_debt_retirement",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: retirementNote,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { ledger, auditEntry }
+}
+
+export function reopenLineageArbitrationDebtRetirement(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    lineageRootSessionReferenceId: string
+    carryoverSignal: string
+    note?: string
+    now?: number
+  }
+): {
+  ledger: TenancyLineageArbitrationDebtRetirementLedgerRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const digest = store.tenancyLineageReconciliationDigests.get(
+    lineageDigestId(input.lineageRootSessionReferenceId)
+  )
+  if (!digest) throw new Error("unknown lineage reconciliation digest")
+  if (digest.firmId !== input.firmId) throw new Error("cross-firm digest denied")
+  const carryoverSignal = input.carryoverSignal.trim()
+  if (!carryoverSignal) throw new Error("carryoverSignal is required")
+  const now = input.now ?? Date.now()
+  const monitoring = ensureLineageReconciliationMonitoringRows(store, {
+    firmId: input.firmId,
+    digest,
+    now,
+  })
+  const ledger: TenancyLineageArbitrationDebtRetirementLedgerRow = {
+    ...monitoring.arbitrationDebtRetirementLedger,
+    status: "carryover_reopened",
+    carryoverSignals: [
+      ...new Set([...monitoring.arbitrationDebtRetirementLedger.carryoverSignals, carryoverSignal]),
+    ],
+    carryoverReopenedBy: actor.id,
+    carryoverReopenedAt: now,
+    updatedAt: now,
+    notes: input.note
+      ? [...monitoring.arbitrationDebtRetirementLedger.notes, input.note]
+      : monitoring.arbitrationDebtRetirementLedger.notes,
+  }
+  store.tenancyLineageArbitrationDebtRetirementLedgers.set(ledger.id, ledger)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_reopen_lineage_arbitration_debt_retirement",
+    actorId: actor.id,
+    target: input.lineageRootSessionReferenceId,
+    classification: actor.clearanceLevel,
+    reason: carryoverSignal,
+    sessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryLineageRootSessionReferenceId: input.lineageRootSessionReferenceId,
+    delegatedBoundaryReconciliationStatus: digest.status === "needs_review" ? "diverged" : "aligned",
+    delegatedBoundaryDivergenceReasons: digest.reasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { ledger, auditEntry }
+}
+
+export function listLineageClosureAdjudications(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  status: TenancyClosureAdjudicationStatus | undefined,
+  lineageRootSessionReferenceId: string | undefined,
+  limit: number,
+  cursor: number
+): {
+  items: TenancyLineageClosureAdjudicationRow[]
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const rows = [...store.tenancyLineageClosureAdjudications.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) => (status ? row.status === status : true))
+    .filter((row) =>
+      lineageRootSessionReferenceId
+        ? row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        : true
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
+    total: rows.length,
+    nextCursor,
+  }
+}
+
+export function listLineageArbitrationDebtRetirementLedgers(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  status: TenancyArbitrationDebtRetirementStatus | undefined,
+  lineageRootSessionReferenceId: string | undefined,
+  limit: number,
+  cursor: number
+): {
+  items: TenancyLineageArbitrationDebtRetirementLedgerRow[]
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const rows = [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) => (status ? row.status === status : true))
+    .filter((row) =>
+      lineageRootSessionReferenceId
+        ? row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        : true
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
+    total: rows.length,
+    nextCursor,
+  }
 }
 
 export function listLineageReconciliationQueueArbitrations(
