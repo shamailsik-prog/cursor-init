@@ -217,6 +217,59 @@ export type TenancyLineageDigestClosureCheckpointRow = {
   updatedAt: number
 }
 
+export type TenancyLineageClosureAdjudicationStatus =
+  | "standby"
+  | "quorum_pending"
+  | "verdict_window_open"
+  | "verdict_recorded"
+
+export type TenancyLineageClosureAdjudicationRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  arbitrationQueueId: string
+  closureCheckpointId: string
+  status: TenancyLineageClosureAdjudicationStatus
+  requiredPanelQuorum: number
+  confirmedPanelPartnerIds: string[]
+  verdictWindowStartedAt: number | null
+  verdictWindowDueAt: number | null
+  verdictDisposition: TenancyLineageReconciliationQueueArbitrationDisposition | null
+  verdictRecordedBy: string | null
+  verdictRecordedAt: number | null
+  dispositionDriftReasons: string[]
+  reopenedClosureTrigger: string | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageArbitrationDebtRetirementStatus =
+  | "pressure_open"
+  | "retirement_attested"
+  | "carryover_reopened"
+
+export type TenancyLineageArbitrationDebtRetirementLedgerRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  arbitrationQueueId: string
+  closureCheckpointId: string
+  status: TenancyLineageArbitrationDebtRetirementStatus
+  unresolvedQueuePressureCount: number
+  ownerAssignmentDebtCount: number
+  assignedPartnerId: string | null
+  retirementAttestedBy: string | null
+  retirementAttestedAt: number | null
+  retirementNote: string | null
+  carryoverSignals: string[]
+  carryoverReopenedBy: string | null
+  carryoverReopenedAt: number | null
+  notes: string[]
+  updatedAt: number
+}
+
 export type StatuteSectionVersion = {
   sectionId: string
   versionNo: number
@@ -1892,6 +1945,9 @@ export class SpineStore {
     new Map<string, TenancyLineageReconciliationQueueArbitrationRow>()
   tenancyLineageDigestClosureCheckpoints =
     new Map<string, TenancyLineageDigestClosureCheckpointRow>()
+  tenancyLineageClosureAdjudications = new Map<string, TenancyLineageClosureAdjudicationRow>()
+  tenancyLineageArbitrationDebtRetirementLedgers =
+    new Map<string, TenancyLineageArbitrationDebtRetirementLedgerRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

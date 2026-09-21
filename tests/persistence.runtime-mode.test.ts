@@ -7994,6 +7994,107 @@ describe("Runtime persistence mode", () => {
       )
       expect(reopenClosureRes.status).toBe(200)
 
+      const governAdjudicationRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "6d08f9c2-083e-4cbf-8308-19809a06e17f",
+          },
+          body: JSON.stringify({
+            action: "govern_lineage_closure_adjudication",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            panelPartnerIds: ["partner_a"],
+            requiredPanelQuorum: 1,
+            verdictWindowMinutes: 45,
+            note: "Runtime closure adjudication governance",
+          }),
+        })
+      )
+      expect(governAdjudicationRes.status).toBe(200)
+
+      const recordVerdictRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "85eff7bf-c374-44f4-b7ff-64d1f3fbf39e",
+          },
+          body: JSON.stringify({
+            action: "record_lineage_closure_adjudication_verdict",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            disposition: "mark_reconciled",
+            dispositionDriftReasons: ["runtime_verdict_alignment"],
+            note: "Runtime verdict recording",
+          }),
+        })
+      )
+      expect(recordVerdictRes.status).toBe(200)
+
+      const attestDebtRetirementFirst = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b7288f0f-a12d-45bd-8ba1-7f5fefd8be52",
+          },
+          body: JSON.stringify({
+            action: "attest_lineage_arbitration_debt_retirement",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            retirementNote: "Runtime queue pressure retired after verdict",
+            note: "Runtime debt retirement attestation",
+          }),
+        })
+      )
+      expect(attestDebtRetirementFirst.status).toBe(200)
+      const attestDebtRetirementReplay = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b7288f0f-a12d-45bd-8ba1-7f5fefd8be52",
+          },
+          body: JSON.stringify({
+            action: "attest_lineage_arbitration_debt_retirement",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            retirementNote: "Runtime queue pressure retired after verdict",
+            note: "Runtime debt retirement attestation",
+          }),
+        })
+      )
+      expect(attestDebtRetirementReplay.status).toBe(200)
+      const attestDebtRetirementReplayJson = (await attestDebtRetirementReplay.json()) as {
+        reused: boolean
+      }
+      expect(attestDebtRetirementReplayJson.reused).toBe(true)
+
+      const reopenDebtRetirementRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8eb4e6a7-f1d7-4a00-a5f9-c7f81057f6e2",
+          },
+          body: JSON.stringify({
+            action: "reopen_lineage_arbitration_debt_retirement",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            carryoverSignal: "Runtime carryover reopened after attestation",
+            note: "Runtime carryover reopen",
+          }),
+        })
+      )
+      expect(reopenDebtRetirementRes.status).toBe(200)
+
       const resolveDispute = await tenancyPost(
         new Request("http://127.0.0.1/api/p5/tenancy", {
           method: "POST",
@@ -8089,6 +8190,38 @@ describe("Runtime persistence mode", () => {
           (row) =>
             row.status === "reopened" &&
             row.reopenTrigger === "Runtime reopened due follow-up divergence check"
+        )
+      ).toBe(true)
+
+      const adjudicationViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_closure_adjudications&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=verdict_recorded&limit=10&cursor=0`
+        )
+      )
+      expect(adjudicationViewRes.status).toBe(200)
+      const adjudicationViewJson = (await adjudicationViewRes.json()) as {
+        items: Array<{ status: string; verdictDisposition: string | null }>
+      }
+      expect(
+        adjudicationViewJson.items.some(
+          (row) => row.status === "verdict_recorded" && row.verdictDisposition === "mark_reconciled"
+        )
+      ).toBe(true)
+
+      const debtLedgerViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_arbitration_debt_retirement_ledgers&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=carryover_reopened&limit=10&cursor=0`
+        )
+      )
+      expect(debtLedgerViewRes.status).toBe(200)
+      const debtLedgerViewJson = (await debtLedgerViewRes.json()) as {
+        items: Array<{ status: string; carryoverSignals: string[] }>
+      }
+      expect(
+        debtLedgerViewJson.items.some(
+          (row) =>
+            row.status === "carryover_reopened" &&
+            row.carryoverSignals.includes("Runtime carryover reopened after attestation")
         )
       ).toBe(true)
 
@@ -8261,6 +8394,34 @@ describe("Runtime persistence mode", () => {
             row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
         )
       ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_govern_lineage_closure_adjudication" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_record_lineage_closure_adjudication_verdict" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_attest_lineage_arbitration_debt_retirement" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_reopen_lineage_arbitration_debt_retirement" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
 
       const persistedClerk = await getDoc(doc(ctx.firestore(), "users", "clerk_a"))
       expect(persistedClerk.exists()).toBe(true)
@@ -8357,6 +8518,30 @@ describe("Runtime persistence mode", () => {
       expect(persistedClosureCheckpoint.data()?.status).toBe("reopened")
       expect(persistedClosureCheckpoint.data()?.reopenTrigger).toBe(
         "Runtime reopened due follow-up divergence check"
+      )
+
+      const persistedClosureAdjudication = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_closure_adjudications",
+          `tenancy-lineage-closure-adjudication:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedClosureAdjudication.exists()).toBe(true)
+      expect(persistedClosureAdjudication.data()?.status).toBe("verdict_recorded")
+      expect(persistedClosureAdjudication.data()?.verdictDisposition).toBe("mark_reconciled")
+
+      const persistedDebtLedger = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_arbitration_debt_retirement_ledgers",
+          `tenancy-lineage-arbitration-debt:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedDebtLedger.exists()).toBe(true)
+      expect(persistedDebtLedger.data()?.status).toBe("carryover_reopened")
+      expect(persistedDebtLedger.data()?.carryoverSignals).toContain(
+        "Runtime carryover reopened after attestation"
       )
 
       const persistedClerkSessionRef = await getDoc(

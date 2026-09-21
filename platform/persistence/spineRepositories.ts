@@ -59,6 +59,8 @@ import type {
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
   TenancyLineageDisputeAttestationRow,
+  TenancyLineageArbitrationDebtRetirementLedgerRow,
+  TenancyLineageClosureAdjudicationRow,
   TenancyLineageReconciliationDigestRow,
   TenancyLineageReconciliationQueueArbitrationRow,
   TenancyLineageDigestClosureCheckpointRow,
@@ -615,6 +617,24 @@ export type TenancyLineageDigestClosureCheckpointRepository = {
   ): Promise<TenancyLineageDigestClosureCheckpointRow[]>
 }
 
+export type TenancyLineageClosureAdjudicationRepository = {
+  upsert(row: TenancyLineageClosureAdjudicationRow): Promise<void>
+  get(id: string): Promise<TenancyLineageClosureAdjudicationRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageClosureAdjudicationRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageClosureAdjudicationRow[]>
+}
+
+export type TenancyLineageArbitrationDebtRetirementLedgerRepository = {
+  upsert(row: TenancyLineageArbitrationDebtRetirementLedgerRow): Promise<void>
+  get(id: string): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -686,6 +706,8 @@ export type SpineRepositories = {
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
   tenancyLineageReconciliationQueueArbitrations: TenancyLineageReconciliationQueueArbitrationRepository
   tenancyLineageDigestClosureCheckpoints: TenancyLineageDigestClosureCheckpointRepository
+  tenancyLineageClosureAdjudications: TenancyLineageClosureAdjudicationRepository
+  tenancyLineageArbitrationDebtRetirementLedgers: TenancyLineageArbitrationDebtRetirementLedgerRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -2023,6 +2045,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByLineageRoot(lineageRootSessionReferenceId) {
         return [...store.tenancyLineageDigestClosureCheckpoints.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageClosureAdjudications: {
+      async upsert(row) {
+        store.tenancyLineageClosureAdjudications.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageClosureAdjudications.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageClosureAdjudications.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageClosureAdjudications.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageArbitrationDebtRetirementLedgers: {
+      async upsert(row) {
+        store.tenancyLineageArbitrationDebtRetirementLedgers.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageArbitrationDebtRetirementLedgers.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
       },

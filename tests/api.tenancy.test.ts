@@ -701,6 +701,150 @@ describe("GET/POST /api/p5/tenancy", () => {
       )
     ).toBe(true)
 
+    const governAdjudicationPayload = {
+      action: "govern_lineage_closure_adjudication",
+      actorId: "partner_a",
+      firmId: "firmA",
+      lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+      panelPartnerIds: ["partner_a"],
+      requiredPanelQuorum: 1,
+      verdictWindowMinutes: 60,
+      note: "Govern reopened closure adjudication panel window",
+    }
+    const governAdjudication = await post(
+      governAdjudicationPayload,
+      "08795ae0-2bcf-42c4-a500-64af9d7960f8"
+    )
+    expect(governAdjudication.status).toBe(200)
+    const governAdjudicationJson = (await governAdjudication.json()) as {
+      result: {
+        adjudication: { status: string; requiredPanelQuorum: number; confirmedPanelPartnerIds: string[] }
+      }
+    }
+    expect(governAdjudicationJson.result.adjudication.status).toBe("verdict_window_open")
+    expect(governAdjudicationJson.result.adjudication.requiredPanelQuorum).toBe(1)
+    expect(governAdjudicationJson.result.adjudication.confirmedPanelPartnerIds).toContain("partner_a")
+
+    const adjudicationViewOpen = await get(
+      new URLSearchParams({
+        view: "session_lineage_closure_adjudications",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "verdict_window_open",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(adjudicationViewOpen.status).toBe(200)
+
+    const recordAdjudicationVerdictPayload = {
+      action: "record_lineage_closure_adjudication_verdict",
+      actorId: "partner_a",
+      firmId: "firmA",
+      lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+      disposition: "mark_reconciled",
+      dispositionDriftReasons: ["panel_alignment_confirmed"],
+      note: "Record closure adjudication verdict for reopened checkpoint",
+    }
+    const recordAdjudicationVerdict = await post(
+      recordAdjudicationVerdictPayload,
+      "50ea611c-74e5-4379-b8f0-fca38755daf5"
+    )
+    expect(recordAdjudicationVerdict.status).toBe(200)
+    const recordAdjudicationVerdictJson = (await recordAdjudicationVerdict.json()) as {
+      result: { adjudication: { status: string; verdictDisposition: string | null } }
+    }
+    expect(recordAdjudicationVerdictJson.result.adjudication.status).toBe("verdict_recorded")
+    expect(recordAdjudicationVerdictJson.result.adjudication.verdictDisposition).toBe("mark_reconciled")
+
+    const debtLedgerViewOpen = await get(
+      new URLSearchParams({
+        view: "session_lineage_arbitration_debt_retirement_ledgers",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "pressure_open",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(debtLedgerViewOpen.status).toBe(200)
+
+    const attestDebtRetirementPayload = {
+      action: "attest_lineage_arbitration_debt_retirement",
+      actorId: "partner_a",
+      firmId: "firmA",
+      lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+      retirementNote: "Queue pressure retired after adjudication verdict",
+      note: "Ledger attestation",
+    }
+    const attestDebtRetirementFirst = await post(
+      attestDebtRetirementPayload,
+      "729970ff-f5a1-48b0-b00e-248e2f37b53f"
+    )
+    const attestDebtRetirementReplay = await post(
+      attestDebtRetirementPayload,
+      "729970ff-f5a1-48b0-b00e-248e2f37b53f"
+    )
+    expect(attestDebtRetirementFirst.status).toBe(200)
+    expect(attestDebtRetirementReplay.status).toBe(200)
+    const attestDebtRetirementFirstJson = (await attestDebtRetirementFirst.json()) as {
+      reused: boolean
+      result: { debtLedger: { status: string; retirementAttestedBy: string | null } }
+    }
+    const attestDebtRetirementReplayJson = (await attestDebtRetirementReplay.json()) as {
+      reused: boolean
+    }
+    expect(attestDebtRetirementFirstJson.reused).toBe(false)
+    expect(attestDebtRetirementReplayJson.reused).toBe(true)
+    expect(attestDebtRetirementFirstJson.result.debtLedger.status).toBe("retirement_attested")
+    expect(attestDebtRetirementFirstJson.result.debtLedger.retirementAttestedBy).toBe("partner_a")
+
+    const reopenDebtRetirementPayload = {
+      action: "reopen_lineage_arbitration_debt_retirement",
+      actorId: "partner_a",
+      firmId: "firmA",
+      lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+      carryoverSignal: "reopened closure checkpoint demands carryover review",
+      note: "Carryover reopened after attestation",
+    }
+    const reopenDebtRetirement = await post(
+      reopenDebtRetirementPayload,
+      "9566e80f-10b9-4fdd-8a3c-f5bcbe212e90"
+    )
+    expect(reopenDebtRetirement.status).toBe(200)
+    const reopenDebtRetirementJson = (await reopenDebtRetirement.json()) as {
+      result: { debtLedger: { status: string; carryoverSignals: string[] } }
+    }
+    expect(reopenDebtRetirementJson.result.debtLedger.status).toBe("carryover_reopened")
+    expect(reopenDebtRetirementJson.result.debtLedger.carryoverSignals).toContain(
+      "reopened closure checkpoint demands carryover review"
+    )
+
+    const debtLedgerViewCarryover = await get(
+      new URLSearchParams({
+        view: "session_lineage_arbitration_debt_retirement_ledgers",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "carryover_reopened",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(debtLedgerViewCarryover.status).toBe(200)
+    const debtLedgerCarryoverJson = (await debtLedgerViewCarryover.json()) as {
+      items: Array<{ status: string; carryoverSignals: string[] }>
+    }
+    expect(
+      debtLedgerCarryoverJson.items.some(
+        (row) =>
+          row.status === "carryover_reopened" &&
+          row.carryoverSignals.includes("reopened closure checkpoint demands carryover review")
+      )
+    ).toBe(true)
+
     const resolvePayload = {
       action: "resolve_session_lineage_dispute",
       actorId: "partner_a",
@@ -867,6 +1011,34 @@ describe("GET/POST /api/p5/tenancy", () => {
       auditJson.items.some(
         (row) =>
           row.action === "tenant_reopen_lineage_digest_closure" &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_govern_lineage_closure_adjudication" &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_record_lineage_closure_adjudication_verdict" &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_attest_lineage_arbitration_debt_retirement" &&
+          row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_reopen_lineage_arbitration_debt_retirement" &&
           row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
       )
     ).toBe(true)
