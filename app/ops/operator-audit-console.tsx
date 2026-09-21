@@ -149,6 +149,20 @@ export function OperatorAuditConsole() {
     return body.items[0].id
   }
 
+  function firstMatchingItemIdFromBody(body: unknown, key: string, value: string): string {
+    if (typeof body !== "object" || body === null || !("items" in body) || !Array.isArray(body.items)) {
+      return ""
+    }
+    for (const item of body.items) {
+      if (typeof item !== "object" || item === null) continue
+      const candidate = item as Record<string, unknown>
+      if (typeof candidate.id === "string" && candidate[key] === value) {
+        return candidate.id
+      }
+    }
+    return ""
+  }
+
   function resultEntityId(body: unknown, key: string): string {
     if (
       typeof body !== "object" ||
@@ -1222,18 +1236,6 @@ export function OperatorAuditConsole() {
     }
     if (resolvedDisputeId) {
       setDisputeId(resolvedDisputeId)
-      await runApiCallWithStatus({
-        step: "Resolve closure attestation dispute (#65 lattice)",
-        method: "POST",
-        path: "/api/d4/filings",
-        body: {
-          action: "resolve_closure_attestation_dispute",
-          actorId: partnerId,
-          disputeId: resolvedDisputeId,
-          resolution: "uphold",
-          note: "Resolve closure attestation dispute through /ops Batch F lattice.",
-        },
-      })
     }
     await runApiCallWithStatus({
       step: "Tick closure SLA exception enforcement (#65 lattice)",
@@ -1263,8 +1265,7 @@ export function OperatorAuditConsole() {
         })
       : null
     let resolvedAdjudicationId =
-      (escalateResponse ? resultEntityId(escalateResponse.body, "closureAdjudicationQueue") : "") ||
-      adjudicationId.trim()
+      (escalateResponse ? resultEntityId(escalateResponse.body, "closureAdjudicationQueue") : "") || ""
     if (!resolvedAdjudicationId) {
       const adjudicationView = await runApiCall({
         step: "Read closure adjudication queue for #60-#69 lattice context",
@@ -1275,7 +1276,23 @@ export function OperatorAuditConsole() {
           ...closureViewsQuery,
         },
       })
-      resolvedAdjudicationId = firstItemIdFromBody(adjudicationView)
+      resolvedAdjudicationId =
+        firstMatchingItemIdFromBody(adjudicationView, "disputeId", resolvedDisputeId) ||
+        firstItemIdFromBody(adjudicationView)
+    }
+    if (resolvedDisputeId && !resolvedAdjudicationId) {
+      await runApiCallWithStatus({
+        step: "Resolve closure attestation dispute (#65 lattice fallback)",
+        method: "POST",
+        path: "/api/d4/filings",
+        body: {
+          action: "resolve_closure_attestation_dispute",
+          actorId: partnerId,
+          disputeId: resolvedDisputeId,
+          resolution: "uphold",
+          note: "Resolve closure attestation dispute when escalation queue is unavailable.",
+        },
+      })
     }
     if (resolvedAdjudicationId) {
       setAdjudicationId(resolvedAdjudicationId)
@@ -1418,6 +1435,19 @@ export function OperatorAuditConsole() {
         actorId: partnerId,
         ...rebalanceSelector,
         note: "Execute rebalance owner transfer through /ops Batch F lattice.",
+      },
+    })
+    await runApiCallWithStatus({
+      step: "Mark closure rebalance throttle active (#67 lattice)",
+      method: "POST",
+      path: "/api/d4/filings",
+      body: {
+        action: "rebalance_closure_enforcement_queue",
+        actorId: partnerId,
+        ...rebalanceSelector,
+        status: "throttle_active",
+        throttleHours: 1,
+        note: "Mark rebalance throttle active through /ops Batch F lattice.",
       },
     })
     await runApiCallWithStatus({
