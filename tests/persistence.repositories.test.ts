@@ -1346,6 +1346,79 @@ describe("Firestore repository adapters", () => {
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1"
         )
       expect(checkpointExpiryQueue?.queueStatus).toBe("queue_auto_drained")
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.upsert({
+        id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        waiverExpiryDisputeAdjudicationSloDebtBurndownId:
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1",
+        classification: "internal",
+        settlementStatus: "target_lock_attested",
+        burndownStatusSnapshot: "burndown_checkpointed",
+        settlementLatencyHours: 2,
+        driftAcknowledgedBy: "partner_a",
+        driftAcknowledgedAt: 71,
+        targetLockAttestedBy: "partner_a",
+        targetLockAttestedAt: 72,
+        rollbackResolutionClosedBy: null,
+        rollbackResolutionClosedAt: null,
+        rollbackResolutionNote: null,
+        settlementNote: "ops_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_seed",
+        reopenPressureCount: 1,
+        lastStatusChangedAt: 72,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement"],
+        recomputedAt: 72,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_seed",
+        updatedAt: 72,
+      })
+      const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
+        )
+      expect(waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement?.settlementStatus).toBe(
+        "target_lock_attested"
+      )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.upsert(
+        {
+          id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          expiryAttestationQueueOrchestrationId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1",
+          classification: "internal",
+          drainStatus: "forced_drain_checkpointed",
+          queueStatusSnapshot: "queue_auto_drained",
+          openQueueAgingHours: 0,
+          drainThroughputPerDay: 2,
+          handoffTimeoutEscalatedBy: "partner_a",
+          handoffTimeoutEscalatedAt: 73,
+          staleReassignmentAttestedBy: "partner_a",
+          staleReassignmentAttestedAt: 74,
+          reassignedOwnerId: "associate_a",
+          forcedDrainCheckpointedBy: "partner_a",
+          forcedDrainCheckpointedAt: 75,
+          forcedDrainOverrideNote: "ops_checkpoint_expiry_queue_drain_seed",
+          drainNote: "ops_checkpoint_expiry_queue_drain_seed",
+          reopenPressureCount: 2,
+          lastStatusChangedAt: 75,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_drain",
+          ],
+          recomputedAt: 75,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_checkpoint_expiry_queue_drain_seed",
+          updatedAt: 75,
+        }
+      )
+      const checkpointExpiryQueueDrain =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
+        )
+      expect(checkpointExpiryQueueDrain?.drainStatus).toBe("forced_drain_checkpointed")
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

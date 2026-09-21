@@ -2744,6 +2744,83 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     updatedAt: number
   }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus =
+  | "settlement_pending"
+  | "drift_acknowledged"
+  | "target_lock_attested"
+  | "rollback_resolution_closed"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow = {
+  id: string
+  firmId: string
+  matterId: string
+  waiverExpiryDisputeAdjudicationSloDebtBurndownId: string
+  classification: Classification
+  settlementStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus
+  burndownStatusSnapshot: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownStatus
+  settlementLatencyHours: number
+  driftAcknowledgedBy: string | null
+  driftAcknowledgedAt: number | null
+  targetLockAttestedBy: string | null
+  targetLockAttestedAt: number | null
+  rollbackResolutionClosedBy: string | null
+  rollbackResolutionClosedAt: number | null
+  rollbackResolutionNote: string | null
+  settlementNote: string | null
+  reopenPressureCount: number
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus =
+  | "drain_pending"
+  | "handoff_timeout_escalated"
+  | "stale_reassignment_attested"
+  | "forced_drain_checkpointed"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    expiryAttestationQueueOrchestrationId: string
+    classification: Classification
+    drainStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus
+    queueStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationStatus
+    openQueueAgingHours: number
+    drainThroughputPerDay: number
+    handoffTimeoutEscalatedBy: string | null
+    handoffTimeoutEscalatedAt: number | null
+    staleReassignmentAttestedBy: string | null
+    staleReassignmentAttestedAt: number | null
+    reassignedOwnerId: string | null
+    forcedDrainCheckpointedBy: string | null
+    forcedDrainCheckpointedAt: number | null
+    forcedDrainOverrideNote: string | null
+    drainNote: string | null
+    reopenPressureCount: number
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2894,6 +2971,13 @@ export class SpineStore {
     new Map<
       string,
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow
+    >()
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements =
+    new Map<string, WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow>()
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains =
+    new Map<
+      string,
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow
     >()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()

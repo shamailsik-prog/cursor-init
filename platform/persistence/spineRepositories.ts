@@ -80,6 +80,8 @@ import type {
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow,
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow,
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow,
+  WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow,
+  WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -829,6 +831,37 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     >
   }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRepository = {
+  upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow | null>
+  listByFirm(
+    firmId: string
+  ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow[]>
+  listByMatter(
+    matterId: string
+  ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow[]>
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRepository =
+  {
+    upsert(
+      row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow
+    ): Promise<void>
+    get(
+      id: string
+    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow | null>
+    listByFirm(
+      firmId: string
+    ): Promise<
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow[]
+    >
+    listByMatter(
+      matterId: string
+    ): Promise<
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow[]
+    >
+  }
+
 export type TenancySessionReferenceRepository = {
   upsert(row: TenancySessionReferenceRow): Promise<void>
   get(id: string): Promise<TenancySessionReferenceRow | null>
@@ -1004,6 +1037,8 @@ export type SpineRepositories = {
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRepository
   workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRepository
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRepository
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRepository
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
@@ -2729,6 +2764,49 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           ].filter((row) => row.matterId === matterId)
         },
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements: {
+      async upsert(row) {
+        store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [
+          ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.values(),
+        ].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [
+          ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.values(),
+        ].filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains: {
+      async upsert(row) {
+        store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.set(
+          row.id,
+          row
+        )
+      },
+      async get(id) {
+        return (
+          store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
+            id
+          ) ?? null
+        )
+      },
+      async listByFirm(firmId) {
+        return [
+          ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.values(),
+        ].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [
+          ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.values(),
+        ].filter((row) => row.matterId === matterId)
+      },
+    },
     tenancySessionReferences: {
       async upsert(row) {
         store.tenancySessionReferences.set(row.id, row)
