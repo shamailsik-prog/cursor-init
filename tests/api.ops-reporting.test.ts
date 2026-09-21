@@ -1236,6 +1236,54 @@ describe("GET /api/d2/ops-reporting", () => {
         .waiverExpiryDisputeAdjudicationSloDebtBurndown.checkpointedBy
     ).toBe("partner_a")
 
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementDrift = await postOpsReport(
+      {
+        action:
+          "acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_drift",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO debt burndown settlement drift acknowledged",
+      },
+      "a79d44f0-91ab-4e22-a7f6-0b3c5d8e9a30"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementDrift.status).toBe(200)
+
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementTargetLock = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_target_lock",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO debt burndown settlement target lock attested",
+      },
+      "b89d44f0-91ab-4e22-a7f6-0b3c5d8e9a31"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementTargetLock.status).toBe(200)
+
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownRollbackResolution = await postOpsReport(
+      {
+        action:
+          "close_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_rollback_resolution",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO debt burndown rollback resolution closed",
+      },
+      "c99d44f0-91ab-4e22-a7f6-0b3c5d8e9a32"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloDebtBurndownRollbackResolution.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownRollbackResolutionJson =
+      (await waiverExpiryDisputeAdjudicationSloDebtBurndownRollbackResolution.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement: {
+            settlementStatus: string
+          }
+        }
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownRollbackResolutionJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement.settlementStatus
+    ).toBe("rollback_resolution_closed")
+
     const waiverExpiryDisputeAdjudicationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_waiver_expiry_dispute_adjudication",
@@ -1587,6 +1635,57 @@ describe("GET /api/d2/ops-reporting", () => {
         .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration
         .autoDrainCheckpointedBy
     ).toBe("partner_a")
+
+    const remediationSlaBreachResolutionCheckpointExpiryQueueDrainHandoffTimeout = await postOpsReport(
+      {
+        action:
+          "escalate_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_handoff_timeout",
+        actorId: "partner_a",
+        matterId,
+        reason: "checkpoint expiry attestation queue drain handoff timeout escalated",
+      },
+      "d09d44f0-91ab-4e22-a7f6-0b3c5d8e9a33"
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryQueueDrainHandoffTimeout.status).toBe(200)
+
+    const remediationSlaBreachResolutionCheckpointExpiryQueueDrainStaleReassignment =
+      await postOpsReport(
+        {
+          action:
+            "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_stale_reassignment",
+          actorId: "partner_a",
+          matterId,
+          reassignedOwnerId: "associate_a",
+          reason: "checkpoint expiry attestation queue drain stale reassignment attested",
+        },
+        "e19d44f0-91ab-4e22-a7f6-0b3c5d8e9a34"
+      )
+    expect(remediationSlaBreachResolutionCheckpointExpiryQueueDrainStaleReassignment.status).toBe(200)
+
+    const remediationSlaBreachResolutionCheckpointExpiryQueueDrainForcedOverride = await postOpsReport(
+      {
+        action:
+          "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_drain_override",
+        actorId: "partner_a",
+        matterId,
+        overrideNote: "forced drain override for overdue queue throughput",
+        reason: "checkpoint expiry attestation queue drain forced override checkpointed",
+      },
+      "f29d44f0-91ab-4e22-a7f6-0b3c5d8e9a35"
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryQueueDrainForcedOverride.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryQueueDrainForcedOverrideJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryQueueDrainForcedOverride.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain: {
+            drainStatus: string
+          }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryQueueDrainForcedOverrideJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus
+    ).toBe("forced_drain_checkpointed")
 
     const remediationResolve = await postOpsReport(
       {
@@ -2154,6 +2253,51 @@ describe("GET /api/d2/ops-reporting", () => {
           row.matterId === matterId &&
           row.queueStatus === "queue_auto_drained" &&
           row.autoDrainCheckpointedBy === "partner_a"
+      )
+    ).toBe(true)
+
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlements",
+        actorId: "associate_a",
+        matterId,
+        settlementStatus: "rollback_resolution_closed",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementView.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementViewJson =
+      (await waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementView.json()) as {
+        items: Array<{ matterId: string; settlementStatus: string }>
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementViewJson.items.some(
+        (row) => row.matterId === matterId && row.settlementStatus === "rollback_resolution_closed"
+      )
+    ).toBe(true)
+
+    const remediationSlaBreachResolutionCheckpointExpiryQueueDrainView = await getOpsReport(
+      new URLSearchParams({
+        view:
+          "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drains",
+        actorId: "associate_a",
+        matterId,
+        drainStatus: "forced_drain_checkpointed",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryQueueDrainView.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryQueueDrainViewJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryQueueDrainView.json()) as {
+        items: Array<{ matterId: string; drainStatus: string }>
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryQueueDrainViewJson.items.some(
+        (row) => row.matterId === matterId && row.drainStatus === "forced_drain_checkpointed"
       )
     ).toBe(true)
   })

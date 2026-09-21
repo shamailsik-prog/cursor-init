@@ -2449,6 +2449,79 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          waiverExpiryDisputeAdjudicationSloDebtBurndownId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1",
+          classification: "internal",
+          settlementStatus: "rollback_resolution_closed",
+          burndownStatusSnapshot: "burndown_checkpointed",
+          settlementLatencyHours: 3,
+          driftAcknowledgedBy: "partner_a",
+          driftAcknowledgedAt: Date.now(),
+          targetLockAttestedBy: "partner_a",
+          targetLockAttestedAt: Date.now(),
+          rollbackResolutionClosedBy: "partner_a",
+          rollbackResolutionClosedAt: Date.now(),
+          rollbackResolutionNote: "repo slo debt burndown settlement closed",
+          settlementNote: "repo slo debt burndown settlement",
+          reopenPressureCount: 1,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 27,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          expiryAttestationQueueOrchestrationId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1",
+          classification: "internal",
+          drainStatus: "forced_drain_checkpointed",
+          queueStatusSnapshot: "queue_auto_drained",
+          openQueueAgingHours: 0,
+          drainThroughputPerDay: 2,
+          handoffTimeoutEscalatedBy: "partner_a",
+          handoffTimeoutEscalatedAt: Date.now(),
+          staleReassignmentAttestedBy: "partner_a",
+          staleReassignmentAttestedAt: Date.now(),
+          reassignedOwnerId: "associate_a",
+          forcedDrainCheckpointedBy: "partner_a",
+          forcedDrainCheckpointedAt: Date.now(),
+          forcedDrainOverrideNote: "repo checkpoint expiry queue drain",
+          drainNote: "repo checkpoint expiry queue drain",
+          reopenPressureCount: 2,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "repo",
+            "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_drain",
+          ],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 28,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -3473,5 +3546,35 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1"
     )
     expect(json.items[0]?.queueStatus).toBe("queue_auto_drained")
+  })
+
+  it("ops reporting waiver-expiry dispute adjudication SLO debt-burndown settlement view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlements&actorId=associate_a&settlementStatus=rollback_resolution_closed&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; settlementStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
+    )
+    expect(json.items[0]?.settlementStatus).toBe("rollback_resolution_closed")
+  })
+
+  it("ops reporting checkpoint expiry-attestation queue-drain view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drains&actorId=associate_a&drainStatus=forced_drain_checkpointed&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; drainStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
+    )
+    expect(json.items[0]?.drainStatus).toBe("forced_drain_checkpointed")
   })
 })

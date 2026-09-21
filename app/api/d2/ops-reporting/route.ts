@@ -83,7 +83,19 @@ import {
   type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow,
   type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointStatus,
   type WorkflowOpsAlertVarianceRemediationSlaBreachEscalationStatus,
+  type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus,
+  type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow,
+  type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus,
+  type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus,
+  type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow,
+  type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus,
 } from "@/platform/spine/store"
+import {
+  buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow,
+  buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow,
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainId,
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementId,
+} from "@/platform/persistence/workflowOpsAlertBurndownSettlementQueueDrainGovernance"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -155,6 +167,8 @@ type View =
   | "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations"
   | "alert_waiver_expiry_dispute_adjudication_slo_debt_burndowns"
   | "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_orchestrations"
+  | "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlements"
+  | "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drains"
 
 function parseView(value: string | null): View | undefined {
   if (!value || value === "activity") return "activity"
@@ -190,6 +204,13 @@ function parseView(value: string | null): View | undefined {
   if (
     value ===
     "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_orchestrations"
+  ) {
+    return value
+  }
+  if (value === "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlements") return value
+  if (
+    value ===
+    "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drains"
   ) {
     return value
   }
@@ -474,6 +495,34 @@ function parseRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueStat
     value === "queue_triaged" ||
     value === "handoff_attested" ||
     value === "queue_auto_drained"
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function parseWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus(
+  value: string | null
+): WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus | undefined {
+  if (
+    value === "settlement_pending" ||
+    value === "drift_acknowledged" ||
+    value === "target_lock_attested" ||
+    value === "rollback_resolution_closed"
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function parseRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus(
+  value: string | null
+): WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus | undefined {
+  if (
+    value === "drain_pending" ||
+    value === "handoff_timeout_escalated" ||
+    value === "stale_reassignment_attested" ||
+    value === "forced_drain_checkpointed"
   ) {
     return value
   }
@@ -911,6 +960,20 @@ function asRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchest
   recomputedAt: number,
   now: number
 ): WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus {
   return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
 }
 
@@ -2389,6 +2452,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
   varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow[]
   waiverExpiryDisputeAdjudicationSloDebtBurndowns: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow[]
   varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow[]
+  waiverExpiryDisputeAdjudicationSloDebtBurndownSettlements: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow[]
+  varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow[]
 }> {
   const { digests, actorId, reason, store, repos } = params
   const now = Date.now()
@@ -2417,6 +2482,10 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
   const waiverExpiryDisputeAdjudicationSloDebtBurndowns: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow[] =
     []
   const varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow[] =
+    []
+  const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlements: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow[] =
+    []
+  const varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow[] =
     []
 
   for (const digest of digests) {
@@ -2452,6 +2521,12 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       alertWaiverExpiryDisputeAdjudicationSloDebtBurndownId(digest.matterId)
     const remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationKey =
       alertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationId(
+        digest.matterId
+      )
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementKey =
+      workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementId(digest.matterId)
+    const remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainKey =
+      workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainId(
         digest.matterId
       )
     const existingAttestation = await repos.workflowOpsAlertAttestations.get(attestationKey)
@@ -2509,6 +2584,22 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.get(
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationKey
       )
+    const existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement =
+      store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementKey
+      ) ??
+      (await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementKey
+      )) ??
+      null
+    const existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain =
+      store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainKey
+      ) ??
+      (await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainKey
+      )) ??
+      null
 
     const attestation = buildWorkflowOpsAlertAttestationRow({
       digest,
@@ -2718,6 +2809,65 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
           .queueStatus === "queue_auto_drained")
         ? existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration
         : remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement =
+      buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow({
+        burndown: waiverExpiryDisputeAdjudicationSloDebtBurndownToPersist,
+        actorId,
+        reason,
+        existing: existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement,
+        now,
+      })
+    let waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementToPersist =
+      existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement &&
+      (existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement.settlementStatus ===
+        "drift_acknowledged" ||
+        existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement.settlementStatus ===
+          "target_lock_attested" ||
+        existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement.settlementStatus ===
+          "rollback_resolution_closed")
+        ? existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement
+        : waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement
+    if (
+      existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement &&
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementToPersist.settlementStatus ===
+        "settlement_pending" &&
+      existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement.settlementStatus !==
+        "settlement_pending"
+    ) {
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementToPersist =
+        existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement
+    }
+    const remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain =
+      buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow(
+        {
+          queueOrchestration:
+            remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationToPersist,
+          actorId,
+          reason,
+          existing: existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain,
+          now,
+        }
+      )
+    let remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainToPersist =
+      existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain &&
+      (existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus ===
+        "handoff_timeout_escalated" ||
+        existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus ===
+          "stale_reassignment_attested" ||
+        existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus ===
+          "forced_drain_checkpointed")
+        ? existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain
+        : remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain
+    if (
+      existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain &&
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainToPersist.drainStatus ===
+        "drain_pending" &&
+      existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus !==
+        "drain_pending"
+    ) {
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainToPersist =
+        existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain
+    }
 
     await repos.workflowOpsAlertAttestations.upsert(attestation)
     await repos.workflowOpsAlertEscalationLedgers.upsert(escalation)
@@ -2758,6 +2908,12 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     )
     await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.upsert(
       remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationToPersist
+    )
+    await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.upsert(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementToPersist
+    )
+    await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.upsert(
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainToPersist
     )
     store.workflowOpsAlertAttestations.set(attestation.id, attestation)
     store.workflowOpsAlertEscalationLedgers.set(escalation.id, escalation)
@@ -2817,6 +2973,14 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationToPersist.id,
       remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationToPersist
     )
+    store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.set(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementToPersist.id,
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementToPersist
+    )
+    store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.set(
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainToPersist.id,
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainToPersist
+    )
     attestations.push(attestation)
     escalationLedgers.push(escalation)
     attestationDisputes.push(dispute)
@@ -2853,6 +3017,12 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.push(
       remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationToPersist
     )
+    waiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.push(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementToPersist
+    )
+    varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.push(
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainToPersist
+    )
   }
 
   return {
@@ -2878,6 +3048,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations,
     waiverExpiryDisputeAdjudicationSloDebtBurndowns,
     varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations,
+    waiverExpiryDisputeAdjudicationSloDebtBurndownSettlements,
+    varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains,
   }
 }
 
@@ -3351,6 +3523,53 @@ type CheckpointWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointE
     reason?: unknown
   }
 
+type AcknowledgeWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementDriftBody = {
+  action: "acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_drift"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type AttestWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementTargetLockBody = {
+  action: "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_target_lock"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type CloseWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRollbackResolutionBody = {
+  action: "close_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_rollback_resolution"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type EscalateWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainHandoffTimeoutBody =
+  {
+    action: "escalate_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_handoff_timeout"
+    actorId?: string
+    matterId?: string
+    reason?: unknown
+  }
+
+type AttestWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStaleReassignmentBody =
+  {
+    action: "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_stale_reassignment"
+    actorId?: string
+    matterId?: string
+    reassignedOwnerId?: unknown
+    reason?: unknown
+  }
+
+type CheckpointWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainForcedDrainOverrideBody =
+  {
+    action: "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_drain_override"
+    actorId?: string
+    matterId?: string
+    overrideNote?: unknown
+    reason?: unknown
+  }
+
 type Body =
   | ViewActivityBody
   | AcknowledgeWorkflowOpsAlertDigestBody
@@ -3416,6 +3635,12 @@ type Body =
   | TriageWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueBody
   | AttestWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueHandoffBody
   | CheckpointWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueAutoDrainBody
+  | AcknowledgeWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementDriftBody
+  | AttestWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementTargetLockBody
+  | CloseWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRollbackResolutionBody
+  | EscalateWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainHandoffTimeoutBody
+  | AttestWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStaleReassignmentBody
+  | CheckpointWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainForcedDrainOverrideBody
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
@@ -3487,6 +3712,17 @@ export async function GET(request: Request) {
       url.searchParams.get(
         "remediationSlaBreachResolutionCheckpointExpiryAttestationQueueStatus"
       ) ?? url.searchParams.get("queueStatus")
+    )
+  const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus =
+    parseWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus(
+      url.searchParams.get("waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus") ??
+        url.searchParams.get("settlementStatus")
+    )
+  const remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus =
+    parseRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus(
+      url.searchParams.get(
+        "remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus"
+      ) ?? url.searchParams.get("drainStatus")
     )
   const terms = normalizeTerms(url.searchParams.get("q"))
   const limit = parseLimit(url.searchParams.get("limit"))
@@ -4243,6 +4479,83 @@ export async function GET(request: Request) {
     })
   }
 
+  if (view === "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlements") {
+    const all = (
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.listByFirm(
+        refreshedActor.firmId
+      )
+    )
+      .map((row) => ({
+        ...row,
+        freshnessStatus: asWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus(
+          row.recomputedAt,
+          now
+        ),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) =>
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus
+          ? row.settlementStatus === waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus
+          : true
+      )
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view: "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlements",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
+  if (
+    view ===
+    "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drains"
+  ) {
+    const all = (
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.listByFirm(
+        refreshedActor.firmId
+      )
+    )
+      .map((row) => ({
+        ...row,
+        freshnessStatus:
+          asRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus(
+            row.recomputedAt,
+            now
+          ),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) =>
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus
+          ? row.drainStatus === remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus
+          : true
+      )
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view:
+        "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drains",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
   return NextResponse.json({ error: "unknown view" }, { status: 400 })
 }
 
@@ -4337,7 +4650,19 @@ export async function POST(request: Request) {
       parsed.action !==
         "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_handoff" &&
       parsed.action !==
-        "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_auto_drain")
+        "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_auto_drain" &&
+      parsed.action !==
+        "acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_drift" &&
+      parsed.action !==
+        "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_target_lock" &&
+      parsed.action !==
+        "close_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_rollback_resolution" &&
+      parsed.action !==
+        "escalate_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_handoff_timeout" &&
+      parsed.action !==
+        "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_stale_reassignment" &&
+      parsed.action !==
+        "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_drain_override")
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -4560,6 +4885,30 @@ export async function POST(request: Request) {
         matter.id
       )
     ))
+  const currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement =
+    store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(
+      workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementId(matter.id)
+    ) ??
+    governance.waiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.find(
+      (row) => row.matterId === matter.id
+    ) ??
+    (await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(
+      workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementId(matter.id)
+    ))
+  const currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain =
+    store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
+      workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainId(
+        matter.id
+      )
+    ) ??
+    governance.varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.find(
+      (row) => row.matterId === matter.id
+    ) ??
+    (await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
+      workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainId(
+        matter.id
+      )
+    ))
   if (
     !currentAttestation ||
     !currentEscalation ||
@@ -4582,7 +4931,9 @@ export async function POST(request: Request) {
     !currentWaiverExpiryDisputeAdjudicationSloDebtRemediation ||
     !currentRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliation ||
     !currentWaiverExpiryDisputeAdjudicationSloDebtBurndown ||
-    !currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration
+    !currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration ||
+    !currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement ||
+    !currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain
   ) {
     return NextResponse.json({ error: "alert governance rows are unavailable for matter" }, { status: 404 })
   }
@@ -7848,6 +8199,408 @@ export async function POST(request: Request) {
         action: parsed.action,
         digest: current,
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration: nextQueue,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_drift"
+    ) {
+      if (currentWaiverExpiryDisputeAdjudicationSloDebtBurndown.burndownStatus !== "burndown_checkpointed") {
+        return NextResponse.json(
+          { error: "SLO debt burndown settlement drift requires burndown-checkpointed posture" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason,
+        "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_drift_acknowledged"
+      )
+      const nextSettlement: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow =
+        {
+          ...currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement,
+          settlementStatus: "drift_acknowledged",
+          burndownStatusSnapshot: currentWaiverExpiryDisputeAdjudicationSloDebtBurndown.burndownStatus,
+          settlementLatencyHours: Math.max(
+            0,
+            Math.ceil(
+              (now -
+                (currentWaiverExpiryDisputeAdjudicationSloDebtBurndown.checkpointedAt ??
+                  currentWaiverExpiryDisputeAdjudicationSloDebtBurndown.recomputedAt)) /
+                (60 * 60 * 1000)
+            )
+          ),
+          driftAcknowledgedBy: actor.id,
+          driftAcknowledgedAt: now,
+          settlementNote: reason,
+          lastStatusChangedAt: now,
+          freshnessStatus: asWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus(
+            currentWaiverExpiryDisputeAdjudicationSloDebtBurndown.recomputedAt,
+            now
+          ),
+          recomputedAt: now,
+          recomputedBy: actor.id,
+          recomputeReason: reason,
+          updatedAt: now,
+        }
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.upsert(
+        nextSettlement
+      )
+      store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.set(
+        nextSettlement.id,
+        nextSettlement
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_drift_acknowledged",
+        actorId: actor.id,
+        target: nextSettlement.matterId,
+        classification: nextSettlement.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        waiverExpiryDisputeAdjudicationSloDebtBurndown: currentWaiverExpiryDisputeAdjudicationSloDebtBurndown,
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement: nextSettlement,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_target_lock"
+    ) {
+      if (currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement.settlementStatus !== "drift_acknowledged") {
+        return NextResponse.json(
+          { error: "SLO debt burndown settlement target lock requires drift-acknowledged posture" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason,
+        "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_target_lock_attested"
+      )
+      const nextSettlement: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow =
+        {
+          ...currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement,
+          settlementStatus: "target_lock_attested",
+          targetLockAttestedBy: actor.id,
+          targetLockAttestedAt: now,
+          settlementNote: reason,
+          lastStatusChangedAt: now,
+          freshnessStatus: asWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus(
+            currentWaiverExpiryDisputeAdjudicationSloDebtBurndown.recomputedAt,
+            now
+          ),
+          recomputedAt: now,
+          recomputedBy: actor.id,
+          recomputeReason: reason,
+          updatedAt: now,
+        }
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.upsert(
+        nextSettlement
+      )
+      store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.set(
+        nextSettlement.id,
+        nextSettlement
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_target_lock_attested",
+        actorId: actor.id,
+        target: nextSettlement.matterId,
+        classification: nextSettlement.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement: nextSettlement,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "close_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_rollback_resolution"
+    ) {
+      if (
+        currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement.settlementStatus !==
+        "target_lock_attested"
+      ) {
+        return NextResponse.json(
+          { error: "SLO debt burndown rollback resolution requires target-lock-attested posture" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason,
+        "waiver_expiry_dispute_adjudication_slo_debt_burndown_rollback_resolution_closed"
+      )
+      const nextSettlement: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow =
+        {
+          ...currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlement,
+          settlementStatus: "rollback_resolution_closed",
+          rollbackResolutionClosedBy: actor.id,
+          rollbackResolutionClosedAt: now,
+          rollbackResolutionNote: reason,
+          settlementNote: reason,
+          lastStatusChangedAt: now,
+          freshnessStatus: asWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementFreshnessStatus(
+            currentWaiverExpiryDisputeAdjudicationSloDebtBurndown.recomputedAt,
+            now
+          ),
+          recomputedAt: now,
+          recomputedBy: actor.id,
+          recomputeReason: reason,
+          updatedAt: now,
+        }
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.upsert(
+        nextSettlement
+      )
+      store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.set(
+        nextSettlement.id,
+        nextSettlement
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_rollback_resolution_closed",
+        actorId: actor.id,
+        target: nextSettlement.matterId,
+        classification: nextSettlement.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement: nextSettlement,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "escalate_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_handoff_timeout"
+    ) {
+      if (
+        currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration
+          .queueStatus !== "queue_auto_drained" &&
+        currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration
+          .queueStatus !== "handoff_attested"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "expiry-attestation queue drain handoff timeout requires auto-drained or handoff-attested queue posture",
+          },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason,
+        "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_handoff_timeout_escalated"
+      )
+      const nextDrain: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow =
+        {
+          ...currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain,
+          drainStatus: "handoff_timeout_escalated",
+          queueStatusSnapshot:
+            currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.queueStatus,
+          openQueueAgingHours: Math.max(
+            currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.queueAgingHours,
+            currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.openQueueAgingHours
+          ),
+          handoffTimeoutEscalatedBy: actor.id,
+          handoffTimeoutEscalatedAt: now,
+          drainNote: reason,
+          lastStatusChangedAt: now,
+          freshnessStatus:
+            asRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus(
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.recomputedAt,
+              now
+            ),
+          recomputedAt: now,
+          recomputedBy: actor.id,
+          recomputeReason: reason,
+          updatedAt: now,
+        }
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.upsert(
+        nextDrain
+      )
+      store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.set(
+        nextDrain.id,
+        nextDrain
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_handoff_timeout_escalated",
+        actorId: actor.id,
+        target: nextDrain.matterId,
+        classification: nextDrain.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration:
+          currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration,
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain: nextDrain,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_stale_reassignment"
+    ) {
+      if (
+        currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus !==
+        "handoff_timeout_escalated"
+      ) {
+        return NextResponse.json(
+          { error: "expiry-attestation queue drain stale reassignment requires handoff-timeout posture" },
+          { status: 400 }
+        )
+      }
+      const reassignedOwnerId =
+        typeof parsed.reassignedOwnerId === "string" && parsed.reassignedOwnerId.length > 0
+          ? parsed.reassignedOwnerId
+          : "associate_a"
+      const reason = normalizeReason(
+        parsed.reason,
+        "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_stale_reassignment_attested"
+      )
+      const nextDrain: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow =
+        {
+          ...currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain,
+          drainStatus: "stale_reassignment_attested",
+          staleReassignmentAttestedBy: actor.id,
+          staleReassignmentAttestedAt: now,
+          reassignedOwnerId,
+          drainNote: reason,
+          lastStatusChangedAt: now,
+          freshnessStatus:
+            asRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus(
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.recomputedAt,
+              now
+            ),
+          recomputedAt: now,
+          recomputedBy: actor.id,
+          recomputeReason: reason,
+          updatedAt: now,
+        }
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.upsert(
+        nextDrain
+      )
+      store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.set(
+        nextDrain.id,
+        nextDrain
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_stale_reassignment_attested",
+        actorId: actor.id,
+        target: nextDrain.matterId,
+        classification: nextDrain.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain: nextDrain,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_drain_override"
+    ) {
+      if (
+        currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus !==
+          "handoff_timeout_escalated" &&
+        currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus !==
+          "stale_reassignment_attested"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "expiry-attestation queue drain forced override requires handoff-timeout or stale-reassignment posture",
+          },
+          { status: 400 }
+        )
+      }
+      const overrideNote =
+        typeof parsed.overrideNote === "string" && parsed.overrideNote.trim().length > 0
+          ? parsed.overrideNote.trim()
+          : undefined
+      const reason = normalizeReason(
+        parsed.reason ?? overrideNote,
+        "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_drain_override_checkpointed"
+      )
+      const nextDrain: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow =
+        {
+          ...currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain,
+          drainStatus: "forced_drain_checkpointed",
+          drainThroughputPerDay: Math.max(
+            1,
+            currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainThroughputPerDay
+          ),
+          openQueueAgingHours: 0,
+          forcedDrainCheckpointedBy: actor.id,
+          forcedDrainCheckpointedAt: now,
+          forcedDrainOverrideNote: overrideNote ?? reason,
+          drainNote: reason,
+          lastStatusChangedAt: now,
+          freshnessStatus:
+            asRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainFreshnessStatus(
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.recomputedAt,
+              now
+            ),
+          recomputedAt: now,
+          recomputedBy: actor.id,
+          recomputeReason: reason,
+          updatedAt: now,
+        }
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.upsert(
+        nextDrain
+      )
+      store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.set(
+        nextDrain.id,
+        nextDrain
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_drain_override_checkpointed",
+        actorId: actor.id,
+        target: nextDrain.matterId,
+        classification: nextDrain.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain: nextDrain,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
