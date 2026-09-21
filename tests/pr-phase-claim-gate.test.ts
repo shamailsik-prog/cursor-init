@@ -81,6 +81,42 @@ describe("PR phase claim gate hardening", () => {
     expect(result.stdout).toContain("frontend_real=false")
   })
 
+  it("passes backend-only claims without /ops call-site evidence", () => {
+    const repo = makeRepo(
+      { "app/api/d2/ops-reporting/route.ts": "export const route = 'base'\n" },
+      { "app/api/d2/ops-reporting/route.ts": "export const route = 'head'\n" }
+    )
+    const result = runGate(repo.root, {
+      PR_TITLE: "Backend-only scaffolding",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+        "no /ops call-site changes in this slice",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+
+  it("fails frontend_real=true claims without /ops call-site evidence", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Frontend claim without evidence",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=true",
+        "transport_stub=true",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("call-site evidence for /ops")
+  })
+
   it("fails self-certified DONE to Shamail", () => {
     const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
     const result = runGate(repo.root, {

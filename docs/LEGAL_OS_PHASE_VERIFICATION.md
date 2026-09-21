@@ -59,6 +59,9 @@ The repository now includes a lightweight PR metadata gate:
 
 - Script: `ci_gates/check_pr_phase_claims.py`
 - Workflow: `.github/workflows/pr-phase-claim-gate.yml`
+- `/ops` action/view → call-site evidence is required only when either:
+  - `frontend_real=true` is claimed, or
+  - the PR diff changes `app/ops/**`.
 
 The gate fails when either condition is true:
 

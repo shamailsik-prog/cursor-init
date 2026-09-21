@@ -4,7 +4,8 @@
 Rules:
 1) Require explicit `backend_real`, `frontend_real`, and `transport_stub` flags
    in PR metadata.
-2) Require action/view -> `/ops` call-site evidence in PR metadata.
+2) Require action/view -> `/ops` call-site evidence in PR metadata only when
+   `frontend_real=true` or `/ops` files are changed.
 3) If PR metadata claims "scaffold-only/docs-only/no runtime change", fail when
    route handlers or tests changed.
 4) If PR metadata claims COMPLETE/product-done, fail while filing transport
@@ -136,7 +137,11 @@ def main() -> int:
             f"(missing: {', '.join(missing_flags)})."
         )
 
-    if not CALLSITE_EVIDENCE_RE.search(claim_text):
+    callsite_evidence_required = flags.get("frontend_real") is True
+    if changed_paths and ops_changed(changed_paths):
+        callsite_evidence_required = True
+
+    if callsite_evidence_required and not CALLSITE_EVIDENCE_RE.search(claim_text):
         failures.append(
             "PR metadata must include action-name→call-site evidence for /ops "
             "(e.g. `set_backup_owner -> app/ops/operator-audit-console.tsx`)."
