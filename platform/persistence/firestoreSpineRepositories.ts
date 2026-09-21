@@ -77,6 +77,8 @@ import type {
   WorkflowOpsAlertClosureDebtVarianceDigestRow,
   WorkflowOpsAlertEnforcementWaiverLedgerRow,
   WorkflowOpsAlertVarianceRemediationQueueRow,
+  WorkflowOpsAlertWaiverExpiryDigestRow,
+  WorkflowOpsAlertVarianceRemediationSlaLedgerRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -2021,6 +2023,56 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "workflow_ops_alert_variance_remediation_queues"))
         return rows.docs
           .map((entry) => entry.data() as WorkflowOpsAlertVarianceRemediationQueueRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertWaiverExpiryDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_waiver_expiry_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertWaiverExpiryDigestRow>(
+          db,
+          "workflow_ops_alert_waiver_expiry_digests",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertWaiverExpiryDigestRow>(
+          db,
+          "workflow_ops_alert_waiver_expiry_digests",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_waiver_expiry_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertWaiverExpiryDigestRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertVarianceRemediationSlaLedgers: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_variance_remediation_sla_ledgers", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertVarianceRemediationSlaLedgerRow>(
+          db,
+          "workflow_ops_alert_variance_remediation_sla_ledgers",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertVarianceRemediationSlaLedgerRow>(
+          db,
+          "workflow_ops_alert_variance_remediation_sla_ledgers",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_variance_remediation_sla_ledgers"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertVarianceRemediationSlaLedgerRow)
           .filter((row) => row.matterId === matterId)
       },
     },

@@ -7571,6 +7571,42 @@ describe("Runtime persistence mode", () => {
       expect(waiverWaiveJson.result.enforcementWaiver.waivedBy).toBe("partner_a")
       expect((waiverWaiveJson.result.enforcementWaiver.waiverExpiresAt ?? 0) >= waiverExpiry).toBe(true)
 
+      const waiverExpiryAcknowledge = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "d5944eca-46d3-4f2d-932f-2b8f53bb80f8",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_workflow_ops_alert_waiver_expiry_digest",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime waiver expiry acknowledged",
+          }),
+        })
+      )
+      expect(waiverExpiryAcknowledge.status).toBe(200)
+
+      const waiverExpiryExtendedTo = Date.now() + 48 * 60 * 60 * 1000
+      const waiverExpiryExtend = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "9f81f50b-8f16-4fbd-b6f9-c35ccf949d03",
+          },
+          body: JSON.stringify({
+            action: "extend_workflow_ops_alert_waiver_expiry_digest",
+            actorId: "partner_a",
+            matterId,
+            waiverExpiresAt: waiverExpiryExtendedTo,
+            reason: "runtime waiver expiry extension",
+          }),
+        })
+      )
+      expect(waiverExpiryExtend.status).toBe(200)
+
       const varianceReopenForQueue = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
           method: "POST",
@@ -7623,6 +7659,23 @@ describe("Runtime persistence mode", () => {
       )
       expect(remediationAssign.status).toBe(200)
 
+      const remediationSlaAcknowledge = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "858e5929-e2d9-4ca2-a335-493ce92f94d6",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_workflow_ops_alert_variance_remediation_sla_ledger",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime remediation SLA acknowledged",
+          }),
+        })
+      )
+      expect(remediationSlaAcknowledge.status).toBe(200)
+
       const remediationResolve = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
           method: "POST",
@@ -7649,6 +7702,23 @@ describe("Runtime persistence mode", () => {
       expect(remediationResolveJson.result.remediationQueue.ownerId).toBe("associate_a")
       expect(remediationResolveJson.result.variance.varianceStatus).toBe("variance_resolved")
 
+      const remediationSlaResolve = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "61fd0bb5-c8df-4d2f-b6cd-332ced27d337",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow_ops_alert_variance_remediation_sla_ledger",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime remediation SLA resolved",
+          }),
+        })
+      )
+      expect(remediationSlaResolve.status).toBe(200)
+
       getRuntimeStore().workflowOpsAlertDigests = new Map()
       getRuntimeStore().workflowOpsAlertAttestations = new Map()
       getRuntimeStore().workflowOpsAlertEscalationLedgers = new Map()
@@ -7660,6 +7730,8 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().workflowOpsAlertClosureDebtVarianceDigests = new Map()
       getRuntimeStore().workflowOpsAlertEnforcementWaiverLedgers = new Map()
       getRuntimeStore().workflowOpsAlertVarianceRemediationQueues = new Map()
+      getRuntimeStore().workflowOpsAlertWaiverExpiryDigests = new Map()
+      getRuntimeStore().workflowOpsAlertVarianceRemediationSlaLedgers = new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -7852,6 +7924,40 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const waiverExpiryView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_digests&actorId=associate_a&matterId=${matterId}&waiverExpiryStatus=extended&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(waiverExpiryView.status).toBe(200)
+      const waiverExpiryViewJson = (await waiverExpiryView.json()) as {
+        items: Array<{ matterId: string; expiryStatus: string; extendedBy: string | null }>
+      }
+      expect(
+        waiverExpiryViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.expiryStatus === "extended" &&
+            row.extendedBy === "partner_a"
+        )
+      ).toBe(true)
+
+      const remediationSlaView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_ledgers&actorId=associate_a&matterId=${matterId}&remediationSlaStatus=resolved&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(remediationSlaView.status).toBe(200)
+      const remediationSlaViewJson = (await remediationSlaView.json()) as {
+        items: Array<{ matterId: string; slaStatus: string; resolvedBy: string | null }>
+      }
+      expect(
+        remediationSlaViewJson.items.some(
+          (row) =>
+            row.matterId === matterId && row.slaStatus === "resolved" && row.resolvedBy === "partner_a"
+        )
+      ).toBe(true)
+
       const persistedOps = await getDocs(collection(ctx.firestore(), "workflow_ops_activity"))
       expect(
         persistedOps.docs.some(
@@ -7993,6 +8099,30 @@ describe("Runtime persistence mode", () => {
             entry.data()?.matterId === matterId &&
             entry.data()?.queueStatus === "resolved" &&
             entry.data()?.ownerId === "associate_a"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDigests = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_waiver_expiry_digests")
+      )
+      expect(
+        persistedWaiverExpiryDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.expiryStatus === "extended" &&
+            entry.data()?.extendedBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaLedgers = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_variance_remediation_sla_ledgers")
+      )
+      expect(
+        persistedRemediationSlaLedgers.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.slaStatus === "resolved" &&
+            entry.data()?.resolvedBy === "partner_a"
         )
       ).toBe(true)
     })

@@ -97,6 +97,8 @@ const baseStore = {
   workflowOpsAlertClosureDebtVarianceDigests: new Map(),
   workflowOpsAlertEnforcementWaiverLedgers: new Map(),
   workflowOpsAlertVarianceRemediationQueues: new Map(),
+  workflowOpsAlertWaiverExpiryDigests: new Map(),
+  workflowOpsAlertVarianceRemediationSlaLedgers: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -2030,6 +2032,70 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertWaiverExpiryDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_waiver_expiry_digest:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          enforcementWaiverLedgerId: "workflow_ops_alert_enforcement_waiver:mat_1",
+          classification: "internal",
+          expiryStatus: "expires_lte_24h",
+          waiverStatusSnapshot: "waived",
+          waiverExpiresAt: Date.now() + 60_000,
+          msUntilExpiry: 60_000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          extendedBy: null,
+          extendedAt: null,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "waiver_expiry"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 15,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationSlaLedgers: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_variance_remediation_sla:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          remediationQueueId: "workflow_ops_alert_variance_remediation_queue:mat_1",
+          classification: "internal",
+          slaStatus: "warning",
+          queueStatusSnapshot: "queued",
+          ownerIdSnapshot: "associate_a",
+          slaStartedAt: Date.now() - 10_000,
+          warningThresholdMs: 14_400_000,
+          breachThresholdMs: 43_200_000,
+          warningDueAt: Date.now() + 1000,
+          breachDueAt: Date.now() + 2000,
+          elapsedMs: 10_000,
+          acknowledgedBy: null,
+          acknowledgedAt: null,
+          resolvedBy: null,
+          resolvedAt: null,
+          resolutionReason: null,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "variance_sla"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 16,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -2880,5 +2946,31 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_variance_remediation_queue:mat_1"
     )
     expect(json.items[0]?.queueStatus).toBe("queued")
+  })
+
+  it("ops reporting waiver-expiry digest view uses repository workflowOpsAlertWaiverExpiryDigests", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_digests&actorId=associate_a&waiverExpiryStatus=expires_lte_24h&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; expiryStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_waiver_expiry_digest:mat_1")
+    expect(json.items[0]?.expiryStatus).toBe("expires_lte_24h")
+  })
+
+  it("ops reporting variance-remediation SLA view uses repository workflowOpsAlertVarianceRemediationSlaLedgers", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_ledgers&actorId=associate_a&remediationSlaStatus=warning&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; slaStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_variance_remediation_sla:mat_1")
+    expect(json.items[0]?.slaStatus).toBe("warning")
   })
 })

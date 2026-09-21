@@ -68,6 +68,8 @@ import type {
   WorkflowOpsAlertClosureDebtVarianceDigestRow,
   WorkflowOpsAlertEnforcementWaiverLedgerRow,
   WorkflowOpsAlertVarianceRemediationQueueRow,
+  WorkflowOpsAlertWaiverExpiryDigestRow,
+  WorkflowOpsAlertVarianceRemediationSlaLedgerRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -684,6 +686,20 @@ export type WorkflowOpsAlertVarianceRemediationQueueRepository = {
   listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationQueueRow[]>
 }
 
+export type WorkflowOpsAlertWaiverExpiryDigestRepository = {
+  upsert(row: WorkflowOpsAlertWaiverExpiryDigestRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDigestRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDigestRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDigestRow[]>
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaLedgerRepository = {
+  upsert(row: WorkflowOpsAlertVarianceRemediationSlaLedgerRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaLedgerRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaLedgerRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaLedgerRow[]>
+}
+
 export type TenancySessionReferenceRepository = {
   upsert(row: TenancySessionReferenceRow): Promise<void>
   get(id: string): Promise<TenancySessionReferenceRow | null>
@@ -847,6 +863,8 @@ export type SpineRepositories = {
   workflowOpsAlertClosureDebtVarianceDigests: WorkflowOpsAlertClosureDebtVarianceDigestRepository
   workflowOpsAlertEnforcementWaiverLedgers: WorkflowOpsAlertEnforcementWaiverLedgerRepository
   workflowOpsAlertVarianceRemediationQueues: WorkflowOpsAlertVarianceRemediationQueueRepository
+  workflowOpsAlertWaiverExpiryDigests: WorkflowOpsAlertWaiverExpiryDigestRepository
+  workflowOpsAlertVarianceRemediationSlaLedgers: WorkflowOpsAlertVarianceRemediationSlaLedgerRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
@@ -2329,6 +2347,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByMatter(matterId) {
         return [...store.workflowOpsAlertVarianceRemediationQueues.values()].filter(
+          (row) => row.matterId === matterId
+        )
+      },
+    },
+    workflowOpsAlertWaiverExpiryDigests: {
+      async upsert(row) {
+        store.workflowOpsAlertWaiverExpiryDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertWaiverExpiryDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertWaiverExpiryDigests.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertWaiverExpiryDigests.values()].filter(
+          (row) => row.matterId === matterId
+        )
+      },
+    },
+    workflowOpsAlertVarianceRemediationSlaLedgers: {
+      async upsert(row) {
+        store.workflowOpsAlertVarianceRemediationSlaLedgers.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertVarianceRemediationSlaLedgers.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertVarianceRemediationSlaLedgers.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertVarianceRemediationSlaLedgers.values()].filter(
           (row) => row.matterId === matterId
         )
       },

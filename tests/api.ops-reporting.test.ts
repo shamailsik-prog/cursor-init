@@ -749,6 +749,46 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(waiverWaiveJson.result.enforcementWaiver.waivedBy).toBe("partner_a")
     expect((waiverWaiveJson.result.enforcementWaiver.waiverExpiresAt ?? 0) >= waiverExpiry).toBe(true)
 
+    const waiverExpiryAcknowledge = await postOpsReport(
+      {
+        action: "acknowledge_workflow_ops_alert_waiver_expiry_digest",
+        actorId: "partner_a",
+        matterId,
+        reason: "expiry digest acknowledged",
+      },
+      "f7518f37-fd14-436f-ab4f-e96f2c08fdee"
+    )
+    expect(waiverExpiryAcknowledge.status).toBe(200)
+    const waiverExpiryAcknowledgeJson = (await waiverExpiryAcknowledge.json()) as {
+      result: { waiverExpiryDigest: { expiryStatus: string; acknowledgedBy: string | null } }
+    }
+    expect(waiverExpiryAcknowledgeJson.result.waiverExpiryDigest.expiryStatus).toBe("acknowledged")
+    expect(waiverExpiryAcknowledgeJson.result.waiverExpiryDigest.acknowledgedBy).toBe("partner_a")
+
+    const waiverExpiryExtendedTo = Date.now() + 48 * 60 * 60 * 1000
+    const waiverExpiryExtend = await postOpsReport(
+      {
+        action: "extend_workflow_ops_alert_waiver_expiry_digest",
+        actorId: "partner_a",
+        matterId,
+        waiverExpiresAt: waiverExpiryExtendedTo,
+        reason: "extension approved",
+      },
+      "56f32f9f-74c0-488b-9146-1b7c66fdcfc0"
+    )
+    expect(waiverExpiryExtend.status).toBe(200)
+    const waiverExpiryExtendJson = (await waiverExpiryExtend.json()) as {
+      result: {
+        enforcementWaiver: { waiverExpiresAt: number | null }
+        waiverExpiryDigest: { expiryStatus: string; extendedBy: string | null }
+      }
+    }
+    expect((waiverExpiryExtendJson.result.enforcementWaiver.waiverExpiresAt ?? 0) >= waiverExpiryExtendedTo).toBe(
+      true
+    )
+    expect(waiverExpiryExtendJson.result.waiverExpiryDigest.expiryStatus).toBe("extended")
+    expect(waiverExpiryExtendJson.result.waiverExpiryDigest.extendedBy).toBe("partner_a")
+
     const varianceReopenForQueue = await postOpsReport(
       {
         action: "open_workflow_ops_alert_closure_debt_variance",
@@ -792,6 +832,22 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(remediationAssignJson.result.remediationQueue.queueStatus).toBe("assigned")
     expect(remediationAssignJson.result.remediationQueue.ownerId).toBe("associate_a")
 
+    const remediationSlaAcknowledge = await postOpsReport(
+      {
+        action: "acknowledge_workflow_ops_alert_variance_remediation_sla_ledger",
+        actorId: "partner_a",
+        matterId,
+        reason: "SLA noted by partner",
+      },
+      "f3fda729-4fda-4de8-ad76-365dc62c6642"
+    )
+    expect(remediationSlaAcknowledge.status).toBe(200)
+    const remediationSlaAcknowledgeJson = (await remediationSlaAcknowledge.json()) as {
+      result: { remediationSlaLedger: { slaStatus: string; acknowledgedBy: string | null } }
+    }
+    expect(remediationSlaAcknowledgeJson.result.remediationSlaLedger.slaStatus).toBe("acknowledged")
+    expect(remediationSlaAcknowledgeJson.result.remediationSlaLedger.acknowledgedBy).toBe("partner_a")
+
     const remediationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_variance_remediation",
@@ -811,6 +867,22 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(remediationResolveJson.result.remediationQueue.queueStatus).toBe("resolved")
     expect(remediationResolveJson.result.remediationQueue.ownerId).toBe("associate_a")
     expect(remediationResolveJson.result.variance.varianceStatus).toBe("variance_resolved")
+
+    const remediationSlaResolve = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_variance_remediation_sla_ledger",
+        actorId: "partner_a",
+        matterId,
+        reason: "SLA closure attested",
+      },
+      "29f19e95-e852-4715-ae54-5207d2e4354f"
+    )
+    expect(remediationSlaResolve.status).toBe(200)
+    const remediationSlaResolveJson = (await remediationSlaResolve.json()) as {
+      result: { remediationSlaLedger: { slaStatus: string; resolvedBy: string | null } }
+    }
+    expect(remediationSlaResolveJson.result.remediationSlaLedger.slaStatus).toBe("resolved")
+    expect(remediationSlaResolveJson.result.remediationSlaLedger.resolvedBy).toBe("partner_a")
 
     const attestationView = await getOpsReport(
       new URLSearchParams({
@@ -1035,6 +1107,52 @@ describe("GET /api/d2/ops-reporting", () => {
       remediationQueueViewJson.items.some(
         (row) =>
           row.matterId === matterId && row.queueStatus === "resolved" && row.ownerId === "associate_a"
+      )
+    ).toBe(true)
+
+    const waiverExpiryView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_waiver_expiry_digests",
+        actorId: "associate_a",
+        matterId,
+        waiverExpiryStatus: "extended",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverExpiryView.status).toBe(200)
+    const waiverExpiryViewJson = (await waiverExpiryView.json()) as {
+      items: Array<{ matterId: string; expiryStatus: string; extendedBy: string | null }>
+    }
+    expect(
+      waiverExpiryViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.expiryStatus === "extended" &&
+          row.extendedBy === "partner_a"
+      )
+    ).toBe(true)
+
+    const remediationSlaView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_variance_remediation_sla_ledgers",
+        actorId: "associate_a",
+        matterId,
+        remediationSlaStatus: "resolved",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationSlaView.status).toBe(200)
+    const remediationSlaViewJson = (await remediationSlaView.json()) as {
+      items: Array<{ matterId: string; slaStatus: string; resolvedBy: string | null }>
+    }
+    expect(
+      remediationSlaViewJson.items.some(
+        (row) =>
+          row.matterId === matterId && row.slaStatus === "resolved" && row.resolvedBy === "partner_a"
       )
     ).toBe(true)
   })
