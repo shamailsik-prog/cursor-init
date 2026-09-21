@@ -1582,6 +1582,85 @@ describe("Firestore repository adapters", () => {
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
         )
       expect(checkpointExpiryQueueReentryCompliance?.complianceStatus).toBe("compliance_pending")
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.upsert(
+        {
+          id:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          settlementArbitrationId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          classification: "internal",
+          dispositionFinalizationStatus: "final_ruling_issued",
+          settlementArbitrationStatusSnapshot: "panel_confirmation_attested",
+          finalRulingIssuedBy: "partner_a",
+          finalRulingIssuedAt: 80,
+          finalRulingSummary: "repo disposition final ruling",
+          dissentMemorializedBy: null,
+          dissentMemorializedAt: null,
+          dissentMemorializedNote: null,
+          rulingPublicationCheckpointedBy: null,
+          rulingPublicationCheckpointedAt: null,
+          rulingPublicationChannel: null,
+          arbitrationRulingAgingHours: 1,
+          dispositionNote: "ops_disposition_finalization_seed",
+          lastStatusChangedAt: 80,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization",
+          ],
+          recomputedAt: 80,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_disposition_finalization_seed",
+          updatedAt: 80,
+        }
+      )
+      const dispositionFinalization =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.get(
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
+        )
+      expect(dispositionFinalization?.dispositionFinalizationStatus).toBe("final_ruling_issued")
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.upsert(
+        {
+          id:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          queueReentryComplianceId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+          classification: "internal",
+          debtRetirementStatus: "exception_debt_assigned",
+          complianceStatusSnapshot: "reconciliation_resumed",
+          exceptionDebtAssignedBy: "partner_a",
+          exceptionDebtAssignedAt: 81,
+          debtAssigneeId: "associate_a",
+          debtRetirementAttestedBy: null,
+          debtRetirementAttestedAt: null,
+          debtRetiredCount: 0,
+          debtAgingAutoEscalatedBy: null,
+          debtAgingAutoEscalatedAt: null,
+          debtAgingEscalationHours: null,
+          queueReentryExceptionDebtCountSnapshot: 2,
+          queueReentryRetirementBurnCount: 0,
+          retirementNote: "ops_queue_reentry_debt_retirement_seed",
+          lastStatusChangedAt: 81,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_reentry_debt_retirement",
+          ],
+          recomputedAt: 81,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_queue_reentry_debt_retirement_seed",
+          updatedAt: 81,
+        }
+      )
+      const queueReentryDebtRetirement =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
+        )
+      expect(queueReentryDebtRetirement?.debtRetirementStatus).toBe("exception_debt_assigned")
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
