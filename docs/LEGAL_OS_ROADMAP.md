@@ -198,11 +198,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert waiver-expiry digest rows and variance-remediation SLA ledger rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_waiver_expiry_digests`, `workflow_ops_alert_variance_remediation_sla_ledgers`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with expiry/SLA monitoring views (`view=alert_waiver_expiry_digests`, `view=alert_variance_remediation_sla_ledgers`) and partner-governed lifecycle actions (`acknowledge_workflow_ops_alert_waiver_expiry_digest`, `extend_workflow_ops_alert_waiver_expiry_digest`, `acknowledge_workflow_ops_alert_variance_remediation_sla_ledger`, `resolve_workflow_ops_alert_variance_remediation_sla_ledger`) filterable by matter, expiry risk status, queue SLA status, and freshness state.
+- Captured waiver-expiry risk/extension posture and remediation queue SLA acknowledgment/resolution provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_waiver_expiry_digest_acknowledged`, `ops_reporting_alert_waiver_expiry_digest_extended`, `ops_reporting_alert_variance_remediation_sla_acknowledged`, `ops_reporting_alert_variance_remediation_sla_resolved`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for expiry/SLA lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for this slice (pending PR + merge SHA assignment):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert waiver expiry watchdog + remediation queue SLA scaffolding**:
+Build **workflow alert waiver expiry disputes + remediation SLA breach escalation scaffolding**:
 
-1. Add workflow alert waiver-expiry digest rows and remediation queue SLA ledger rows to track waiver expiry risk and remediation queue aging breaches.
-2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed expiry/SLA actions and paginated views filterable by matter, expiry risk status, queue SLA status, and freshness state.
-3. Extend unit/runtime persistence tests for expiry/SLA lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+1. Add workflow alert waiver-expiry dispute rows and remediation-SLA breach escalation rows to track contested expiry posture and unresolved SLA breach ownership.
+2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed dispute/escalation actions and paginated views filterable by matter, dispute status, SLA breach status, and freshness state.
+3. Extend unit/runtime persistence tests for dispute/escalation lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving scaffold-claim gate behavior.

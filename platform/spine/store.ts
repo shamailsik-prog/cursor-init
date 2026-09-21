@@ -2295,6 +2295,78 @@ export type WorkflowOpsAlertVarianceRemediationQueueRow = {
   updatedAt: number
 }
 
+export type WorkflowOpsAlertWaiverExpiryDigestStatus =
+  | "no_risk"
+  | "expires_lte_24h"
+  | "expires_lte_4h"
+  | "expired"
+  | "acknowledged"
+  | "extended"
+
+export type WorkflowOpsAlertWaiverExpiryDigestFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDigestRow = {
+  id: string
+  firmId: string
+  matterId: string
+  enforcementWaiverLedgerId: string
+  classification: Classification
+  expiryStatus: WorkflowOpsAlertWaiverExpiryDigestStatus
+  waiverStatusSnapshot: WorkflowOpsAlertEnforcementWaiverStatus
+  waiverExpiresAt: number | null
+  msUntilExpiry: number | null
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  extendedBy: string | null
+  extendedAt: number | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertWaiverExpiryDigestFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaLedgerStatus =
+  | "not_applicable"
+  | "within_sla"
+  | "warning"
+  | "breached"
+  | "acknowledged"
+  | "resolved"
+
+export type WorkflowOpsAlertVarianceRemediationSlaLedgerFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaLedgerRow = {
+  id: string
+  firmId: string
+  matterId: string
+  remediationQueueId: string
+  classification: Classification
+  slaStatus: WorkflowOpsAlertVarianceRemediationSlaLedgerStatus
+  queueStatusSnapshot: WorkflowOpsAlertVarianceRemediationQueueStatus
+  ownerIdSnapshot: string | null
+  slaStartedAt: number | null
+  warningThresholdMs: number
+  breachThresholdMs: number
+  warningDueAt: number | null
+  breachDueAt: number | null
+  elapsedMs: number | null
+  acknowledgedBy: string | null
+  acknowledgedAt: number | null
+  resolvedBy: string | null
+  resolvedAt: number | null
+  resolutionReason: string | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaLedgerFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2416,6 +2488,10 @@ export class SpineStore {
     new Map<string, WorkflowOpsAlertEnforcementWaiverLedgerRow>()
   workflowOpsAlertVarianceRemediationQueues =
     new Map<string, WorkflowOpsAlertVarianceRemediationQueueRow>()
+  workflowOpsAlertWaiverExpiryDigests =
+    new Map<string, WorkflowOpsAlertWaiverExpiryDigestRow>()
+  workflowOpsAlertVarianceRemediationSlaLedgers =
+    new Map<string, WorkflowOpsAlertVarianceRemediationSlaLedgerRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()
