@@ -63,6 +63,7 @@ import type {
   TenancyLineageClosureAdjudicationRow,
   TenancyLineageClosureAdjudicationSettlementRow,
   TenancyLineageArbitrationDebtRetirementDisputeLedgerRow,
+  TenancyExternalSessionIdentityBridgeRow,
   TenancyLineageReconciliationDigestRow,
   TenancyLineageReconciliationQueueArbitrationRow,
   TenancyLineageDigestClosureCheckpointRow,
@@ -655,6 +656,14 @@ export type TenancyLineageArbitrationDebtRetirementDisputeLedgerRepository = {
   ): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]>
 }
 
+export type TenancyExternalSessionIdentityBridgeRepository = {
+  upsert(row: TenancyExternalSessionIdentityBridgeRow): Promise<void>
+  get(id: string): Promise<TenancyExternalSessionIdentityBridgeRow | null>
+  listByFirm(firmId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
+  listByLineageRoot(lineageRootSessionReferenceId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
+  listBySessionReference(sessionReferenceId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -730,6 +739,7 @@ export type SpineRepositories = {
   tenancyLineageArbitrationDebtRetirementLedgers: TenancyLineageArbitrationDebtRetirementLedgerRepository
   tenancyLineageClosureAdjudicationSettlements: TenancyLineageClosureAdjudicationSettlementRepository
   tenancyLineageArbitrationDebtRetirementDisputeLedgers: TenancyLineageArbitrationDebtRetirementDisputeLedgerRepository
+  tenancyExternalSessionIdentityBridges: TenancyExternalSessionIdentityBridgeRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -2140,6 +2150,29 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async listByLineageRoot(lineageRootSessionReferenceId) {
         return [...store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyExternalSessionIdentityBridges: {
+      async upsert(row) {
+        store.tenancyExternalSessionIdentityBridges.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyExternalSessionIdentityBridges.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+      async listBySessionReference(sessionReferenceId) {
+        return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
+          (row) => row.sessionReferenceId === sessionReferenceId
         )
       },
     },

@@ -7880,6 +7880,143 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const attestIdentityBridgeFirst = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "95f13a1d-3962-4ccb-ad34-c7af9545f169",
+          },
+          body: JSON.stringify({
+            action: "attest_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            assertedIssuer: "idp.runtime.local",
+            assertedSubject: "partner_a:runtime-diverged",
+            assertedExternalSessionId: "ext-runtime-lineage-diverged",
+            note: "Runtime bridge attestation",
+          }),
+        })
+      )
+      expect(attestIdentityBridgeFirst.status).toBe(200)
+      const attestIdentityBridgeReplay = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "95f13a1d-3962-4ccb-ad34-c7af9545f169",
+          },
+          body: JSON.stringify({
+            action: "attest_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            assertedIssuer: "idp.runtime.local",
+            assertedSubject: "partner_a:runtime-diverged",
+            assertedExternalSessionId: "ext-runtime-lineage-diverged",
+            note: "Runtime bridge attestation",
+          }),
+        })
+      )
+      expect(attestIdentityBridgeReplay.status).toBe(200)
+      const attestIdentityBridgeReplayJson = (await attestIdentityBridgeReplay.json()) as {
+        reused: boolean
+      }
+      expect(attestIdentityBridgeReplayJson.reused).toBe(true)
+
+      const attestIdentityBridgeMismatch = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1fb5ff52-c4e8-4b26-a983-c839bf35b80c",
+          },
+          body: JSON.stringify({
+            action: "attest_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            assertedIssuer: "idp.runtime.local",
+            assertedSubject: "partner_a:runtime-diverged",
+            assertedExternalSessionId: "ext-runtime-lineage-diverged-mismatch",
+            note: "Runtime mismatch trigger",
+          }),
+        })
+      )
+      expect(attestIdentityBridgeMismatch.status).toBe(200)
+
+      const quarantineIdentityBridgeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f59af8af-c89f-4a46-bf85-dd89cfd8f2d4",
+          },
+          body: JSON.stringify({
+            action: "quarantine_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            quarantineReason: "Runtime issuer drift quarantine",
+            note: "Runtime quarantine",
+          }),
+        })
+      )
+      expect(quarantineIdentityBridgeRes.status).toBe(200)
+
+      const identityBridgeMismatchViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_external_session_identity_bridges&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=quarantined&mismatchStatus=mismatch_detected&limit=10&cursor=0`
+        )
+      )
+      expect(identityBridgeMismatchViewRes.status).toBe(200)
+      const identityBridgeMismatchViewJson = (await identityBridgeMismatchViewRes.json()) as {
+        items: Array<{ status: string; mismatchStatus: string; sessionReferenceId: string }>
+      }
+      expect(
+        identityBridgeMismatchViewJson.items.some(
+          (row) =>
+            row.status === "quarantined" &&
+            row.mismatchStatus === "mismatch_detected" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
+
+      const clearIdentityBridgeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f9861e95-b2cd-4c74-b70d-52e76f4a8b54",
+          },
+          body: JSON.stringify({
+            action: "clear_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            clearReason: "Runtime manual override after bridge review",
+            note: "Runtime clear bridge",
+          }),
+        })
+      )
+      expect(clearIdentityBridgeRes.status).toBe(200)
+
+      const identityBridgeClearedViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_external_session_identity_bridges&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=cleared&mismatchStatus=aligned&limit=10&cursor=0`
+        )
+      )
+      expect(identityBridgeClearedViewRes.status).toBe(200)
+      const identityBridgeClearedViewJson = (await identityBridgeClearedViewRes.json()) as {
+        items: Array<{ status: string; mismatchStatus: string }>
+      }
+      expect(
+        identityBridgeClearedViewJson.items.some(
+          (row) => row.status === "cleared" && row.mismatchStatus === "aligned"
+        )
+      ).toBe(true)
+
       const queueQueuedRes = await tenancyGet(
         new Request(
           `http://127.0.0.1/api/p5/tenancy?view=session_lineage_reconciliation_queue&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=queued&limit=10&cursor=0`
@@ -8638,6 +8775,27 @@ describe("Runtime persistence mode", () => {
             row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
         )
       ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_attest_external_session_identity_bridge" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_quarantine_external_session_identity_bridge" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_clear_external_session_identity_bridge" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
 
       const persistedClerk = await getDoc(doc(ctx.firestore(), "users", "clerk_a"))
       expect(persistedClerk.exists()).toBe(true)
@@ -8786,6 +8944,21 @@ describe("Runtime persistence mode", () => {
       expect(persistedDebtDisputeLedger.data()?.resolutionOutcome).toBe("require_rollback_review")
       expect(persistedDebtDisputeLedger.data()?.rollbackControlNote).toBe(
         "Runtime rollback control engaged"
+      )
+
+      const persistedIdentityBridge = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_external_session_identity_bridges",
+          `tenancy-external-session-identity-bridge:${reissueDivergedJson.result.sessionReference.id}`
+        )
+      )
+      expect(persistedIdentityBridge.exists()).toBe(true)
+      expect(persistedIdentityBridge.data()?.status).toBe("cleared")
+      expect(persistedIdentityBridge.data()?.mismatchStatus).toBe("aligned")
+      expect(persistedIdentityBridge.data()?.assertedIssuer).toBe("idp.runtime.local")
+      expect(persistedIdentityBridge.data()?.clearReason).toBe(
+        "Runtime manual override after bridge review"
       )
 
       const persistedClerkSessionRef = await getDoc(

@@ -333,6 +333,41 @@ export type TenancyLineageArbitrationDebtRetirementDisputeLedgerRow = {
   updatedAt: number
 }
 
+export type TenancyExternalSessionIdentityBridgeStatus =
+  | "attested"
+  | "quarantined"
+  | "cleared"
+
+export type TenancyExternalSessionIdentityBridgeMismatchStatus =
+  | "aligned"
+  | "mismatch_detected"
+  | "assertion_missing"
+
+export type TenancyExternalSessionIdentityBridgeRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  sessionReferenceId: string
+  authBoundary: TenancyAuthBoundary
+  sessionExternalSessionId: string | null
+  status: TenancyExternalSessionIdentityBridgeStatus
+  mismatchStatus: TenancyExternalSessionIdentityBridgeMismatchStatus
+  mismatchReasons: string[]
+  assertedIssuer: string | null
+  assertedSubject: string | null
+  assertedExternalSessionId: string | null
+  attestedBy: string | null
+  attestedAt: number | null
+  quarantinedBy: string | null
+  quarantinedAt: number | null
+  quarantineReason: string | null
+  clearedBy: string | null
+  clearedAt: number | null
+  clearReason: string | null
+  notes: string[]
+  updatedAt: number
+}
+
 export type StatuteSectionVersion = {
   sectionId: string
   versionNo: number
@@ -2015,6 +2050,7 @@ export class SpineStore {
     new Map<string, TenancyLineageClosureAdjudicationSettlementRow>()
   tenancyLineageArbitrationDebtRetirementDisputeLedgers =
     new Map<string, TenancyLineageArbitrationDebtRetirementDisputeLedgerRow>()
+  tenancyExternalSessionIdentityBridges = new Map<string, TenancyExternalSessionIdentityBridgeRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

@@ -9,6 +9,9 @@ import {
   type TenancyLineageArbitrationDebtRetirementDisputeResolutionOutcome,
   type TenancyLineageArbitrationDebtRetirementDisputeStatus,
   type TenancyLineageArbitrationDebtRetirementStatus,
+  type TenancyExternalSessionIdentityBridgeMismatchStatus as SpineTenancyExternalSessionIdentityBridgeMismatchStatus,
+  type TenancyExternalSessionIdentityBridgeRow,
+  type TenancyExternalSessionIdentityBridgeStatus as SpineTenancyExternalSessionIdentityBridgeStatus,
   type TenancyLineageClosureAdjudicationRow,
   type TenancyLineageClosureAdjudicationSettlementRow,
   type TenancyLineageClosureAdjudicationSettlementStatus,
@@ -39,6 +42,10 @@ export type TenancyClosureAdjudicationSettlementStatus =
   TenancyLineageClosureAdjudicationSettlementStatus
 export type TenancyArbitrationDebtRetirementDisputeStatus =
   TenancyLineageArbitrationDebtRetirementDisputeStatus
+export type TenancyExternalSessionIdentityBridgeStatus =
+  SpineTenancyExternalSessionIdentityBridgeStatus
+export type TenancyExternalSessionIdentityBridgeMismatchStatus =
+  SpineTenancyExternalSessionIdentityBridgeMismatchStatus
 
 function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
   const actor = store.users.get(actorId)
@@ -804,6 +811,41 @@ function lineageArbitrationDebtRetirementDisputeLedgerId(
   lineageRootSessionReferenceId: string
 ): string {
   return `tenancy-lineage-arbitration-debt-dispute:${lineageRootSessionReferenceId}`
+}
+
+function externalSessionIdentityBridgeId(sessionReferenceId: string): string {
+  return `tenancy-external-session-identity-bridge:${sessionReferenceId}`
+}
+
+function computeExternalSessionIdentityMismatchReasons(input: {
+  sessionReference: TenancySessionReferenceRow
+  assertedExternalSessionId: string | null
+  previousIssuer: string | null
+  previousSubject: string | null
+  assertedIssuer: string
+  assertedSubject: string
+}): string[] {
+  const reasons: string[] = []
+  if (input.sessionReference.authBoundary !== "external_session_hint") {
+    reasons.push("auth_boundary_not_external_session_hint")
+  }
+  if (!input.sessionReference.externalSessionId) {
+    reasons.push("session_reference_missing_external_session_id")
+  }
+  if (
+    input.assertedExternalSessionId &&
+    input.sessionReference.externalSessionId &&
+    input.assertedExternalSessionId !== input.sessionReference.externalSessionId
+  ) {
+    reasons.push("asserted_external_session_id_mismatch")
+  }
+  if (input.previousIssuer && input.previousIssuer !== input.assertedIssuer) {
+    reasons.push("asserted_issuer_changed_since_last_attestation")
+  }
+  if (input.previousSubject && input.previousSubject !== input.assertedSubject) {
+    reasons.push("asserted_subject_changed_since_last_attestation")
+  }
+  return [...new Set(reasons)]
 }
 
 function computeLineageDispositionDriftReasons(input: {
@@ -2197,6 +2239,272 @@ export function controlLineageArbitrationDebtRetirementDisputeRollback(
   } as const
   store.audit.push(auditEntry)
   return { disputeLedger, auditEntry }
+}
+
+export function attestExternalSessionIdentityBridge(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    sessionReferenceId: string
+    assertedIssuer: string
+    assertedSubject: string
+    assertedExternalSessionId?: string
+    note?: string
+    now?: number
+  }
+): {
+  bridge: TenancyExternalSessionIdentityBridgeRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
+  if (!sessionReference) throw new Error("unknown session reference")
+  if (sessionReference.firmId !== input.firmId) throw new Error("cross-firm session reference denied")
+  const assertedIssuer = input.assertedIssuer.trim()
+  if (!assertedIssuer) throw new Error("assertedIssuer is required")
+  const assertedSubject = input.assertedSubject.trim()
+  if (!assertedSubject) throw new Error("assertedSubject is required")
+  const assertedExternalSessionId = input.assertedExternalSessionId?.trim() || null
+  const now = input.now ?? Date.now()
+  const bridgeId = externalSessionIdentityBridgeId(sessionReference.id)
+  const existing = store.tenancyExternalSessionIdentityBridges.get(bridgeId)
+  const mismatchReasons = computeExternalSessionIdentityMismatchReasons({
+    sessionReference,
+    assertedExternalSessionId,
+    previousIssuer: existing?.assertedIssuer ?? null,
+    previousSubject: existing?.assertedSubject ?? null,
+    assertedIssuer,
+    assertedSubject,
+  })
+  const mismatchStatus: TenancyExternalSessionIdentityBridgeMismatchStatus =
+    mismatchReasons.length > 0 ? "mismatch_detected" : "aligned"
+  const status: TenancyExternalSessionIdentityBridgeStatus =
+    existing?.status === "quarantined" ? "quarantined" : "attested"
+  const bridge: TenancyExternalSessionIdentityBridgeRow = {
+    id: bridgeId,
+    firmId: input.firmId,
+    lineageRootSessionReferenceId:
+      sessionReference.lineageRootSessionReferenceId || sessionReference.id,
+    sessionReferenceId: sessionReference.id,
+    authBoundary: sessionReference.authBoundary,
+    sessionExternalSessionId: sessionReference.externalSessionId,
+    status,
+    mismatchStatus,
+    mismatchReasons,
+    assertedIssuer,
+    assertedSubject,
+    assertedExternalSessionId,
+    attestedBy: actor.id,
+    attestedAt: now,
+    quarantinedBy: existing?.quarantinedBy ?? null,
+    quarantinedAt: existing?.quarantinedAt ?? null,
+    quarantineReason: existing?.quarantineReason ?? null,
+    clearedBy: existing?.clearedBy ?? null,
+    clearedAt: existing?.clearedAt ?? null,
+    clearReason: existing?.clearReason ?? null,
+    notes: input.note ? [...(existing?.notes ?? []), input.note] : (existing?.notes ?? []),
+    updatedAt: now,
+  }
+  store.tenancyExternalSessionIdentityBridges.set(bridge.id, bridge)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_attest_external_session_identity_bridge",
+    actorId: actor.id,
+    target: sessionReference.id,
+    classification: actor.clearanceLevel,
+    reason: `issuer=${assertedIssuer}`,
+    authBoundary: sessionReference.authBoundary,
+    sessionReferenceId: sessionReference.id,
+    externalSessionId: sessionReference.externalSessionId,
+    delegatedBoundaryLineageRootSessionReferenceId:
+      sessionReference.lineageRootSessionReferenceId || sessionReference.id,
+    delegatedBoundaryComparedSessionReferenceId: null,
+    delegatedBoundaryReconciliationStatus: sessionReference.delegatedBoundaryReconciliationStatus,
+    delegatedBoundaryDivergenceReasons: sessionReference.delegatedBoundaryDivergenceReasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { bridge, auditEntry }
+}
+
+export function quarantineExternalSessionIdentityBridge(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    sessionReferenceId: string
+    quarantineReason: string
+    note?: string
+    now?: number
+  }
+): {
+  bridge: TenancyExternalSessionIdentityBridgeRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
+  if (!sessionReference) throw new Error("unknown session reference")
+  if (sessionReference.firmId !== input.firmId) throw new Error("cross-firm session reference denied")
+  const quarantineReason = input.quarantineReason.trim()
+  if (!quarantineReason) throw new Error("quarantineReason is required")
+  const now = input.now ?? Date.now()
+  const bridgeId = externalSessionIdentityBridgeId(sessionReference.id)
+  const existing = store.tenancyExternalSessionIdentityBridges.get(bridgeId)
+  const bridge: TenancyExternalSessionIdentityBridgeRow = {
+    id: bridgeId,
+    firmId: input.firmId,
+    lineageRootSessionReferenceId:
+      sessionReference.lineageRootSessionReferenceId || sessionReference.id,
+    sessionReferenceId: sessionReference.id,
+    authBoundary: sessionReference.authBoundary,
+    sessionExternalSessionId: sessionReference.externalSessionId,
+    status: "quarantined",
+    mismatchStatus: "mismatch_detected",
+    mismatchReasons: [
+      ...new Set([...(existing?.mismatchReasons ?? []), `manual_quarantine:${quarantineReason}`]),
+    ],
+    assertedIssuer: existing?.assertedIssuer ?? null,
+    assertedSubject: existing?.assertedSubject ?? null,
+    assertedExternalSessionId: existing?.assertedExternalSessionId ?? null,
+    attestedBy: existing?.attestedBy ?? null,
+    attestedAt: existing?.attestedAt ?? null,
+    quarantinedBy: actor.id,
+    quarantinedAt: now,
+    quarantineReason,
+    clearedBy: null,
+    clearedAt: null,
+    clearReason: null,
+    notes: input.note ? [...(existing?.notes ?? []), input.note] : (existing?.notes ?? []),
+    updatedAt: now,
+  }
+  store.tenancyExternalSessionIdentityBridges.set(bridge.id, bridge)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_quarantine_external_session_identity_bridge",
+    actorId: actor.id,
+    target: sessionReference.id,
+    classification: actor.clearanceLevel,
+    reason: quarantineReason,
+    authBoundary: sessionReference.authBoundary,
+    sessionReferenceId: sessionReference.id,
+    externalSessionId: sessionReference.externalSessionId,
+    delegatedBoundaryLineageRootSessionReferenceId:
+      sessionReference.lineageRootSessionReferenceId || sessionReference.id,
+    delegatedBoundaryComparedSessionReferenceId: null,
+    delegatedBoundaryReconciliationStatus: sessionReference.delegatedBoundaryReconciliationStatus,
+    delegatedBoundaryDivergenceReasons: sessionReference.delegatedBoundaryDivergenceReasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { bridge, auditEntry }
+}
+
+export function clearExternalSessionIdentityBridge(
+  store: SpineStore,
+  input: {
+    actorId: string
+    firmId: string
+    sessionReferenceId: string
+    clearReason: string
+    note?: string
+    now?: number
+  }
+): {
+  bridge: TenancyExternalSessionIdentityBridgeRow
+  auditEntry: NonNullable<SpineStore["audit"][number]>
+} {
+  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
+  const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
+  if (!sessionReference) throw new Error("unknown session reference")
+  if (sessionReference.firmId !== input.firmId) throw new Error("cross-firm session reference denied")
+  const clearReason = input.clearReason.trim()
+  if (!clearReason) throw new Error("clearReason is required")
+  const now = input.now ?? Date.now()
+  const bridgeId = externalSessionIdentityBridgeId(sessionReference.id)
+  const existing = store.tenancyExternalSessionIdentityBridges.get(bridgeId)
+  const bridge: TenancyExternalSessionIdentityBridgeRow = {
+    id: bridgeId,
+    firmId: input.firmId,
+    lineageRootSessionReferenceId:
+      sessionReference.lineageRootSessionReferenceId || sessionReference.id,
+    sessionReferenceId: sessionReference.id,
+    authBoundary: sessionReference.authBoundary,
+    sessionExternalSessionId: sessionReference.externalSessionId,
+    status: "cleared",
+    mismatchStatus: "aligned",
+    mismatchReasons: [],
+    assertedIssuer: existing?.assertedIssuer ?? null,
+    assertedSubject: existing?.assertedSubject ?? null,
+    assertedExternalSessionId: existing?.assertedExternalSessionId ?? null,
+    attestedBy: existing?.attestedBy ?? null,
+    attestedAt: existing?.attestedAt ?? null,
+    quarantinedBy: existing?.quarantinedBy ?? null,
+    quarantinedAt: existing?.quarantinedAt ?? null,
+    quarantineReason: existing?.quarantineReason ?? null,
+    clearedBy: actor.id,
+    clearedAt: now,
+    clearReason,
+    notes: input.note ? [...(existing?.notes ?? []), input.note] : (existing?.notes ?? []),
+    updatedAt: now,
+  }
+  store.tenancyExternalSessionIdentityBridges.set(bridge.id, bridge)
+  const auditEntry = {
+    id: store.id("aud"),
+    firmId: input.firmId,
+    action: "tenant_clear_external_session_identity_bridge",
+    actorId: actor.id,
+    target: sessionReference.id,
+    classification: actor.clearanceLevel,
+    reason: clearReason,
+    authBoundary: sessionReference.authBoundary,
+    sessionReferenceId: sessionReference.id,
+    externalSessionId: sessionReference.externalSessionId,
+    delegatedBoundaryLineageRootSessionReferenceId:
+      sessionReference.lineageRootSessionReferenceId || sessionReference.id,
+    delegatedBoundaryComparedSessionReferenceId: null,
+    delegatedBoundaryReconciliationStatus: sessionReference.delegatedBoundaryReconciliationStatus,
+    delegatedBoundaryDivergenceReasons: sessionReference.delegatedBoundaryDivergenceReasons,
+    at: now,
+  } as const
+  store.audit.push(auditEntry)
+  return { bridge, auditEntry }
+}
+
+export function listExternalSessionIdentityBridges(
+  store: SpineStore,
+  actorId: string,
+  firmId: string,
+  status: TenancyExternalSessionIdentityBridgeStatus | undefined,
+  mismatchStatus: TenancyExternalSessionIdentityBridgeMismatchStatus | undefined,
+  lineageRootSessionReferenceId: string | undefined,
+  limit: number,
+  cursor: number
+): {
+  items: TenancyExternalSessionIdentityBridgeRow[]
+  total: number
+  nextCursor: string | null
+} {
+  requirePartnerInFirm(store, actorId, firmId)
+  const rows = [...store.tenancyExternalSessionIdentityBridges.values()]
+    .filter((row) => row.firmId === firmId)
+    .filter((row) => (status ? row.status === status : true))
+    .filter((row) => (mismatchStatus ? row.mismatchStatus === mismatchStatus : true))
+    .filter((row) =>
+      lineageRootSessionReferenceId
+        ? row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        : true
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+  const page = rows.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < rows.length ? String(cursor + page.length) : null
+  return {
+    items: page,
+    total: rows.length,
+    nextCursor,
+  }
 }
 
 export function listLineageClosureAdjudications(

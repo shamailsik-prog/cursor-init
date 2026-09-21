@@ -88,3 +88,14 @@ export async function syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedg
     store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(row.id, row)
   }
 }
+
+export async function syncFirmTenancyExternalSessionIdentityBridges(
+  store: SpineStore,
+  repos: SpineRepositories,
+  firmId: string
+): Promise<void> {
+  const rows = await repos.tenancyExternalSessionIdentityBridges.listByFirm(firmId)
+  for (const row of rows) {
+    store.tenancyExternalSessionIdentityBridges.set(row.id, row)
+  }
+}
