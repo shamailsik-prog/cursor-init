@@ -1,9 +1,22 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
+function sourceSliceBetween(source: string, startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker)
+  const end = source.indexOf(endMarker)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  return source.slice(start, end)
+}
+
 describe("Batch E frontend_real /ops lattice coverage", () => {
   it("keeps #48-#59 filing/escalation action call sites wired", () => {
     const source = readFileSync("app/ops/operator-audit-console.tsx", "utf8")
+    const batchEActionSource = sourceSliceBetween(
+      source,
+      "async function runBatchEActionLattice()",
+      "async function readBatchEGovernanceViews()"
+    )
 
     const requiredActions = [
       "annexure_checkpoint",
@@ -43,12 +56,17 @@ describe("Batch E frontend_real /ops lattice coverage", () => {
     ]
 
     for (const action of requiredActions) {
-      expect(source).toContain(`action: "${action}"`)
+      expect(batchEActionSource).toContain(`action: "${action}"`)
     }
   })
 
   it("keeps #48-#59 governance read views and buttons wired", () => {
     const source = readFileSync("app/ops/operator-audit-console.tsx", "utf8")
+    const batchEViewsSource = sourceSliceBetween(
+      source,
+      "async function readBatchEGovernanceViews()",
+      "async function runBatchFGovernanceLattice()"
+    )
 
     const requiredViews = [
       "annexures",
@@ -72,7 +90,7 @@ describe("Batch E frontend_real /ops lattice coverage", () => {
     ]
 
     for (const view of requiredViews) {
-      expect(source).toContain(`view: "${view}"`)
+      expect(batchEViewsSource).toContain(`view: "${view}"`)
     }
 
     expect(source).toContain("23) Batch E actions (#48-#59 filing/escalation lattice)")
