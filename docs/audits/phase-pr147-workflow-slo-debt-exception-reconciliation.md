@@ -12,11 +12,15 @@ Claim-gate anchor on `main`: `aca861c6075c45ef15034ad7867b7318f3a4b853` (PR #141
 
 ## Verdict (lead)
 
-**PARTIAL (severity: medium).**
+**PASS (severity: low)** — independent RE-AUDIT on 2026-09-21 supersedes the initial **PARTIAL (medium)** below solely on process flags (F). See [Independent Phase Auditor RE-AUDIT addendum](#independent-phase-auditor-re-audit-addendum).
 
-Backend slice is **real** (A PASS), labels are **honest** (B PASS), there is **no semantic COMPLETE/product-done overclaim** (C PASS), merge SHA integrity holds (D PASS), and focused tests plus `G-0`/`G-1` replay green (E PASS). **Process-flag replay fails (F FAIL)** because PR #147 metadata uses `not a product-done claim` (article `a`), which `ci_gates/check_pr_phase_claims.py` does not treat as a negated disclaimer — the gate mis-reads `product-done` as an affirmative COMPLETE claim.
+Backend slice is **real** (A PASS), labels are **honest** (B PASS), there is **no semantic COMPLETE/product-done overclaim** (C PASS), merge SHA integrity holds (D PASS), focused tests plus `G-0`/`G-1` replay green (E PASS), and **process-flag replay passes (F PASS)** on `main` @ `90b09962659d51ce0d5cdec904d9dbe7b0ae6cc7` after `NEGATED_COMPLETE_DISCLAIMER_RE` accepts optional articles and markdown-bold `**not**`.
 
-Product classification correctly remains **PARTIAL** because `transport_stub=true` and `frontend_real=false`; this audit does **not** certify COMPLETE/product-done.
+Product classification remains **PARTIAL** because `transport_stub=true` and `frontend_real=false`; this audit does **not** certify COMPLETE/product-done.
+
+### Initial audit close (2026-09-21, superseded on F only)
+
+**PARTIAL (severity: medium).** Process-flag replay failed (F FAIL) because PR #147 metadata used `not a product-done claim` (article `a`), which `ci_gates/check_pr_phase_claims.py` at `aca861c` did not treat as a negated disclaimer.
 
 Supersedes the builder packet stub `docs/audits/phase-prXXX-workflow-slo-debt-remediation-expiry-exception-reconciliation.md`.
 
@@ -154,10 +158,42 @@ Verdict remains **PARTIAL (medium)** for product scope (`transport_stub=true`). 
 | C No semantic COMPLETE overclaim | PASS |
 | D SHA on `main` | PASS |
 | E Focused tests + G-0/G-1 | PASS |
-| F Process flags | **FAIL** |
+| F Process flags | PASS (re-audit; gate `90b0996`) |
 
-- **Auditor verdict:** **PARTIAL** (medium) — implementation and honesty checks pass; CI claim-gate replay on shipped PR metadata fails until wording or gate regex is fixed.
+- **Auditor verdict:** **PASS** (low) — backend-scoped slice; all A–F checks green on current `main`; not COMPLETE/product-done.
 - **Product classification:** **PARTIAL** (`transport_stub=true`; not DONE).
+
+---
+
+## Independent Phase Auditor RE-AUDIT addendum
+
+Date: 2026-09-21  
+Auditor: independent Phase Auditor (no rubber-stamp; full replay)  
+`origin/main` tip at re-audit: `c771207428a9c92cf6db9fa6ab985f1d0e9e9ec4`  
+Feature merge SHA (unchanged): `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8`  
+Claim-gate fix: `90b09962659d51ce0d5cdec904d9dbe7b0ae6cc7`  
+Docs consolidation on ledger: `e73d6f68b1c00a00fd208d560c9d5f3f2b220449` (Origin PR #148); duplicate auditor PR #149 closed.
+
+### Verdict (lead)
+
+**PASS (severity: low).** Process flags are green after gate hardening; A–E unchanged from initial audit.
+
+### Verification performed
+
+1. **Gate change @ `90b0996`:** `NEGATED_COMPLETE_DISCLAIMER_RE` adds optional `(?:\*\*)?` after negation, optional `(?:a|an|the)\s+` before `COMPLETE_TOKEN`, and word-boundary on `not` — see `ci_gates/check_pr_phase_claims.py` and `tests/pr-phase-claim-gate.test.ts` (markdown-bold `**not**` disclaimer case).
+2. **Claim-gate replay (PR #147 metadata):** `origin pr view 147` title/body, `BASE_SHA=abb135a07e27`, `HEAD_SHA=4f0a44d2530ab1e192e5b8a2662839ec305e9814` — **exit 0** on `main` @ `90b0996+`. Pre-fix script at `90b0996^` on the same metadata — **exit 1** (three false-positive COMPLETE branches), matching the original F FAIL root cause.
+3. **A–E spot-check:** `07e5db8` remains merge subject for PR #147; `a2a50a0` ancestor; merge diff excludes `app/ops/**`; Firestore deny-write rules for both new collections at `07e5db8` lines 171–172; focused replay on current `main` — `npm run test:unit -- tests/api.ops-reporting.test.ts tests/persistence.route-wiring.test.ts` **80/80 PASS** (count grew after #150; #147 slice still covered), `npm run gate:g0` PASS, `npm run gate:g1` PASS.
+
+### Re-audit adjudication
+
+| Check | Result |
+|---|---|
+| A BACKEND_REAL | PASS (unchanged) |
+| B FE honesty | PASS (unchanged) |
+| C No semantic COMPLETE overclaim | PASS (unchanged) |
+| D SHA on `main` | PASS (unchanged) |
+| E Focused tests + G-0/G-1 | PASS (unchanged) |
+| F Process flags | **PASS** |
 
 ---
 
@@ -172,9 +208,9 @@ npm run test:rules
 npm run gate:g0
 npm run gate:g1
 
-PR_BODY="$(origin pr view 147 --json description | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"description\"])')"
+PR_BODY="$(origin pr view 147 | sed -n '/CURSOR_AGENT_PR_BODY_BEGIN/,/CURSOR_AGENT_PR_BODY_END/p' | grep -v CURSOR_AGENT)"
 BASE_SHA=abb135a HEAD_SHA=4f0a44d \
   PR_TITLE='Workflow alert SLO debt-remediation + checkpoint expiry exception reconciliation scaffolding #147' \
   PR_BODY="$PR_BODY" \
-  python3 ci_gates/check_pr_phase_claims.py
+  python3 ci_gates/check_pr_phase_claims.py   # expect PASS on main @ 90b0996+
 ```

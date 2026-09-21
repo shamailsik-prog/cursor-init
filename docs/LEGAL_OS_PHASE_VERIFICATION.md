@@ -557,7 +557,7 @@ The gate fails when either condition is true:
 - Merge SHA on `main`: `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8` (parent-2 / final PR head `4f0a44d`; feature `a2a50a0`; stacked on PR #143 lane)
 - Main tip at audit close: `07e5db8`
 - Claim-gate anchor: `aca861c` (PR #141)
-- Verdict: **PARTIAL (medium)** — backend-real, label-honest, focused tests/gates green; **claim-gate replay FAIL** on PR metadata (`not a product-done claim` vs `NEGATED_COMPLETE_DISCLAIMER_RE`). Product scope remains PARTIAL because `transport_stub=true`.
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes on current `main` (after `90b0996`). Product scope remains PARTIAL because `transport_stub=true` (not COMPLETE/product-done).
 
 ### DoD summary
 
@@ -566,19 +566,27 @@ The gate fails when either condition is true:
 - `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; merge diff excludes `app/ops/**`).
 - `no COMPLETE/product-done overclaim`: PASS semantically; machine gate false-positive on disclaimer wording (see audit F).
 - `focused tests+gates`: PASS (API/route-wiring 78; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
-- `process flags`: **FAIL at audit close** (`ci_gates/check_pr_phase_claims.py` replay on PR #147 metadata with `abb135a..4f0a44d` exited 1 on `aca861c`); **remediated on `main` @ `90b0996`** (optional article + markdown-bold negation in `NEGATED_COMPLETE_DISCLAIMER_RE`; PR #147 metadata replay PASS).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #147 metadata with `abb135a..4f0a44d` exits 0 on `main` @ `90b0996+`; initial audit close failed on `aca861c` until optional article + markdown-bold negation landed).
 
 ### PR matrix (targeted)
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #147 | workflow alert adjudication SLO debt-remediation + checkpoint expiry-attestation exception reconciliation | `07e5db8` | Yes | true | false | true | PARTIAL (process-flag gate replay failure at audit; gate fix `90b0996`) | medium |
+| #147 | workflow alert adjudication SLO debt-remediation + checkpoint expiry-attestation exception reconciliation | `07e5db8` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
 ### Merge-confirmation addendum (ledger)
 
 - Date: 2026-09-21
 - Re-fetched `origin/main` merge subject remains `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8`; PR head `4f0a44d` is merge parent-2 and an ancestor of `main`; pre-merge parent-1 `abb135a`.
 - Duplicate auditor PR #149 (`bc-8c695da7`) closed in favor of this ledger (#148); no separate ledger row added.
+
+### Independent Phase Auditor RE-AUDIT addendum (ledger)
+
+- Date: 2026-09-21
+- Re-audit file: `docs/audits/phase-pr147-workflow-slo-debt-exception-reconciliation.md` (RE-AUDIT section)
+- `origin/main` tip at re-audit: `c771207`; feature merge SHA unchanged `07e5db8`; claim-gate fix `90b0996`; ledger tip `e73d6f6`
+- Verdict: **PASS (low)** — A–F all green; F FAIL at initial close was gate false-positive on `**not** a product-done claim`, not a semantic overclaim
+- Claim-gate replay: PR #147 metadata + `abb135a..4f0a44d` → exit 0 on `90b0996+`; exit 1 on `90b0996^` (control)
 
 ## Targeted ledger — PR #150 workflow alert adjudication SLO debt-burndown + checkpoint expiry-attestation queue orchestration
 
