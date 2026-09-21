@@ -128,3 +128,65 @@ Status: **PASS**
 ## Auditor sign-off
 
 Independent forensic replay @ `40366e0` (feature tip `966bf1b`, stack `62c863b`) **rejects** the builder’s full-test claim for this phase due to **non-compiling** `persistence.repositories.test.ts`. Severity **major**. Firestore doc-id remediation from PR #174 + PR #175 entity wiring is **verified** via runtime-mode mega + dedicated custody/closure id tests. Release classification stays **PARTIAL** because `transport_stub=true`.
+
+---
+
+## Independent Phase Auditor RE-AUDIT addendum (remediation PR #178)
+
+Date: 2026-09-21  
+Re-audit trigger: `main` @ `36dca9c811ca37bfb8dd373baab0c7942208f32e` (merge PR #178; fix head `dc1fc0f0c18820046e7c07a36d464bc575dc0f87`)  
+Feature merge SHA (unchanged): `40366e0bcb3b46a09beae1c24b1efe4b1e7cddeb` (slice `966bf1b`; stack base `62c863b` PR #174)  
+Prior FAIL ledger: `docs/LEGAL_OS_PHASE_VERIFICATION.md` @ `136922e` (PR #177 docs merge; on `main` lineage)
+
+### Verdict (lead)
+
+**PASS (auditor closure).** Prior **FAIL (major)** is **retired** — it applied only to a duplicate `const closureAttestation` binding in `tests/persistence.repositories.test.ts` (workflow-ops transport-boundary closure attestation @ L2154 vs filing-escalation closure attestation @ L3036 in the same mega block, introduced `eb44829`). Remediation renames the workflow-ops binding to `transportBoundaryReceiptReconciliationClosureAttestation`. Independent Firestore emulator trio is **22/22** green on `main` @ `36dca9c`.
+
+**Product / release classification remains PARTIAL** (`transport_stub=true`; **not COMPLETE** / not product-done) — unchanged.
+
+### 1) Rename on `main` @ `36dca9c` (`dc1fc0f`)
+
+Status: **PASS**
+
+- `git show dc1fc0f -- tests/persistence.repositories.test.ts` renames workflow-ops `const closureAttestation` → `const transportBoundaryReceiptReconciliationClosureAttestation` (and matching `expect` reference); filing-escalation `closureAttestation` @ L3036 retained (no collision).
+- Merge commit `36dca9c`: `Merge pull request #178: fix(tests) remediates PR #175 duplicate closureAttestation compile failure`.
+
+### 2) Firestore emulator trio (independent rerun)
+
+Status: **PASS**
+
+Command @ `36dca9c`:
+
+```bash
+npm run test:rules
+```
+
+Equivalent vitest scope: `tests/firestore.rules.test.ts`, `tests/persistence.repositories.test.ts`, `tests/persistence.runtime-mode.test.ts`.
+
+Observed: **22 passed**, exit **0** (was **21/22** with repositories suite transform error @ `40366e0`).
+
+Log artifact: `/opt/cursor/artifacts/pr175-firestore-trio-reaudit.log`.
+
+### 3) A–F spot-check @ `36dca9c` (feature slice `966bf1b` + remediation `dc1fc0f`)
+
+| Check | Status | Notes |
+|---|---|---|
+| **A BACKEND_REAL** | **PASS** | Unchanged from initial audit @ `40366e0` — custody-handoff + closure-attestation spine, repos, rules, governance (`buildWorkflowOpsChainedDocumentId`), ops-reporting views + six partner actions; runtime-mode mega green under emulator. |
+| **B FE honesty** | **PASS** | `frontend_real=false`; diff `62c863b..966bf1b` excludes `app/ops/**`. |
+| **C No COMPLETE** | **PASS** | `classification=PARTIAL`, `transport_stub=true`, negated product-done posture. |
+| **D SHA on main** | **PASS** | Feature `966bf1b` + merge `40366e0` ancestors of `36dca9c`; remediation merge `36dca9c` on `main`. |
+| **E Focused tests + gates** | **PASS** | Firestore trio **22/22** (sole prior major blocker); `gate_g0` PASS; `gate_g1` **10/10** PASS @ re-audit. Initial-audit partial Vitest lane (**124**) and claim-gate replay remain valid on feature SHA; non-blocking residual: six partner POST actions lack dedicated HTTP assertions in `api.ops-reporting` mega test (recurring #170/#156 pattern). |
+| **F Process flags** | **PASS** | `ede9a9c` on lineage; PR #175 `key=value` claim-gate replay (`62c863b..966bf1b`) exit **0** (unchanged). Builder `phase-prXXX-…` stub not used as evidence. |
+
+### Release labels (re-audit)
+
+| Flag | PR #175 claim | Auditor finding @ `36dca9c` |
+|---|---|---|
+| `backend_real` | true | **true** (PASS — Firestore trio + runtime-mode) |
+| `frontend_real` | false | **false** (PASS) |
+| `transport_stub` | true | **true** (PASS) |
+| `classification` | PARTIAL | **PARTIAL** (not COMPLETE) |
+
+### Auditor sign-off (re-audit)
+
+Independent forensic replay @ `36dca9c` **accepts** auditor closure for PR #175 phase verification. Prior major **E** failure **retired**. Severity **low** (prior major retired). **Not COMPLETE** — `transport_stub=true`.
