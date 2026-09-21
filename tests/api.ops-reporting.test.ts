@@ -399,6 +399,120 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(resolveEscalationJson.result.escalation.escalationStatus).toBe("resolved")
     expect(resolveEscalationJson.result.escalation.resolutionReason).toBe("issue remediated")
 
+    const disputeOpen = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_attestation_dispute",
+        actorId: "partner_a",
+        matterId,
+        reason: "contested attestation",
+      },
+      "8f1baf12-f7da-493f-b90b-3d6dbd7e4d04"
+    )
+    expect(disputeOpen.status).toBe(200)
+    const disputeOpenJson = (await disputeOpen.json()) as {
+      result: {
+        attestation: { attestationStatus: string }
+        dispute: { disputeStatus: string; openedAt: number | null }
+      }
+    }
+    expect(disputeOpenJson.result.attestation.attestationStatus).toBe("reopened")
+    expect(disputeOpenJson.result.dispute.disputeStatus).toBe("open")
+    expect(disputeOpenJson.result.dispute.openedAt).not.toBeNull()
+
+    const disputeAssign = await postOpsReport(
+      {
+        action: "assign_workflow_ops_alert_attestation_dispute_reviewer",
+        actorId: "partner_a",
+        matterId,
+        reviewerId: "associate_a",
+        reason: "assign reviewer",
+      },
+      "22d5adf4-f8ee-4c17-a95c-15f68a8ea189"
+    )
+    expect(disputeAssign.status).toBe(200)
+    const disputeAssignJson = (await disputeAssign.json()) as {
+      result: { dispute: { disputeStatus: string; reviewerId: string | null } }
+    }
+    expect(disputeAssignJson.result.dispute.disputeStatus).toBe("review_assigned")
+    expect(disputeAssignJson.result.dispute.reviewerId).toBe("associate_a")
+
+    const disputeResolve = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_attestation_dispute",
+        actorId: "partner_a",
+        matterId,
+        resolutionOutcome: "upheld",
+        reason: "review completed",
+      },
+      "d5f15f89-3447-4a72-a3db-17ae0f86461f"
+    )
+    expect(disputeResolve.status).toBe(200)
+    const disputeResolveJson = (await disputeResolve.json()) as {
+      result: {
+        attestation: { attestationStatus: string }
+        dispute: { disputeStatus: string; resolutionOutcome: string | null }
+      }
+    }
+    expect(disputeResolveJson.result.dispute.disputeStatus).toBe("resolved")
+    expect(disputeResolveJson.result.dispute.resolutionOutcome).toBe("upheld")
+    expect(disputeResolveJson.result.attestation.attestationStatus).toBe("attested")
+
+    const closureCheckpoint = await postOpsReport(
+      {
+        action: "checkpoint_workflow_ops_alert_escalation_closure",
+        actorId: "partner_a",
+        matterId,
+        reason: "closure checkpoint recorded",
+      },
+      "47c44f47-c95e-43e2-9357-4953060fc84f"
+    )
+    expect(closureCheckpoint.status).toBe(200)
+    const closureCheckpointJson = (await closureCheckpoint.json()) as {
+      result: { closure: { closureStatus: string; checkpointAt: number | null } }
+    }
+    expect(closureCheckpointJson.result.closure.closureStatus).toBe("checkpoint_recorded")
+    expect(closureCheckpointJson.result.closure.checkpointAt).not.toBeNull()
+
+    const closureClose = await postOpsReport(
+      {
+        action: "close_workflow_ops_alert_escalation_closure",
+        actorId: "partner_a",
+        matterId,
+        reason: "closure accepted",
+      },
+      "3f82e9f8-c894-4b98-9c8d-98a8242ab246"
+    )
+    expect(closureClose.status).toBe(200)
+    const closureCloseJson = (await closureClose.json()) as {
+      result: {
+        escalation: { escalationStatus: string }
+        closure: { closureStatus: string; closedAt: number | null }
+      }
+    }
+    expect(closureCloseJson.result.escalation.escalationStatus).toBe("resolved")
+    expect(closureCloseJson.result.closure.closureStatus).toBe("closed")
+    expect(closureCloseJson.result.closure.closedAt).not.toBeNull()
+
+    const closureReopen = await postOpsReport(
+      {
+        action: "reopen_workflow_ops_alert_escalation_closure",
+        actorId: "partner_a",
+        matterId,
+        reason: "closure evidence contested",
+      },
+      "85787620-e0a6-4f8a-b327-c88145d4f59a"
+    )
+    expect(closureReopen.status).toBe(200)
+    const closureReopenJson = (await closureReopen.json()) as {
+      result: {
+        escalation: { escalationStatus: string }
+        closure: { closureStatus: string; reopenedAt: number | null }
+      }
+    }
+    expect(closureReopenJson.result.escalation.escalationStatus).toBe("open")
+    expect(closureReopenJson.result.closure.closureStatus).toBe("reopened")
+    expect(closureReopenJson.result.closure.reopenedAt).not.toBeNull()
+
     const attestationView = await getOpsReport(
       new URLSearchParams({
         view: "alert_attestations",
@@ -437,7 +551,52 @@ describe("GET /api/d2/ops-reporting", () => {
     }
     expect(
       escalationViewJson.items.some(
-        (row) => row.matterId === matterId && row.escalationStatus === "resolved"
+        (row) => row.matterId === matterId && row.escalationStatus === "open"
+      )
+    ).toBe(true)
+
+    const disputeView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_attestation_disputes",
+        actorId: "associate_a",
+        matterId,
+        disputeStatus: "resolved",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(disputeView.status).toBe(200)
+    const disputeViewJson = (await disputeView.json()) as {
+      items: Array<{ matterId: string; disputeStatus: string; reviewerId: string | null }>
+    }
+    expect(
+      disputeViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.disputeStatus === "resolved" &&
+          row.reviewerId === "associate_a"
+      )
+    ).toBe(true)
+
+    const closureView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_escalation_closures",
+        actorId: "associate_a",
+        matterId,
+        closureStatus: "reopened",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(closureView.status).toBe(200)
+    const closureViewJson = (await closureView.json()) as {
+      items: Array<{ matterId: string; closureStatus: string }>
+    }
+    expect(
+      closureViewJson.items.some(
+        (row) => row.matterId === matterId && row.closureStatus === "reopened"
       )
     ).toBe(true)
   })

@@ -2050,6 +2050,68 @@ export type WorkflowOpsAlertEscalationLedgerRow = {
   updatedAt: number
 }
 
+export type WorkflowOpsAlertAttestationDisputeStatus =
+  | "not_contested"
+  | "open"
+  | "review_assigned"
+  | "resolved"
+
+export type WorkflowOpsAlertAttestationDisputeResolutionOutcome =
+  | "upheld"
+  | "overturned"
+  | "deferred"
+
+export type WorkflowOpsAlertAttestationDisputeFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertAttestationDisputeRow = {
+  id: string
+  firmId: string
+  matterId: string
+  alertAttestationId: string
+  classification: Classification
+  disputeStatus: WorkflowOpsAlertAttestationDisputeStatus
+  reviewerId: string | null
+  openedAt: number | null
+  lastStatusChangedAt: number | null
+  resolvedAt: number | null
+  resolutionOutcome: WorkflowOpsAlertAttestationDisputeResolutionOutcome | null
+  resolutionReason: string | null
+  freshnessStatus: WorkflowOpsAlertAttestationDisputeFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertEscalationClosureStatus =
+  | "pending_closure"
+  | "checkpoint_recorded"
+  | "closed"
+  | "reopened"
+
+export type WorkflowOpsAlertEscalationClosureFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertEscalationClosureRow = {
+  id: string
+  firmId: string
+  matterId: string
+  alertEscalationLedgerId: string
+  classification: Classification
+  closureStatus: WorkflowOpsAlertEscalationClosureStatus
+  checkpointAt: number | null
+  closedAt: number | null
+  reopenedAt: number | null
+  closureReason: string | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertEscalationClosureFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2157,6 +2219,8 @@ export class SpineStore {
   workflowOpsAlertDigests = new Map<string, WorkflowOpsAlertDigestRow>()
   workflowOpsAlertAttestations = new Map<string, WorkflowOpsAlertAttestationRow>()
   workflowOpsAlertEscalationLedgers = new Map<string, WorkflowOpsAlertEscalationLedgerRow>()
+  workflowOpsAlertAttestationDisputes = new Map<string, WorkflowOpsAlertAttestationDisputeRow>()
+  workflowOpsAlertEscalationClosures = new Map<string, WorkflowOpsAlertEscalationClosureRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()

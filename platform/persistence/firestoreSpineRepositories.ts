@@ -69,6 +69,8 @@ import type {
   WorkflowOpsAlertDigestRow,
   WorkflowOpsAlertAttestationRow,
   WorkflowOpsAlertEscalationLedgerRow,
+  WorkflowOpsAlertAttestationDisputeRow,
+  WorkflowOpsAlertEscalationClosureRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -1811,6 +1813,56 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "workflow_ops_alert_escalation_ledgers"))
         return rows.docs
           .map((entry) => entry.data() as WorkflowOpsAlertEscalationLedgerRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertAttestationDisputes: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_attestation_disputes", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertAttestationDisputeRow>(
+          db,
+          "workflow_ops_alert_attestation_disputes",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertAttestationDisputeRow>(
+          db,
+          "workflow_ops_alert_attestation_disputes",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_attestation_disputes"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertAttestationDisputeRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertEscalationClosures: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_escalation_closures", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertEscalationClosureRow>(
+          db,
+          "workflow_ops_alert_escalation_closures",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertEscalationClosureRow>(
+          db,
+          "workflow_ops_alert_escalation_closures",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_escalation_closures"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertEscalationClosureRow)
           .filter((row) => row.matterId === matterId)
       },
     },

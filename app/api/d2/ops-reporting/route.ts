@@ -12,11 +12,18 @@ import {
   type User,
   type WorkflowOpsActivityRow,
   type WorkflowOpsAlertAttestationFreshnessStatus,
+  type WorkflowOpsAlertAttestationDisputeFreshnessStatus,
+  type WorkflowOpsAlertAttestationDisputeResolutionOutcome,
+  type WorkflowOpsAlertAttestationDisputeRow,
+  type WorkflowOpsAlertAttestationDisputeStatus,
   type WorkflowOpsAlertAttestationRow,
   type WorkflowOpsAlertAttestationStatus,
   type WorkflowOpsAlertDigestFreshnessStatus,
   type WorkflowOpsAlertDigestRow,
   type WorkflowOpsAlertDigestSeverity,
+  type WorkflowOpsAlertEscalationClosureFreshnessStatus,
+  type WorkflowOpsAlertEscalationClosureRow,
+  type WorkflowOpsAlertEscalationClosureStatus,
   type WorkflowOpsAlertEscalationFreshnessStatus,
   type WorkflowOpsAlertEscalationLedgerRow,
   type WorkflowOpsAlertEscalationStatus,
@@ -59,13 +66,21 @@ function parseSource(value: string | null): "workflow_event" | "court_ops" | und
   return undefined
 }
 
-type View = "activity" | "alert_digests" | "alert_attestations" | "alert_escalation_ledgers"
+type View =
+  | "activity"
+  | "alert_digests"
+  | "alert_attestations"
+  | "alert_escalation_ledgers"
+  | "alert_attestation_disputes"
+  | "alert_escalation_closures"
 
 function parseView(value: string | null): View | undefined {
   if (!value || value === "activity") return "activity"
   if (value === "alert_digests") return value
   if (value === "alert_attestations") return value
   if (value === "alert_escalation_ledgers") return value
+  if (value === "alert_attestation_disputes") return value
+  if (value === "alert_escalation_closures") return value
   return undefined
 }
 
@@ -90,6 +105,37 @@ function parseEscalationStatus(value: string | null): WorkflowOpsAlertEscalation
   if (value === "not_required" || value === "open" || value === "assigned" || value === "resolved") {
     return value
   }
+  return undefined
+}
+
+function parseDisputeStatus(value: string | null): WorkflowOpsAlertAttestationDisputeStatus | undefined {
+  if (
+    value === "not_contested" ||
+    value === "open" ||
+    value === "review_assigned" ||
+    value === "resolved"
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function parseClosureStatus(value: string | null): WorkflowOpsAlertEscalationClosureStatus | undefined {
+  if (
+    value === "pending_closure" ||
+    value === "checkpoint_recorded" ||
+    value === "closed" ||
+    value === "reopened"
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function parseDisputeOutcome(
+  value: unknown
+): WorkflowOpsAlertAttestationDisputeResolutionOutcome | undefined {
+  if (value === "upheld" || value === "overturned" || value === "deferred") return value
   return undefined
 }
 
@@ -132,6 +178,14 @@ function alertAttestationId(matterId: string): string {
 
 function alertEscalationLedgerId(matterId: string): string {
   return `workflow_ops_alert_escalation:${matterId}`
+}
+
+function alertAttestationDisputeId(matterId: string): string {
+  return `workflow_ops_alert_attestation_dispute:${matterId}`
+}
+
+function alertEscalationClosureId(matterId: string): string {
+  return `workflow_ops_alert_escalation_closure:${matterId}`
 }
 
 function severityRank(value: WorkflowOpsAlertDigestSeverity): number {
@@ -264,6 +318,20 @@ function asEscalationFreshnessStatus(
   return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
 }
 
+function asDisputeFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertAttestationDisputeFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asClosureFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertEscalationClosureFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
 function buildWorkflowOpsAlertAttestationRow(params: {
   digest: WorkflowOpsAlertDigestRow
   actorId: string
@@ -334,6 +402,76 @@ function buildWorkflowOpsAlertEscalationLedgerRow(params: {
       `reason:${reason}`,
       `digest_severity:${digest.severity}`,
       ...digest.provenanceTags.map((tag) => `digest_${tag}`),
+    ]),
+    recomputedAt: now,
+    recomputedBy: actorId,
+    recomputeReason: reason,
+    updatedAt: now,
+  }
+}
+
+function buildWorkflowOpsAlertAttestationDisputeRow(params: {
+  attestation: WorkflowOpsAlertAttestationRow
+  actorId: string
+  reason: string
+  existing: WorkflowOpsAlertAttestationDisputeRow | null
+  now: number
+}): WorkflowOpsAlertAttestationDisputeRow {
+  const { attestation, actorId, reason, existing, now } = params
+  const disputeStatus = existing?.disputeStatus ?? "not_contested"
+  return {
+    id: alertAttestationDisputeId(attestation.matterId),
+    firmId: attestation.firmId,
+    matterId: attestation.matterId,
+    alertAttestationId: attestation.id,
+    classification: attestation.classification,
+    disputeStatus,
+    reviewerId: existing?.reviewerId ?? null,
+    openedAt: existing?.openedAt ?? null,
+    lastStatusChangedAt: existing?.lastStatusChangedAt ?? null,
+    resolvedAt: existing?.resolvedAt ?? null,
+    resolutionOutcome: existing?.resolutionOutcome ?? null,
+    resolutionReason: existing?.resolutionReason ?? null,
+    freshnessStatus: asDisputeFreshnessStatus(attestation.recomputedAt, now),
+    provenanceTags: normalizeProvenanceTags([
+      `reason:${reason}`,
+      `attestation_status:${attestation.attestationStatus}`,
+      ...attestation.provenanceTags.map((tag) => `attestation_${tag}`),
+    ]),
+    recomputedAt: now,
+    recomputedBy: actorId,
+    recomputeReason: reason,
+    updatedAt: now,
+  }
+}
+
+function buildWorkflowOpsAlertEscalationClosureRow(params: {
+  escalation: WorkflowOpsAlertEscalationLedgerRow
+  actorId: string
+  reason: string
+  existing: WorkflowOpsAlertEscalationClosureRow | null
+  now: number
+}): WorkflowOpsAlertEscalationClosureRow {
+  const { escalation, actorId, reason, existing, now } = params
+  const closureStatus = existing?.closureStatus ?? "pending_closure"
+  return {
+    id: alertEscalationClosureId(escalation.matterId),
+    firmId: escalation.firmId,
+    matterId: escalation.matterId,
+    alertEscalationLedgerId: escalation.id,
+    classification: escalation.classification,
+    closureStatus,
+    checkpointAt: existing?.checkpointAt ?? null,
+    closedAt: existing?.closedAt ?? null,
+    reopenedAt: existing?.reopenedAt ?? null,
+    closureReason: existing?.closureReason ?? null,
+    lastStatusChangedAt: existing?.lastStatusChangedAt ?? null,
+    freshnessStatus: asClosureFreshnessStatus(escalation.recomputedAt, now),
+    provenanceTags: normalizeProvenanceTags([
+      `reason:${reason}`,
+      `escalation_status:${escalation.escalationStatus}`,
+      `digest_severity:${escalation.severity}`,
+      ...escalation.provenanceTags.map((tag) => `escalation_${tag}`),
     ]),
     recomputedAt: now,
     recomputedBy: actorId,
@@ -424,18 +562,26 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
 }): Promise<{
   attestations: WorkflowOpsAlertAttestationRow[]
   escalationLedgers: WorkflowOpsAlertEscalationLedgerRow[]
+  attestationDisputes: WorkflowOpsAlertAttestationDisputeRow[]
+  escalationClosures: WorkflowOpsAlertEscalationClosureRow[]
 }> {
   const { digests, actorId, reason, store, repos } = params
   const now = Date.now()
   const attestations: WorkflowOpsAlertAttestationRow[] = []
   const escalationLedgers: WorkflowOpsAlertEscalationLedgerRow[] = []
+  const attestationDisputes: WorkflowOpsAlertAttestationDisputeRow[] = []
+  const escalationClosures: WorkflowOpsAlertEscalationClosureRow[] = []
 
   for (const digest of digests) {
     if (!digest.matterId) continue
     const attestationKey = alertAttestationId(digest.matterId)
     const escalationKey = alertEscalationLedgerId(digest.matterId)
+    const disputeKey = alertAttestationDisputeId(digest.matterId)
+    const closureKey = alertEscalationClosureId(digest.matterId)
     const existingAttestation = await repos.workflowOpsAlertAttestations.get(attestationKey)
     const existingEscalation = await repos.workflowOpsAlertEscalationLedgers.get(escalationKey)
+    const existingDispute = await repos.workflowOpsAlertAttestationDisputes.get(disputeKey)
+    const existingClosure = await repos.workflowOpsAlertEscalationClosures.get(closureKey)
 
     const attestation = buildWorkflowOpsAlertAttestationRow({
       digest,
@@ -451,16 +597,36 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       existing: existingEscalation,
       now,
     })
+    const dispute = buildWorkflowOpsAlertAttestationDisputeRow({
+      attestation,
+      actorId,
+      reason,
+      existing: existingDispute,
+      now,
+    })
+    const closure = buildWorkflowOpsAlertEscalationClosureRow({
+      escalation,
+      actorId,
+      reason,
+      existing: existingClosure,
+      now,
+    })
 
     await repos.workflowOpsAlertAttestations.upsert(attestation)
     await repos.workflowOpsAlertEscalationLedgers.upsert(escalation)
+    await repos.workflowOpsAlertAttestationDisputes.upsert(dispute)
+    await repos.workflowOpsAlertEscalationClosures.upsert(closure)
     store.workflowOpsAlertAttestations.set(attestation.id, attestation)
     store.workflowOpsAlertEscalationLedgers.set(escalation.id, escalation)
+    store.workflowOpsAlertAttestationDisputes.set(dispute.id, dispute)
+    store.workflowOpsAlertEscalationClosures.set(closure.id, closure)
     attestations.push(attestation)
     escalationLedgers.push(escalation)
+    attestationDisputes.push(dispute)
+    escalationClosures.push(closure)
   }
 
-  return { attestations, escalationLedgers }
+  return { attestations, escalationLedgers, attestationDisputes, escalationClosures }
 }
 
 type ViewActivityBody = never
@@ -509,6 +675,50 @@ type ResolveWorkflowOpsAlertEscalationBody = {
   reason?: unknown
 }
 
+type OpenWorkflowOpsAlertAttestationDisputeBody = {
+  action: "open_workflow_ops_alert_attestation_dispute"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type AssignWorkflowOpsAlertAttestationDisputeReviewerBody = {
+  action: "assign_workflow_ops_alert_attestation_dispute_reviewer"
+  actorId?: string
+  matterId?: string
+  reviewerId?: unknown
+  reason?: unknown
+}
+
+type ResolveWorkflowOpsAlertAttestationDisputeBody = {
+  action: "resolve_workflow_ops_alert_attestation_dispute"
+  actorId?: string
+  matterId?: string
+  resolutionOutcome?: unknown
+  reason?: unknown
+}
+
+type CheckpointWorkflowOpsAlertEscalationClosureBody = {
+  action: "checkpoint_workflow_ops_alert_escalation_closure"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type CloseWorkflowOpsAlertEscalationClosureBody = {
+  action: "close_workflow_ops_alert_escalation_closure"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type ReopenWorkflowOpsAlertEscalationClosureBody = {
+  action: "reopen_workflow_ops_alert_escalation_closure"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
 type Body =
   | ViewActivityBody
   | AcknowledgeWorkflowOpsAlertDigestBody
@@ -517,6 +727,12 @@ type Body =
   | OpenWorkflowOpsAlertEscalationBody
   | AssignWorkflowOpsAlertEscalationOwnerBody
   | ResolveWorkflowOpsAlertEscalationBody
+  | OpenWorkflowOpsAlertAttestationDisputeBody
+  | AssignWorkflowOpsAlertAttestationDisputeReviewerBody
+  | ResolveWorkflowOpsAlertAttestationDisputeBody
+  | CheckpointWorkflowOpsAlertEscalationClosureBody
+  | CloseWorkflowOpsAlertEscalationClosureBody
+  | ReopenWorkflowOpsAlertEscalationClosureBody
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
@@ -535,6 +751,8 @@ export async function GET(request: Request) {
   const freshnessStatus = parseFreshness(url.searchParams.get("freshnessStatus"))
   const attestationStatus = parseAttestationStatus(url.searchParams.get("attestationStatus"))
   const escalationStatus = parseEscalationStatus(url.searchParams.get("escalationStatus"))
+  const disputeStatus = parseDisputeStatus(url.searchParams.get("disputeStatus"))
+  const closureStatus = parseClosureStatus(url.searchParams.get("closureStatus"))
   const terms = normalizeTerms(url.searchParams.get("q"))
   const limit = parseLimit(url.searchParams.get("limit"))
   const cursor = parseCursor(url.searchParams.get("cursor"))
@@ -662,14 +880,64 @@ export async function GET(request: Request) {
     })
   }
 
-  const all = (await repos.workflowOpsAlertEscalationLedgers.listByFirm(refreshedActor.firmId))
+  if (view === "alert_escalation_ledgers") {
+    const all = (await repos.workflowOpsAlertEscalationLedgers.listByFirm(refreshedActor.firmId))
+      .map((row) => ({
+        ...row,
+        freshnessStatus: asEscalationFreshnessStatus(row.recomputedAt, now),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) => (escalationStatus ? row.escalationStatus === escalationStatus : true))
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view: "alert_escalation_ledgers",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
+  if (view === "alert_attestation_disputes") {
+    const all = (await repos.workflowOpsAlertAttestationDisputes.listByFirm(refreshedActor.firmId))
+      .map((row) => ({
+        ...row,
+        freshnessStatus: asDisputeFreshnessStatus(row.recomputedAt, now),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) => (disputeStatus ? row.disputeStatus === disputeStatus : true))
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view: "alert_attestation_disputes",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
+  const all = (await repos.workflowOpsAlertEscalationClosures.listByFirm(refreshedActor.firmId))
     .map((row) => ({
       ...row,
-      freshnessStatus: asEscalationFreshnessStatus(row.recomputedAt, now),
+      freshnessStatus: asClosureFreshnessStatus(row.recomputedAt, now),
     }))
     .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
-    .filter((row) => (escalationStatus ? row.escalationStatus === escalationStatus : true))
+    .filter((row) => (closureStatus ? row.closureStatus === closureStatus : true))
     .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
     .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
     .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -677,7 +945,7 @@ export async function GET(request: Request) {
   const items = all.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
   return NextResponse.json({
-    view: "alert_escalation_ledgers",
+    view: "alert_escalation_closures",
     items,
     total: all.length,
     limit,
@@ -711,7 +979,13 @@ export async function POST(request: Request) {
       parsed.action !== "attest_workflow_ops_alert_digest" &&
       parsed.action !== "open_workflow_ops_alert_escalation" &&
       parsed.action !== "assign_workflow_ops_alert_escalation_owner" &&
-      parsed.action !== "resolve_workflow_ops_alert_escalation")
+      parsed.action !== "resolve_workflow_ops_alert_escalation" &&
+      parsed.action !== "open_workflow_ops_alert_attestation_dispute" &&
+      parsed.action !== "assign_workflow_ops_alert_attestation_dispute_reviewer" &&
+      parsed.action !== "resolve_workflow_ops_alert_attestation_dispute" &&
+      parsed.action !== "checkpoint_workflow_ops_alert_escalation_closure" &&
+      parsed.action !== "close_workflow_ops_alert_escalation_closure" &&
+      parsed.action !== "reopen_workflow_ops_alert_escalation_closure")
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -786,7 +1060,15 @@ export async function POST(request: Request) {
     governance.escalationLedgers.find((row) => row.matterId === matter.id) ??
     store.workflowOpsAlertEscalationLedgers.get(alertEscalationLedgerId(matter.id)) ??
     (await repos.workflowOpsAlertEscalationLedgers.get(alertEscalationLedgerId(matter.id)))
-  if (!currentAttestation || !currentEscalation) {
+  const currentDispute =
+    governance.attestationDisputes.find((row) => row.matterId === matter.id) ??
+    store.workflowOpsAlertAttestationDisputes.get(alertAttestationDisputeId(matter.id)) ??
+    (await repos.workflowOpsAlertAttestationDisputes.get(alertAttestationDisputeId(matter.id)))
+  const currentClosure =
+    governance.escalationClosures.find((row) => row.matterId === matter.id) ??
+    store.workflowOpsAlertEscalationClosures.get(alertEscalationClosureId(matter.id)) ??
+    (await repos.workflowOpsAlertEscalationClosures.get(alertEscalationClosureId(matter.id)))
+  if (!currentAttestation || !currentEscalation || !currentDispute || !currentClosure) {
     return NextResponse.json({ error: "alert governance rows are unavailable for matter" }, { status: 404 })
   }
 
@@ -945,6 +1227,262 @@ export async function POST(request: Request) {
         action: parsed.action,
         digest: current,
         escalation: nextEscalation,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "open_workflow_ops_alert_attestation_dispute") {
+      const reason = normalizeReason(parsed.reason, "attestation_dispute_opened")
+      const nextDispute: WorkflowOpsAlertAttestationDisputeRow = {
+        ...currentDispute,
+        disputeStatus: "open",
+        openedAt: currentDispute.openedAt ?? now,
+        lastStatusChangedAt: now,
+        resolvedAt: null,
+        resolutionOutcome: null,
+        resolutionReason: null,
+        freshnessStatus: asDisputeFreshnessStatus(currentAttestation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertAttestationDisputes.upsert(nextDispute)
+      store.workflowOpsAlertAttestationDisputes.set(nextDispute.id, nextDispute)
+
+      const nextAttestation: WorkflowOpsAlertAttestationRow = {
+        ...currentAttestation,
+        attestationStatus: "reopened",
+        attestationReason: reason,
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertAttestations.upsert(nextAttestation)
+      store.workflowOpsAlertAttestations.set(nextAttestation.id, nextAttestation)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_attestation_dispute_opened",
+        actorId: actor.id,
+        target: nextDispute.matterId,
+        classification: nextDispute.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        attestation: nextAttestation,
+        dispute: nextDispute,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "assign_workflow_ops_alert_attestation_dispute_reviewer") {
+      const reviewerId = typeof parsed.reviewerId === "string" ? parsed.reviewerId.trim() : ""
+      if (!reviewerId) {
+        return NextResponse.json({ error: "reviewerId is required" }, { status: 400 })
+      }
+      const reason = normalizeReason(parsed.reason, "attestation_dispute_reviewer_assigned")
+      const nextDispute: WorkflowOpsAlertAttestationDisputeRow = {
+        ...currentDispute,
+        disputeStatus: "review_assigned",
+        reviewerId,
+        openedAt: currentDispute.openedAt ?? now,
+        lastStatusChangedAt: now,
+        resolvedAt: null,
+        resolutionOutcome: null,
+        resolutionReason: null,
+        freshnessStatus: asDisputeFreshnessStatus(currentAttestation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertAttestationDisputes.upsert(nextDispute)
+      store.workflowOpsAlertAttestationDisputes.set(nextDispute.id, nextDispute)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_attestation_dispute_reviewer_assigned",
+        actorId: actor.id,
+        target: nextDispute.matterId,
+        classification: nextDispute.classification,
+        reason: `${reason}:${reviewerId}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        dispute: nextDispute,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_workflow_ops_alert_attestation_dispute") {
+      const resolutionOutcome = parseDisputeOutcome(parsed.resolutionOutcome)
+      if (!resolutionOutcome) {
+        return NextResponse.json(
+          { error: "resolutionOutcome must be upheld, overturned, or deferred" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(parsed.reason, "attestation_dispute_resolved")
+      const nextDispute: WorkflowOpsAlertAttestationDisputeRow = {
+        ...currentDispute,
+        disputeStatus: "resolved",
+        lastStatusChangedAt: now,
+        resolvedAt: now,
+        resolutionOutcome,
+        resolutionReason: reason,
+        freshnessStatus: asDisputeFreshnessStatus(currentAttestation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertAttestationDisputes.upsert(nextDispute)
+      store.workflowOpsAlertAttestationDisputes.set(nextDispute.id, nextDispute)
+
+      const nextAttestation: WorkflowOpsAlertAttestationRow = {
+        ...currentAttestation,
+        attestationStatus: resolutionOutcome === "overturned" ? "reopened" : "attested",
+        attestationReason: reason,
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertAttestations.upsert(nextAttestation)
+      store.workflowOpsAlertAttestations.set(nextAttestation.id, nextAttestation)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_attestation_dispute_resolved",
+        actorId: actor.id,
+        target: nextDispute.matterId,
+        classification: nextDispute.classification,
+        reason: `${reason}:${resolutionOutcome}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        attestation: nextAttestation,
+        dispute: nextDispute,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "checkpoint_workflow_ops_alert_escalation_closure") {
+      const reason = normalizeReason(parsed.reason, "escalation_closure_checkpoint_recorded")
+      const nextClosure: WorkflowOpsAlertEscalationClosureRow = {
+        ...currentClosure,
+        closureStatus: "checkpoint_recorded",
+        checkpointAt: now,
+        lastStatusChangedAt: now,
+        freshnessStatus: asClosureFreshnessStatus(currentEscalation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertEscalationClosures.upsert(nextClosure)
+      store.workflowOpsAlertEscalationClosures.set(nextClosure.id, nextClosure)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_escalation_closure_checkpoint_recorded",
+        actorId: actor.id,
+        target: nextClosure.matterId,
+        classification: nextClosure.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        closure: nextClosure,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "close_workflow_ops_alert_escalation_closure") {
+      const reason = normalizeReason(parsed.reason, "escalation_closure_closed")
+      const nextClosure: WorkflowOpsAlertEscalationClosureRow = {
+        ...currentClosure,
+        closureStatus: "closed",
+        closedAt: now,
+        reopenedAt: null,
+        closureReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asClosureFreshnessStatus(currentEscalation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertEscalationClosures.upsert(nextClosure)
+      store.workflowOpsAlertEscalationClosures.set(nextClosure.id, nextClosure)
+
+      const nextEscalation: WorkflowOpsAlertEscalationLedgerRow = {
+        ...currentEscalation,
+        escalationStatus: "resolved",
+        lastStatusChangedAt: now,
+        resolvedAt: currentEscalation.resolvedAt ?? now,
+        resolutionReason: reason,
+        freshnessStatus: asEscalationFreshnessStatus(current.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertEscalationLedgers.upsert(nextEscalation)
+      store.workflowOpsAlertEscalationLedgers.set(nextEscalation.id, nextEscalation)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_escalation_closure_closed",
+        actorId: actor.id,
+        target: nextClosure.matterId,
+        classification: nextClosure.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        escalation: nextEscalation,
+        closure: nextClosure,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "reopen_workflow_ops_alert_escalation_closure") {
+      const reason = normalizeReason(parsed.reason, "escalation_closure_reopened")
+      const nextClosure: WorkflowOpsAlertEscalationClosureRow = {
+        ...currentClosure,
+        closureStatus: "reopened",
+        reopenedAt: now,
+        closureReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asClosureFreshnessStatus(currentEscalation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertEscalationClosures.upsert(nextClosure)
+      store.workflowOpsAlertEscalationClosures.set(nextClosure.id, nextClosure)
+
+      const nextEscalation: WorkflowOpsAlertEscalationLedgerRow = {
+        ...currentEscalation,
+        escalationStatus: "open",
+        openedAt: currentEscalation.openedAt ?? now,
+        lastStatusChangedAt: now,
+        resolvedAt: null,
+        resolutionReason: null,
+        freshnessStatus: asEscalationFreshnessStatus(current.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertEscalationLedgers.upsert(nextEscalation)
+      store.workflowOpsAlertEscalationLedgers.set(nextEscalation.id, nextEscalation)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_escalation_closure_reopened",
+        actorId: actor.id,
+        target: nextClosure.matterId,
+        classification: nextClosure.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        escalation: nextEscalation,
+        closure: nextClosure,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
