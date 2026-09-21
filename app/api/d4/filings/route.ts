@@ -3947,7 +3947,9 @@ export async function GET(request: Request) {
         if (!filingPackage) continue
         const existing = rowsByPackage.get(pkgId) ?? null
         const linkedReceipt =
-          (reconciliation.latestReceiptId && receiptById.get(reconciliation.latestReceiptId)) ?? null
+          (reconciliation.latestReceiptId
+            ? receiptById.get(reconciliation.latestReceiptId)
+            : undefined) ?? null
         const next = buildSubmissionExceptionRowFromFailure(
           filingPackage,
           {
@@ -6333,7 +6335,7 @@ export async function GET(request: Request) {
             ? {
                 ...computedBase,
                 status: computedBase.status === "cleared" ? ("open_alert" as const) : computedBase.status,
-                alertReasons: [...computedBase.alertReasons, "closure_compliance_pressure"].sort((a, b) =>
+                alertReasons: [...computedBase.alertReasons, "closure_compliance_pressure" as const].sort((a, b) =>
                   a.localeCompare(b)
                 ),
                 updatedAt: now,
@@ -7488,7 +7490,9 @@ export async function POST(request: Request) {
           ? [...existing.operatorNotes, `${new Date(now).toISOString()} ${actor.id}: ${note}`]
           : existing.operatorNotes,
         externalDispatchState:
-          nextStatus === "handoff_ready" ? "ready_for_firm_dispatch" : "blocked_todo_firm",
+          nextStatus === "handoff_ready"
+            ? ("ready_for_firm_dispatch" as const)
+            : ("blocked_todo_firm" as const),
         updatedAt: now,
       }
       await repos.filingDispatchQueue.upsert(updated)
@@ -7791,7 +7795,9 @@ export async function POST(request: Request) {
       }
       const dispatchQueue = await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))
       const dispatchStatus =
-        parsed.dispatchOutcome === "accepted" ? "handoff_ready" : "retry_pending"
+        parsed.dispatchOutcome === "accepted"
+          ? ("handoff_ready" as const)
+          : ("retry_pending" as const)
       const updatedDispatchQueue = dispatchQueue
         ? {
             ...dispatchQueue,
@@ -9889,11 +9895,12 @@ export async function POST(request: Request) {
     }
 
     if (parsed.action === "record_variance_remediation") {
+      const decision = parsed.decision ?? null
       if (
         !parsed.actorId ||
         !parsed.packageId ||
         !parsed.justification?.trim() ||
-        !isFilingEscalationVarianceRemediationDecision(parsed.decision ?? null) ||
+        !isFilingEscalationVarianceRemediationDecision(decision) ||
         parsed.expiresInHours === undefined
       ) {
         return NextResponse.json(
@@ -9949,7 +9956,7 @@ export async function POST(request: Request) {
       const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
-      if (requiresSecondApproverForRemediationDecision(parsed.decision) && !secondApprover) {
+      if (requiresSecondApproverForRemediationDecision(decision) && !secondApprover) {
         return NextResponse.json(
           { error: "temporary_override remediation requires a second approver" },
           { status: 422 }
@@ -9969,7 +9976,7 @@ export async function POST(request: Request) {
       )
       const remediation = buildFilingEscalationVarianceRemediationRow(filingPackage, {
         sequenceNo: existingRemediations.length + 1,
-        decision: parsed.decision,
+        decision,
         justification: parsed.justification,
         actorId: actor.id,
         expiresAt: now + expiresInHours * 60 * 60 * 1000,
@@ -10055,10 +10062,11 @@ export async function POST(request: Request) {
     }
 
     if (parsed.action === "attest_remediation_closure") {
+      const closureOutcome = parsed.closureOutcome ?? null
       if (
         !parsed.actorId ||
         !parsed.packageId ||
-        !isFilingEscalationRemediationClosureOutcome(parsed.closureOutcome ?? null) ||
+        !isFilingEscalationRemediationClosureOutcome(closureOutcome) ||
         !parsed.note?.trim()
       ) {
         return NextResponse.json(
@@ -10104,12 +10112,12 @@ export async function POST(request: Request) {
       const closedLifecycle = {
         ...targetLifecycle,
         status: "closure_attested" as const,
-        closureOutcome: parsed.closureOutcome,
+        closureOutcome,
         closureAttestedBy: actor.id,
         closureAttestedAt: now,
         notes: [
           ...targetLifecycle.notes,
-          `${new Date(now).toISOString()} ${actor.id}: closure ${parsed.closureOutcome} ${closureNote}`,
+          `${new Date(now).toISOString()} ${actor.id}: closure ${closureOutcome} ${closureNote}`,
         ],
         updatedAt: now,
       }
@@ -10119,7 +10127,7 @@ export async function POST(request: Request) {
       if (remediation) {
         const updatedRemediation = {
           ...remediation,
-          status: remediationStatusFromClosureOutcome(parsed.closureOutcome),
+          status: remediationStatusFromClosureOutcome(closureOutcome),
           updatedAt: now,
         }
         await repos.filingEscalationVarianceRemediations.upsert(updatedRemediation)
@@ -10738,14 +10746,15 @@ export async function POST(request: Request) {
       ) {
         return NextResponse.json({ error: "ownerId must reference a partner in actor firm" }, { status: 422 })
       }
-      if (!isFilingEscalationClosureAutoAssignmentMode(parsed.mode ?? null) && parsed.mode !== undefined) {
+      const requestedMode = parsed.mode ?? null
+      if (!isFilingEscalationClosureAutoAssignmentMode(requestedMode) && parsed.mode !== undefined) {
         return NextResponse.json(
           { error: "mode must be owner_rota or workload_aware_claim" },
           { status: 400 }
         )
       }
-      const mode = isFilingEscalationClosureAutoAssignmentMode(parsed.mode ?? null)
-        ? parsed.mode
+      const mode = isFilingEscalationClosureAutoAssignmentMode(requestedMode)
+        ? requestedMode
         : undefined
       const maxActiveClaims = Number(
         parsed.maxActiveClaimsPerPartner ?? DEFAULT_CLOSURE_AUTO_ASSIGNMENT_MAX_ACTIVE_CLAIMS
@@ -11093,9 +11102,10 @@ export async function POST(request: Request) {
         )
       }
       const digest = closureState.digestByOwner.get(queue.ownerId) ?? null
-      const slaWindow = store.filingEscalationClosureSlaWindows.get(
-        filingEscalationClosureSlaWindowId(queue.id)
-      )
+      const slaWindowRef = closureState.slaWindowByOwner.get(queue.ownerId) ?? null
+      const slaWindow = slaWindowRef
+        ? store.filingEscalationClosureSlaWindows.get(slaWindowRef.id) ?? null
+        : null
       if (!digest || !slaWindow) {
         return NextResponse.json({ error: "closure compliance state unavailable" }, { status: 422 })
       }

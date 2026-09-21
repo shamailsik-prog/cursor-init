@@ -432,7 +432,7 @@ export function reissueTenancySessionReference(
     sessionReferenceId: reference.id,
     externalSessionId: reference.externalSessionId,
     privilegedBoundaryDriftCount: 0,
-    privilegedBoundaryDriftSessionReferenceIds: [],
+    privilegedBoundaryDriftSessionReferenceIds: [] as string[],
     delegatedBoundaryLineageRootSessionReferenceId: reference.lineageRootSessionReferenceId,
     delegatedBoundaryComparedSessionReferenceId: parent.id,
     delegatedBoundaryReconciliationStatus: reference.delegatedBoundaryReconciliationStatus,
@@ -483,7 +483,7 @@ export function revokeTenancySessionReference(
     sessionReferenceId: revoked.id,
     externalSessionId: revoked.externalSessionId,
     privilegedBoundaryDriftCount: 0,
-    privilegedBoundaryDriftSessionReferenceIds: [],
+    privilegedBoundaryDriftSessionReferenceIds: [] as string[],
     delegatedBoundaryLineageRootSessionReferenceId: revoked.lineageRootSessionReferenceId,
     delegatedBoundaryComparedSessionReferenceId:
       revoked.delegatedBoundaryComparedSessionReferenceId,
@@ -685,7 +685,7 @@ export function attestSessionLineageDispute(
     sessionReferenceId: sessionReference.id,
     externalSessionId: sessionReference.externalSessionId,
     privilegedBoundaryDriftCount: 0,
-    privilegedBoundaryDriftSessionReferenceIds: [],
+    privilegedBoundaryDriftSessionReferenceIds: [] as string[],
     delegatedBoundaryLineageRootSessionReferenceId: sessionReference.lineageRootSessionReferenceId,
     delegatedBoundaryComparedSessionReferenceId:
       sessionReference.delegatedBoundaryComparedSessionReferenceId,
@@ -752,7 +752,7 @@ export function resolveSessionLineageDispute(
     sessionReferenceId: relatedSessionReference?.id ?? dispute.sessionReferenceId,
     externalSessionId: relatedSessionReference?.externalSessionId,
     privilegedBoundaryDriftCount: 0,
-    privilegedBoundaryDriftSessionReferenceIds: [],
+    privilegedBoundaryDriftSessionReferenceIds: [] as string[],
     delegatedBoundaryLineageRootSessionReferenceId: dispute.lineageRootSessionReferenceId,
     delegatedBoundaryComparedSessionReferenceId:
       relatedSessionReference?.delegatedBoundaryComparedSessionReferenceId ?? null,
