@@ -178,11 +178,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert enforcement-attestation rows and closure-debt variance digest rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_enforcement_attestations`, `workflow_ops_alert_closure_debt_variance_digests`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with attestation/variance monitoring views (`view=alert_enforcement_attestations`, `view=alert_closure_debt_variance_digests`) and partner-governed lifecycle actions (`attest_workflow_ops_alert_dispute_enforcement`, `reopen_workflow_ops_alert_dispute_enforcement_attestation`, `open_workflow_ops_alert_closure_debt_variance`, `assign_workflow_ops_alert_closure_debt_variance_owner`, `resolve_workflow_ops_alert_closure_debt_variance`) filterable by matter, lifecycle status, and freshness state.
+- Captured enforcement policy attestations, attestation reopen provenance, closure-debt variance intake, reviewer assignment, and variance resolution provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_dispute_enforcement_attested`, `ops_reporting_alert_dispute_enforcement_attestation_reopened`, `ops_reporting_alert_closure_debt_variance_opened`, `ops_reporting_alert_closure_debt_variance_owner_assigned`, `ops_reporting_alert_closure_debt_variance_resolved`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for attestation/variance lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for PR #127:
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert enforcement attestation + reconciliation variance digest scaffolding**:
+Build **workflow alert enforcement waiver ledger + variance remediation queue scaffolding**:
 
-1. Add workflow alert enforcement attestation rows and closure-debt reconciliation variance digest rows for post-enforcement policy attestations and debt drift visibility.
-2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed attestation/variance actions and paginated views filterable by matter, attestation status, and freshness state.
-3. Extend unit/runtime persistence tests for attestation/variance lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+1. Add workflow alert enforcement waiver-ledger rows and closure-debt variance remediation queue rows for waiver governance and outstanding variance execution tracking.
+2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed waiver/remediation actions and paginated views filterable by matter, waiver status, and freshness state.
+3. Extend unit/runtime persistence tests for waiver/remediation lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving scaffold-claim gate behavior.
