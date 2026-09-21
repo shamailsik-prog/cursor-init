@@ -1012,6 +1012,91 @@ describe("Firestore repository adapters", () => {
           (row) => row.recomputeReason === "ops_variance_sla_breach_escalation_seed"
         )
       ).toBe(true)
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.upsert({
+        id: "workflow_ops_alert_waiver_expiry_dispute_adjudication:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        waiverExpiryDisputeId: "workflow_ops_alert_waiver_expiry_dispute:mat_1",
+        classification: "internal",
+        adjudicationStatus: "panel_assigned",
+        disputeStatusSnapshot: "review_assigned",
+        requestedOutcome: null,
+        panelOwnerId: "associate_a",
+        openedAt: 63,
+        dueAt: 63 + 28_800_000,
+        resolvedAt: null,
+        resolutionOutcome: null,
+        resolutionReason: null,
+        reopenPressureCount: 1,
+        lastStatusChangedAt: 63,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "waiver_expiry_dispute_adjudication"],
+        recomputedAt: 63,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_waiver_expiry_dispute_adjudication_seed",
+        updatedAt: 63,
+      })
+      const waiverExpiryDisputeAdjudication =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.get(
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication:mat_1"
+        )
+      expect(waiverExpiryDisputeAdjudication?.adjudicationStatus).toBe("panel_assigned")
+      const waiverExpiryDisputeAdjudicationsByFirm =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.listByFirm("firmA")
+      expect(waiverExpiryDisputeAdjudicationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const waiverExpiryDisputeAdjudicationsByMatter =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.listByMatter("mat_1")
+      expect(
+        waiverExpiryDisputeAdjudicationsByMatter.some(
+          (row) => row.recomputeReason === "ops_waiver_expiry_dispute_adjudication_seed"
+        )
+      ).toBe(true)
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.upsert({
+        id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        remediationSlaBreachEscalationId:
+          "workflow_ops_alert_variance_remediation_sla_breach_escalation:mat_1",
+        classification: "internal",
+        checkpointStatus: "reopened",
+        escalationStatusSnapshot: "assigned",
+        ownerIdSnapshot: "associate_a",
+        checkpointOwnerId: "partner_a",
+        openedAt: 64,
+        dueAt: 64 + 21_600_000,
+        checkpointRecordedAt: null,
+        reopenedAt: 64,
+        resolutionNote: "ops_variance_sla_breach_resolution_checkpoint_seed",
+        reopenPressureCount: 2,
+        lastStatusChangedAt: 64,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "variance_remediation_sla_breach_resolution_checkpoint"],
+        recomputedAt: 64,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_variance_sla_breach_resolution_checkpoint_seed",
+        updatedAt: 64,
+      })
+      const remediationSlaBreachResolutionCheckpoint =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint:mat_1"
+        )
+      expect(remediationSlaBreachResolutionCheckpoint?.checkpointStatus).toBe("reopened")
+      const remediationSlaBreachResolutionCheckpointsByFirm =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.listByFirm(
+          "firmA"
+        )
+      expect(remediationSlaBreachResolutionCheckpointsByFirm.some((row) => row.matterId === "mat_1")).toBe(
+        true
+      )
+      const remediationSlaBreachResolutionCheckpointsByMatter =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.listByMatter(
+          "mat_1"
+        )
+      expect(
+        remediationSlaBreachResolutionCheckpointsByMatter.some(
+          (row) => row.recomputeReason === "ops_variance_sla_breach_resolution_checkpoint_seed"
+        )
+      ).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

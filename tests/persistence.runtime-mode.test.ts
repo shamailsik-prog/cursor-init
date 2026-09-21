@@ -7781,6 +7781,111 @@ describe("Runtime persistence mode", () => {
       )
       expect(remediationSlaBreachEscalationResolve.status).toBe(200)
 
+      const waiverExpiryDisputeAdjudicationOpen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "c2a8f91d-4e70-4b16-9d33-7a1c5e8f0b24",
+          },
+          body: JSON.stringify({
+            action: "open_workflow_ops_alert_waiver_expiry_dispute_adjudication",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime waiver expiry dispute adjudication opened",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeAdjudicationOpen.status).toBe(200)
+
+      const waiverExpiryDisputeAdjudicationAssign = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "d9b1e40c-8f25-4a73-b2e1-6c0d9a4f3e18",
+          },
+          body: JSON.stringify({
+            action: "assign_workflow_ops_alert_waiver_expiry_dispute_adjudication_panel_owner",
+            actorId: "partner_a",
+            matterId,
+            panelOwnerId: "associate_a",
+            reason: "runtime waiver expiry dispute adjudication panel owner assigned",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeAdjudicationAssign.status).toBe(200)
+
+      const waiverExpiryDisputeAdjudicationResolve = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "e4c7a12f-1b86-4d09-a5e0-2f9c8b7d6a30",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow_ops_alert_waiver_expiry_dispute_adjudication",
+            actorId: "partner_a",
+            matterId,
+            resolutionOutcome: "extension_granted",
+            reason: "runtime waiver expiry dispute adjudication resolved",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeAdjudicationResolve.status).toBe(200)
+
+      const remediationSlaBreachResolutionCheckpointOpen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f1d0b83a-6c47-4e19-9a52-0b8e4c3d1f65",
+          },
+          body: JSON.stringify({
+            action: "open_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint",
+            actorId: "partner_a",
+            matterId,
+            checkpointOwnerId: "associate_a",
+            reason: "runtime remediation SLA breach resolution checkpoint opened",
+          }),
+        })
+      )
+      expect(remediationSlaBreachResolutionCheckpointOpen.status).toBe(200)
+
+      const remediationSlaBreachResolutionCheckpointRecord = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "a8e3c51b-2d90-4f64-b1c7-5e9a0d2f8c14",
+          },
+          body: JSON.stringify({
+            action: "record_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime remediation SLA breach resolution checkpoint recorded",
+          }),
+        })
+      )
+      expect(remediationSlaBreachResolutionCheckpointRecord.status).toBe(200)
+
+      const remediationSlaBreachResolutionCheckpointReopen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b7f4d20e-9a18-4c35-8e61-3d0b5c7a2f49",
+          },
+          body: JSON.stringify({
+            action: "reopen_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime remediation SLA breach resolution checkpoint reopened",
+          }),
+        })
+      )
+      expect(remediationSlaBreachResolutionCheckpointReopen.status).toBe(200)
+
       const remediationResolve = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
           method: "POST",
@@ -7839,6 +7944,8 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().workflowOpsAlertVarianceRemediationSlaLedgers = new Map()
       getRuntimeStore().workflowOpsAlertWaiverExpiryDisputes = new Map()
       getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachEscalations = new Map()
+      getRuntimeStore().workflowOpsAlertWaiverExpiryDisputeAdjudications = new Map()
+      getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints = new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -8101,6 +8208,44 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const waiverExpiryDisputeAdjudicationView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudications&actorId=associate_a&matterId=${matterId}&waiverExpiryDisputeAdjudicationStatus=resolved&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(waiverExpiryDisputeAdjudicationView.status).toBe(200)
+      const waiverExpiryDisputeAdjudicationViewJson =
+        (await waiverExpiryDisputeAdjudicationView.json()) as {
+          items: Array<{ matterId: string; adjudicationStatus: string; panelOwnerId: string | null }>
+        }
+      expect(
+        waiverExpiryDisputeAdjudicationViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.adjudicationStatus === "resolved" &&
+            row.panelOwnerId === "associate_a"
+        )
+      ).toBe(true)
+
+      const remediationSlaBreachResolutionCheckpointView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoints&actorId=associate_a&matterId=${matterId}&remediationSlaBreachResolutionCheckpointStatus=reopened&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(remediationSlaBreachResolutionCheckpointView.status).toBe(200)
+      const remediationSlaBreachResolutionCheckpointViewJson =
+        (await remediationSlaBreachResolutionCheckpointView.json()) as {
+          items: Array<{ matterId: string; checkpointStatus: string; reopenPressureCount: number }>
+        }
+      expect(
+        remediationSlaBreachResolutionCheckpointViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.checkpointStatus === "reopened" &&
+            row.reopenPressureCount >= 1
+        )
+      ).toBe(true)
+
       const persistedOps = await getDocs(collection(ctx.firestore(), "workflow_ops_activity"))
       expect(
         persistedOps.docs.some(
@@ -8292,8 +8437,35 @@ describe("Runtime persistence mode", () => {
             entry.data()?.ownerId === "associate_a"
         )
       ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudications = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_waiver_expiry_dispute_adjudications")
+      )
+      expect(
+        persistedWaiverExpiryDisputeAdjudications.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.adjudicationStatus === "resolved" &&
+            entry.data()?.panelOwnerId === "associate_a"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpoints = await getDocs(
+        collection(
+          ctx.firestore(),
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoints"
+        )
+      )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpoints.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.checkpointStatus === "reopened" &&
+            (entry.data()?.reopenPressureCount ?? 0) >= 1
+        )
+      ).toBe(true)
     })
-  })
+  }, 30_000)
 
   it("persists follow-up and intimation creation at source through matters route", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {

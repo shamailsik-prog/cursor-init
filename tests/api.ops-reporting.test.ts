@@ -965,6 +965,150 @@ describe("GET /api/d2/ops-reporting", () => {
     ).toBe("resolved")
     expect(remediationSlaBreachEscalationResolveJson.result.remediationSlaBreachEscalation.resolvedAt).not.toBeNull()
 
+    const waiverExpiryDisputeAdjudicationOpen = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_waiver_expiry_dispute_adjudication",
+        actorId: "partner_a",
+        matterId,
+        reason: "waiver expiry dispute adjudication opened",
+      },
+      "a91c0f22-6d4a-4b7e-9f11-2d8c4b6e1a70"
+    )
+    expect(waiverExpiryDisputeAdjudicationOpen.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationOpenJson = (await waiverExpiryDisputeAdjudicationOpen.json()) as {
+      result: { waiverExpiryDisputeAdjudication: { adjudicationStatus: string } }
+    }
+    expect(waiverExpiryDisputeAdjudicationOpenJson.result.waiverExpiryDisputeAdjudication.adjudicationStatus).toBe(
+      "open"
+    )
+
+    const waiverExpiryDisputeAdjudicationAssign = await postOpsReport(
+      {
+        action: "assign_workflow_ops_alert_waiver_expiry_dispute_adjudication_panel_owner",
+        actorId: "partner_a",
+        matterId,
+        panelOwnerId: "associate_a",
+        reason: "assign adjudication panel owner",
+      },
+      "b72e91aa-3c18-4f60-8d44-5f1a0c9e2b31"
+    )
+    expect(waiverExpiryDisputeAdjudicationAssign.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationAssignJson =
+      (await waiverExpiryDisputeAdjudicationAssign.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudication: { adjudicationStatus: string; panelOwnerId: string | null }
+        }
+      }
+    expect(waiverExpiryDisputeAdjudicationAssignJson.result.waiverExpiryDisputeAdjudication.adjudicationStatus).toBe(
+      "panel_assigned"
+    )
+    expect(waiverExpiryDisputeAdjudicationAssignJson.result.waiverExpiryDisputeAdjudication.panelOwnerId).toBe(
+      "associate_a"
+    )
+
+    const waiverExpiryDisputeAdjudicationResolve = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_waiver_expiry_dispute_adjudication",
+        actorId: "partner_a",
+        matterId,
+        resolutionOutcome: "extension_granted",
+        reason: "waiver expiry dispute adjudication resolved",
+      },
+      "c18d44f0-91ab-4e22-a7f6-0b3c5d8e9a12"
+    )
+    expect(waiverExpiryDisputeAdjudicationResolve.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationResolveJson =
+      (await waiverExpiryDisputeAdjudicationResolve.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudication: {
+            adjudicationStatus: string
+            resolutionOutcome: string | null
+          }
+        }
+      }
+    expect(waiverExpiryDisputeAdjudicationResolveJson.result.waiverExpiryDisputeAdjudication.adjudicationStatus).toBe(
+      "resolved"
+    )
+    expect(
+      waiverExpiryDisputeAdjudicationResolveJson.result.waiverExpiryDisputeAdjudication.resolutionOutcome
+    ).toBe("extension_granted")
+
+    const remediationSlaBreachResolutionCheckpointOpen = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint",
+        actorId: "partner_a",
+        matterId,
+        checkpointOwnerId: "associate_a",
+        reason: "resolution checkpoint opened",
+      },
+      "d44a0b91-7c2e-4f18-9a55-1e6b8c0d3f27"
+    )
+    expect(remediationSlaBreachResolutionCheckpointOpen.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointOpenJson =
+      (await remediationSlaBreachResolutionCheckpointOpen.json()) as {
+        result: { remediationSlaBreachResolutionCheckpoint: { checkpointStatus: string } }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointOpenJson.result.remediationSlaBreachResolutionCheckpoint
+        .checkpointStatus
+    ).toBe("open")
+
+    const remediationSlaBreachResolutionCheckpointRecord = await postOpsReport(
+      {
+        action: "record_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint",
+        actorId: "partner_a",
+        matterId,
+        reason: "resolution checkpoint recorded",
+      },
+      "e91f3c20-8a47-4b16-bd33-6c2a0e1f5d84"
+    )
+    expect(remediationSlaBreachResolutionCheckpointRecord.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointRecordJson =
+      (await remediationSlaBreachResolutionCheckpointRecord.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpoint: {
+            checkpointStatus: string
+            checkpointRecordedAt: number | null
+          }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointRecordJson.result.remediationSlaBreachResolutionCheckpoint
+        .checkpointStatus
+    ).toBe("checkpoint_recorded")
+    expect(
+      remediationSlaBreachResolutionCheckpointRecordJson.result.remediationSlaBreachResolutionCheckpoint
+        .checkpointRecordedAt
+    ).not.toBeNull()
+
+    const remediationSlaBreachResolutionCheckpointReopen = await postOpsReport(
+      {
+        action: "reopen_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint",
+        actorId: "partner_a",
+        matterId,
+        reason: "resolution checkpoint reopened",
+      },
+      "f07b1a55-2d94-4c80-ae11-9d6e4b8c2a73"
+    )
+    expect(remediationSlaBreachResolutionCheckpointReopen.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointReopenJson =
+      (await remediationSlaBreachResolutionCheckpointReopen.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpoint: {
+            checkpointStatus: string
+            reopenPressureCount: number
+          }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointReopenJson.result.remediationSlaBreachResolutionCheckpoint
+        .checkpointStatus
+    ).toBe("reopened")
+    expect(
+      remediationSlaBreachResolutionCheckpointReopenJson.result.remediationSlaBreachResolutionCheckpoint
+        .reopenPressureCount
+    ).toBeGreaterThanOrEqual(1)
+
     const remediationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_variance_remediation",
@@ -1318,6 +1462,55 @@ describe("GET /api/d2/ops-reporting", () => {
           row.matterId === matterId &&
           row.escalationStatus === "resolved" &&
           row.ownerId === "associate_a"
+      )
+    ).toBe(true)
+
+    const waiverExpiryDisputeAdjudicationView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_waiver_expiry_dispute_adjudications",
+        actorId: "associate_a",
+        matterId,
+        waiverExpiryDisputeAdjudicationStatus: "resolved",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverExpiryDisputeAdjudicationView.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationViewJson = (await waiverExpiryDisputeAdjudicationView.json()) as {
+      items: Array<{ matterId: string; adjudicationStatus: string; panelOwnerId: string | null }>
+    }
+    expect(
+      waiverExpiryDisputeAdjudicationViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.adjudicationStatus === "resolved" &&
+          row.panelOwnerId === "associate_a"
+      )
+    ).toBe(true)
+
+    const remediationSlaBreachResolutionCheckpointView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_variance_remediation_sla_breach_resolution_checkpoints",
+        actorId: "associate_a",
+        matterId,
+        remediationSlaBreachResolutionCheckpointStatus: "reopened",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationSlaBreachResolutionCheckpointView.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointViewJson =
+      (await remediationSlaBreachResolutionCheckpointView.json()) as {
+        items: Array<{ matterId: string; checkpointStatus: string; reopenPressureCount: number }>
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.checkpointStatus === "reopened" &&
+          row.reopenPressureCount >= 1
       )
     ).toBe(true)
   })
