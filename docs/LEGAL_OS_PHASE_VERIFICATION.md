@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-21  
+Last updated: 2026-09-21 (PR #172 independent audit appended)  
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -816,4 +816,28 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #170 | workflow alert adjudication SLO partner-handoff outbound-registry attestation-ledger + archival-export partner-delivery receipt | `632d8f8` / slice `cfde66b` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
+## Targeted ledger — PR #172 workflow alert adjudication SLO partner-delivery receipt freeze-override seal verification + archival-export partner-delivery transport-boundary receipt reconciliation
+
+- Audit file: `docs/audits/phase-pr172-workflow-slo-freeze-override-seal-transport-boundary-recon.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `13c37e5` (parents `fc4d96d` + slice head `8fec696`; stack branch point `632d8f8`)
+- Main tip at audit close: `ab27a3c379755bccd43026200925c2d988b068a8`
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **FAIL (major)** — label-honest PARTIAL release, but Firestore runtime-mode mega flow fails: workflow-ops document IDs exceed Firestore 1500-byte doc-id limit after PR #172 entity chain; fails backend_real Firestore parity and standard emulator suite **21/22**. Claim-gate metadata replay still green.
+
+### DoD summary
+
+- `SHA on main`: PASS (slice `8fec696` + merge `13c37e5` ancestors of `ab27a3c`; roadmap integration commit `ab27a3c`).
+- `BACKEND_REAL`: **FAIL** (memory/route/governance present; Firestore integrated persistence broken — doc id length regression vs `632d8f8`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, negated product-done disclaimer).
+- `focused tests+gates`: **FAIL** (api/route-wiring **98**; claim-gate unit **20**; G-0/G-1 green; Firestore trio **21/22** — `persistence.runtime-mode` mega test red).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #172 metadata with `632d8f8..8fec696` exits 0 @ `ede9a9c`). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #172 | workflow alert adjudication SLO partner-delivery receipt freeze-override seal verification + archival-export partner-delivery transport-boundary receipt reconciliation | `ab27a3c` / merge `13c37e5` / slice `8fec696` | Yes | true (overclaimed for Firestore) | false | true | **FAIL** (not COMPLETE) | major |
 
