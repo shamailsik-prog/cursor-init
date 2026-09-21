@@ -721,3 +721,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #160 | workflow alert adjudication SLO settlement-arbitration disposition-finalization + checkpoint expiry-attestation queue-reentry debt-retirement | `9427706` / slice `3ce4023` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #164 workflow alert adjudication SLO settlement-arbitration disposition publication-governance + checkpoint expiry-attestation queue-reentry debt-retirement dispute-reconciliation
+
+- Audit file: `docs/audits/phase-pr164-workflow-slo-publication-governance-dispute-recon.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `a986d46de1fbbbb65c54b1819da0e947098615fd` (squash landed commit; parent `2f41e7e`; PR head before squash `e18c9d8`)
+- Main tip at audit close: `a986d46`
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (`a986d46` @ `origin/main`; stack base `2f41e7e`).
+- `BACKEND_REAL`: PASS (disposition publication-governance + debt-retirement dispute-reconciliation rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through; governance `workflowOpsAlertSettlementArbitrationDispositionPublicationGovernanceQueueReentryDebtRetirementDisputeReconciliationGovernance.ts`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `2f41e7e..a986d46` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring 90; Firestore repos/runtime/rules 22; `G-0`; `G-1`; claim-gate unit 20). Non-blocking: four partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #164 metadata with `2f41e7e..a986d46` exits 0). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #164 | workflow alert adjudication SLO disposition publication-governance + queue-reentry debt-retirement dispute-reconciliation | `a986d46` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
