@@ -119,3 +119,45 @@ Evidence:
 - **Verdict:** `PARTIAL`
 - **Severity:** `medium`
 - **Summary:** Backend implementation and focused validation are real and green, but process-flag compliance fails under independent claim-gate replay due to COMPLETE-token wording in PR metadata.
+
+---
+
+## Re-audit addendum (after claim-gate negation fix on `main`)
+
+Date: 2026-09-21  
+Main tip audited: `f270e0b1979ef59337903708d57bb0ce55cbe89d`  
+Feature SHA under review (unchanged): `632fbdaaf3b04239708c7ead609c68e898a048b6`  
+Referenced fix lane: PR #135 (`15f0a08` merged via `f270e0b`)  
+
+### Verdict (lead)
+
+**PASS (severity: low).**
+
+Process-flag failure from the prior audit is remediated. The claim gate now correctly ignores negated COMPLETE/product-done disclaimer phrasing, and replay against live PR #133 metadata passes. A–E spot-checks remain green for the previously merged feature slice.
+
+### Re-audit verification results
+
+1. **Gate change on `main` confirmed**  
+   `ci_gates/check_pr_phase_claims.py` now:
+   - matches COMPLETE tokens through `COMPLETE_CLAIM_RE` (including literal `complete`), and
+   - excludes negated disclaimers via `NEGATED_COMPLETE_DISCLAIMER_RE` + `has_complete_claim(...)` span filtering.
+
+2. **Claim-gate replay against PR #133 metadata**  
+   Replay used live `origin pr view 133` fields:
+   - `baseSha=df818e034e328986171c53339d1570a9d066099d`
+   - `headSha=270f5032ee35963a6a5345f40815c63446834f8e`
+   - title/body unchanged from prior audit (`frontend_real=false`, `transport_stub=true`, negated COMPLETE disclaimer text)
+   - result: `PASS: PR phase-claim gate.` (exit code `0`)
+
+3. **Spot-check A–E (regression scan)**
+   - **A BACKEND_REAL:** PASS — runtime row types, repo wiring, Firestore rules, and `/api/d2/ops-reporting` view/action surfaces remain present.
+   - **B FE honesty:** PASS — PR metadata remains `frontend_real=false`; diff scope still excludes `app/ops/**`.
+   - **C no COMPLETE overclaim:** PASS — no affirmative COMPLETE/product-done claim; negated disclaimer no longer false-trips gate logic.
+   - **D SHA integrity:** PASS — feature SHA `632fbda` remains on `origin/main`.
+   - **E focused checks:** PASS — `tests/pr-phase-claim-gate.test.ts`, `gate_g0`, and `gate_g1` reruns are green.
+
+### Updated adjudication (superseding)
+
+- **Verdict:** `PASS`
+- **Severity:** `low`
+- **Classification note:** backend-scoped slice remains non-COMPLETE because `transport_stub=true` persists globally; this pass reflects claim-honesty + process-gate compliance for PR #133 metadata under current policy.
