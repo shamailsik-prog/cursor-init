@@ -353,11 +353,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Surfaced seal-verification custody backlog and transport-boundary reconciliation closure lag posture while preserving idempotent replay semantics and audit write-through in internal scaffolding mode.
 - Extended API, route-wiring, repository, runtime-mode, and Firestore document-id coverage for custody-handoff/closure-attestation transitions.
 
+## PR #175 (pending) — archival-export custody handoff + closure attestation external transport receipt acknowledgment (stub)
+
+- Added durable **dual-track** workflow-ops rows for external transport receipt acknowledgment scaffolding (`workflow_ops_alert_waiver_expiry_..._archival_export_custody_handoff_external_transport_receipt_acknowledgments`, `workflow_ops_alert_variance_remediation_..._closure_attestation_external_transport_receipt_acknowledgments`) with `externalTransportChannel: "blocked_todo_firm"`, provenance tag `transport_stub:true`, memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId`.
+- Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync, and six partner-governed lifecycle actions (custody-handoff track: checkpoint / acknowledge / control finalization; closure-attestation track: digest checkpoint / acknowledge / control finalization) with idempotency + audit write-through; acknowledge paths set stub external transport receipt references only (no external transport claims).
+- Extended focused tests (Firestore id, repositories, route wiring, runtime-mode) and auditor stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment.md`.
+- Release labels (expected for PR #175): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim).
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert adjudication SLO deep-chain Firestore document ID remediation (PR #172 freeze-override seal verification + transport-boundary receipt reconciliation hashed doc ids) + archival-export custody handoff external transport receipt acknowledgment stub scaffolding**:
-
-1. Migrate PR #172 workflow-ops entities that still use concatenated parent-chain Firestore document IDs to sha256-hashed doc ids (preserve logical keys in row payloads for traceability).
-2. Extend custody-handoff rows with external transport receipt acknowledgment checkpoints (stub transport only) and partner-governed ops-reporting actions/views.
-3. Extend focused tests for hashed-id Firestore parity, acknowledgment transitions, idempotent replay, and audit provenance traceability.
-4. Keep scoped to internal scaffolding only (no external transport claims) while preserving scaffold-claim gate behavior.
+Build **workflow alert adjudication SLO archival-export custody handoff external transport receipt acknowledgment reconciliation** (stub-honest reconciliation between custody-handoff and closure-attestation external transport receipt acknowledgment rows, partner-governed ops-reporting views/actions, Firestore hashed-id parity, focused tests + gates).
