@@ -26,6 +26,8 @@ jobs:
         run: bash ci_gates/gate_g0.sh
       - name: Lint
         run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
       - name: Unit tests
         run: npm run test:all
       - name: Gate G-1 forensic
