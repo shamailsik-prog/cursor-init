@@ -599,6 +599,61 @@ describe("Firestore repository adapters", () => {
       expect(escalationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const escalationsByMatter = await repos.workflowOpsAlertEscalationLedgers.listByMatter("mat_1")
       expect(escalationsByMatter.some((row) => row.recomputeReason === "ops_escalation_seed")).toBe(true)
+      await repos.workflowOpsAlertAttestationDisputes.upsert({
+        id: "workflow_ops_alert_attestation_dispute:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        alertAttestationId: "workflow_ops_alert_attestation:mat_1",
+        classification: "internal",
+        disputeStatus: "open",
+        reviewerId: "associate_a",
+        openedAt: 51,
+        lastStatusChangedAt: 51,
+        resolvedAt: null,
+        resolutionOutcome: null,
+        resolutionReason: null,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "attestation_dispute"],
+        recomputedAt: 51,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_dispute_seed",
+        updatedAt: 51,
+      })
+      const dispute = await repos.workflowOpsAlertAttestationDisputes.get(
+        "workflow_ops_alert_attestation_dispute:mat_1"
+      )
+      expect(dispute?.disputeStatus).toBe("open")
+      const disputesByFirm = await repos.workflowOpsAlertAttestationDisputes.listByFirm("firmA")
+      expect(disputesByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const disputesByMatter = await repos.workflowOpsAlertAttestationDisputes.listByMatter("mat_1")
+      expect(disputesByMatter.some((row) => row.recomputeReason === "ops_dispute_seed")).toBe(true)
+      await repos.workflowOpsAlertEscalationClosures.upsert({
+        id: "workflow_ops_alert_escalation_closure:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        alertEscalationLedgerId: "workflow_ops_alert_escalation:mat_1",
+        classification: "internal",
+        closureStatus: "checkpoint_recorded",
+        checkpointAt: 52,
+        closedAt: null,
+        reopenedAt: null,
+        closureReason: null,
+        lastStatusChangedAt: 52,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "escalation_closure"],
+        recomputedAt: 52,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_closure_seed",
+        updatedAt: 52,
+      })
+      const closure = await repos.workflowOpsAlertEscalationClosures.get(
+        "workflow_ops_alert_escalation_closure:mat_1"
+      )
+      expect(closure?.closureStatus).toBe("checkpoint_recorded")
+      const closuresByFirm = await repos.workflowOpsAlertEscalationClosures.listByFirm("firmA")
+      expect(closuresByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const closuresByMatter = await repos.workflowOpsAlertEscalationClosures.listByMatter("mat_1")
+      expect(closuresByMatter.some((row) => row.recomputeReason === "ops_closure_seed")).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

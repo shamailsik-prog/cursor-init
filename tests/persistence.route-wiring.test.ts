@@ -89,6 +89,8 @@ const baseStore = {
   workflowOpsAlertDigests: new Map(),
   workflowOpsAlertAttestations: new Map(),
   workflowOpsAlertEscalationLedgers: new Map(),
+  workflowOpsAlertAttestationDisputes: new Map(),
+  workflowOpsAlertEscalationClosures: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -1798,6 +1800,59 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertAttestationDisputes: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_attestation_dispute:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          alertAttestationId: "workflow_ops_alert_attestation:mat_1",
+          classification: "internal",
+          disputeStatus: "open",
+          reviewerId: null,
+          openedAt: Date.now(),
+          lastStatusChangedAt: Date.now(),
+          resolvedAt: null,
+          resolutionOutcome: null,
+          resolutionReason: null,
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "attestation_dispute"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 7,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertEscalationClosures: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_escalation_closure:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          alertEscalationLedgerId: "workflow_ops_alert_escalation:mat_1",
+          classification: "internal",
+          closureStatus: "pending_closure",
+          checkpointAt: null,
+          closedAt: null,
+          reopenedAt: null,
+          closureReason: null,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "escalation_closure"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 8,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -2540,5 +2595,31 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string; escalationStatus: string }> }
     expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_escalation:mat_1")
     expect(json.items[0]?.escalationStatus).toBe("open")
+  })
+
+  it("ops reporting attestation-dispute view uses repository workflowOpsAlertAttestationDisputes", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_attestation_disputes&actorId=associate_a&disputeStatus=open&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; disputeStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_attestation_dispute:mat_1")
+    expect(json.items[0]?.disputeStatus).toBe("open")
+  })
+
+  it("ops reporting escalation-closure view uses repository workflowOpsAlertEscalationClosures", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_escalation_closures&actorId=associate_a&closureStatus=pending_closure&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; closureStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_escalation_closure:mat_1")
+    expect(json.items[0]?.closureStatus).toBe("pending_closure")
   })
 })

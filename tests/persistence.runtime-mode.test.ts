@@ -7184,9 +7184,134 @@ describe("Runtime persistence mode", () => {
       expect(escalationResolveJson.result.escalation.escalationStatus).toBe("resolved")
       expect(escalationResolveJson.result.escalation.resolutionReason).toBe("runtime escalation resolved")
 
+      const disputeOpen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "74730ef6-b193-4fd5-a158-fb48704e4788",
+          },
+          body: JSON.stringify({
+            action: "open_workflow_ops_alert_attestation_dispute",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime dispute opened",
+          }),
+        })
+      )
+      expect(disputeOpen.status).toBe(200)
+
+      const disputeAssign = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8be5678d-a86d-42b7-8d6b-203f0dbd43f3",
+          },
+          body: JSON.stringify({
+            action: "assign_workflow_ops_alert_attestation_dispute_reviewer",
+            actorId: "partner_a",
+            matterId,
+            reviewerId: "associate_a",
+            reason: "runtime reviewer assignment",
+          }),
+        })
+      )
+      expect(disputeAssign.status).toBe(200)
+
+      const disputeResolve = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "2736b63e-1653-4135-a154-6f8d5df1a437",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow_ops_alert_attestation_dispute",
+            actorId: "partner_a",
+            matterId,
+            resolutionOutcome: "upheld",
+            reason: "runtime dispute resolved",
+          }),
+        })
+      )
+      expect(disputeResolve.status).toBe(200)
+      const disputeResolveJson = (await disputeResolve.json()) as {
+        result: {
+          dispute: { disputeStatus: string; reviewerId: string | null; resolutionOutcome: string | null }
+          attestation: { attestationStatus: string }
+        }
+      }
+      expect(disputeResolveJson.result.dispute.disputeStatus).toBe("resolved")
+      expect(disputeResolveJson.result.dispute.reviewerId).toBe("associate_a")
+      expect(disputeResolveJson.result.dispute.resolutionOutcome).toBe("upheld")
+      expect(disputeResolveJson.result.attestation.attestationStatus).toBe("attested")
+
+      const closureCheckpoint = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1a49c5c6-1908-4a9f-8a2e-96744d6747e2",
+          },
+          body: JSON.stringify({
+            action: "checkpoint_workflow_ops_alert_escalation_closure",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime closure checkpoint",
+          }),
+        })
+      )
+      expect(closureCheckpoint.status).toBe(200)
+
+      const closureClose = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "687e4dbe-ec1b-4f17-b7fa-9a3312f80f6e",
+          },
+          body: JSON.stringify({
+            action: "close_workflow_ops_alert_escalation_closure",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime closure confirmed",
+          }),
+        })
+      )
+      expect(closureClose.status).toBe(200)
+
+      const closureReopen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "af6e0185-573d-4208-847b-969f42f1ca36",
+          },
+          body: JSON.stringify({
+            action: "reopen_workflow_ops_alert_escalation_closure",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime closure reopened",
+          }),
+        })
+      )
+      expect(closureReopen.status).toBe(200)
+      const closureReopenJson = (await closureReopen.json()) as {
+        result: {
+          closure: { closureStatus: string; reopenedAt: number | null }
+          escalation: { escalationStatus: string }
+        }
+      }
+      expect(closureReopenJson.result.closure.closureStatus).toBe("reopened")
+      expect(closureReopenJson.result.closure.reopenedAt).not.toBeNull()
+      expect(closureReopenJson.result.escalation.escalationStatus).toBe("open")
+
       getRuntimeStore().workflowOpsAlertDigests = new Map()
       getRuntimeStore().workflowOpsAlertAttestations = new Map()
       getRuntimeStore().workflowOpsAlertEscalationLedgers = new Map()
+      getRuntimeStore().workflowOpsAlertAttestationDisputes = new Map()
+      getRuntimeStore().workflowOpsAlertEscalationClosures = new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -7227,7 +7352,7 @@ describe("Runtime persistence mode", () => {
 
       const escalationView = await opsReportingGet(
         new Request(
-          `http://127.0.0.1/api/d2/ops-reporting?view=alert_escalation_ledgers&actorId=associate_a&matterId=${matterId}&escalationStatus=resolved&freshnessStatus=fresh&limit=20&cursor=0`
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_escalation_ledgers&actorId=associate_a&matterId=${matterId}&escalationStatus=open&freshnessStatus=fresh&limit=20&cursor=0`
         )
       )
       expect(escalationView.status).toBe(200)
@@ -7238,8 +7363,41 @@ describe("Runtime persistence mode", () => {
         escalationViewJson.items.some(
           (row) =>
             row.matterId === matterId &&
-            row.escalationStatus === "resolved" &&
+            row.escalationStatus === "open" &&
             row.ownerId === "clerk_a"
+        )
+      ).toBe(true)
+
+      const disputeView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_attestation_disputes&actorId=associate_a&matterId=${matterId}&disputeStatus=resolved&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(disputeView.status).toBe(200)
+      const disputeViewJson = (await disputeView.json()) as {
+        items: Array<{ matterId: string; disputeStatus: string; reviewerId: string | null }>
+      }
+      expect(
+        disputeViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.disputeStatus === "resolved" &&
+            row.reviewerId === "associate_a"
+        )
+      ).toBe(true)
+
+      const closureView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_escalation_closures&actorId=associate_a&matterId=${matterId}&closureStatus=reopened&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(closureView.status).toBe(200)
+      const closureViewJson = (await closureView.json()) as {
+        items: Array<{ matterId: string; closureStatus: string }>
+      }
+      expect(
+        closureViewJson.items.some(
+          (row) => row.matterId === matterId && row.closureStatus === "reopened"
         )
       ).toBe(true)
 
@@ -7288,8 +7446,30 @@ describe("Runtime persistence mode", () => {
           (entry) =>
             entry.data()?.firmId === "firmA" &&
             entry.data()?.matterId === matterId &&
-            entry.data()?.escalationStatus === "resolved" &&
+            entry.data()?.escalationStatus === "open" &&
             entry.data()?.ownerId === "clerk_a"
+        )
+      ).toBe(true)
+      const persistedDisputes = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_attestation_disputes")
+      )
+      expect(
+        persistedDisputes.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.disputeStatus === "resolved" &&
+            entry.data()?.reviewerId === "associate_a" &&
+            entry.data()?.resolutionOutcome === "upheld"
+        )
+      ).toBe(true)
+      const persistedClosures = await getDocs(collection(ctx.firestore(), "workflow_ops_alert_escalation_closures"))
+      expect(
+        persistedClosures.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.closureStatus === "reopened"
         )
       ).toBe(true)
     })

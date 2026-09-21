@@ -60,6 +60,8 @@ import type {
   WorkflowOpsAlertDigestRow,
   WorkflowOpsAlertAttestationRow,
   WorkflowOpsAlertEscalationLedgerRow,
+  WorkflowOpsAlertAttestationDisputeRow,
+  WorkflowOpsAlertEscalationClosureRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -620,6 +622,20 @@ export type WorkflowOpsAlertEscalationLedgerRepository = {
   listByMatter(matterId: string): Promise<WorkflowOpsAlertEscalationLedgerRow[]>
 }
 
+export type WorkflowOpsAlertAttestationDisputeRepository = {
+  upsert(row: WorkflowOpsAlertAttestationDisputeRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertAttestationDisputeRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertAttestationDisputeRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertAttestationDisputeRow[]>
+}
+
+export type WorkflowOpsAlertEscalationClosureRepository = {
+  upsert(row: WorkflowOpsAlertEscalationClosureRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertEscalationClosureRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertEscalationClosureRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertEscalationClosureRow[]>
+}
+
 export type TenancySessionReferenceRepository = {
   upsert(row: TenancySessionReferenceRow): Promise<void>
   get(id: string): Promise<TenancySessionReferenceRow | null>
@@ -775,6 +791,8 @@ export type SpineRepositories = {
   workflowOpsAlertDigests: WorkflowOpsAlertDigestRepository
   workflowOpsAlertAttestations: WorkflowOpsAlertAttestationRepository
   workflowOpsAlertEscalationLedgers: WorkflowOpsAlertEscalationLedgerRepository
+  workflowOpsAlertAttestationDisputes: WorkflowOpsAlertAttestationDisputeRepository
+  workflowOpsAlertEscalationClosures: WorkflowOpsAlertEscalationClosureRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
@@ -2113,6 +2131,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByMatter(matterId) {
         return [...store.workflowOpsAlertEscalationLedgers.values()].filter(
+          (row) => row.matterId === matterId
+        )
+      },
+    },
+    workflowOpsAlertAttestationDisputes: {
+      async upsert(row) {
+        store.workflowOpsAlertAttestationDisputes.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertAttestationDisputes.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertAttestationDisputes.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertAttestationDisputes.values()].filter(
+          (row) => row.matterId === matterId
+        )
+      },
+    },
+    workflowOpsAlertEscalationClosures: {
+      async upsert(row) {
+        store.workflowOpsAlertEscalationClosures.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertEscalationClosures.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertEscalationClosures.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertEscalationClosures.values()].filter(
           (row) => row.matterId === matterId
         )
       },
