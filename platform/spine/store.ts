@@ -1996,6 +1996,60 @@ export type WorkflowOpsAlertDigestRow = {
   updatedAt: number
 }
 
+export type WorkflowOpsAlertAttestationStatus =
+  | "pending_attestation"
+  | "attested"
+  | "reopened"
+
+export type WorkflowOpsAlertAttestationFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertAttestationRow = {
+  id: string
+  firmId: string
+  matterId: string
+  alertDigestId: string
+  classification: Classification
+  attestationStatus: WorkflowOpsAlertAttestationStatus
+  lastAttestedAt: number | null
+  lastAttestedBy: string | null
+  attestationReason: string | null
+  freshnessStatus: WorkflowOpsAlertAttestationFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertEscalationStatus =
+  | "not_required"
+  | "open"
+  | "assigned"
+  | "resolved"
+
+export type WorkflowOpsAlertEscalationFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertEscalationLedgerRow = {
+  id: string
+  firmId: string
+  matterId: string
+  alertDigestId: string
+  classification: Classification
+  escalationStatus: WorkflowOpsAlertEscalationStatus
+  severity: WorkflowOpsAlertDigestSeverity
+  ownerId: string | null
+  openedAt: number | null
+  lastStatusChangedAt: number | null
+  resolvedAt: number | null
+  resolutionReason: string | null
+  freshnessStatus: WorkflowOpsAlertEscalationFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2101,6 +2155,8 @@ export class SpineStore {
   matterReportRelevanceSnapshots = new Map<string, MatterReportRelevanceSnapshotRow>()
   workflowOpsActivity = new Map<string, WorkflowOpsActivityRow>()
   workflowOpsAlertDigests = new Map<string, WorkflowOpsAlertDigestRow>()
+  workflowOpsAlertAttestations = new Map<string, WorkflowOpsAlertAttestationRow>()
+  workflowOpsAlertEscalationLedgers = new Map<string, WorkflowOpsAlertEscalationLedgerRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()

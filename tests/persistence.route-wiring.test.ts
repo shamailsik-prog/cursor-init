@@ -87,6 +87,8 @@ const baseStore = {
   matterReportRelevanceSnapshots: new Map(),
   workflowOpsActivity: new Map(),
   workflowOpsAlertDigests: new Map(),
+  workflowOpsAlertAttestations: new Map(),
+  workflowOpsAlertEscalationLedgers: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -1745,6 +1747,57 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertAttestations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_attestation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          alertDigestId: "workflow_ops_alert:mat_1",
+          classification: "internal",
+          attestationStatus: "pending_attestation",
+          lastAttestedAt: null,
+          lastAttestedBy: null,
+          attestationReason: null,
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "attestation"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 5,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertEscalationLedgers: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_escalation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          alertDigestId: "workflow_ops_alert:mat_1",
+          classification: "internal",
+          escalationStatus: "open",
+          severity: "high",
+          ownerId: null,
+          openedAt: Date.now(),
+          lastStatusChangedAt: Date.now(),
+          resolvedAt: null,
+          resolutionReason: null,
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "escalation"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 6,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -2461,5 +2514,31 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string; severity: string }> }
     expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert:mat_1")
     expect(json.items[0]?.severity).toBe("high")
+  })
+
+  it("ops reporting alert-attestation view uses repository workflowOpsAlertAttestations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_attestations&actorId=associate_a&attestationStatus=pending_attestation&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; attestationStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_attestation:mat_1")
+    expect(json.items[0]?.attestationStatus).toBe("pending_attestation")
+  })
+
+  it("ops reporting escalation-ledger view uses repository workflowOpsAlertEscalationLedgers", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_escalation_ledgers&actorId=associate_a&escalationStatus=open&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; escalationStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_escalation:mat_1")
+    expect(json.items[0]?.escalationStatus).toBe("open")
   })
 })

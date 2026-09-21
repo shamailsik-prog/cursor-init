@@ -235,7 +235,7 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(workflowListStillWorks.status).toBe(200)
   })
 
-  it("provides alert digests and partner-governed acknowledge/snooze actions", async () => {
+  it("provides alert digests plus attestation/escalation governance views and actions", async () => {
     const matterId = seedOpsMatter("internal")
     const doc = uploadDocument(getRuntimeStore(), {
       firmId: "firmA",
@@ -334,5 +334,111 @@ describe("GET /api/d2/ops-reporting", () => {
     }
     expect(snoozeJson.result.digest.snoozedBy).toBe("partner_a")
     expect((snoozeJson.result.digest.snoozedUntil ?? 0) >= snoozeUntil).toBe(true)
+
+    const attest = await postOpsReport(
+      {
+        action: "attest_workflow_ops_alert_digest",
+        actorId: "partner_a",
+        matterId,
+        reason: "partner attestation complete",
+      },
+      "30287a12-06b5-4fcd-a304-89de9f63a2e0"
+    )
+    expect(attest.status).toBe(200)
+    const attestJson = (await attest.json()) as {
+      result: { attestation: { attestationStatus: string; lastAttestedBy: string | null } }
+    }
+    expect(attestJson.result.attestation.attestationStatus).toBe("attested")
+    expect(attestJson.result.attestation.lastAttestedBy).toBe("partner_a")
+
+    const escalateOpen = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_escalation",
+        actorId: "partner_a",
+        matterId,
+        reason: "stale queue requires escalation",
+      },
+      "5f7a32ec-8778-43a4-b228-d56e91d5c545"
+    )
+    expect(escalateOpen.status).toBe(200)
+    const escalateOpenJson = (await escalateOpen.json()) as {
+      result: { escalation: { escalationStatus: string } }
+    }
+    expect(escalateOpenJson.result.escalation.escalationStatus).toBe("open")
+
+    const assignOwner = await postOpsReport(
+      {
+        action: "assign_workflow_ops_alert_escalation_owner",
+        actorId: "partner_a",
+        matterId,
+        ownerId: "clerk_a",
+        reason: "queue owner assignment",
+      },
+      "8ac8f00e-2ec7-4ddf-b695-2af6c8a6406a"
+    )
+    expect(assignOwner.status).toBe(200)
+    const assignOwnerJson = (await assignOwner.json()) as {
+      result: { escalation: { escalationStatus: string; ownerId: string | null } }
+    }
+    expect(assignOwnerJson.result.escalation.escalationStatus).toBe("assigned")
+    expect(assignOwnerJson.result.escalation.ownerId).toBe("clerk_a")
+
+    const resolveEscalation = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_escalation",
+        actorId: "partner_a",
+        matterId,
+        reason: "issue remediated",
+      },
+      "1eeb3a16-fde5-4462-8bb8-f23df95af206"
+    )
+    expect(resolveEscalation.status).toBe(200)
+    const resolveEscalationJson = (await resolveEscalation.json()) as {
+      result: { escalation: { escalationStatus: string; resolutionReason: string | null } }
+    }
+    expect(resolveEscalationJson.result.escalation.escalationStatus).toBe("resolved")
+    expect(resolveEscalationJson.result.escalation.resolutionReason).toBe("issue remediated")
+
+    const attestationView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_attestations",
+        actorId: "associate_a",
+        matterId,
+        attestationStatus: "attested",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(attestationView.status).toBe(200)
+    const attestationViewJson = (await attestationView.json()) as {
+      items: Array<{ matterId: string; attestationStatus: string }>
+    }
+    expect(
+      attestationViewJson.items.some(
+        (row) => row.matterId === matterId && row.attestationStatus === "attested"
+      )
+    ).toBe(true)
+
+    const escalationView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_escalation_ledgers",
+        actorId: "associate_a",
+        matterId,
+        escalationStatus: "resolved",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(escalationView.status).toBe(200)
+    const escalationViewJson = (await escalationView.json()) as {
+      items: Array<{ matterId: string; escalationStatus: string }>
+    }
+    expect(
+      escalationViewJson.items.some(
+        (row) => row.matterId === matterId && row.escalationStatus === "resolved"
+      )
+    ).toBe(true)
   })
 })
