@@ -1269,6 +1269,83 @@ describe("Firestore repository adapters", () => {
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1"
         )
       expect(checkpointExpiryException?.exceptionStatus).toBe("exception_reconciled")
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.upsert({
+        id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        waiverExpiryDisputeAdjudicationSloDebtRemediationId:
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation:mat_1",
+        classification: "internal",
+        burndownStatus: "burndown_checkpointed",
+        debtStatusSnapshot: "breach_closure_attested",
+        remainingDebtMs: 0,
+        debtVelocityPerDay: 120_000,
+        projectedBurndownHours: 0,
+        forecastBreachHours: 0,
+        retirementTargetAt: 69,
+        targetSetBy: "partner_a",
+        targetSetAt: 69,
+        backlogAttestedBy: "partner_a",
+        backlogAttestedAt: 69,
+        checkpointedBy: "partner_a",
+        checkpointedAt: 69,
+        burndownNote: "ops_waiver_expiry_dispute_adjudication_slo_debt_burndown_seed",
+        reopenPressureCount: 1,
+        lastStatusChangedAt: 69,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "waiver_expiry_dispute_adjudication_slo_debt_burndown"],
+        recomputedAt: 69,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_waiver_expiry_dispute_adjudication_slo_debt_burndown_seed",
+        updatedAt: 69,
+      })
+      const waiverExpiryDisputeAdjudicationSloDebtBurndown =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.get(
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1"
+        )
+      expect(waiverExpiryDisputeAdjudicationSloDebtBurndown?.burndownStatus).toBe(
+        "burndown_checkpointed"
+      )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.upsert(
+        {
+          id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          expiryAttestationExceptionReconciliationId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1",
+          classification: "internal",
+          queueStatus: "queue_auto_drained",
+          exceptionStatusSnapshot: "exception_reconciled",
+          overdueExceptionCountSnapshot: 1,
+          queueAgingHours: 2,
+          openExceptionCount: 0,
+          drainVelocityPerDay: 1,
+          triagedBy: "partner_a",
+          triagedAt: 70,
+          handoffAttestedBy: "partner_a",
+          handoffAttestedAt: 70,
+          handoffToOwnerId: "associate_a",
+          autoDrainCheckpointedBy: "partner_a",
+          autoDrainCheckpointedAt: 70,
+          orchestrationNote: "ops_checkpoint_expiry_queue_seed",
+          reopenPressureCount: 2,
+          lastStatusChangedAt: 70,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue",
+          ],
+          recomputedAt: 70,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_checkpoint_expiry_queue_seed",
+          updatedAt: 70,
+        }
+      )
+      const checkpointExpiryQueue =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1"
+        )
+      expect(checkpointExpiryQueue?.queueStatus).toBe("queue_auto_drained")
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

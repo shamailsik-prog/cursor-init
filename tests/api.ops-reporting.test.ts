@@ -1155,6 +1155,87 @@ describe("GET /api/d2/ops-reporting", () => {
         .waiverExpiryDisputeAdjudicationSloDebtRemediation.breachClosureAttestedBy
     ).toBe("partner_a")
 
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownTarget = await postOpsReport(
+      {
+        action: "set_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_target",
+        actorId: "partner_a",
+        matterId,
+        retirementTargetAt: Date.now() + 48 * 60 * 60 * 1000,
+        reason: "adjudication SLO debt burndown target set",
+      },
+      "d59d44f0-91ab-4e22-a7f6-0b3c5d8e9a27"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloDebtBurndownTarget.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownTargetJson =
+      (await waiverExpiryDisputeAdjudicationSloDebtBurndownTarget.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSloDebtBurndown: {
+            burndownStatus: string
+            remainingDebtMs: number
+          }
+        }
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownTargetJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndown.burndownStatus
+    ).toBe("target_set")
+
+    const waiverExpiryDisputeAdjudicationSloDebtBacklog = await postOpsReport(
+      {
+        action: "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_backlog",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO debt backlog attested",
+      },
+      "e69d44f0-91ab-4e22-a7f6-0b3c5d8e9a28"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloDebtBacklog.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloDebtBacklogJson =
+      (await waiverExpiryDisputeAdjudicationSloDebtBacklog.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSloDebtBurndown: {
+            burndownStatus: string
+            backlogAttestedBy: string | null
+          }
+        }
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloDebtBacklogJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndown.burndownStatus
+    ).toBe("backlog_attested")
+    expect(
+      waiverExpiryDisputeAdjudicationSloDebtBacklogJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndown.backlogAttestedBy
+    ).toBe("partner_a")
+
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownCheckpoint = await postOpsReport(
+      {
+        action: "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO debt burndown checkpointed",
+      },
+      "f79d44f0-91ab-4e22-a7f6-0b3c5d8e9a29"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloDebtBurndownCheckpoint.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownCheckpointJson =
+      (await waiverExpiryDisputeAdjudicationSloDebtBurndownCheckpoint.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSloDebtBurndown: {
+            burndownStatus: string
+            checkpointedBy: string | null
+          }
+        }
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownCheckpointJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndown.burndownStatus
+    ).toBe("burndown_checkpointed")
+    expect(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownCheckpointJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndown.checkpointedBy
+    ).toBe("partner_a")
+
     const waiverExpiryDisputeAdjudicationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_waiver_expiry_dispute_adjudication",
@@ -1421,6 +1502,90 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(
       remediationSlaBreachResolutionCheckpointExpiryExceptionReconcileJson.result
         .remediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliation.reconciledBy
+    ).toBe("partner_a")
+
+    const remediationSlaBreachResolutionCheckpointExpiryQueueTriage = await postOpsReport(
+      {
+        action:
+          "triage_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue",
+        actorId: "partner_a",
+        matterId,
+        reason: "checkpoint expiry attestation queue triaged",
+      },
+      "d48b1a55-2d94-4c80-ae11-9d6e4b8c2a88"
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryQueueTriage.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryQueueTriageJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryQueueTriage.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration: {
+            queueStatus: string
+          }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryQueueTriageJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.queueStatus
+    ).toBe("queue_triaged")
+
+    const remediationSlaBreachResolutionCheckpointExpiryQueueHandoff = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_handoff",
+        actorId: "partner_a",
+        matterId,
+        handoffToOwnerId: "associate_a",
+        reason: "checkpoint expiry attestation queue handoff attested",
+      },
+      "e58b1a55-2d94-4c80-ae11-9d6e4b8c2a89"
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryQueueHandoff.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryQueueHandoffJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryQueueHandoff.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration: {
+            queueStatus: string
+            handoffToOwnerId: string | null
+          }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryQueueHandoffJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.queueStatus
+    ).toBe("handoff_attested")
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryQueueHandoffJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.handoffToOwnerId
+    ).toBe("associate_a")
+
+    const remediationSlaBreachResolutionCheckpointExpiryQueueDrain = await postOpsReport(
+      {
+        action:
+          "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_auto_drain",
+        actorId: "partner_a",
+        matterId,
+        reason: "checkpoint expiry attestation queue auto-drain checkpointed",
+      },
+      "f68b1a55-2d94-4c80-ae11-9d6e4b8c2a90"
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryQueueDrain.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryQueueDrainJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryQueueDrain.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration: {
+            queueStatus: string
+            autoDrainCheckpointedBy: string | null
+          }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryQueueDrainJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration.queueStatus
+    ).toBe("queue_auto_drained")
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryQueueDrainJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestration
+        .autoDrainCheckpointedBy
     ).toBe("partner_a")
 
     const remediationResolve = await postOpsReport(
@@ -1930,6 +2095,65 @@ describe("GET /api/d2/ops-reporting", () => {
           row.matterId === matterId &&
           row.exceptionStatus === "exception_reconciled" &&
           row.reconciledBy === "partner_a"
+      )
+    ).toBe(true)
+
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_waiver_expiry_dispute_adjudication_slo_debt_burndowns",
+        actorId: "associate_a",
+        matterId,
+        burndownStatus: "burndown_checkpointed",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverExpiryDisputeAdjudicationSloDebtBurndownView.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownViewJson =
+      (await waiverExpiryDisputeAdjudicationSloDebtBurndownView.json()) as {
+        items: Array<{
+          matterId: string
+          burndownStatus: string
+          checkpointedBy: string | null
+        }>
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.burndownStatus === "burndown_checkpointed" &&
+          row.checkpointedBy === "partner_a"
+      )
+    ).toBe(true)
+
+    const remediationSlaBreachResolutionCheckpointExpiryQueueView = await getOpsReport(
+      new URLSearchParams({
+        view:
+          "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_orchestrations",
+        actorId: "associate_a",
+        matterId,
+        queueStatus: "queue_auto_drained",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryQueueView.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryQueueViewJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryQueueView.json()) as {
+        items: Array<{
+          matterId: string
+          queueStatus: string
+          autoDrainCheckpointedBy: string | null
+        }>
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryQueueViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.queueStatus === "queue_auto_drained" &&
+          row.autoDrainCheckpointedBy === "partner_a"
       )
     ).toBe(true)
   })

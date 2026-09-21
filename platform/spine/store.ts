@@ -2661,6 +2661,89 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     updatedAt: number
   }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownStatus =
+  | "not_required"
+  | "burndown_tracking"
+  | "target_set"
+  | "backlog_attested"
+  | "burndown_checkpointed"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow = {
+  id: string
+  firmId: string
+  matterId: string
+  waiverExpiryDisputeAdjudicationSloDebtRemediationId: string
+  classification: Classification
+  burndownStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownStatus
+  debtStatusSnapshot: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationStatus
+  remainingDebtMs: number
+  debtVelocityPerDay: number
+  projectedBurndownHours: number
+  forecastBreachHours: number
+  retirementTargetAt: number | null
+  targetSetBy: string | null
+  targetSetAt: number | null
+  backlogAttestedBy: string | null
+  backlogAttestedAt: number | null
+  checkpointedBy: string | null
+  checkpointedAt: number | null
+  burndownNote: string | null
+  reopenPressureCount: number
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationStatus =
+  | "not_required"
+  | "queue_open"
+  | "queue_triaged"
+  | "handoff_attested"
+  | "queue_auto_drained"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    expiryAttestationExceptionReconciliationId: string
+    classification: Classification
+    queueStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationStatus
+    exceptionStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationStatus
+    overdueExceptionCountSnapshot: number
+    queueAgingHours: number
+    openExceptionCount: number
+    drainVelocityPerDay: number
+    triagedBy: string | null
+    triagedAt: number | null
+    handoffAttestedBy: string | null
+    handoffAttestedAt: number | null
+    handoffToOwnerId: string | null
+    autoDrainCheckpointedBy: string | null
+    autoDrainCheckpointedAt: number | null
+    orchestrationNote: string | null
+    reopenPressureCount: number
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2804,6 +2887,13 @@ export class SpineStore {
     new Map<
       string,
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow
+    >()
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns =
+    new Map<string, WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow>()
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations =
+    new Map<
+      string,
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow
     >()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()

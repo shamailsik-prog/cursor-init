@@ -7919,6 +7919,58 @@ describe("Runtime persistence mode", () => {
       )
       expect(waiverExpiryDisputeAdjudicationSloBreachClosure.status).toBe(200)
 
+      const waiverExpiryDisputeAdjudicationSloDebtBurndownTarget = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "c9b2f67e-603b-4244-8a15-7e4f3a2c1d86",
+          },
+          body: JSON.stringify({
+            action: "set_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_target",
+            actorId: "partner_a",
+            matterId,
+            retirementTargetAt: Date.now() + 48 * 60 * 60 * 1000,
+            reason: "runtime waiver expiry dispute adjudication SLO debt burndown target set",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeAdjudicationSloDebtBurndownTarget.status).toBe(200)
+
+      const waiverExpiryDisputeAdjudicationSloDebtBacklog = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "d0c3a78f-714c-4355-9b26-8f503b3d2e97",
+          },
+          body: JSON.stringify({
+            action: "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_backlog",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime waiver expiry dispute adjudication SLO debt backlog attested",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeAdjudicationSloDebtBacklog.status).toBe(200)
+
+      const waiverExpiryDisputeAdjudicationSloDebtBurndownCheckpoint = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "e1d4b890-825d-4466-ac37-90614c4e3fa8",
+          },
+          body: JSON.stringify({
+            action: "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime waiver expiry dispute adjudication SLO debt burndown checkpointed",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeAdjudicationSloDebtBurndownCheckpoint.status).toBe(200)
+
       const waiverExpiryDisputeAdjudicationResolve = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
           method: "POST",
@@ -8097,6 +8149,61 @@ describe("Runtime persistence mode", () => {
       )
       expect(remediationSlaBreachResolutionCheckpointExpiryExceptionReconcile.status).toBe(200)
 
+      const remediationSlaBreachResolutionCheckpointExpiryQueueTriage = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f2e5c901-936e-4577-bd48-a1725d5f40b9",
+          },
+          body: JSON.stringify({
+            action:
+              "triage_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime checkpoint expiry attestation queue triaged",
+          }),
+        })
+      )
+      expect(remediationSlaBreachResolutionCheckpointExpiryQueueTriage.status).toBe(200)
+
+      const remediationSlaBreachResolutionCheckpointExpiryQueueHandoff = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "a3f6d012-a47f-4688-ce59-b2836e6051ca",
+          },
+          body: JSON.stringify({
+            action:
+              "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_handoff",
+            actorId: "partner_a",
+            matterId,
+            handoffToOwnerId: "associate_a",
+            reason: "runtime checkpoint expiry attestation queue handoff attested",
+          }),
+        })
+      )
+      expect(remediationSlaBreachResolutionCheckpointExpiryQueueHandoff.status).toBe(200)
+
+      const remediationSlaBreachResolutionCheckpointExpiryQueueDrain = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b4a7e123-b580-4799-df60-c3947f7162db",
+          },
+          body: JSON.stringify({
+            action:
+              "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_auto_drain",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime checkpoint expiry attestation queue auto-drain checkpointed",
+          }),
+        })
+      )
+      expect(remediationSlaBreachResolutionCheckpointExpiryQueueDrain.status).toBe(200)
+
       const remediationResolve = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
           method: "POST",
@@ -8162,6 +8269,9 @@ describe("Runtime persistence mode", () => {
         new Map()
       getRuntimeStore().workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations = new Map()
       getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations =
+        new Map()
+      getRuntimeStore().workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns = new Map()
+      getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations =
         new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
@@ -8543,6 +8653,52 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const waiverExpiryDisputeAdjudicationSloDebtBurndownView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndowns&actorId=associate_a&matterId=${matterId}&burndownStatus=burndown_checkpointed&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(waiverExpiryDisputeAdjudicationSloDebtBurndownView.status).toBe(200)
+      const waiverExpiryDisputeAdjudicationSloDebtBurndownViewJson =
+        (await waiverExpiryDisputeAdjudicationSloDebtBurndownView.json()) as {
+          items: Array<{
+            matterId: string
+            burndownStatus: string
+            checkpointedBy: string | null
+          }>
+        }
+      expect(
+        waiverExpiryDisputeAdjudicationSloDebtBurndownViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.burndownStatus === "burndown_checkpointed" &&
+            row.checkpointedBy === "partner_a"
+        )
+      ).toBe(true)
+
+      const remediationSlaBreachResolutionCheckpointExpiryQueueView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_orchestrations&actorId=associate_a&matterId=${matterId}&queueStatus=queue_auto_drained&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(remediationSlaBreachResolutionCheckpointExpiryQueueView.status).toBe(200)
+      const remediationSlaBreachResolutionCheckpointExpiryQueueViewJson =
+        (await remediationSlaBreachResolutionCheckpointExpiryQueueView.json()) as {
+          items: Array<{
+            matterId: string
+            queueStatus: string
+            autoDrainCheckpointedBy: string | null
+          }>
+        }
+      expect(
+        remediationSlaBreachResolutionCheckpointExpiryQueueViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.queueStatus === "queue_auto_drained" &&
+            row.autoDrainCheckpointedBy === "partner_a"
+        )
+      ).toBe(true)
+
       const persistedOps = await getDocs(collection(ctx.firestore(), "workflow_ops_activity"))
       expect(
         persistedOps.docs.some(
@@ -8820,6 +8976,37 @@ describe("Runtime persistence mode", () => {
             entry.data()?.matterId === matterId &&
             entry.data()?.exceptionStatus === "exception_reconciled" &&
             entry.data()?.reconciledBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndowns = await getDocs(
+        collection(
+          ctx.firestore(),
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndowns"
+        )
+      )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndowns.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.burndownStatus === "burndown_checkpointed" &&
+            entry.data()?.checkpointedBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueOrchestrations =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_orchestrations"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueOrchestrations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.queueStatus === "queue_auto_drained" &&
+            entry.data()?.autoDrainCheckpointedBy === "partner_a"
         )
       ).toBe(true)
     })

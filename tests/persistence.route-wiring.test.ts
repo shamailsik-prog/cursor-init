@@ -108,6 +108,9 @@ const baseStore = {
   workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations: new Map(),
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations:
     new Map(),
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns: new Map(),
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations:
+    new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -2368,6 +2371,84 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          waiverExpiryDisputeAdjudicationSloDebtRemediationId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation:mat_1",
+          classification: "internal",
+          burndownStatus: "burndown_checkpointed",
+          debtStatusSnapshot: "breach_closure_attested",
+          remainingDebtMs: 0,
+          debtVelocityPerDay: 120_000,
+          projectedBurndownHours: 0,
+          forecastBreachHours: 0,
+          retirementTargetAt: Date.now() + 86_400_000,
+          targetSetBy: "partner_a",
+          targetSetAt: Date.now(),
+          backlogAttestedBy: "partner_a",
+          backlogAttestedAt: Date.now(),
+          checkpointedBy: "partner_a",
+          checkpointedAt: Date.now(),
+          burndownNote: "repo slo debt burndown",
+          reopenPressureCount: 1,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "waiver_expiry_dispute_adjudication_slo_debt_burndown"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 25,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations:
+      {
+        upsert: vi.fn(),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1",
+            firmId: "firmA",
+            matterId: "mat_1",
+            expiryAttestationExceptionReconciliationId:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1",
+            classification: "internal",
+            queueStatus: "queue_auto_drained",
+            exceptionStatusSnapshot: "exception_reconciled",
+            overdueExceptionCountSnapshot: 1,
+            queueAgingHours: 2,
+            openExceptionCount: 0,
+            drainVelocityPerDay: 1,
+            triagedBy: "partner_a",
+            triagedAt: Date.now(),
+            handoffAttestedBy: "partner_a",
+            handoffAttestedAt: Date.now(),
+            handoffToOwnerId: "associate_a",
+            autoDrainCheckpointedBy: "partner_a",
+            autoDrainCheckpointedAt: Date.now(),
+            orchestrationNote: "repo checkpoint expiry queue",
+            reopenPressureCount: 2,
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: [
+              "repo",
+              "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue",
+            ],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 26,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -3362,5 +3443,35 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1"
     )
     expect(json.items[0]?.exceptionStatus).toBe("exception_reconciled")
+  })
+
+  it("ops reporting waiver-expiry dispute adjudication SLO debt-burndown view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndowns&actorId=associate_a&burndownStatus=burndown_checkpointed&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; burndownStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1"
+    )
+    expect(json.items[0]?.burndownStatus).toBe("burndown_checkpointed")
+  })
+
+  it("ops reporting checkpoint expiry-attestation queue-orchestration view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_orchestrations&actorId=associate_a&queueStatus=queue_auto_drained&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; queueStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1"
+    )
+    expect(json.items[0]?.queueStatus).toBe("queue_auto_drained")
   })
 })
