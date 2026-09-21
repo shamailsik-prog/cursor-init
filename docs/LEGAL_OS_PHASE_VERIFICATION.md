@@ -321,6 +321,31 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #126 | workflow alert dispute enforcement + closure debt reconciliation scaffolding | `1862544` | Yes | true | false | true | PARTIAL (process-flag noncompliance) | medium |
 
+## Re-audit addendum — PR #126 after workflow alert dispute outcome enforcement
+
+- Audit file: `docs/audits/phase-pr126-workflow-enforcement-debt-reconciliation.md`
+- Date: 2026-09-21
+- Main tip audited: `746a35f`
+- Supporting docs-on-main check: `5a634a8`
+- Verdict: **PASS** (low) — process-flag dispute is resolved and no regressions were observed in A–E spot-checks.
+
+### Re-audit findings
+
+1. Gate logic was relaxed as intended:
+   - `/ops` call-site evidence is now required only when `frontend_real=true` or when the PR diff changes `app/ops/**`.
+2. Live replay of `ci_gates/check_pr_phase_claims.py` against PR #126 title/body + `baseSha/headSha` now returns `PASS` with exit code `0`.
+3. Spot-check A–E remains green:
+   - backend rows/repos/rules + route actions/views present,
+   - FE honesty remains explicit (`frontend_real=false`) with no `app/ops/**` changes in PR #126 diff,
+   - no COMPLETE/product-done overclaim,
+   - `1862544` remains on `origin/main`,
+   - targeted tests/gates rerun green.
+
+### Updated targeted matrix entry (superseding)
+
+| PR | Audit pass | Main tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #126 | Re-audit after gate fix + docs reconciliation | `746a35f` | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 ## Targeted ledger — PR #127 workflow alert enforcement-attestation + closure-debt variance digest scaffolding
 
 - Audit file: `docs/audits/phase-pr127-workflow-enforcement-attestation-variance.md`

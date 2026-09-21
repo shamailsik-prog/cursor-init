@@ -7,9 +7,9 @@ Main tip audited: `1862544`
 
 ## Verdict (lead)
 
-**PARTIAL (severity: medium).**
+**PASS (severity: low) — re-audit supersedes prior PARTIAL process-flag finding.**
 
-The implementation is backend-real, test/gate-green, SHA-valid, and does not overclaim COMPLETE. However, process-flag compliance is incomplete: PR metadata call-site evidence does not satisfy the `/ops` call-site format enforced by `ci_gates/check_pr_phase_claims.py`.
+The implementation is backend-real, test/gate-green, SHA-valid, and does not overclaim COMPLETE. The prior process-flag dispute is now resolved on `main` by gate commit `746a35f`: `/ops` call-site evidence is required only when `frontend_real=true` or `app/ops/**` changes.
 
 ---
 
@@ -118,3 +118,44 @@ Evidence:
 - **Verdict:** `PARTIAL`
 - **Severity:** `medium`
 - **Reasoning:** A–E pass, but F fails due process-flag call-site evidence format noncompliance in PR metadata.
+
+---
+
+## Re-audit addendum (dispute outcome enforcement + closure debt reconciliation)
+
+Date: 2026-09-21  
+Main tip audited: `746a35f`  
+Supporting docs-on-main check: `5a634a8` (ancestor of `origin/main`)
+
+### Delta verified on `main`
+
+1. `ci_gates/check_pr_phase_claims.py` now conditionally enforces `/ops` call-site evidence:
+   - required when `frontend_real=true`, or
+   - required when PR diff changes `app/ops/**`.
+2. For backend-only diffs with `frontend_real=false` and no `app/ops/**` changes, claim-gate replay should pass without `/ops` call-site mapping lines.
+
+### Claim-gate replay (PR #126 metadata, independent rerun)
+
+Inputs:
+- `title`: `Add workflow alert enforcement and debt reconciliation scaffolding`
+- `base_sha`: `fa2edc59576f4da4dd976e54f963fc31908f5dd5`
+- `head_sha`: `b1a480b5004b71de240c8f052cf5506f73d9de52`
+- `body`: live metadata from `origin pr view 126 --json title,description,baseSha,headSha`
+
+Output:
+- `PASS: PR phase-claim gate.`
+- exit code `0`
+
+### A–E spot-check (post-fix)
+
+- **A BACKEND_REAL:** PASS (rows/repos/rules + route actions/views still present).
+- **B FE honesty (`frontend_real=false`):** PASS (metadata still explicit; PR diff excludes `app/ops/**`).
+- **C No COMPLETE overclaim:** PASS (no COMPLETE/product-done phrase; `transport_stub=true` remains explicit).
+- **D SHA-on-main integrity:** PASS (`1862544` remains ancestor of `origin/main`).
+- **E tests/gates:** PASS (targeted unit/rules suites + `gate:g0` + `gate:g1` rerun green).
+
+## Superseding adjudication (current)
+
+- **Verdict:** `PASS`
+- **Severity:** `low`
+- **Classification note:** still **NOT COMPLETE / NOT product-done** because transport-stub policy remains active globally; this audit only adjudicates the scoped PR #126 backend/process-flag dispute resolution.
