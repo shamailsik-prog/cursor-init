@@ -167,3 +167,20 @@ Re-audit process flags after metadata amend (`no product-done claim` / `no COMPL
 | Severity | **medium** |
 | Product classification | **PARTIAL** (`transport_stub=true`, `frontend_real=false`) |
 | Disposition | Accept backend slice as real and merged; phase remains process-blocked until claim-gate-compatible disclaimer phrasing (or further gate hardening) is landed. Do not treat as product-done or frontend-complete. |
+
+---
+
+## Merge-confirmation addendum (follow-up)
+
+Date: 2026-09-21  
+Trigger: explicit instruction to audit against `main` @ `07e5db8` (or verify `4f0a44d` is an ancestor).
+
+Independent `git fetch origin main` re-check:
+
+| Claimed identifier | Observed on `origin/main` | Match |
+|---|---|---|
+| Final merge SHA `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8` | `origin/main` tip is exactly this commit | PASS |
+| PR head (content) `4f0a44d2530ab1e192e5b8a2662839ec305e9814` | `git merge-base --is-ancestor` → true; also `07e5db8^2` | PASS |
+| Pre-merge main `abb135a` | `07e5db8^1` = `abb135a07e273f54c835c217ae9b4a0f55612b97` | PASS |
+
+Subject SHA for this audit remains **`07e5db8`**. Verdict, A–F scores, and process-flag FAIL are unchanged. This addendum does not reopen backend or test dimensions.

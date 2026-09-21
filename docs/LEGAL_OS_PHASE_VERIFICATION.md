@@ -574,3 +574,11 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #147 | workflow alert SLO debt-remediation + checkpoint expiry-attestation exception reconciliation | `07e5db8` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
 
+### Merge-confirmation addendum
+
+- Date: 2026-09-21
+- Re-fetched `origin/main` tip is still `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8`.
+- `4f0a44d2530ab1e192e5b8a2662839ec305e9814` is an ancestor of `origin/main` and is merge parent-2.
+- Pre-merge parent-1 is `abb135a07e273f54c835c217ae9b4a0f55612b97`.
+- Verdict unchanged: **PARTIAL (medium)**.
+
