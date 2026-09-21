@@ -7676,6 +7676,111 @@ describe("Runtime persistence mode", () => {
       )
       expect(remediationSlaAcknowledge.status).toBe(200)
 
+      const waiverExpiryDisputeOpen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "2e5d1fd4-1335-49ca-8ccd-b2cfb6f9eb39",
+          },
+          body: JSON.stringify({
+            action: "open_workflow_ops_alert_waiver_expiry_dispute",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime waiver expiry dispute opened",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeOpen.status).toBe(200)
+
+      const waiverExpiryDisputeAssign = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b9f8aa33-4012-4321-83e8-c5c5ec904f9a",
+          },
+          body: JSON.stringify({
+            action: "assign_workflow_ops_alert_waiver_expiry_dispute_reviewer",
+            actorId: "partner_a",
+            matterId,
+            reviewerId: "associate_a",
+            reason: "runtime waiver expiry dispute reviewer assigned",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeAssign.status).toBe(200)
+
+      const waiverExpiryDisputeResolve = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "6d4d90f8-e64c-46bb-8c3d-1f0f08f7fdaf",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow_ops_alert_waiver_expiry_dispute",
+            actorId: "partner_a",
+            matterId,
+            resolutionOutcome: "extension_granted",
+            reason: "runtime waiver expiry dispute resolved",
+          }),
+        })
+      )
+      expect(waiverExpiryDisputeResolve.status).toBe(200)
+
+      const remediationSlaBreachEscalationOpen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "579cffef-e7be-4646-9af4-36f7de0d865f",
+          },
+          body: JSON.stringify({
+            action: "open_workflow_ops_alert_variance_remediation_sla_breach_escalation",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime remediation SLA breach escalation opened",
+          }),
+        })
+      )
+      expect(remediationSlaBreachEscalationOpen.status).toBe(200)
+
+      const remediationSlaBreachEscalationAssign = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "510eb01b-b7e7-4331-b90f-ab018e4cc496",
+          },
+          body: JSON.stringify({
+            action: "assign_workflow_ops_alert_variance_remediation_sla_breach_escalation_owner",
+            actorId: "partner_a",
+            matterId,
+            ownerId: "associate_a",
+            reason: "runtime remediation SLA breach escalation owner assigned",
+          }),
+        })
+      )
+      expect(remediationSlaBreachEscalationAssign.status).toBe(200)
+
+      const remediationSlaBreachEscalationResolve = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "a4ef9f89-e238-4fc7-89a3-8c4fbaea4da4",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow_ops_alert_variance_remediation_sla_breach_escalation",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime remediation SLA breach escalation resolved",
+          }),
+        })
+      )
+      expect(remediationSlaBreachEscalationResolve.status).toBe(200)
+
       const remediationResolve = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
           method: "POST",
@@ -7732,6 +7837,8 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().workflowOpsAlertVarianceRemediationQueues = new Map()
       getRuntimeStore().workflowOpsAlertWaiverExpiryDigests = new Map()
       getRuntimeStore().workflowOpsAlertVarianceRemediationSlaLedgers = new Map()
+      getRuntimeStore().workflowOpsAlertWaiverExpiryDisputes = new Map()
+      getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachEscalations = new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -7958,6 +8065,42 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const waiverExpiryDisputeView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_disputes&actorId=associate_a&matterId=${matterId}&waiverExpiryDisputeStatus=resolved&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(waiverExpiryDisputeView.status).toBe(200)
+      const waiverExpiryDisputeViewJson = (await waiverExpiryDisputeView.json()) as {
+        items: Array<{ matterId: string; disputeStatus: string; reviewerId: string | null }>
+      }
+      expect(
+        waiverExpiryDisputeViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.disputeStatus === "resolved" &&
+            row.reviewerId === "associate_a"
+        )
+      ).toBe(true)
+
+      const remediationSlaBreachEscalationView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_escalations&actorId=associate_a&matterId=${matterId}&remediationSlaBreachEscalationStatus=resolved&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(remediationSlaBreachEscalationView.status).toBe(200)
+      const remediationSlaBreachEscalationViewJson = (await remediationSlaBreachEscalationView.json()) as {
+        items: Array<{ matterId: string; escalationStatus: string; ownerId: string | null }>
+      }
+      expect(
+        remediationSlaBreachEscalationViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.escalationStatus === "resolved" &&
+            row.ownerId === "associate_a"
+        )
+      ).toBe(true)
+
       const persistedOps = await getDocs(collection(ctx.firestore(), "workflow_ops_activity"))
       expect(
         persistedOps.docs.some(
@@ -8123,6 +8266,30 @@ describe("Runtime persistence mode", () => {
             entry.data()?.matterId === matterId &&
             entry.data()?.slaStatus === "resolved" &&
             entry.data()?.resolvedBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDisputes = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_waiver_expiry_disputes")
+      )
+      expect(
+        persistedWaiverExpiryDisputes.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.disputeStatus === "resolved" &&
+            entry.data()?.reviewerId === "associate_a"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachEscalations = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_variance_remediation_sla_breach_escalations")
+      )
+      expect(
+        persistedRemediationSlaBreachEscalations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.escalationStatus === "resolved" &&
+            entry.data()?.ownerId === "associate_a"
         )
       ).toBe(true)
     })

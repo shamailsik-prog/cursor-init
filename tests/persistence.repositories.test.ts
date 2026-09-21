@@ -935,6 +935,83 @@ describe("Firestore repository adapters", () => {
       expect(
         remediationSlaLedgersByMatter.some((row) => row.recomputeReason === "ops_variance_sla_seed")
       ).toBe(true)
+      await repos.workflowOpsAlertWaiverExpiryDisputes.upsert({
+        id: "workflow_ops_alert_waiver_expiry_dispute:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        waiverExpiryDigestId: "workflow_ops_alert_waiver_expiry_digest:mat_1",
+        classification: "internal",
+        disputeStatus: "open",
+        contestedExpiryStatusSnapshot: "expires_lte_24h",
+        waiverExpiresAtSnapshot: 3599_999,
+        openedBy: "partner_a",
+        openedAt: 61,
+        reviewerId: null,
+        reviewAssignedAt: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionOutcome: null,
+        resolutionReason: null,
+        lastStatusChangedAt: 61,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "waiver_expiry_dispute"],
+        recomputedAt: 61,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_waiver_expiry_dispute_seed",
+        updatedAt: 61,
+      })
+      const waiverExpiryDispute = await repos.workflowOpsAlertWaiverExpiryDisputes.get(
+        "workflow_ops_alert_waiver_expiry_dispute:mat_1"
+      )
+      expect(waiverExpiryDispute?.disputeStatus).toBe("open")
+      const waiverExpiryDisputesByFirm =
+        await repos.workflowOpsAlertWaiverExpiryDisputes.listByFirm("firmA")
+      expect(waiverExpiryDisputesByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const waiverExpiryDisputesByMatter =
+        await repos.workflowOpsAlertWaiverExpiryDisputes.listByMatter("mat_1")
+      expect(
+        waiverExpiryDisputesByMatter.some(
+          (row) => row.recomputeReason === "ops_waiver_expiry_dispute_seed"
+        )
+      ).toBe(true)
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.upsert({
+        id: "workflow_ops_alert_variance_remediation_sla_breach_escalation:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        remediationSlaLedgerId: "workflow_ops_alert_variance_remediation_sla:mat_1",
+        classification: "internal",
+        escalationStatus: "open",
+        slaStatusSnapshot: "breached",
+        queueStatusSnapshot: "assigned",
+        ownerId: "associate_a",
+        openedAt: 62,
+        resolvedAt: null,
+        resolutionReason: null,
+        breachDueAtSnapshot: 43_200_060,
+        elapsedMsSnapshot: 45_000_000,
+        lastStatusChangedAt: 62,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "variance_remediation_sla_breach_escalation"],
+        recomputedAt: 62,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_variance_sla_breach_escalation_seed",
+        updatedAt: 62,
+      })
+      const remediationSlaBreachEscalation =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_escalation:mat_1"
+        )
+      expect(remediationSlaBreachEscalation?.escalationStatus).toBe("open")
+      const remediationSlaBreachEscalationsByFirm =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.listByFirm("firmA")
+      expect(remediationSlaBreachEscalationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const remediationSlaBreachEscalationsByMatter =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.listByMatter("mat_1")
+      expect(
+        remediationSlaBreachEscalationsByMatter.some(
+          (row) => row.recomputeReason === "ops_variance_sla_breach_escalation_seed"
+        )
+      ).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

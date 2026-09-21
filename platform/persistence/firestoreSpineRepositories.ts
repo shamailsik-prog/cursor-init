@@ -79,6 +79,8 @@ import type {
   WorkflowOpsAlertVarianceRemediationQueueRow,
   WorkflowOpsAlertWaiverExpiryDigestRow,
   WorkflowOpsAlertVarianceRemediationSlaLedgerRow,
+  WorkflowOpsAlertWaiverExpiryDisputeRow,
+  WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -2073,6 +2075,61 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "workflow_ops_alert_variance_remediation_sla_ledgers"))
         return rows.docs
           .map((entry) => entry.data() as WorkflowOpsAlertVarianceRemediationSlaLedgerRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertWaiverExpiryDisputes: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_waiver_expiry_disputes", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertWaiverExpiryDisputeRow>(
+          db,
+          "workflow_ops_alert_waiver_expiry_disputes",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertWaiverExpiryDisputeRow>(
+          db,
+          "workflow_ops_alert_waiver_expiry_disputes",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_waiver_expiry_disputes"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertWaiverExpiryDisputeRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachEscalations: {
+      async upsert(row) {
+        await setDoc(
+          doc(db, "workflow_ops_alert_variance_remediation_sla_breach_escalations", row.id),
+          row
+        )
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow>(
+          db,
+          "workflow_ops_alert_variance_remediation_sla_breach_escalations",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow>(
+          db,
+          "workflow_ops_alert_variance_remediation_sla_breach_escalations",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(
+          collection(db, "workflow_ops_alert_variance_remediation_sla_breach_escalations")
+        )
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow)
           .filter((row) => row.matterId === matterId)
       },
     },
