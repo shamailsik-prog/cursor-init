@@ -619,14 +619,20 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_dispute_seed",
         updatedAt: 51,
       })
-      const dispute = await repos.workflowOpsAlertAttestationDisputes.get(
+      const attestationDispute = await repos.workflowOpsAlertAttestationDisputes.get(
         "workflow_ops_alert_attestation_dispute:mat_1"
       )
-      expect(dispute?.disputeStatus).toBe("open")
-      const disputesByFirm = await repos.workflowOpsAlertAttestationDisputes.listByFirm("firmA")
-      expect(disputesByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const disputesByMatter = await repos.workflowOpsAlertAttestationDisputes.listByMatter("mat_1")
-      expect(disputesByMatter.some((row) => row.recomputeReason === "ops_dispute_seed")).toBe(true)
+      expect(attestationDispute?.disputeStatus).toBe("open")
+      const attestationDisputesByFirm = await repos.workflowOpsAlertAttestationDisputes.listByFirm(
+        "firmA"
+      )
+      expect(attestationDisputesByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const attestationDisputesByMatter = await repos.workflowOpsAlertAttestationDisputes.listByMatter(
+        "mat_1"
+      )
+      expect(attestationDisputesByMatter.some((row) => row.recomputeReason === "ops_dispute_seed")).toBe(
+        true
+      )
       await repos.workflowOpsAlertEscalationClosures.upsert({
         id: "workflow_ops_alert_escalation_closure:mat_1",
         firmId: "firmA",

@@ -539,7 +539,7 @@ describe("GET /api/d2/ops-reporting", () => {
         view: "alert_escalation_ledgers",
         actorId: "associate_a",
         matterId,
-        escalationStatus: "resolved",
+        escalationStatus: "open",
         freshnessStatus: "fresh",
         limit: "10",
         cursor: "0",
