@@ -74,6 +74,8 @@ import type {
   WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow,
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow,
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow,
+  WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow,
+  WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -736,6 +738,31 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRepo
   ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow[]>
 }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRepository = {
+  upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow[]>
+  listByMatter(
+    matterId: string
+  ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow[]>
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRepository =
+  {
+    upsert(
+      row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow
+    ): Promise<void>
+    get(
+      id: string
+    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow | null>
+    listByFirm(
+      firmId: string
+    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow[]>
+    listByMatter(
+      matterId: string
+    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow[]>
+  }
+
 export type TenancySessionReferenceRepository = {
   upsert(row: TenancySessionReferenceRow): Promise<void>
   get(id: string): Promise<TenancySessionReferenceRow | null>
@@ -905,6 +932,8 @@ export type SpineRepositories = {
   workflowOpsAlertVarianceRemediationSlaBreachEscalations: WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRepository
   workflowOpsAlertWaiverExpiryDisputeAdjudications: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRepository
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRepository
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRepository
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
@@ -2497,6 +2526,49 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         return [...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.values()].filter(
           (row) => row.matterId === matterId
         )
+      },
+    },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships: {
+      async upsert(row) {
+        store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.values()].filter(
+          (row) => row.matterId === matterId
+        )
+      },
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations: {
+      async upsert(row) {
+        store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.set(
+          row.id,
+          row
+        )
+      },
+      async get(id) {
+        return (
+          store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.get(
+            id
+          ) ?? null
+        )
+      },
+      async listByFirm(firmId) {
+        return [
+          ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.values(),
+        ].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [
+          ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.values(),
+        ].filter((row) => row.matterId === matterId)
       },
     },
     tenancySessionReferences: {

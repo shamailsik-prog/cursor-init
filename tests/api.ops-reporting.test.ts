@@ -1006,6 +1006,77 @@ describe("GET /api/d2/ops-reporting", () => {
       "associate_a"
     )
 
+    const waiverExpiryDisputeAdjudicationSloOpen = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_stewardship",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO stewardship opened",
+      },
+      "a11c0f22-6d4a-4b7e-9f11-2d8c4b6e1a81"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloOpen.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloOpenJson =
+      (await waiverExpiryDisputeAdjudicationSloOpen.json()) as {
+        result: { waiverExpiryDisputeAdjudicationSlo: { sloStatus: string } }
+      }
+    expect(waiverExpiryDisputeAdjudicationSloOpenJson.result.waiverExpiryDisputeAdjudicationSlo.sloStatus).toBe(
+      "watch"
+    )
+
+    const waiverExpiryDisputeAdjudicationSloExtend = await postOpsReport(
+      {
+        action: "extend_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_deadline",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO deadline extended",
+      },
+      "b82e91aa-3c18-4f60-8d44-5f1a0c9e2b42"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloExtend.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloExtendJson =
+      (await waiverExpiryDisputeAdjudicationSloExtend.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSlo: {
+            sloStatus: string
+            extendedDueAt: number | null
+          }
+        }
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloExtendJson.result.waiverExpiryDisputeAdjudicationSlo.sloStatus
+    ).toBe("deadline_extended")
+    expect(
+      waiverExpiryDisputeAdjudicationSloExtendJson.result.waiverExpiryDisputeAdjudicationSlo.extendedDueAt
+    ).not.toBeNull()
+
+    const waiverExpiryDisputeAdjudicationSloAcknowledge = await postOpsReport(
+      {
+        action: "acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_breach",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO breach acknowledged",
+      },
+      "c29d44f0-91ab-4e22-a7f6-0b3c5d8e9a23"
+    )
+    expect(waiverExpiryDisputeAdjudicationSloAcknowledge.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloAcknowledgeJson =
+      (await waiverExpiryDisputeAdjudicationSloAcknowledge.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSlo: {
+            sloStatus: string
+            breachAcknowledgedAt: number | null
+          }
+        }
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloAcknowledgeJson.result.waiverExpiryDisputeAdjudicationSlo.sloStatus
+    ).toBe("breach_acknowledged")
+    expect(
+      waiverExpiryDisputeAdjudicationSloAcknowledgeJson.result.waiverExpiryDisputeAdjudicationSlo
+        .breachAcknowledgedAt
+    ).not.toBeNull()
+
     const waiverExpiryDisputeAdjudicationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_waiver_expiry_dispute_adjudication",
@@ -1108,6 +1179,85 @@ describe("GET /api/d2/ops-reporting", () => {
       remediationSlaBreachResolutionCheckpointReopenJson.result.remediationSlaBreachResolutionCheckpoint
         .reopenPressureCount
     ).toBeGreaterThanOrEqual(1)
+
+    const remediationSlaBreachResolutionCheckpointExpiryOpen = await postOpsReport(
+      {
+        action:
+          "open_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation",
+        actorId: "partner_a",
+        matterId,
+        reason: "resolution checkpoint expiry attestation opened",
+      },
+      "d55a0b91-7c2e-4f18-9a55-1e6b8c0d3f38"
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryOpen.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryOpenJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryOpen.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestation: { attestationStatus: string }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryOpenJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestation.attestationStatus
+    ).toBe("open")
+
+    const remediationSlaBreachResolutionCheckpointExpiryAttest = await postOpsReport(
+      {
+        action: "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry",
+        actorId: "partner_a",
+        matterId,
+        reason: "resolution checkpoint expiry attested",
+      },
+      "e02f3c20-8a47-4b16-bd33-6c2a0e1f5d95"
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryAttest.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryAttestJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryAttest.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestation: {
+            attestationStatus: string
+            attestedBy: string | null
+          }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryAttestJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestation.attestationStatus
+    ).toBe("attested")
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryAttestJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestation.attestedBy
+    ).toBe("partner_a")
+
+    const remediationSlaBreachResolutionCheckpointExpiryAcknowledge = await postOpsReport(
+      {
+        action:
+          "acknowledge_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry",
+        actorId: "partner_a",
+        matterId,
+        reason: "resolution checkpoint expiry acknowledged",
+      },
+      "f18b1a55-2d94-4c80-ae11-9d6e4b8c2a84"
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryAcknowledge.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryAcknowledgeJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryAcknowledge.json()) as {
+        result: {
+          remediationSlaBreachResolutionCheckpointExpiryAttestation: {
+            attestationStatus: string
+            expiryAcknowledgedBy: string | null
+          }
+        }
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryAcknowledgeJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestation.attestationStatus
+    ).toBe("expiry_acknowledged")
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryAcknowledgeJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestation.expiryAcknowledgedBy
+    ).toBe("partner_a")
 
     const remediationResolve = await postOpsReport(
       {
@@ -1511,6 +1661,60 @@ describe("GET /api/d2/ops-reporting", () => {
           row.matterId === matterId &&
           row.checkpointStatus === "reopened" &&
           row.reopenPressureCount >= 1
+      )
+    ).toBe(true)
+
+    const waiverExpiryDisputeAdjudicationSloView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_waiver_expiry_dispute_adjudication_slo_stewardships",
+        actorId: "associate_a",
+        matterId,
+        waiverExpiryDisputeAdjudicationSloStatus: "breach_acknowledged",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverExpiryDisputeAdjudicationSloView.status).toBe(200)
+    const waiverExpiryDisputeAdjudicationSloViewJson =
+      (await waiverExpiryDisputeAdjudicationSloView.json()) as {
+        items: Array<{ matterId: string; sloStatus: string; stewardId: string | null }>
+      }
+    expect(
+      waiverExpiryDisputeAdjudicationSloViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.sloStatus === "breach_acknowledged" &&
+          row.stewardId === "partner_a"
+      )
+    ).toBe(true)
+
+    const remediationSlaBreachResolutionCheckpointExpiryView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestations",
+        actorId: "associate_a",
+        matterId,
+        remediationSlaBreachResolutionCheckpointExpiryAttestationStatus: "expiry_acknowledged",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationSlaBreachResolutionCheckpointExpiryView.status).toBe(200)
+    const remediationSlaBreachResolutionCheckpointExpiryViewJson =
+      (await remediationSlaBreachResolutionCheckpointExpiryView.json()) as {
+        items: Array<{
+          matterId: string
+          attestationStatus: string
+          expiryAcknowledgedBy: string | null
+        }>
+      }
+    expect(
+      remediationSlaBreachResolutionCheckpointExpiryViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.attestationStatus === "expiry_acknowledged" &&
+          row.expiryAcknowledgedBy === "partner_a"
       )
     ).toBe(true)
   })
