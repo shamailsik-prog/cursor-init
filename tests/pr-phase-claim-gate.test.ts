@@ -52,6 +52,61 @@ function runGate(cwd: string, env: Record<string, string>) {
 }
 
 describe("PR phase claim gate hardening", () => {
+  it("passes when required flags are only in a markdown release-label table", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Backend slice",
+      PR_BODY: [
+        "## Release labels (honest)",
+        "",
+        "| Label | Value |",
+        "|---|---|",
+        "| backend_real | true |",
+        "| frontend_real | false |",
+        "| transport_stub | true |",
+        "| classification | **PARTIAL** — no product-done claim |",
+        "",
+        "Never COMPLETE while `transport_stub=true`.",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+
+  it("passes markdown-table flags with bold/backtick cells", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Backend slice",
+      PR_BODY: [
+        "| **backend_real** | **true** |",
+        "| `frontend_real` | `false` |",
+        "| transport_stub | true |",
+        "no COMPLETE/product-done claim",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+
+  it("fails when markdown table omits required flags", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Incomplete table",
+      PR_BODY: [
+        "| backend_real | true |",
+        "| transport_stub | true |",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("missing: frontend_real")
+  })
+
   it("fails when required flags are missing", () => {
     const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
     const result = runGate(repo.root, {
