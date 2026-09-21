@@ -463,3 +463,26 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #136 | workflow alert waiver-expiry disputes + remediation SLA breach escalation | `f20cdf1` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
 
+## Targeted ledger — PR #139 workflow alert waiver-expiry dispute adjudication + SLA breach resolution checkpoints
+
+- Audit file: `docs/audits/phase-pr139-workflow-alert-waiver-dispute-adjudication.md`
+- Date: 2026-09-21
+- Live PR head audited: `df7451d` (builder-claimed head `cbc9d5e` is a stale ancestor; implementation `01ebcd9`)
+- Main tip during audit: `44f1eb1`
+- Verdict: **PASS** (low) — backend-real, label-honest, focused tests/gates green, live claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA evidence`: PASS for an open PR (live tip `df7451d` independently resolved; claimed `cbc9d5e` is ancestor; not landed on `main`; merge-base `be8bb88`).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow` + `WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow`, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` views + open/assign/resolve and open/record/reopen actions, idempotency + audit write-through).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; PR delta excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, disclaimer `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring/claim-gate 84; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
+- `process flags`: PASS (live `ci_gates/check_pr_phase_claims.py` replay on PR #139 metadata exits 0). Residual after #135 (`docs-only queue update`, `never COMPLETE while ...`) still exists in the gate but does not fire on current #139 wording.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #139 | workflow alert waiver-expiry dispute adjudication + SLA breach resolution checkpoints | `df7451d` (live; claimed `cbc9d5e` stale) | No (open) | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
