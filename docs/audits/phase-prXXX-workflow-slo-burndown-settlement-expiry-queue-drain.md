@@ -25,9 +25,9 @@ Head SHA: pending
 
 ## Evidence stub
 
-- Unit/API: pending (`tests/api.ops-reporting.test.ts` + `tests/persistence.route-wiring.test.ts`)
-- Rules/runtime: pending (`tests/persistence.repositories.test.ts`, `tests/persistence.runtime-mode.test.ts`, `tests/firestore.rules.test.ts`)
+- Unit/API: PASS (`tests/api.ops-reporting.test.ts` + `tests/persistence.route-wiring.test.ts` = 82/82)
+- Rules/runtime: PASS (`tests/persistence.repositories.test.ts` 1/1, `tests/persistence.runtime-mode.test.ts` 14/14, `tests/firestore.rules.test.ts` 7/7)
 - Gates:
-  - `gate:g0` -> pending
-  - `gate:g1` -> pending
-  - claim-gate replay against PR metadata -> pending (`no product-done claim` wording)
+  - `gate:g0` -> PASS
+  - `gate:g1` -> PASS
+  - claim-gate replay against PR metadata -> PASS (`no product-done claim` wording)
