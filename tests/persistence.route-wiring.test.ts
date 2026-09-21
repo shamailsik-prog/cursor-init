@@ -3275,6 +3275,90 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_custody_handoff_external_transport_receipt_ack_reconciliation",
+            firmId: "firmA",
+            matterId: "mat_1",
+            archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentId: "repo_custody_handoff_external_transport_receipt_ack",
+            closureAttestationExternalTransportReceiptAcknowledgmentId: "repo_closure_external_transport_receipt_ack",
+            classification: "internal",
+            archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationStatus:
+              "archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_pending",
+            archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentStatusSnapshot:
+              "archival_export_custody_handoff_external_transport_receipt_acknowledgment_pending",
+            closureAttestationExternalTransportReceiptAcknowledgmentStatusSnapshot:
+              "closure_attestation_external_transport_receipt_acknowledgment_pending",
+            custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedBy: null,
+            custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedAt: null,
+            custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationDigest: null,
+            custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationReconciledBy: null,
+            custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationReconciledAt: null,
+            custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationFinalizedBy: null,
+            custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationFinalizedAt: null,
+            externalTransportReceiptReferenceParityDigest: null,
+            externalTransportChannel: "blocked_todo_firm",
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCount: 1,
+            custodyHandoffExternalTransportReceiptBacklogCountSnapshot: 1,
+            closureAttestationExternalTransportReceiptBacklogCountSnapshot: 1,
+            custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationNote: "repo custody ack reconciliation",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 49,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_closure_external_transport_receipt_ack_reconciliation",
+            firmId: "firmA",
+            matterId: "mat_1",
+            closureAttestationExternalTransportReceiptAcknowledgmentId: "repo_closure_external_transport_receipt_ack",
+            archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentId: "repo_custody_handoff_external_transport_receipt_ack",
+            classification: "internal",
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+              "closure_attestation_external_transport_receipt_acknowledgment_reconciliation_pending",
+            closureAttestationExternalTransportReceiptAcknowledgmentStatusSnapshot:
+              "closure_attestation_external_transport_receipt_acknowledgment_pending",
+            archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentStatusSnapshot:
+              "archival_export_custody_handoff_external_transport_receipt_acknowledgment_pending",
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedBy: null,
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedAt: null,
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationDigest: null,
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationReconciledBy: null,
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationReconciledAt: null,
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationFinalizedBy: null,
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationFinalizedAt: null,
+            externalTransportReceiptReferenceParityDigest: null,
+            externalTransportChannel: "blocked_todo_firm",
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCount: 1,
+            closureAttestationExternalTransportReceiptBacklogCountSnapshot: 1,
+            custodyHandoffExternalTransportReceiptBacklogCountSnapshot: 1,
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationNote: "repo closure ack reconciliation",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 50,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -4648,6 +4732,38 @@ describe("Route wiring uses repository adapters", () => {
     }
     expect(json.items[0]?.archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentStatus).toBe(
       "archival_export_custody_handoff_external_transport_receipt_acknowledgment_pending"
+    )
+  })
+
+  it("ops reporting custody handoff external transport receipt acknowledgment reconciliation view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliations&actorId=associate_a&archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationStatus=archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_pending&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationStatus: string }>
+    }
+    expect(
+      json.items[0]?.archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationStatus
+    ).toBe("archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_pending")
+  })
+
+  it("ops reporting closure attestation external transport receipt acknowledgment reconciliation view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliations&actorId=associate_a&closureAttestationExternalTransportReceiptAcknowledgmentReconciliationStatus=closure_attestation_external_transport_receipt_acknowledgment_reconciliation_pending&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ closureAttestationExternalTransportReceiptAcknowledgmentReconciliationStatus: string }>
+    }
+    expect(json.items[0]?.closureAttestationExternalTransportReceiptAcknowledgmentReconciliationStatus).toBe(
+      "closure_attestation_external_transport_receipt_acknowledgment_reconciliation_pending"
     )
   })
 })

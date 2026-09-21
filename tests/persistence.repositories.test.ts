@@ -2243,6 +2243,104 @@ describe("Firestore repository adapters", () => {
       ).toBe("blocked_todo_firm")
       expect(custodyHandoffExternalTransportReceiptAcknowledgmentId.length).toBeLessThanOrEqual(1500)
       expect(closureAttestationExternalTransportReceiptAcknowledgmentId.length).toBeLessThanOrEqual(1500)
+      const {
+        workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationId,
+        workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationId,
+      } = await import(
+        "@/platform/persistence/workflowOpsAlertArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationGovernance"
+      )
+      const repoCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationId =
+        workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationId(
+          custodyHandoffExternalTransportReceiptAcknowledgmentId
+        )
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations.upsert(
+        {
+          id: repoCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationId,
+          firmId: "firmA",
+          matterId: "mat_1",
+          archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentId:
+            custodyHandoffExternalTransportReceiptAcknowledgmentId,
+          closureAttestationExternalTransportReceiptAcknowledgmentId:
+            closureAttestationExternalTransportReceiptAcknowledgmentId,
+          classification: "internal",
+          archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationStatus:
+            "archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_pending",
+          archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentStatusSnapshot:
+            "archival_export_custody_handoff_external_transport_receipt_acknowledgment_pending",
+          closureAttestationExternalTransportReceiptAcknowledgmentStatusSnapshot:
+            "closure_attestation_external_transport_receipt_acknowledgment_pending",
+          custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedBy: null,
+          custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedAt: null,
+          custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationDigest: null,
+          custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationReconciledBy: null,
+          custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationReconciledAt: null,
+          custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationFinalizedBy: null,
+          custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationFinalizedAt: null,
+          externalTransportReceiptReferenceParityDigest: null,
+          externalTransportChannel: "blocked_todo_firm",
+          crossTrackExternalTransportReceiptAcknowledgmentMismatchCount: 1,
+          custodyHandoffExternalTransportReceiptBacklogCountSnapshot: 1,
+          closureAttestationExternalTransportReceiptBacklogCountSnapshot: 1,
+          custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationNote:
+            "ops_custody_handoff_external_transport_receipt_ack_reconciliation_seed",
+          lastStatusChangedAt: 95,
+          freshnessStatus: "fresh",
+          provenanceTags: ["transport_stub:true", "workflow"],
+          recomputedAt: 95,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_custody_handoff_external_transport_receipt_ack_reconciliation_seed",
+          updatedAt: 95,
+        }
+      )
+      const repoClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationId =
+        workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationId(
+          closureAttestationExternalTransportReceiptAcknowledgmentId
+        )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations.upsert(
+        {
+          id: repoClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationId,
+          firmId: "firmA",
+          matterId: "mat_1",
+          closureAttestationExternalTransportReceiptAcknowledgmentId:
+            closureAttestationExternalTransportReceiptAcknowledgmentId,
+          archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentId:
+            custodyHandoffExternalTransportReceiptAcknowledgmentId,
+          classification: "internal",
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+            "closure_attestation_external_transport_receipt_acknowledgment_reconciliation_pending",
+          closureAttestationExternalTransportReceiptAcknowledgmentStatusSnapshot:
+            "closure_attestation_external_transport_receipt_acknowledgment_pending",
+          archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentStatusSnapshot:
+            "archival_export_custody_handoff_external_transport_receipt_acknowledgment_pending",
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedBy: null,
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedAt: null,
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationDigest: null,
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationReconciledBy: null,
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationReconciledAt: null,
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationFinalizedBy: null,
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationFinalizedAt: null,
+          externalTransportReceiptReferenceParityDigest: null,
+          externalTransportChannel: "blocked_todo_firm",
+          crossTrackExternalTransportReceiptAcknowledgmentMismatchCount: 1,
+          closureAttestationExternalTransportReceiptBacklogCountSnapshot: 1,
+          custodyHandoffExternalTransportReceiptBacklogCountSnapshot: 1,
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationNote:
+            "ops_closure_attestation_external_transport_receipt_ack_reconciliation_seed",
+          lastStatusChangedAt: 96,
+          freshnessStatus: "fresh",
+          provenanceTags: ["transport_stub:true", "workflow"],
+          recomputedAt: 96,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_closure_attestation_external_transport_receipt_ack_reconciliation_seed",
+          updatedAt: 96,
+        }
+      )
+      expect(
+        repoCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationId.length
+      ).toBeLessThanOrEqual(1500)
+      expect(
+        repoClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationId.length
+      ).toBeLessThanOrEqual(1500)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
