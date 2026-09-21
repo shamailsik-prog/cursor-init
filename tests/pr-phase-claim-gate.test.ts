@@ -81,6 +81,68 @@ describe("PR phase claim gate hardening", () => {
     expect(result.stdout).toContain("frontend_real=false")
   })
 
+  it("passes never COMPLETE while transport_stub disclaimer phrasing", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Scope correction",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+        "classification=PARTIAL (never COMPLETE while transport_stub=true)",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+
+  it("passes PR #136-style metadata with incidental docs-only queue wording", () => {
+    const repo = makeRepo(
+      { "app/api/d2/ops-reporting/route.ts": "export const route = 'base'\n" },
+      {
+        "app/api/d2/ops-reporting/route.ts": "export const route = 'head'\n",
+        "platform/spine/store.ts": "export const store = 'head'\n",
+        "tests/api.ops-reporting.test.ts": "export const t = 1\n",
+      }
+    )
+    const result = runGate(repo.root, {
+      PR_TITLE: "Add workflow waiver-expiry dispute and SLA breach escalation scaffolding",
+      PR_BODY: [
+        "- update roadmap (docs-only queue update)",
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+        "classification=PARTIAL (never COMPLETE while transport_stub=true)",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+
+  it("fails affirmative docs-only claims when substantive paths changed", () => {
+    const repo = makeRepo(
+      { "app/api/d2/ops-reporting/route.ts": "export const route = 'base'\n" },
+      { "app/api/d2/ops-reporting/route.ts": "export const route = 'head'\n" }
+    )
+    const result = runGate(repo.root, {
+      PR_TITLE: "docs-only",
+      PR_BODY: [
+        "docs-only PR",
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("substantive runtime paths changed")
+  })
+
   it("passes negated COMPLETE/product-done disclaimer phrasing", () => {
     const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
     const result = runGate(repo.root, {
