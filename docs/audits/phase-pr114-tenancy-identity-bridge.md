@@ -1,16 +1,28 @@
-# Independent Phase Auditor forensic audit: PR #114 tenancy external-session identity bridge + IdP parity scaffolding
+# Independent Phase Auditor re-audit: PR #114 tenancy external-session identity bridge + IdP parity scaffolding
 
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
 Requested PR: `#114` (`cursor/legal-os-tenancy-id-bridge-parity-a243`)  
-Feature commit: `6c4c293`  
-Merge SHA on `main`: `ce57557`
+Label-amend PR: `#117` (`cursor/pr114-phase-audit-label-fix-451f`)  
+Main tip audited: `bf24a57e6056`
 
 ## Verdict (lead)
 
-**PARTIAL. Severity: major.**
+**PARTIAL (minor).**
 
-Backend reality claims are materially true and test-backed, but process-hardening and claim-hygiene checks fail: PR metadata does not declare required phase flags and includes a "phase complete" phrase that fails the repository's own COMPLETE overclaim gate while transport stubs remain.
+The label-amend docs change is now on `main` and correctly expresses this phase as backend-real but transport-stub-capped (`backend_real=true`, `frontend_real=false`, `transport_stub=true`, `status=PARTIAL`). Backend implementation remains real and regression checks pass. The only remaining cap is the expected global transport stub boundary, so this phase is not COMPLETE/product-done.
+
+### Blockers
+
+- None.
+
+### Major findings
+
+- None.
+
+### Minor findings
+
+1. `transport_stub=true` remains active because filing transport still carries `TODO(firm)` / `_stub` / `blocked_todo_firm` markers, so classification remains PARTIAL by policy.
 
 ---
 
@@ -22,56 +34,56 @@ Status: **PASS**
 
 Evidence:
 
-1. `app/api/p5/tenancy/route.ts` defines and handles:
-   - POST actions: `attest_external_session_identity_bridge`, `quarantine_external_session_identity_bridge`, `clear_external_session_identity_bridge`.
-   - GET monitoring view: `view=session_external_session_identity_bridges` with `status`, `mismatchStatus`, and lineage-root (`rootSessionRefId`) filtering.
-2. `platform/p5/tenancyAdmin.ts` implements lifecycle domain logic and telemetry:
-   - `attestExternalSessionIdentityBridge`, `quarantineExternalSessionIdentityBridge`, `clearExternalSessionIdentityBridge`.
-   - mismatch reason computation (`computeExternalSessionIdentityMismatchReasons`) including auth-boundary/session drift checks and asserted external-session mismatch.
-3. Runtime store + repository surfaces are present:
-   - row/type definitions in `platform/spine/store.ts`.
-   - memory repository interface + implementation in `platform/persistence/spineRepositories.ts`.
-   - Firestore adapter collection wiring in `platform/persistence/firestoreSpineRepositories.ts`.
-   - runtime sync function `syncFirmTenancyExternalSessionIdentityBridges` in `platform/persistence/tenancyLineageSync.ts`.
-4. Firestore rules include partner-read / deny-write posture:
-   - `match /tenancy_external_session_identity_bridges/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }`.
-5. Tests cover lifecycle + filtering + persistence:
-   - `tests/api.tenancy.test.ts` validates attest/quarantine/clear actions, mismatch-listing filters, and idempotent replay semantics.
-   - `tests/persistence.repositories.test.ts` validates repository round-trip/list paths for identity bridges.
-   - `tests/persistence.runtime-mode.test.ts` validates route-driven runtime-mode persistence and persisted Firestore bridge rows.
+1. `app/api/p5/tenancy/route.ts` still handles identity-bridge lifecycle actions and monitoring view:
+   - `attest_external_session_identity_bridge`
+   - `quarantine_external_session_identity_bridge`
+   - `clear_external_session_identity_bridge`
+   - `view=session_external_session_identity_bridges`
+2. `platform/p5/tenancyAdmin.ts` still implements domain handlers and mismatch logic:
+   - `attestExternalSessionIdentityBridge`
+   - `quarantineExternalSessionIdentityBridge`
+   - `clearExternalSessionIdentityBridge`
+   - `computeExternalSessionIdentityMismatchReasons`
+3. Persistence + rules wiring remains present:
+   - repository and Firestore collection surfaces for `tenancy_external_session_identity_bridges`
+   - sync path `syncFirmTenancyExternalSessionIdentityBridges`
+   - Firestore rules entry keeps partner-read/deny-write posture for this collection.
 
-### B) FE honesty — backend-only acceptable if `frontend_real=false` / not overclaimed
+### B) FRONTEND_REAL honesty
 
-Status: **PASS (claim-honesty check)**
+Status: **PASS (backend-only claim is honest)**
 
 Evidence:
 
-1. Feature commit `6c4c293` changes backend/runtime/test/rules/docs files only; no frontend TSX UI files were changed.
-2. PR summary describes backend tenancy API/persistence/rules/test scaffolding and does not claim delivered frontend workflow.
+1. The roadmap + verification docs now explicitly carry `frontend_real=false` for PR #114.
+2. No frontend-complete claim is made for this phase packet.
 
-### C) No COMPLETE overclaim
+### C) Claim-gate replay and label integrity
 
-Status: **FAIL**
+Status: **PASS for amended labels on `main`; historical failure remains documented**
 
 Evidence:
 
-1. PR metadata description contains "mark the identity bridge phase complete".
-2. Replaying `ci_gates/check_pr_phase_claims.py` against PR #114 metadata fails with:
-   - missing required phase flags
-   - and `PR claims COMPLETE/product-done while filing transport TODO/stub markers still exist.`
+1. Label-amend content for PR #114 is present on `main`:
+   - `backend_real=true`
+   - `frontend_real=false`
+   - `transport_stub=true`
+   - `status=PARTIAL`
+   - explicit NOT COMPLETE / NOT product-done wording.
+2. `ci_gates/check_pr_phase_claims.py` replay:
+   - Historical PR #114-style metadata fails (missing flags + COMPLETE overclaim while stubs exist).
+   - Amended honest metadata passes.
 
-### D) SHA integrity (`ce57557` / `6c4c293` on `main`)
+### D) SHA integrity / landing state
 
 Status: **PASS**
 
 Evidence:
 
-1. `git log --oneline` on updated `main` shows:
-   - `ce57557 Merge branch 'cursor/legal-os-tenancy-id-bridge-parity-a243'`
-   - parent commit `6c4c293 Scaffold tenancy external session identity bridge`.
-2. `git show --no-patch --pretty=fuller` confirms commit identity for both SHAs.
+1. `origin/main` now points to `bf24a57` (`docs: mark PR114 as partial with explicit phase labels`), confirming the label amend landed.
+2. PR #117 is closed with branch `cursor/pr114-phase-audit-label-fix-451f → main` and its content matches the label correction in docs.
 
-### E) Focused tenancy + persistence tests + G-0/G-1
+### E) Regression checks (backend + gates)
 
 Status: **PASS**
 
@@ -81,26 +93,12 @@ Executed:
 2. `npx firebase-tools emulators:exec --only firestore --project demo-sikander "npx vitest run tests/persistence.repositories.test.ts"` → PASS (`1` test).
 3. `npx firebase-tools emulators:exec --only firestore --project demo-sikander "npx vitest run tests/persistence.runtime-mode.test.ts"` → PASS (`14` tests).
 4. `npm run gate:g0` → PASS.
-5. `npm run gate:g1` → PASS (`tests/gate_g1.test.ts`: `10` tests).
-
-### F) Process hardening labels/honesty
-
-Status: **FAIL**
-
-Evidence:
-
-1. PR metadata does not include explicit `backend_real`, `frontend_real`, and `transport_stub` declarations required by `ci_gates/check_pr_phase_claims.py`.
-2. PR metadata does not include required action/view -> `/ops` call-site evidence entry format expected by the same gate.
-3. Gate replay therefore hard-fails for metadata non-compliance (despite backend implementation correctness).
+5. `npm run gate:g1` → PASS (`10` tests).
 
 ---
 
 ## Final adjudication
 
-- **Phase verdict:** `PARTIAL`
-- **Severity:** `major`
-- **Why not PASS:** process integrity failures under the repository's own phase-claim hardening policy (missing required flags + COMPLETE phrasing conflict).
-- **Required remediation for future phases:**
-  1. Always include explicit `backend_real`, `frontend_real`, and `transport_stub` values in PR metadata.
-  2. Avoid COMPLETE/product-complete phrasing while transport stubs remain active.
-  3. Provide required action/view -> `/ops` call-site evidence format whenever claim gate policy requires it.
+- **Phase verdict:** `PARTIAL (minor)`
+- **Why not PASS/COMPLETE:** transport remains intentionally stub-capped (`transport_stub=true`), so COMPLETE/product-done remains disallowed by policy.
+- **Process posture:** label honesty and status wording for PR #114 are corrected on `main`; no remaining major process defect in the amended docs state.
