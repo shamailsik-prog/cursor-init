@@ -2,8 +2,8 @@
 
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
-PR: `#TBD`  
-Head SHA: `TBD`
+PR: `#143`  
+Head SHA: `eca2fe199c1ce237b2c4d51577fe76bfbdd7a4ee`
 
 ## Scope stub
 
@@ -21,12 +21,13 @@ Head SHA: `TBD`
 - `backend_real: true`
 - `frontend_real: false`
 - `transport_stub: true`
-- `classification: PARTIAL` (this slice is not product-done while transport_stub remains true)
+- `classification: PARTIAL` (frontend_real=false and transport_stub=true)
 
 ## Evidence stub
 
-- Unit/API: `TBD`
-- Rules/runtime: `TBD`
+- Unit/API: PASS (`tests/api.ops-reporting.test.ts` 3/3, `tests/persistence.route-wiring.test.ts` 73/73)
+- Rules/runtime: PASS (`tests/persistence.repositories.test.ts` 1/1, `tests/persistence.runtime-mode.test.ts` 14/14, `tests/firestore.rules.test.ts` 7/7)
 - Gates:
-  - `gate:g0` -> `TBD`
-  - `gate:g1` -> `TBD`
+  - `gate:g0` -> PASS
+  - `gate:g1` -> PASS
+  - claim-gate replay against PR metadata -> PASS
