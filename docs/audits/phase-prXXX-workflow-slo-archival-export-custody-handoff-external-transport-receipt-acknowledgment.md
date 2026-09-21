@@ -2,8 +2,8 @@
 
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
-PR: `#175` (`cursor/external-transport-receipt-ack-2b25` → `main`, open)  
-Main tip audited: pending merge
+PR: `#180` (`cursor/external-transport-receipt-ack-2b25` → `main`, merged)  
+Main tip audited: `bf93647`
 
 ## Verdict (lead)
 

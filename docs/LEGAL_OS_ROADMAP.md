@@ -353,12 +353,12 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Surfaced seal-verification custody backlog and transport-boundary reconciliation closure lag posture while preserving idempotent replay semantics and audit write-through in internal scaffolding mode.
 - Extended API, route-wiring, repository, runtime-mode, and Firestore document-id coverage for custody-handoff/closure-attestation transitions.
 
-## PR #180 — archival-export custody handoff + closure attestation external transport receipt acknowledgment (stub)
+## PR #180 (merged @ `bf93647`) — archival-export custody handoff + closure attestation external transport receipt acknowledgment (stub)
 
 - Added durable **dual-track** workflow-ops rows for external transport receipt acknowledgment scaffolding (`workflow_ops_alert_waiver_expiry_..._archival_export_custody_handoff_external_transport_receipt_acknowledgments`, `workflow_ops_alert_variance_remediation_..._closure_attestation_external_transport_receipt_acknowledgments`) with `externalTransportChannel: "blocked_todo_firm"`, provenance tag `transport_stub:true`, memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId`.
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync, and six partner-governed lifecycle actions (custody-handoff track: checkpoint / acknowledge / control finalization; closure-attestation track: digest checkpoint / acknowledge / control finalization) with idempotency + audit write-through; acknowledge paths set stub external transport receipt references only (no external transport claims).
 - Extended focused tests (Firestore id, repositories, route wiring, runtime-mode) and auditor stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment.md`.
-- Release labels (PR #180 merge `bf93647`): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim).
+- Phase-auditor release labels (merge `bf93647`; **PASS**, not COMPLETE): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim).
 
 ## PR #182 (pending) — archival-export custody handoff + closure attestation external transport receipt acknowledgment reconciliation (stub)
 
