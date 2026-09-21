@@ -5,10 +5,17 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    // These suites call initializeTestEnvironment() and require the Firestore
+    // emulator. Skip them under a plain `vitest run`; they execute via
+    // `npm run test:rules`, which wraps them with `firebase emulators:exec`.
     exclude: [
       ...(process.env.FIRESTORE_EMULATOR_HOST
         ? []
-        : ["tests/firestore.rules.test.ts"]),
+        : [
+            "tests/firestore.rules.test.ts",
+            "tests/persistence.repositories.test.ts",
+            "tests/persistence.runtime-mode.test.ts",
+          ]),
     ],
   },
   resolve: {
