@@ -413,3 +413,31 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #133 | workflow waiver-expiry + variance-remediation SLA scaffolding | `632fbda` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
 
+## Re-audit addendum — PR #133 after claim-gate negation remediation (PR #135)
+
+- Audit file: `docs/audits/phase-pr133-workflow-waiver-expiry-remediation-sla.md`
+- Date: 2026-09-21
+- Main tip audited: `f270e0b`
+- Verdict: **PASS** (low) — process-flag false positive is remediated, and A–E spot-checks remain green.
+
+### Re-audit findings
+
+1. Gate logic on `main` now properly handles negated COMPLETE disclaimers:
+   - `NEGATED_COMPLETE_DISCLAIMER_RE` captures phrases like `no COMPLETE/product-done claim`.
+   - `has_complete_claim(...)` filters COMPLETE regex matches that fall inside negated spans.
+2. Live replay of `ci_gates/check_pr_phase_claims.py` against PR #133 metadata now returns `PASS` (exit code `0`).
+3. Feature SHA remains unchanged and anchored on `main`:
+   - audited slice SHA `632fbda` is still an ancestor of `origin/main`.
+4. A–E spot-checks remain green:
+   - backend rows/repos/rules + route surfaces present,
+   - FE honesty preserved (`frontend_real=false`; PR #133 diff excludes `app/ops/**`),
+   - no affirmative COMPLETE/product-done claim,
+   - SHA integrity preserved,
+   - focused checks rerun green (`tests/pr-phase-claim-gate.test.ts`, `gate_g0`, `gate_g1`).
+
+### Updated targeted matrix entry (superseding)
+
+| PR | Audit pass | Main tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #133 | Re-audit after PR #135 claim-gate negation fix | `f270e0b` | true | false | true | PASS (backend-scoped; process flags compliant) | low |
+
