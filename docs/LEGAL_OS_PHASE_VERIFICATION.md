@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-21 (PR #172 independent audit appended)  
+Last updated: 2026-09-21 (PR #172 re-audit after remediation #174 appended)  
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -840,4 +840,29 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #172 | workflow alert adjudication SLO partner-delivery receipt freeze-override seal verification + archival-export partner-delivery transport-boundary receipt reconciliation | `ab27a3c` / merge `13c37e5` / slice `8fec696` | Yes | true (overclaimed for Firestore) | false | true | **FAIL** (not COMPLETE) | major |
+
+## Targeted ledger — PR #172 RE-AUDIT (remediation PR #174)
+
+- Audit file: `docs/audits/phase-pr172-workflow-slo-freeze-override-seal-transport-boundary-recon.md` (RE-AUDIT addendum)
+- Date: 2026-09-21
+- Feature merge SHA (unchanged): `13c37e5` (slice `8fec696`; stack `632d8f8`)
+- Remediation merge on `main`: `62c863b` (PR #174; fix `8a890fc`)
+- Main tip at re-audit close: `62c863b80a2be5fa7da80ce8320d2fa99de2d671`
+- Prior FAIL ledger commit: `42e2816` (independent FAIL append; on `main` lineage)
+- Verdict: **PASS (auditor closure)** — `buildWorkflowOpsChainedDocumentId` hashes oversize workflow-ops chained Firestore doc ids to `woa:<sha256>`; nine governance helpers wired; Firestore emulator trio **22/22** including runtime-mode mega flow. **Not COMPLETE** (`transport_stub=true`).
+
+### DoD summary (re-audit)
+
+- `SHA on main`: PASS (feature `8fec696` / `13c37e5` + remediation `8a890fc` / `62c863b` on `main`).
+- `BACKEND_REAL`: **PASS** (Firestore integrated persistence green after #174).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`).
+- `focused tests+gates`: **PASS** (api/route-wiring **98**; claim-gate unit **20** → **118** total with focused vitest bundle; Firestore trio **22/22**; `G-0`; `G-1`; `workflowOpsChainedDocumentId` unit **2/2**).
+- `process flags`: PASS (claim-gate replay on PR #172 metadata, `632d8f8..8fec696`, exit 0).
+
+### PR matrix (re-audit)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #172 | workflow alert adjudication SLO partner-delivery receipt freeze-override seal verification + archival-export partner-delivery transport-boundary receipt reconciliation | `ab27a3c` / merge `13c37e5` / slice `8fec696` | Yes | true | false | true | **PASS** (backend-scoped; not COMPLETE) | low (prior major retired) |
 

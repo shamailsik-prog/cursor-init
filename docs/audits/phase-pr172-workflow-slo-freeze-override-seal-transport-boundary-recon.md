@@ -137,3 +137,66 @@ Status: **PASS**
 ## Auditor sign-off
 
 Independent forensic replay @ `ab27a3c` (implementation `8fec696`) **rejects** builder backend_real / full-test claims for this phase due to Firestore ID limit regression. Severity **major**. Release classification stays **PARTIAL** because `transport_stub=true`.
+
+---
+
+## Independent Phase Auditor RE-AUDIT addendum (remediation #174)
+
+Date: 2026-09-21  
+Re-audit trigger: `main` @ `62c863b80a2be5fa7da80ce8320d2fa99de2d671` (merge PR #174; fix head `8a890fc1f6fafec9069f34a222307a8794fd6629`)  
+Feature merge SHA (unchanged): `13c37e5` (slice `8fec696`; stack base `632d8f8`)  
+Prior FAIL ledger: `docs/LEGAL_OS_PHASE_VERIFICATION.md` @ `42e2816` (docs-only; on `main` lineage)
+
+### Verdict (lead)
+
+**PASS (auditor closure).** Prior **FAIL (major)** is **retired** — it applied only to Firestore chained document IDs exceeding the 1500-byte limit in integrated runtime-mode persistence. Remediation on `main` routes all nine workflow-ops governance chained-id builders through `buildWorkflowOpsChainedDocumentId` (`platform/persistence/workflowOpsChainedDocumentId.ts`), hashing oversize logical keys to stable `woa:<sha256-hex>` ids (≤68 UTF-8 bytes). Independent Firestore emulator trio is **22/22** green, including `tests/persistence.runtime-mode.test.ts` mega flow.
+
+**Product / release classification remains PARTIAL** (`transport_stub=true`; **not COMPLETE** / not product-done) — unchanged.
+
+### 1) Hash helper on `main` @ `62c863b`
+
+Status: **PASS**
+
+- `buildWorkflowOpsChainedDocumentId` present on merge tip; exports `FIRESTORE_DOCUMENT_ID_MAX_UTF8_BYTES = 1500`.
+- Oversize `entityKind:parentKey` logical keys hash to `woa:<sha256>`; under-cap keys remain human-readable.
+- `tests/workflowOpsChainedDocumentId.test.ts`: **2/2** passed @ `62c863b`.
+- Nine governance modules import the helper (all `workflowOpsAlert*Governance.ts` chained-id call sites in `platform/persistence/`).
+
+### 2) Firestore emulator trio (independent rerun)
+
+Status: **PASS**
+
+Command @ `62c863b`:
+
+```bash
+npx firebase-tools emulators:exec --only firestore --project demo-sikander \
+  "npx vitest run tests/persistence.repositories.test.ts tests/persistence.runtime-mode.test.ts tests/firestore.rules.test.ts"
+```
+
+Observed: **22 passed**, exit **0**. Mega test `persists workflow/court-ops activity index and rehydrates reporting after reset` **green** (was red @ `ab27a3c`).
+
+Log artifact: `/opt/cursor/artifacts/pr172-firestore-trio.log`.
+
+### 3) A–F spot-check @ `62c863b` (feature slice `8fec696` + remediation `8a890fc`)
+
+| Check | Status | Notes |
+|---|---|---|
+| **A BACKEND_REAL** | **PASS** | Spine rows, memory/Firestore repos, deny-write rules, governance, ops-reporting views/actions unchanged from initial audit; Firestore integrated persistence now succeeds under production-length chained ids. |
+| **B FE honesty** | **PASS** | `frontend_real=false`; no `app/ops/**` in feature diff. |
+| **C No COMPLETE** | **PASS** | `classification=PARTIAL`, `transport_stub=true`, negated product-done disclaimer. |
+| **D SHA on main** | **PASS** | `8fec696` + `13c37e5` ancestors of `62c863b`; remediation merge `62c863b` on `main`. |
+| **E Focused tests + gates** | **PASS** | api/route-wiring **98**; + claim-gate unit **118** (Vitest worker `onTaskUpdate` timeout noise — recurring, non-blocking); Firestore trio **22/22**; `gate_g0` PASS; `gate_g1` **10/10** PASS. Non-blocking residual: zero dedicated HTTP assertions for six new partner POST actions (recurring #170 pattern). |
+| **F Process flags** | **PASS** | `ci_gates/check_pr_phase_claims.py` replay with Origin PR #172 title/description, `BASE_SHA=632d8f8`, `HEAD_SHA=8fec696` → exit **0**. |
+
+### Release labels (re-audit)
+
+| Flag | PR #172 claim | Auditor finding @ `62c863b` |
+|---|---|---|
+| `backend_real` | true | **true** (PASS — Firestore leg restored) |
+| `frontend_real` | false | **false** (PASS) |
+| `transport_stub` | true | **true** (PASS) |
+| `classification` | PARTIAL | **PARTIAL** (not COMPLETE) |
+
+### Auditor sign-off (re-audit)
+
+Independent forensic replay @ `62c863b` **accepts** backend_real and focused-test posture for PR #172 after remediation #174. Prior major severity **retired**. Scope remains **PARTIAL** product classification because `transport_stub=true`.
