@@ -57,11 +57,37 @@ SHAMAIL_SELF_CERTIFY_RE = re.compile(
     re.IGNORECASE,
 )
 
+FLAG_NAMES = ("backend_real", "frontend_real", "transport_stub")
+TRUTHY = frozenset({"true", "pass", "yes", "1"})
+FALSY = frozenset({"false", "fail", "no", "0"})
+
 FLAG_VALUE_RE = re.compile(
     r"\b(?P<name>backend_real|frontend_real|transport_stub)\b\s*[:=]\s*"
     r"(?P<value>true|false|pass|fail|yes|no|1|0)\b",
     re.IGNORECASE,
 )
+
+# Markdown table rows, e.g. `| backend_real | true |` or `| **backend_real** | **true** |`.
+FLAG_TABLE_ROW_RE = re.compile(
+    r"^\s*\|\s*(?P<name>[^|]+?)\s*\|\s*(?P<value>[^|]+?)\s*\|",
+    re.MULTILINE,
+)
+
+
+def _strip_markdown_cell(token: str) -> str:
+    cleaned = token.strip()
+    cleaned = re.sub(r"^`+|`+$", "", cleaned)
+    cleaned = re.sub(r"^\*+|\*+$", "", cleaned)
+    return cleaned.strip().lower()
+
+
+def _coerce_flag_value(raw: str) -> bool | None:
+    value = raw.lower()
+    if value in TRUTHY:
+        return True
+    if value in FALSY:
+        return False
+    return None
 
 CALLSITE_EVIDENCE_RE = re.compile(
     r"(action|view)[-_ ]?name[\s\S]{0,120}(?:->|→)[\s\S]{0,160}app/ops/operator-audit-console\.tsx"
@@ -125,8 +151,18 @@ def parse_flags(claim_text: str) -> dict[str, bool]:
     parsed: dict[str, bool] = {}
     for match in FLAG_VALUE_RE.finditer(claim_text):
         name = match.group("name").lower()
-        raw = match.group("value").lower()
-        parsed[name] = raw in {"true", "pass", "yes", "1"}
+        coerced = _coerce_flag_value(match.group("value"))
+        if coerced is not None:
+            parsed[name] = coerced
+    for match in FLAG_TABLE_ROW_RE.finditer(claim_text):
+        name = _strip_markdown_cell(match.group("name"))
+        if name not in FLAG_NAMES:
+            continue
+        value_cell = _strip_markdown_cell(match.group("value"))
+        value_token = re.split(r"\s+[-—]\s+|\s+", value_cell, maxsplit=1)[0]
+        coerced = _coerce_flag_value(value_token)
+        if coerced is not None:
+            parsed[name] = coerced
     return parsed
 
 

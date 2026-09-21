@@ -59,6 +59,19 @@ The repository now includes a lightweight PR metadata gate:
 
 - Script: `ci_gates/check_pr_phase_claims.py`
 - Workflow: `.github/workflows/pr-phase-claim-gate.yml`
+
+### PR body template (copy for every feature slice)
+
+Phase Auditor replay and CI use **machine-readable** `key=value` lines (markdown tables are optional documentation only; the gate also parses common table rows as belt-and-suspenders):
+
+```text
+backend_real=true
+frontend_real=false
+transport_stub=true
+classification=PARTIAL
+```
+
+Add bounded claim text (e.g. `no COMPLETE/product-done claim`, `Never COMPLETE while transport_stub=true`). When `frontend_real=true` or the PR touches `app/ops/**`, include action-name→call-site evidence for `/ops` and concrete `/api/...` fetch paths.
 - `/ops` action/view → call-site evidence is required only when either:
   - `frontend_real=true` is claimed, or
   - the PR diff changes `app/ops/**`.
