@@ -2915,5 +2915,65 @@ describe("GET /api/d2/ops-reporting", () => {
           row.provenanceTags.includes("transport_stub:true")
       )
     ).toBe(true)
+
+    const ackReconAuditLedgerPartnerHandoffRes = await getOpsReport(
+      new URLSearchParams({
+        view:
+          "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestations",
+        actorId: "associate_a",
+        matterId,
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(ackReconAuditLedgerPartnerHandoffRes.status).toBe(200)
+    const ackReconAuditLedgerPartnerHandoffJson = (await ackReconAuditLedgerPartnerHandoffRes.json()) as {
+      items: Array<{
+        matterId: string
+        partnerHandoffAttestationStatus: string
+        externalTransportChannel: string
+        provenanceTags: string[]
+      }>
+    }
+    expect(
+      ackReconAuditLedgerPartnerHandoffJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.partnerHandoffAttestationStatus ===
+            "archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_pending" &&
+          row.externalTransportChannel === "blocked_todo_firm" &&
+          row.provenanceTags.includes("transport_stub:true")
+      )
+    ).toBe(true)
+
+    const ackReconOutboundRegistryLedgerRes = await getOpsReport(
+      new URLSearchParams({
+        view:
+          "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledgers",
+        actorId: "associate_a",
+        matterId,
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(ackReconOutboundRegistryLedgerRes.status).toBe(200)
+    const ackReconOutboundRegistryLedgerJson = (await ackReconOutboundRegistryLedgerRes.json()) as {
+      items: Array<{
+        matterId: string
+        outboundRegistryAttestationLedgerStatus: string
+        externalTransportChannel: string
+        provenanceTags: string[]
+      }>
+    }
+    expect(
+      ackReconOutboundRegistryLedgerJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.outboundRegistryAttestationLedgerStatus ===
+            "closure_attestation_external_transport_receipt_acknowledgment_reconciliation_outbound_registry_attestation_ledger_pending" &&
+          row.externalTransportChannel === "blocked_todo_firm" &&
+          row.provenanceTags.includes("transport_stub:true")
+      )
+    ).toBe(true)
   })
 })
