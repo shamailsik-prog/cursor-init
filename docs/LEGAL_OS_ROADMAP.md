@@ -139,12 +139,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - frontend_real: false
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
+- Added durable workflow-ops alert digest rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_digests`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with alert digest monitoring (`view=alert_digests`) plus partner-governed actions (`acknowledge_workflow_ops_alert_digest`, `snooze_workflow_ops_alert_digest`) filterable by matter, severity, and freshness state.
+- Captured backlog pressure, unresolved follow-up debt, and stale queue-window signals with digest provenance tags while preserving idempotent replay and audit provenance (`ops_reporting_alert_digest_acknowledged`, `ops_reporting_alert_digest_snoozed`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for alert lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for PR #120 (`b73cb41`):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow operations monitoring + alert digest scaffolding**:
+Build **workflow alert attestation + escalation ledger scaffolding**:
 
-1. Add workflow-ops monitoring digest rows for backlog pressure, unresolved follow-up debt, and stale queue windows with provenance tags.
-2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed alert acknowledgment/snooze actions plus paginated views filterable by matter, severity, and freshness state.
-3. Extend unit/runtime persistence tests for alert lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
-4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.
+1. Add workflow alert attestation rows and escalation ledger rows for stale-digest exception handling, owner assignment, and resolution checkpoints.
+2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed attestation/escalation actions plus paginated views filterable by matter, escalation status, and freshness state.
+3. Extend unit/runtime persistence tests for attestation/escalation lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving scaffold-claim gate behavior.
