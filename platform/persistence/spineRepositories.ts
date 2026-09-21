@@ -61,6 +61,8 @@ import type {
   TenancyLineageDisputeAttestationRow,
   TenancyLineageArbitrationDebtRetirementLedgerRow,
   TenancyLineageClosureAdjudicationRow,
+  TenancyLineageClosureAdjudicationSettlementRow,
+  TenancyLineageArbitrationDebtRetirementDisputeLedgerRow,
   TenancyLineageReconciliationDigestRow,
   TenancyLineageReconciliationQueueArbitrationRow,
   TenancyLineageDigestClosureCheckpointRow,
@@ -635,6 +637,24 @@ export type TenancyLineageArbitrationDebtRetirementLedgerRepository = {
   ): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow[]>
 }
 
+export type TenancyLineageClosureAdjudicationSettlementRepository = {
+  upsert(row: TenancyLineageClosureAdjudicationSettlementRow): Promise<void>
+  get(id: string): Promise<TenancyLineageClosureAdjudicationSettlementRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageClosureAdjudicationSettlementRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageClosureAdjudicationSettlementRow[]>
+}
+
+export type TenancyLineageArbitrationDebtRetirementDisputeLedgerRepository = {
+  upsert(row: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow): Promise<void>
+  get(id: string): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]>
+}
+
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
@@ -708,6 +728,8 @@ export type SpineRepositories = {
   tenancyLineageDigestClosureCheckpoints: TenancyLineageDigestClosureCheckpointRepository
   tenancyLineageClosureAdjudications: TenancyLineageClosureAdjudicationRepository
   tenancyLineageArbitrationDebtRetirementLedgers: TenancyLineageArbitrationDebtRetirementLedgerRepository
+  tenancyLineageClosureAdjudicationSettlements: TenancyLineageClosureAdjudicationSettlementRepository
+  tenancyLineageArbitrationDebtRetirementDisputeLedgers: TenancyLineageArbitrationDebtRetirementDisputeLedgerRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -2081,6 +2103,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByLineageRoot(lineageRootSessionReferenceId) {
         return [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageClosureAdjudicationSettlements: {
+      async upsert(row) {
+        store.tenancyLineageClosureAdjudicationSettlements.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageClosureAdjudicationSettlements.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageClosureAdjudicationSettlements.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageClosureAdjudicationSettlements.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageArbitrationDebtRetirementDisputeLedgers: {
+      async upsert(row) {
+        store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
       },

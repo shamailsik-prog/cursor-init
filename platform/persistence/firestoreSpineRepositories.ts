@@ -70,6 +70,8 @@ import type {
   TenancyLineageDisputeAttestationRow,
   TenancyLineageArbitrationDebtRetirementLedgerRow,
   TenancyLineageClosureAdjudicationRow,
+  TenancyLineageClosureAdjudicationSettlementRow,
+  TenancyLineageArbitrationDebtRetirementDisputeLedgerRow,
   TenancyLineageReconciliationDigestRow,
   TenancyLineageReconciliationQueueArbitrationRow,
   TenancyLineageDigestClosureCheckpointRow,
@@ -1869,6 +1871,60 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
         return rows.docs
           .map((entry) => entry.data() as TenancyLineageArbitrationDebtRetirementLedgerRow)
+          .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
+      },
+    },
+    tenancyLineageClosureAdjudicationSettlements: {
+      async upsert(row) {
+        await setById(db, "tenancy_lineage_closure_adjudication_settlements", row)
+      },
+      async get(id) {
+        return getById<TenancyLineageClosureAdjudicationSettlementRow>(
+          db,
+          "tenancy_lineage_closure_adjudication_settlements",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyLineageClosureAdjudicationSettlementRow>(
+          db,
+          "tenancy_lineage_closure_adjudication_settlements",
+          firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        const rows = await getDocs(
+          collection(db, "tenancy_lineage_closure_adjudication_settlements")
+        )
+        return rows.docs
+          .map((entry) => entry.data() as TenancyLineageClosureAdjudicationSettlementRow)
+          .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
+      },
+    },
+    tenancyLineageArbitrationDebtRetirementDisputeLedgers: {
+      async upsert(row) {
+        await setById(db, "tenancy_lineage_arbitration_debt_retirement_dispute_ledgers", row)
+      },
+      async get(id) {
+        return getById<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow>(
+          db,
+          "tenancy_lineage_arbitration_debt_retirement_dispute_ledgers",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow>(
+          db,
+          "tenancy_lineage_arbitration_debt_retirement_dispute_ledgers",
+          firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        const rows = await getDocs(
+          collection(db, "tenancy_lineage_arbitration_debt_retirement_dispute_ledgers")
+        )
+        return rows.docs
+          .map((entry) => entry.data() as TenancyLineageArbitrationDebtRetirementDisputeLedgerRow)
           .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
       },
     },

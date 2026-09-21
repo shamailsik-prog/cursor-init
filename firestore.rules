@@ -140,6 +140,8 @@ service cloud.firestore {
     match /tenancy_lineage_digest_closure_checkpoints/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_lineage_closure_adjudications/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_lineage_arbitration_debt_retirement_ledgers/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_lineage_closure_adjudication_settlements/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_lineage_arbitration_debt_retirement_dispute_ledgers/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /committee_outputs/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /matter_client_search_index/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /draft_template_analytics/{id} { allow read: if sameFirm() && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
