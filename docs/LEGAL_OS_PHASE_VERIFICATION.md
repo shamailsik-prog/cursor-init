@@ -254,3 +254,24 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #120 | workflow operations monitoring + alert digest scaffolding | `b73cb41` | Yes | true | false | true | PASS (backend-scoped) | low |
 
+## Targeted ledger — PR #122 workflow alert attestation + escalation ledger scaffolding
+
+- Audit file: `docs/audits/phase-pr122-workflow-alert-attestation-escalation.md`
+- Date: 2026-09-21
+- Main tip audited: `db7b69f`
+- Verdict: **PASS** (low) — backend-real, claim-honest, and process-complete for scoped slice.
+
+### DoD summary
+
+- `SHA on main`: PASS (`19d3916` merge SHA and roadmap note `02354bb` are on `origin/main`).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertAttestationRow` + `WorkflowOpsAlertEscalationLedgerRow`, memory/Firestore repos, rules, and `/api/d2/ops-reporting` attestation/escalation views + actions are present).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; PR #122 diff excludes `/ops` files/call-site helpers).
+- `no COMPLETE/product-done overclaim`: PASS (`transport_stub=true` remains explicit with bounded pending-auditor claim).
+- `focused tests+gates`: PASS (targeted API/route-wiring + Firestore runtime suites + `G-0` + `G-1` all green in independent rerun).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #122 | workflow alert attestation + escalation ledger scaffolding | `19d3916` | Yes | true | false | true | PASS (backend-scoped) | low |
+
