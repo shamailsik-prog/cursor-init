@@ -25,9 +25,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCAFFOLD_ONLY_RE = re.compile(
-    r"\b(scaffold[-\s]?only|docs[-\s]?only|documentation[-\s]?only|no runtime changes?)\b",
-    re.IGNORECASE,
+SCAFFOLD_ONLY_SCOPE_RE = re.compile(
+    r"(?:"
+    r"\bscaffold[-\s]?only\b"
+    r"|(?:^|[\n\r])\s*[-*]?\s*docs[-\s]?only\b(?!\s+queue\s+update)"
+    r"|(?:^|[\n\r])\s*[-*]?\s*documentation[-\s]?only\b"
+    r"|(?:^|[\n\r])\s*[-*]?\s*no runtime changes?\b"
+    r"|classification\s*=\s*[^\n]*\b(?:scaffold[-\s]?only|docs[-\s]?only|documentation[-\s]?only)\b"
+    r")",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 COMPLETE_CLAIM_RE = re.compile(
@@ -39,6 +45,12 @@ NEGATED_COMPLETE_DISCLAIMER_RE = re.compile(
     r"(?:(?:phase\s+)?complete|product[-\s]?done)"
     r"(?:\s*/\s*(?:(?:phase\s+)?complete|product[-\s]?done))*"
     r"\s+claims?\b",
+    re.IGNORECASE,
+)
+NEVER_COMPLETE_DISCLAIMER_RE = re.compile(
+    r"\bnever\s+"
+    r"(?:(?:phase\s+)?complete|product[-\s]?done)"
+    r"(?:\s+while\b[^\n)]{0,160})?",
     re.IGNORECASE,
 )
 SHAMAIL_SELF_CERTIFY_RE = re.compile(
@@ -59,7 +71,8 @@ CALLSITE_EVIDENCE_RE = re.compile(
     re.IGNORECASE,
 )
 
-ROUTE_OR_TEST_PREFIXES = ("app/api/", "tests/")
+SUBSTANTIVE_CHANGE_PREFIXES = ("app/api/", "app/ops/", "platform/", "tests/")
+DOCS_SCAFFOLD_PREFIXES = ("docs/", "scaffold/")
 OPS_PREFIX = "app/ops/"
 OPS_TEST_PREFIX = "tests/ops"
 
@@ -89,8 +102,23 @@ def list_changed_files(base_sha: str, head_sha: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def route_or_test_changed(paths: list[str]) -> bool:
-    return any(path.startswith(ROUTE_OR_TEST_PREFIXES) for path in paths)
+def substantive_paths_changed(paths: list[str]) -> bool:
+    return any(path.startswith(SUBSTANTIVE_CHANGE_PREFIXES) for path in paths)
+
+
+def docs_scaffold_scoped_diff(paths: list[str]) -> bool:
+    if not paths:
+        return False
+    return all(
+        path.startswith(DOCS_SCAFFOLD_PREFIXES)
+        or path.endswith(".md")
+        or path.endswith(".mdx")
+        for path in paths
+    )
+
+
+def has_scaffold_only_claim(claim_text: str) -> bool:
+    return bool(SCAFFOLD_ONLY_SCOPE_RE.search(claim_text))
 
 
 def ops_changed(paths: list[str]) -> bool:
@@ -120,8 +148,15 @@ def parse_flags(claim_text: str) -> dict[str, bool]:
     return parsed
 
 
+def negated_complete_disclaimer_spans(claim_text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for pattern in (NEGATED_COMPLETE_DISCLAIMER_RE, NEVER_COMPLETE_DISCLAIMER_RE):
+        spans.extend(match.span() for match in pattern.finditer(claim_text))
+    return spans
+
+
 def has_complete_claim(claim_text: str) -> bool:
-    negated_spans = [match.span() for match in NEGATED_COMPLETE_DISCLAIMER_RE.finditer(claim_text)]
+    negated_spans = negated_complete_disclaimer_spans(claim_text)
     for claim_match in COMPLETE_CLAIM_RE.finditer(claim_text):
         if any(start <= claim_match.start() and claim_match.end() <= end for start, end in negated_spans):
             continue
@@ -163,9 +198,14 @@ def main() -> int:
             "(e.g. `set_backup_owner -> app/ops/operator-audit-console.tsx`)."
         )
 
-    if changed_paths and route_or_test_changed(changed_paths) and SCAFFOLD_ONLY_RE.search(claim_text):
+    if (
+        changed_paths
+        and has_scaffold_only_claim(claim_text)
+        and substantive_paths_changed(changed_paths)
+        and not docs_scaffold_scoped_diff(changed_paths)
+    ):
         failures.append(
-            "PR claim says scaffold/docs-only or no runtime changes, but route/tests changed."
+            "PR claim says scaffold/docs-only or no runtime changes, but substantive runtime paths changed."
         )
 
     if SHAMAIL_SELF_CERTIFY_RE.search(claim_text):
