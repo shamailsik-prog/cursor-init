@@ -63,6 +63,8 @@ import type {
   Job,
   MatterClientSearchIndexRow,
   DraftTemplateAnalyticsRow,
+  MatterReportExportAnalyticsRow,
+  MatterReportRelevanceSnapshotRow,
   WorkflowOpsActivityRow,
   AuditEntry,
   CommitteeBrainOutput,
@@ -1699,6 +1701,44 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<DraftTemplateAnalyticsRow>(db, "draft_template_analytics", firmId)
+      },
+    },
+    matterReportExportAnalytics: {
+      async upsert(row) {
+        await setDoc(doc(db, "matter_report_export_analytics", row.id), row)
+      },
+      async get(id) {
+        return getById<MatterReportExportAnalyticsRow>(db, "matter_report_export_analytics", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<MatterReportExportAnalyticsRow>(db, "matter_report_export_analytics", firmId)
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "matter_report_export_analytics"))
+        return rows.docs
+          .map((entry) => entry.data() as MatterReportExportAnalyticsRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    matterReportRelevanceSnapshots: {
+      async upsert(row) {
+        await setDoc(doc(db, "matter_report_relevance_snapshots", row.id), row)
+      },
+      async get(id) {
+        return getById<MatterReportRelevanceSnapshotRow>(db, "matter_report_relevance_snapshots", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<MatterReportRelevanceSnapshotRow>(
+          db,
+          "matter_report_relevance_snapshots",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "matter_report_relevance_snapshots"))
+        return rows.docs
+          .map((entry) => entry.data() as MatterReportRelevanceSnapshotRow)
+          .filter((row) => row.matterId === matterId)
       },
     },
     workflowOpsActivity: {

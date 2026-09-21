@@ -457,6 +457,49 @@ describe("Firestore repository adapters", () => {
           (row) => row.templateId === "motion_template" && row.templateSearchCount === 7
         )
       ).toBe(true)
+      await repos.matterReportExportAnalytics.upsert({
+        id: "matter_report_export:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        classification: "internal",
+        exportCount: 2,
+        lastExportedAt: 45,
+        lastExportedBy: "partner_a",
+        lastExportFormat: "csv",
+        lastExportScope: "summary",
+        lastExportReason: "weekly_export",
+        updatedAt: 45,
+      })
+      const exportAnalytics = await repos.matterReportExportAnalytics.get("matter_report_export:mat_1")
+      expect(exportAnalytics?.exportCount).toBe(2)
+      const exportAnalyticsByFirm = await repos.matterReportExportAnalytics.listByFirm("firmA")
+      expect(exportAnalyticsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const exportAnalyticsByMatter = await repos.matterReportExportAnalytics.listByMatter("mat_1")
+      expect(
+        exportAnalyticsByMatter.some(
+          (row) => row.lastExportFormat === "csv" && row.lastExportScope === "summary"
+        )
+      ).toBe(true)
+      await repos.matterReportRelevanceSnapshots.upsert({
+        id: "matter_report_relevance:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        classification: "internal",
+        relevanceScore: 72,
+        scoreBand: "medium",
+        freshnessStatus: "fresh",
+        provenanceTags: ["matter_status:live", "case_number_status:recorded"],
+        recomputedAt: 46,
+        recomputedBy: "partner_a",
+        recomputeReason: "manual_recompute",
+        updatedAt: 46,
+      })
+      const relevanceSnapshot = await repos.matterReportRelevanceSnapshots.get("matter_report_relevance:mat_1")
+      expect(relevanceSnapshot?.scoreBand).toBe("medium")
+      const relevanceByFirm = await repos.matterReportRelevanceSnapshots.listByFirm("firmA")
+      expect(relevanceByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const relevanceByMatter = await repos.matterReportRelevanceSnapshots.listByMatter("mat_1")
+      expect(relevanceByMatter.some((row) => row.recomputeReason === "manual_recompute")).toBe(true)
       await repos.workflowOpsActivity.upsert({
         id: "ops:workflow_event:wfe_1",
         firmId: "firmA",

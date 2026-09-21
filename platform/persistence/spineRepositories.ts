@@ -54,6 +54,8 @@ import type {
   Job,
   MatterClientSearchIndexRow,
   DraftTemplateAnalyticsRow,
+  MatterReportExportAnalyticsRow,
+  MatterReportRelevanceSnapshotRow,
   WorkflowOpsActivityRow,
   AuditEntry,
   CommitteeBrainOutput,
@@ -574,6 +576,20 @@ export type DraftTemplateAnalyticsRepository = {
   listByFirm(firmId: string): Promise<DraftTemplateAnalyticsRow[]>
 }
 
+export type MatterReportExportAnalyticsRepository = {
+  upsert(row: MatterReportExportAnalyticsRow): Promise<void>
+  get(id: string): Promise<MatterReportExportAnalyticsRow | null>
+  listByFirm(firmId: string): Promise<MatterReportExportAnalyticsRow[]>
+  listByMatter(matterId: string): Promise<MatterReportExportAnalyticsRow[]>
+}
+
+export type MatterReportRelevanceSnapshotRepository = {
+  upsert(row: MatterReportRelevanceSnapshotRow): Promise<void>
+  get(id: string): Promise<MatterReportRelevanceSnapshotRow | null>
+  listByFirm(firmId: string): Promise<MatterReportRelevanceSnapshotRow[]>
+  listByMatter(matterId: string): Promise<MatterReportRelevanceSnapshotRow[]>
+}
+
 export type WorkflowOpsActivityRepository = {
   upsert(row: WorkflowOpsActivityRow): Promise<void>
   get(id: string): Promise<WorkflowOpsActivityRow | null>
@@ -729,6 +745,8 @@ export type SpineRepositories = {
   committeeOutputs: CommitteeBrainOutputRepository
   reportingIndex: MatterClientSearchIndexRepository
   draftTemplateAnalytics: DraftTemplateAnalyticsRepository
+  matterReportExportAnalytics: MatterReportExportAnalyticsRepository
+  matterReportRelevanceSnapshots: MatterReportRelevanceSnapshotRepository
   workflowOpsActivity: WorkflowOpsActivityRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
@@ -1987,6 +2005,34 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.draftTemplateAnalytics.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    matterReportExportAnalytics: {
+      async upsert(row) {
+        store.matterReportExportAnalytics.set(row.id, row)
+      },
+      async get(id) {
+        return store.matterReportExportAnalytics.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.matterReportExportAnalytics.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.matterReportExportAnalytics.values()].filter((row) => row.matterId === matterId)
+      },
+    },
+    matterReportRelevanceSnapshots: {
+      async upsert(row) {
+        store.matterReportRelevanceSnapshots.set(row.id, row)
+      },
+      async get(id) {
+        return store.matterReportRelevanceSnapshots.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.matterReportRelevanceSnapshots.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.matterReportRelevanceSnapshots.values()].filter((row) => row.matterId === matterId)
       },
     },
     workflowOpsActivity: {
