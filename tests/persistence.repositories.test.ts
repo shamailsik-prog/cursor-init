@@ -1200,6 +1200,75 @@ describe("Firestore repository adapters", () => {
             "ops_variance_sla_breach_resolution_checkpoint_expiry_attestation_seed"
         )
       ).toBe(true)
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.upsert({
+        id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        waiverExpiryDisputeAdjudicationSloStewardshipId:
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo:mat_1",
+        classification: "internal",
+        debtStatus: "breach_closure_attested",
+        sloStatusSnapshot: "breach_acknowledged",
+        dueWindowDebtMsSnapshot: 3_600_000,
+        debtRetiredMs: 120_000,
+        remediationRecordedBy: "partner_a",
+        remediationRecordedAt: 67,
+        tierDownshiftedBy: "partner_a",
+        tierDownshiftedAt: 67,
+        breachClosureAttestedBy: "partner_a",
+        breachClosureAttestedAt: 67,
+        remediationNote: "ops_waiver_expiry_dispute_adjudication_slo_debt_seed",
+        reopenPressureCount: 1,
+        lastStatusChangedAt: 67,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "waiver_expiry_dispute_adjudication_slo_debt"],
+        recomputedAt: 67,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_waiver_expiry_dispute_adjudication_slo_debt_seed",
+        updatedAt: 67,
+      })
+      const waiverExpiryDisputeAdjudicationSloDebt =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.get(
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation:mat_1"
+        )
+      expect(waiverExpiryDisputeAdjudicationSloDebt?.debtStatus).toBe("breach_closure_attested")
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.upsert(
+        {
+          id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          expiryAttestationId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1",
+          classification: "internal",
+          exceptionStatus: "exception_reconciled",
+          attestationStatusSnapshot: "expiry_acknowledged",
+          expiryRiskStatusSnapshot: "expires_soon",
+          exceptionOpenedBy: "partner_a",
+          exceptionOpenedAt: 68,
+          assigneeId: "associate_a",
+          assigneeAssignedAt: 68,
+          reconciledBy: "partner_a",
+          reconciledAt: 68,
+          overdueExceptionCount: 1,
+          reconciliationNote: "ops_checkpoint_expiry_exception_seed",
+          reopenPressureCount: 2,
+          lastStatusChangedAt: 68,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "variance_remediation_sla_breach_resolution_checkpoint_expiry_exception",
+          ],
+          recomputedAt: 68,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_checkpoint_expiry_exception_seed",
+          updatedAt: 68,
+        }
+      )
+      const checkpointExpiryException =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1"
+        )
+      expect(checkpointExpiryException?.exceptionStatus).toBe("exception_reconciled")
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

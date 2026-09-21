@@ -85,6 +85,8 @@ import type {
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow,
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow,
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow,
+  WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow,
+  WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -2272,6 +2274,79 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           .filter((row) => row.matterId === matterId)
       },
     },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations: {
+      async upsert(row) {
+        await setDoc(
+          doc(db, "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediations", row.id),
+          row
+        )
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow>(
+          db,
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediations",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow>(
+          db,
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediations",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(
+          collection(db, "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediations")
+        )
+        return rows.docs
+          .map(
+            (entry) => entry.data() as WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow
+          )
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations:
+      {
+        async upsert(row) {
+          await setDoc(
+            doc(
+              db,
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations",
+              row.id
+            ),
+            row
+          )
+        },
+        async get(id) {
+          return getById<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow>(
+            db,
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations",
+            id
+          )
+        },
+        async listByFirm(firmId) {
+          return listByFirm<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow>(
+            db,
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations",
+            firmId
+          )
+        },
+        async listByMatter(matterId) {
+          const rows = await getDocs(
+            collection(
+              db,
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations"
+            )
+          )
+          return rows.docs
+            .map(
+              (entry) =>
+                entry.data() as WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow
+            )
+            .filter((row) => row.matterId === matterId)
+        },
+      },
     tenancySessionReferences: {
       async upsert(row) {
         await setById(db, "tenancy_session_references", row)
