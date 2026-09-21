@@ -7088,7 +7088,7 @@ describe("Runtime persistence mode", () => {
             action: "snooze_workflow_ops_alert_digest",
             actorId: "partner_a",
             matterId,
-            snoozedUntil,
+            snoozedUntil: snoozeUntil,
             reason: "runtime digest snooze",
           }),
         })
