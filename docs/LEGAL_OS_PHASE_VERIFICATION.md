@@ -793,3 +793,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #168 | workflow alert adjudication SLO partner-handoff attestation + closure-verification archival-export | `9493d4b` / slice `7eb98ea` / merge `297ac0d` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #170 workflow alert adjudication SLO partner-handoff outbound-registry attestation-ledger + archival-export partner-delivery receipt
+
+- Audit file: `docs/audits/phase-pr170-workflow-slo-partner-handoff-outbound-registry-attestation-ledger-archival-export-partner-delivery-receipt.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `632d8f8bf625fa61b8b3e487e2fb2aaeeb07923f` (merge parents `838cda6` + slice head `cfde66bf1615ef95b3b22b848e47493b755ac7fa`)
+- Main tip at audit close: `632d8f8`
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (slice `cfde66b` and merge `632d8f8` are ancestors of `origin/main`; claimed head matches merge parent-2).
+- `BACKEND_REAL`: PASS (outbound-registry attestation-ledger + archival-export partner-delivery receipt rows, memory/Firestore repos, Firestore deny-write rules, `/api/d2/ops-reporting` two paginated views + six partner actions, idempotency + audit write-through; governance `workflowOpsAlertPartnerHandoffOutboundRegistryAttestationLedgerPartnerDeliveryReceiptGovernance.ts`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; merge diff excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, negated product-done disclaimer).
+- `focused tests+gates`: PASS (API/route-wiring 96; plus claim-gate unit 20 → 116; Firestore repos/runtime/rules 22; `G-0`; `G-1`). Non-blocking: five partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test (recurring minor).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on verbatim PR #170 `key=value` body with `838cda6..cfde66b` exits 0 @ `ede9a9c`). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #170 | workflow alert adjudication SLO partner-handoff outbound-registry attestation-ledger + archival-export partner-delivery receipt | `632d8f8` / slice `cfde66b` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
