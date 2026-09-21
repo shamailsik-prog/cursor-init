@@ -660,3 +660,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #156 | workflow alert adjudication SLO settlement-attestation + checkpoint expiry-attestation queue-drain-reconciliation | `419d9a3` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #158 workflow alert adjudication SLO settlement-arbitration + checkpoint expiry-attestation queue-reentry-compliance
+
+- Audit file: `docs/audits/phase-pr158-workflow-slo-settlement-arbitration-queue-reentry.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `caad961d3c475b9fd45de59e4400458868aacd33` (parent-2 / final PR head `0fbdc29`; stacked on PR #156 lane via base `48823fc`)
+- Main tip at audit close: `caad961`
+- Claim-gate anchor: `90b0996` (PR #135 negation hardening; preserved on merge)
+- Verdict: **PARTIAL (medium)** — backend-real, label-honest semantically, focused tests/gates green; claim-gate replay fails on markdown-table release labels. Product scope remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `caad961`; parent-2 `0fbdc29`).
+- `BACKEND_REAL`: PASS (settlement-arbitration + queue-reentry-compliance rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through; governance `workflowOpsAlertSettlementArbitrationQueueReentryComplianceGovernance.ts`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `48823fc..0fbdc29` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring 86; Firestore repos/runtime/rules 22; `G-0`; `G-1`). Non-blocking: three partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
+- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` verbatim PR #158 body replay with `48823fc..0fbdc29` exits 1 — table-encoded flags not parsed). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #158 | workflow alert adjudication SLO settlement-arbitration + checkpoint expiry-attestation queue-reentry-compliance | `caad961` | Yes | true | false | true | PARTIAL (backend-real; process-flag gate replay failure) | medium |
+
