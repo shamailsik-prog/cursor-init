@@ -6,6 +6,9 @@ import { defineSandbox } from "eve/sandbox"
  */
 export default defineSandbox({
   async onSession({ use: applySession }) {
-    await applySession({ networkPolicy: "deny-all" })
+    const session = await applySession()
+    // just-bash keeps a fixed deny-all posture and rejects setNetworkPolicy;
+    // capable backends (Docker/Vercel) get an explicit deny-all applied here.
+    await session.setNetworkPolicy("deny-all").catch(() => {})
   },
 })

@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto"
 import type { Classification } from "@/platform/p1/types"
 import { classificationRank } from "@/platform/p1/types"
 
+export type { Classification } from "@/platform/p1/types"
+
 export type Role =
   | "partner"
   | "associate"

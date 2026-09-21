@@ -25,7 +25,9 @@ describe("Firestore repository adapters", () => {
   it("round-trips matters/documents/drafts/workflow/filings without secrets (emulator)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore()
-      const repos = createFirestoreRepositories(db)
+      const repos = createFirestoreRepositories(
+        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
+      )
 
       await repos.users.upsert({
         id: "associate_a",

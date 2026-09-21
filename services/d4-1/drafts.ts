@@ -98,7 +98,7 @@ export function runDraftPreflight(
     )
     return {
       sectionId: row.sectionId,
-      status: gate.status === "TEMPORAL-MISMATCH" ? "TEMPORAL-MISMATCH" : "OK",
+      status: gate.status === "TEMPORAL-MISMATCH" ? ("TEMPORAL-MISMATCH" as const) : ("OK" as const),
     }
   })
   const temporalBlocked = temporal.some((row) => row.status !== "OK")
