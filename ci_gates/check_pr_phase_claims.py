@@ -43,7 +43,9 @@ COMPLETE_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 NEGATED_COMPLETE_DISCLAIMER_RE = re.compile(
-    r"\b(?:no|not(?:\s+yet)?|never|without|do(?:es)?\s+not|don['’]t)\s+"
+    r"\b(?:no|not(?:\s+yet)?|never|without|do(?:es)?\s+not|don['’]t)\b"
+    r"\s*(?:\*\*)?\s*"
+    r"(?:(?:a|an|the)\s+)?"
     rf"{COMPLETE_TOKEN}"
     rf"(?:\s*/\s*{COMPLETE_TOKEN})*"
     r"(?:\s+claims?)?",

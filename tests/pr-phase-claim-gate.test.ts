@@ -160,6 +160,24 @@ describe("PR phase claim gate hardening", () => {
     expect(result.stdout).toContain("PASS: PR phase-claim gate.")
   })
 
+  it("passes PR #147 residual not-a-product-done-claim disclaimer phrasing", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE:
+        "Workflow alert adjudication SLO debt-remediation + checkpoint expiry-attestation exception reconciliation",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+        "classification=PARTIAL — internal scaffolding only; **not** a product-done claim while `transport_stub=true`",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+
   it("passes residual PR #136 disclaimer phrases with test changes", () => {
     const repo = makeRepo(
       { "tests/api.ops-reporting.test.ts": "export const t = 1\n" },
