@@ -268,11 +268,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - classification: PARTIAL (no product-done claim)
 
+- Added durable workflow alert waiver-expiry dispute adjudication SLO debt-burndown settlement-attestation rows and remediation-SLA breach resolution-checkpoint expiry-attestation queue-drain-reconciliation rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestations`, `workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliations`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with settlement-attestation/reconciliation monitoring views (`view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestations`, `view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliations`) and partner-governed lifecycle actions (`checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_post_resolution_verification`, `attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_lock_release`, `safeguard_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_dispute_reopen`, `attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_reconciliation`, `checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reassignment_rollback`, `control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_timeout_reentry`) filterable by matter, attestation status, reconciliation status, and freshness state.
+- Captured settlement-verification lag and queue-drain reopen-pressure posture while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_post_resolution_verification_checkpointed`, `ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_lock_release_attested`, `ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_dispute_reopen_safeguarded`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_reconciliation_attested`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reassignment_rollback_checkpointed`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_timeout_reentry_controlled`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for settlement-attestation/reconciliation lifecycle transitions, idempotent replay behavior, pagination/filtering, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for this slice (pending PR + merge SHA assignment):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - classification: PARTIAL (no product-done claim)
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert adjudication SLO settlement-attestation + checkpoint expiry-attestation queue-drain-reconciliation scaffolding**:
+Build **workflow alert adjudication SLO settlement-arbitration + checkpoint expiry-attestation queue-reentry-compliance scaffolding**:
 
-1. Add adjudication SLO settlement-attestation rows plus checkpoint expiry-attestation queue-drain-reconciliation rows to track settlement-verification lag and queue-drain reopen pressure.
-2. Extend `app/api/d2/ops-reporting/route.ts` with settlement-attestation/reconciliation actions and paginated views filterable by matter, attestation status, reconciliation status, and freshness state.
-3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for attestation/reconciliation transitions, idempotent replay, and audit provenance traceability.
+1. Add adjudication SLO settlement-arbitration rows plus checkpoint expiry-attestation queue-reentry-compliance rows to track settlement arbitration lead-time and queue re-entry exception debt.
+2. Extend `app/api/d2/ops-reporting/route.ts` with arbitration/reentry actions and paginated views filterable by matter, arbitration status, compliance status, and freshness state.
+3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for arbitration/reentry transitions, idempotent replay, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding only (no external pager/on-call transport claims) while preserving scaffold-claim gate behavior.

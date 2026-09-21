@@ -8331,6 +8331,42 @@ describe("Runtime persistence mode", () => {
         )
       expect(remediationSlaBreachResolutionCheckpointExpiryQueueDrainForcedOverride.status).toBe(200)
 
+      const settlementPostResolutionVerification = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f8ebb567-a9ce-4bee-93c6-29f38bb5a8c1",
+          },
+          body: JSON.stringify({
+            action:
+              "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_post_resolution_verification",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime settlement post-resolution verification checkpoint",
+          }),
+        })
+      )
+      expect(settlementPostResolutionVerification.status).toBe(200)
+
+      const queueDrainForcedReconciliation = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "a9fcc678-b0df-4cff-a4d7-3a049cc6b9d2",
+          },
+          body: JSON.stringify({
+            action:
+              "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_reconciliation",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime queue drain forced reconciliation attested",
+          }),
+        })
+      )
+      expect(queueDrainForcedReconciliation.status).toBe(200)
+
       const remediationResolve = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
           method: "POST",
@@ -8403,6 +8439,10 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements =
         new Map()
       getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains =
+        new Map()
+      getRuntimeStore().workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations =
+        new Map()
+      getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations =
         new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
@@ -9182,6 +9222,37 @@ describe("Runtime persistence mode", () => {
             entry.data()?.matterId === matterId &&
             entry.data()?.drainStatus === "forced_drain_checkpointed" &&
             entry.data()?.forcedDrainCheckpointedBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestations"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.postResolutionCheckpointedBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueDrainReconciliations =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliations"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueDrainReconciliations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.reconciliationStatus === "forced_drain_attested" &&
+            entry.data()?.forcedDrainAttestedBy === "partner_a"
         )
       ).toBe(true)
     })
