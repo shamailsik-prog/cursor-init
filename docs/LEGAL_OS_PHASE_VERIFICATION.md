@@ -580,3 +580,27 @@ The gate fails when either condition is true:
 - Re-fetched `origin/main` merge subject remains `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8`; PR head `4f0a44d` is merge parent-2 and an ancestor of `main`; pre-merge parent-1 `abb135a`.
 - Duplicate auditor PR #149 (`bc-8c695da7`) closed in favor of this ledger (#148); no separate ledger row added.
 
+## Targeted ledger — PR #150 workflow alert adjudication SLO debt-burndown + checkpoint expiry-attestation queue orchestration
+
+- Audit file: `docs/audits/phase-pr150-workflow-slo-burndown-queue-orch.md`
+- Date: 2026-09-21
+- Main tip audited: `0d4e08a4b589a6bc189da93053fb05cf502d4ab9` (PR #150 head; `origin/main` at audit close)
+- Stack base: `07e5db8` (PR #147 merge on `main`)
+- Claim-gate anchor: `aca861c` (PR #141)
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (`0d4e08a` resolves to `origin/main`; feature commits `2292643`, `bcafb07` on lineage; linear land without `Merge PR #150` merge commit — non-blocking provenance note).
+- `BACKEND_REAL`: PASS (debt-burndown + queue-orchestration rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` views + six partner actions, idempotency + audit write-through; unique vs #147 remediation/exception-reconciliation slice).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `07e5db8..0d4e08a` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring 80; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #150 metadata with `07e5db8..0d4e08a` exits 0).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #150 | workflow alert adjudication SLO debt-burndown + checkpoint expiry-attestation queue orchestration | `0d4e08a` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
