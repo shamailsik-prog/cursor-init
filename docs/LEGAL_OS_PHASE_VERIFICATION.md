@@ -1,7 +1,7 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-20  
-Primary source: `docs/audits/phase-reaudit-after-helper-99.md` plus `docs/audits/phase-reaudit-48-59-after-stream2.md`.
+Last updated: 2026-09-21  
+Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
 
@@ -158,4 +158,23 @@ The gate fails when either condition is true:
 | #67 | Panel quorum + rebalance execution | `1a3dd2c` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
 | #68 | Adjudication SLO + rebalance safeguards | `f563876` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
 | #69 | SLO debt remediation + safeguard expiry | `15254ca` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+
+## Targeted ledger — PR #111 tenancy lineage adjudication/debt retirement
+
+- Audit file: `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`
+- Verdict: **PASS** (backend-scoped claim verified)
+- Date: 2026-09-21
+
+### DoD summary
+
+- `SHA on main`: PASS (`origin/main` at `a5235b5`; PR branch tip is ancestor of `main`).
+- `BACKEND_REAL`: PASS (tenancy actions/views + persistence + rules + tests verified).
+- `FRONTEND_REAL`: PASS as claim-honesty check (`frontend_real=false` is consistent for backend-only scope).
+- `stubs policy`: PASS (no COMPLETE/product-done overclaim; `transport_stub=true` remains explicit).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #111 | tenancy reconciliation closure adjudication + arbitration debt-retirement scaffolding | `a5235b5` | Yes | PASS | PASS (backend-only claim, `frontend_real=false`) | true | PASS (backend-scoped) | low |
 
