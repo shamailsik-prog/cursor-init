@@ -2522,6 +2522,84 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          classification: "internal",
+          settlementAttestationStatus: "settlement_verified",
+          settlementStatusSnapshot: "rollback_resolution_closed",
+          postResolutionCheckpointedBy: "partner_a",
+          postResolutionCheckpointedAt: Date.now(),
+          lockReleaseAttestedBy: "partner_a",
+          lockReleaseAttestedAt: Date.now(),
+          disputeReopenGuardedBy: null,
+          disputeReopenGuardedAt: null,
+          disputeReopenGuardNote: null,
+          settlementVerificationLagHours: 2,
+          reopenPressureCount: 1,
+          attestationNote: "repo slo debt burndown settlement attestation",
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "repo",
+            "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation",
+          ],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 29,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations:
+      {
+        upsert: vi.fn(),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+            firmId: "firmA",
+            matterId: "mat_1",
+            expiryAttestationQueueDrainId:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+            classification: "internal",
+            reconciliationStatus: "timeout_reentry_controlled",
+            drainStatusSnapshot: "forced_drain_checkpointed",
+            forcedDrainAttestedBy: "partner_a",
+            forcedDrainAttestedAt: Date.now(),
+            reassignmentRollbackCheckpointedBy: null,
+            reassignmentRollbackCheckpointedAt: null,
+            rollbackToOwnerId: null,
+            timeoutReentryControlledBy: "partner_a",
+            timeoutReentryControlledAt: Date.now(),
+            timeoutReentryWindowHours: 6,
+            drainReopenPressureCount: 0,
+            reopenPressureCount: 1,
+            reconciliationNote: "repo checkpoint expiry queue drain reconciliation",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: [
+              "repo",
+              "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_drain_reconciliation",
+            ],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 30,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -3576,5 +3654,39 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
     )
     expect(json.items[0]?.drainStatus).toBe("forced_drain_checkpointed")
+  })
+
+  it("ops reporting waiver-expiry dispute adjudication SLO debt-burndown settlement attestation view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestations&actorId=associate_a&settlementAttestationStatus=settlement_verified&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ id: string; settlementAttestationStatus: string }>
+    }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
+    )
+    expect(json.items[0]?.settlementAttestationStatus).toBe("settlement_verified")
+  })
+
+  it("ops reporting checkpoint expiry-attestation queue-drain reconciliation view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliations&actorId=associate_a&drainReconciliationStatus=timeout_reentry_controlled&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ id: string; reconciliationStatus: string }>
+    }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
+    )
+    expect(json.items[0]?.reconciliationStatus).toBe("timeout_reentry_controlled")
   })
 })

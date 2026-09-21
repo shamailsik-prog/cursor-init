@@ -1687,6 +1687,78 @@ describe("GET /api/d2/ops-reporting", () => {
         .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrain.drainStatus
     ).toBe("forced_drain_checkpointed")
 
+    const settlementPostResolutionVerification = await postOpsReport(
+      {
+        action:
+          "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_post_resolution_verification",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO debt burndown settlement post-resolution verification checkpointed",
+      },
+      "a39d44f0-91ab-4e22-a7f6-0b3c5d8e9a36"
+    )
+    expect(settlementPostResolutionVerification.status).toBe(200)
+
+    const settlementLockRelease = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_lock_release",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO debt burndown settlement lock release attested",
+      },
+      "b49d44f0-91ab-4e22-a7f6-0b3c5d8e9a37"
+    )
+    expect(settlementLockRelease.status).toBe(200)
+    const settlementLockReleaseJson = (await settlementLockRelease.json()) as {
+      result: {
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestation: {
+          settlementAttestationStatus: string
+        }
+      }
+    }
+    expect(
+      settlementLockReleaseJson.result.waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestation
+        .settlementAttestationStatus
+    ).toBe("settlement_verified")
+
+    const queueDrainForcedReconciliation = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_reconciliation",
+        actorId: "partner_a",
+        matterId,
+        reason: "checkpoint expiry attestation queue drain forced reconciliation attested",
+      },
+      "c59d44f0-91ab-4e22-a7f6-0b3c5d8e9a38"
+    )
+    expect(queueDrainForcedReconciliation.status).toBe(200)
+    const queueDrainForcedReconciliationJson = (await queueDrainForcedReconciliation.json()) as {
+      result: {
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliation: {
+          reconciliationStatus: string
+        }
+      }
+    }
+    expect(
+      queueDrainForcedReconciliationJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliation
+        .reconciliationStatus
+    ).toBe("forced_drain_attested")
+
+    const queueDrainTimeoutReentry = await postOpsReport(
+      {
+        action:
+          "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_timeout_reentry",
+        actorId: "partner_a",
+        matterId,
+        timeoutReentryWindowHours: 6,
+        reason: "checkpoint expiry attestation queue drain timeout reentry controlled",
+      },
+      "d69d44f0-91ab-4e22-a7f6-0b3c5d8e9a39"
+    )
+    expect(queueDrainTimeoutReentry.status).toBe(200)
+
     const remediationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_variance_remediation",
