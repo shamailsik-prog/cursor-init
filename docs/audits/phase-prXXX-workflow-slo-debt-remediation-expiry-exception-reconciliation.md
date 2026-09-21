@@ -25,9 +25,9 @@ Head SHA: pending
 
 ## Evidence stub
 
-- Unit/API: pending focused suite rerun
-- Rules/runtime: pending focused suite rerun
+- Unit/API: PASS (`tests/api.ops-reporting.test.ts`, `tests/persistence.route-wiring.test.ts`)
+- Rules/runtime: PASS (`tests/persistence.repositories.test.ts`, `tests/persistence.runtime-mode.test.ts`, `tests/firestore.rules.test.ts`)
 - Gates:
-  - `gate:g0` -> pending
-  - `gate:g1` -> pending
+  - `gate:g0` -> PASS
+  - `gate:g1` -> PASS
   - claim-gate replay against PR metadata -> pending
