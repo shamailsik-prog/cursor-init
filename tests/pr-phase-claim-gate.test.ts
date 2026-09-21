@@ -81,6 +81,56 @@ describe("PR phase claim gate hardening", () => {
     expect(result.stdout).toContain("frontend_real=false")
   })
 
+  it("passes negated COMPLETE/product-done disclaimer phrasing", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Scope correction",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+        "no COMPLETE/product-done claim",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+
+  it("fails literal COMPLETE claims", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "COMPLETE",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=false",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("frontend_real=false")
+  })
+
+  it("fails literal product-done claims", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "product-done",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=true",
+        "transport_stub=true",
+        "action-name→call-site evidence: set_backup_owner -> app/ops/operator-audit-console.tsx",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("transport_stub=true")
+  })
+
   it("passes backend-only claims without /ops call-site evidence", () => {
     const repo = makeRepo(
       { "app/api/d2/ops-reporting/route.ts": "export const route = 'base'\n" },
@@ -153,7 +203,7 @@ describe("PR phase claim gate hardening", () => {
     })
     expect(result.status).toBe(1)
     expect(result.stdout).toContain("no focused tests under tests/ops*.test.ts were changed")
-  })
+  }, 30000)
 
   it("passes with required flags and evidence for ops changes", () => {
     const repo = makeRepo(
@@ -181,4 +231,4 @@ describe("PR phase claim gate hardening", () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain("PASS: PR phase-claim gate.")
   })
-})
+}, 30000)
