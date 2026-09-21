@@ -550,3 +550,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #143 | workflow adjudication SLO stewardship + remediation-SLA breach resolution-checkpoint expiry attestation | `9fd7dca` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #147 workflow adjudication SLO debt-remediation + checkpoint expiry-attestation exception reconciliation
+
+- Audit file: `docs/audits/phase-pr147-workflow-slo-debt-exception-reconciliation.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8` (parent-2 / final PR head `4f0a44d`; feature `a2a50a0`; stacked on PR #143 lane)
+- Main tip at audit close: `07e5db8`
+- Claim-gate anchor: `aca861c` (PR #141)
+- Verdict: **PARTIAL (medium)** — backend-real, label-honest, focused tests/gates green; **claim-gate replay FAIL** on PR metadata (`not a product-done claim` vs `NEGATED_COMPLETE_DISCLAIMER_RE`). Product scope remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `07e5db8`; parent-2 `4f0a44d`).
+- `BACKEND_REAL`: PASS (SLO debt-remediation + checkpoint expiry-attestation exception-reconciliation rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; merge diff excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS semantically; machine gate false-positive on disclaimer wording (see audit F).
+- `focused tests+gates`: PASS (API/route-wiring 78; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
+- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` replay on PR #147 metadata with `abb135a..4f0a44d` exits 1).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #147 | workflow alert adjudication SLO debt-remediation + checkpoint expiry-attestation exception reconciliation | `07e5db8` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
+
