@@ -482,6 +482,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #136 | Re-audit after PR #142 claim-gate residual fix | `f023e42` | true | false | true | PARTIAL (backend-real; process flags compliant) | medium |
 
+## Independent Phase Auditor re-audit addendum — PR #136 (PR #141 gate hardening, `aca861c`)
+
+- Audit file: `docs/audits/phase-pr136-workflow-waiver-dispute-sla-escalation.md` (re-audit addendum appended)
+- Date: 2026-09-21
+- Gate merge SHA audited: `aca861c6075c45ef15034ad7867b7318f3a4b853` (PR **#141**; preferred over overlapping PR **#142** / `f023e42` for residual disclaimer + docs-only-queue semantics)
+- Feature merge SHA (unchanged): `f20cdf1`
+- `origin/main` tip at close: `2df6951`
+- Verdict: **PASS (low)** — process flags green on PR #136 metadata replay; A–E spot-checks remain green; slice stays **PARTIAL** because `transport_stub=true` (not product-done).
+
+### Re-audit findings
+
+1. **Gate change confirmed on `aca861c`:** span-based `has_scaffold_only_claim` ignores `docs-only queue update` roadmap mentions; unified `NEGATED_COMPLETE_DISCLAIMER_RE` covers `never` / `not yet` / `do not` disclaimers; PR #136-style tests in `tests/pr-phase-claim-gate.test.ts`.
+2. **Claim-gate replay:** live PR #136 title/body with `BASE_SHA=0b9152155b0b` / `HEAD_SHA=42e7b0b` → **PASS** (exit `0`) on current `main`.
+3. **A–E regression:** backend surfaces at `f20cdf1`, FE honesty, semantic non-COMPLETE, SHA lineage, and focused vitest + `G-0`/`G-1` reruns green (see audit addendum for command list).
+
+### Updated targeted matrix entry (superseding #142 re-audit row)
+
+| PR | Audit pass | Gate / main anchor | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #136 | Independent re-audit after PR #141 (`aca861c`) | `aca861c` / tip `2df6951` | true | false | true | PASS (backend-scoped; process flags compliant; not COMPLETE) | low |
+
 ## Targeted ledger — PR #139 workflow alert waiver-expiry dispute adjudication + SLA breach resolution checkpoints
 
 - Audit file: `docs/audits/phase-pr139-workflow-alert-waiver-dispute-adjudication.md`

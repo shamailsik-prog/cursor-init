@@ -161,3 +161,62 @@ Observed failures:
 
 - Remove or rephrase `(docs-only queue update)` when routes/tests change (e.g. “roadmap queue note only”).
 - Replace `never COMPLETE while …` with negation forms recognized by the gate (e.g. `no COMPLETE/product-done claims`) or drop the literal `COMPLETE` token from label lines.
+
+---
+
+## Independent re-audit addendum (after claim-gate residual hardening on `main`)
+
+Date: 2026-09-21  
+Gate merge audited: `aca861c6075c45ef15034ad7867b7318f3a4b853` (PR **#141**; supersedes overlapping PR **#142** at `f023e42` for gate semantics)  
+Docs queue note on `main`: `44f1eb1` (PR **#140**)  
+Feature SHA under review (unchanged): `f20cdf1f78c349c3c65a0e0f24459fbab0e2102f`  
+`origin/main` tip at close: `2df6951`
+
+### Verdict (lead)
+
+**PASS (severity: low).**
+
+Prior **PARTIAL (medium)** was driven solely by process-flag false positives on PR #136 metadata (`docs-only queue update` roadmap bullet + `never COMPLETE while transport_stub=true`). Gate hardening on `aca861c` clears both without weakening literal COMPLETE/product-done or real docs-only overclaim detection. Claim-gate replay against live PR #136 metadata is **PASS**. A–E spot-checks remain green. Product classification stays **PARTIAL** (`transport_stub=true`; not product-done).
+
+### 1) Gate change on `main` (`aca861c`) — confirmed
+
+`ci_gates/check_pr_phase_claims.py` at `aca861c` (commit `0f5f33c` in PR #141) introduces:
+
+1. **Next-slice docs-only ignore:** `SCAFFOLD_NEXT_SLICE_MENTION_RE` matches `docs-only queue update`; `has_scaffold_only_claim(...)` span-filters `SCAFFOLD_ONLY_RE` hits inside that mention (parenthetical roadmap bullet no longer treated as a current-PR docs-only claim when `app/api/**` and `tests/**` change).
+2. **Expanded negation allowlist:** `NEGATED_COMPLETE_DISCLAIMER_RE` includes `never`, `not yet`, `do not` / `don't`, unified `COMPLETE_TOKEN`, optional trailing `claims?`, and span-based filtering via `has_complete_claim(...)` + `_contained_in_spans(...)`.
+3. **Regression tests:** `tests/pr-phase-claim-gate.test.ts` includes PR #136-style fixtures (`never COMPLETE while transport_stub=true`, incidental `docs-only queue update`).
+
+No further edits to this gate file after `aca861c` on current `main` (`git diff aca861c HEAD -- ci_gates/check_pr_phase_claims.py` empty).
+
+### 2) Claim-gate replay against PR #136 metadata — PASS
+
+Replay (independent, current `main` tree):
+
+```bash
+PR_TITLE='Add workflow waiver-expiry dispute and SLA breach escalation scaffolding'
+PR_BODY='<agent body from origin pr view 136; includes docs-only queue update + never COMPLETE disclaimer>'
+BASE_SHA='0b9152155b0b45fb067e6432811f6106d8d88f04'
+HEAD_SHA='42e7b0b72728c842d0aa04285395ca1480bb11c6'
+python3 ci_gates/check_pr_phase_claims.py
+```
+
+Observed: `PASS: PR phase-claim gate.` (exit code `0`).  
+Prior failures (scaffold/docs-only conflict + three COMPLETE/product-done transport/FE flags) are **not** reproduced.
+
+### 3) Spot-check A–E (regression scan)
+
+| Check | Result | Notes |
+|---|---|---|
+| A BACKEND_REAL | PASS | Row types, spine maps, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` dispute + escalation views/actions unchanged at feature SHA `f20cdf1`. |
+| B FE honesty | PASS | `frontend_real=false`; PR diff `0b9152155b0b` → `42e7b0b` excludes `app/ops/**`. |
+| C No COMPLETE overclaim | PASS | Semantic PARTIAL + `transport_stub=true`; disclaimer is negated, not an affirmative product-done claim. |
+| D SHA integrity | PASS | `f20cdf1` merge on `main`; parent-2 `42e7b0b`; ancestors of `origin/main`. |
+| E Focused tests + gates | PASS | `npx vitest run tests/pr-phase-claim-gate.test.ts tests/api.ops-reporting.test.ts tests/persistence.route-wiring.test.ts` → 90 passed; `npm run gate:g0` + `gate:g1` → PASS. |
+
+### Updated adjudication (superseding)
+
+| Check | Prior audit | Re-audit |
+|---|---|---|
+| F Process flags | FAIL (wording false positives) | **PASS** |
+| Auditor overall | PARTIAL (medium) | **PASS (low)** |
+| Product classification | PARTIAL (`transport_stub=true`) | **PARTIAL** (unchanged; not COMPLETE) |
