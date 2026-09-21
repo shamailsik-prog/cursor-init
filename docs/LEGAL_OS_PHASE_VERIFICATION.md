@@ -482,3 +482,26 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #136 | Re-audit after PR #142 claim-gate residual fix | `f023e42` | true | false | true | PARTIAL (backend-real; process flags compliant) | medium |
 
+## Targeted ledger — PR #139 workflow alert waiver-expiry dispute adjudication + SLA breach resolution checkpoints
+
+- Audit file: `docs/audits/phase-pr139-workflow-alert-waiver-dispute-adjudication.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `f541ae7` (parent-2 / final PR head `8503073`; builder-claimed `cbc9d5e` and tested tip `df7451d` are ancestors; implementation `01ebcd9`)
+- Main tip at audit close: `f023e42` (includes PR #142 claim-gate residual fix)
+- Verdict: **PASS** (low) — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `f541ae7`; parent-2 `8503073`; claimed `cbc9d5e` / tested `df7451d` / implementation `01ebcd9` are ancestors of `origin/main`).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow` + `WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow`, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` views + open/assign/resolve and open/record/reopen actions, idempotency + audit write-through).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; PR delta excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, disclaimer `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring/claim-gate 84; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
+- `process flags`: PASS (live `ci_gates/check_pr_phase_claims.py` replay on PR #139 metadata exits 0). Mid-audit residual after #135 did not fire on #139 wording; PR #142 later cleared the remaining `docs-only` / `never COMPLETE` false-positive probes.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #139 | workflow alert waiver-expiry dispute adjudication + SLA breach resolution checkpoints | `f541ae7` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
