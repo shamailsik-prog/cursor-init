@@ -98,6 +98,66 @@ describe("PR phase claim gate hardening", () => {
     expect(result.stdout).toContain("PASS: PR phase-claim gate.")
   })
 
+  it("passes residual PR #136 disclaimer phrases with test changes", () => {
+    const repo = makeRepo(
+      { "tests/api.ops-reporting.test.ts": "export const t = 1\n" },
+      { "tests/api.ops-reporting.test.ts": "export const t = 2\n" }
+    )
+    const result = runGate(repo.root, {
+      PR_TITLE: "Add workflow waiver-expiry dispute and SLA breach escalation scaffolding",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+        "queue the immediate next slice (docs-only queue update)",
+        "classification=PARTIAL (never COMPLETE while transport_stub=true)",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+  })
+
+  it("fails actual docs-only claims when tests change", () => {
+    const repo = makeRepo(
+      { "tests/api.ops-reporting.test.ts": "export const t = 1\n" },
+      { "tests/api.ops-reporting.test.ts": "export const t = 2\n" }
+    )
+    const result = runGate(repo.root, {
+      PR_TITLE: "Docs-only claim with test delta",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+        "this PR is docs-only",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("scaffold/docs-only or no runtime changes")
+  })
+
+  it("fails real COMPLETE claims even when residual disclaimers are also present", () => {
+    const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+    const result = runGate(repo.root, {
+      PR_TITLE: "Phase complete",
+      PR_BODY: [
+        "backend_real=true",
+        "frontend_real=false",
+        "transport_stub=true",
+        "queue the immediate next slice (docs-only queue update)",
+        "classification=PARTIAL (never COMPLETE while transport_stub=true)",
+      ].join("\n"),
+      BASE_SHA: repo.baseSha,
+      HEAD_SHA: repo.headSha,
+    })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("frontend_real=false")
+    expect(result.stdout).toContain("transport_stub=true")
+  })
+
   it("fails literal COMPLETE claims", () => {
     const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
     const result = runGate(repo.root, {
