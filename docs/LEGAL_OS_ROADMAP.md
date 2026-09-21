@@ -218,11 +218,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert waiver-expiry dispute adjudication rows and remediation-SLA breach resolution-checkpoint rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_waiver_expiry_dispute_adjudications`, `workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoints`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with adjudication/checkpoint monitoring views (`view=alert_waiver_expiry_dispute_adjudications`, `view=alert_variance_remediation_sla_breach_resolution_checkpoints`) and partner-governed lifecycle actions (`open_workflow_ops_alert_waiver_expiry_dispute_adjudication`, `assign_workflow_ops_alert_waiver_expiry_dispute_adjudication_panel_owner`, `resolve_workflow_ops_alert_waiver_expiry_dispute_adjudication`, `open_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint`, `record_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint`, `reopen_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint`) filterable by matter, adjudication status, checkpoint status, and freshness state.
+- Captured panel ownership, due windows, and reopen-pressure posture for waiver-expiry dispute adjudication plus remediation-SLA breach resolution checkpoints while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_waiver_expiry_dispute_adjudication_opened`, `ops_reporting_alert_waiver_expiry_dispute_adjudication_panel_owner_assigned`, `ops_reporting_alert_waiver_expiry_dispute_adjudication_resolved`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_opened`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_recorded`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_reopened`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for adjudication/checkpoint lifecycle transitions, idempotent replay behavior, pagination/filtering, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for this slice (pending PR + merge SHA assignment):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert waiver-expiry dispute adjudication + remediation SLA breach resolution-governance scaffolding**:
+Build **workflow alert waiver-expiry dispute adjudication SLO stewardship + remediation SLA breach resolution-checkpoint expiry attestation scaffolding**:
 
-1. Add waiver-expiry dispute adjudication queue rows plus remediation-SLA breach resolution-checkpoint rows to track panel ownership, due windows, and reopen pressure.
-2. Extend `app/api/d2/ops-reporting/route.ts` with adjudication/checkpoint actions and paginated views filterable by matter, adjudication status, checkpoint status, and freshness state.
-3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for adjudication/checkpoint transitions, idempotent replay, and audit provenance traceability.
+1. Add adjudication SLO stewardship rows plus resolution-checkpoint expiry/attestation rows to track due-window debt, expiry risk, and reopen-pressure attestation.
+2. Extend `app/api/d2/ops-reporting/route.ts` with SLO/expiry-attestation actions and paginated views filterable by matter, SLO status, expiry/attestation status, and freshness state.
+3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for SLO/expiry-attestation transitions, idempotent replay, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding only (no external pager/on-call transport claims) while preserving scaffold-claim gate behavior.
