@@ -427,7 +427,7 @@ The gate fails when either condition is true:
 - `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; PR delta excludes `app/ops/**`).
 - `no COMPLETE/product-done overclaim`: PASS semantically (classification remains PARTIAL with `transport_stub=true`), with token-level wording hazard in process gate.
 - `focused tests+gates`: PASS on replay (`tests/api.ops-reporting.test.ts`, `tests/persistence.route-wiring.test.ts`, Firestore-backed persistence/runtime suite retry, `G-0`, `G-1`).
-- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` replay on PR #136 metadata blocks on regex matches for scoped `docs-only` wording and `COMPLETE` token phrasing; process-only outcome, not a backend-reality failure).
+- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` replay on PR #136 metadata still blocks after #135, matching scoped `docs-only queue update` and `never COMPLETE while transport_stub=true`; process-only outcome, not a backend-reality failure). Re-audit process flags after further gate hardening.
 
 ### PR matrix (targeted)
 

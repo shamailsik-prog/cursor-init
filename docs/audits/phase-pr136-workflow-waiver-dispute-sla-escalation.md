@@ -15,7 +15,8 @@ PR head SHA: `42e7b0b72728c842d0aa04285395ca1480bb11c6`
 `COMPLETE/product-done` is not claimed semantically.  
 `SHA` integrity is verified on `main`.  
 Focused tests and gates are green on replay, with one observed flaky timeout on a first run of the Firestore runtime suite.  
-Process flags fail on claim-gate replay due wording-triggered regex hits in PR metadata; this is a process/compliance outcome and does not invalidate backend reality.
+Process flags fail on claim-gate replay due wording-triggered regex hits in PR metadata; this is a process/compliance outcome and does not invalidate backend reality.  
+PR #135 (claim-gate negation) is already on `main` (`15f0a08` / merge `f270e0b`) and does not clear these residual wording matches. Re-audit process flags after further gate hardening.
 
 ---
 
@@ -89,10 +90,12 @@ Stability note: runtime-mode suite is near timeout threshold for one test and be
 
 Status: **FAIL (process-only)**
 
-Replay of `ci_gates/check_pr_phase_claims.py` against actual PR #136 metadata (`PR_TITLE`, `PR_BODY`, `BASE_SHA`, `HEAD_SHA`) returns:
+Replay of `ci_gates/check_pr_phase_claims.py` against actual PR #136 metadata (`PR_TITLE`, `PR_BODY`, `BASE_SHA`, `HEAD_SHA`) on current `main` (post-#135) returns:
 
-- scaffold/docs-only claim conflict (token-level match against `docs-only` wording),
-- COMPLETE/product-done conflicts (token-level match despite non-complete intent).
+- scaffold/docs-only claim conflict from the scoped phrase `docs-only queue update` in the PR body
+- COMPLETE/product-done conflicts from the disclaimer phrase `never COMPLETE while transport_stub=true`
+
+PR #135's negation regex only excludes `no|not|without ... claims` spans. It does not treat `never COMPLETE while ...` as a negated complete-claim, and it does not ignore scoped `docs-only` wording.
 
 This is a policy-gate/phrasing failure class and does **not** negate `BACKEND_REAL`.
 
@@ -102,4 +105,4 @@ This is a policy-gate/phrasing failure class and does **not** negate `BACKEND_RE
 
 - **Verdict:** `PARTIAL`
 - **Severity:** `medium`
-- **Disposition:** backend implementation accepted as real; phase remains process-blocked pending claim-gate-compatible metadata phrasing and/or additional regex hardening re-audit.
+- **Disposition:** backend implementation accepted as real; phase remains process-blocked pending claim-gate-compatible metadata phrasing and/or additional regex hardening. Re-audit process flags after further gate work beyond #135.
