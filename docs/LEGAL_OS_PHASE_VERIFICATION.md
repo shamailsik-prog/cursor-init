@@ -187,13 +187,14 @@ The gate fails when either condition is true:
 ### DoD summary
 
 - `SHA on main`: PASS (`origin/main` at `ce57557`; feature commit `6c4c293` is merged parent).
-- `BACKEND_REAL`: PASS (tenancy identity-bridge actions/views + persistence + rules + tests verified).
-- `FRONTEND_REAL`: PASS as claim-honesty check (backend-only delivery; no frontend call-site overclaim in changed files).
-- `stubs/claim policy`: FAIL (PR metadata includes "phase complete" wording and omits required `backend_real`/`frontend_real`/`transport_stub` declarations; repo claim-gate replay blocks the metadata).
+- `backend_real=true` (tenancy identity-bridge actions/views + persistence + rules + tests verified).
+- `frontend_real=false` (backend-only delivery; no frontend call-site completion claim for this phase).
+- `transport_stub=true` (global filing transport TODO/stub markers still present).
+- `status=PARTIAL` (NOT COMPLETE / NOT product-done; PR metadata had a complete-claim policy failure).
 
 ### PR matrix (targeted)
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #114 | tenancy external-session identity bridge + IdP parity scaffolding | `ce57557` | Yes | PASS | PASS (backend-only scope in code changes) | true (global filing transport stubs remain) | PARTIAL | major |
+| #114 | tenancy external-session identity bridge + IdP parity scaffolding | `ce57557` | Yes | true | false | true | PARTIAL | major |
 
