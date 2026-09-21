@@ -2,8 +2,8 @@
 
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
-PR: `#TBD`  
-Head SHA: `TBD`
+PR: `#139`  
+Head SHA: `8e2b7ef461ff74dd876c814811bb7c7e1b14a430`
 
 ## Scope stub
 
@@ -25,8 +25,8 @@ Head SHA: `TBD`
 
 ## Evidence stub
 
-- Unit/API: `TBD`
-- Rules/runtime: `TBD`
+- Unit/API: PASS (`tests/api.ops-reporting.test.ts` 3/3, `tests/persistence.route-wiring.test.ts` 71/71)
+- Rules/runtime: PASS (`tests/persistence.repositories.test.ts` 1/1, `tests/persistence.runtime-mode.test.ts` 14/14, `tests/firestore.rules.test.ts` 7/7)
 - Gates:
-  - `gate:g0` -> `TBD`
-  - `gate:g1` -> `TBD`
+  - `gate:g0` -> PASS
+  - `gate:g1` -> PASS
