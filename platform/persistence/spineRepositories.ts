@@ -54,12 +54,22 @@ import type {
   Job,
   MatterClientSearchIndexRow,
   DraftTemplateAnalyticsRow,
+  MatterReportExportAnalyticsRow,
+  MatterReportRelevanceSnapshotRow,
   WorkflowOpsActivityRow,
+  WorkflowOpsAlertDigestRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
   TenancyLineageDisputeAttestationRow,
+  TenancyLineageArbitrationDebtRetirementLedgerRow,
+  TenancyLineageClosureAdjudicationRow,
+  TenancyLineageClosureAdjudicationSettlementRow,
+  TenancyLineageArbitrationDebtRetirementDisputeLedgerRow,
+  TenancyExternalSessionIdentityBridgeRow,
   TenancyLineageReconciliationDigestRow,
+  TenancyLineageReconciliationQueueArbitrationRow,
+  TenancyLineageDigestClosureCheckpointRow,
   Entity,
   EntityLink,
   Matter,
@@ -567,10 +577,31 @@ export type DraftTemplateAnalyticsRepository = {
   listByFirm(firmId: string): Promise<DraftTemplateAnalyticsRow[]>
 }
 
+export type MatterReportExportAnalyticsRepository = {
+  upsert(row: MatterReportExportAnalyticsRow): Promise<void>
+  get(id: string): Promise<MatterReportExportAnalyticsRow | null>
+  listByFirm(firmId: string): Promise<MatterReportExportAnalyticsRow[]>
+  listByMatter(matterId: string): Promise<MatterReportExportAnalyticsRow[]>
+}
+
+export type MatterReportRelevanceSnapshotRepository = {
+  upsert(row: MatterReportRelevanceSnapshotRow): Promise<void>
+  get(id: string): Promise<MatterReportRelevanceSnapshotRow | null>
+  listByFirm(firmId: string): Promise<MatterReportRelevanceSnapshotRow[]>
+  listByMatter(matterId: string): Promise<MatterReportRelevanceSnapshotRow[]>
+}
+
 export type WorkflowOpsActivityRepository = {
   upsert(row: WorkflowOpsActivityRow): Promise<void>
   get(id: string): Promise<WorkflowOpsActivityRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsActivityRow[]>
+}
+
+export type WorkflowOpsAlertDigestRepository = {
+  upsert(row: WorkflowOpsAlertDigestRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertDigestRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertDigestRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertDigestRow[]>
 }
 
 export type TenancySessionReferenceRepository = {
@@ -593,6 +624,68 @@ export type TenancyLineageReconciliationDigestRepository = {
   upsert(row: TenancyLineageReconciliationDigestRow): Promise<void>
   get(id: string): Promise<TenancyLineageReconciliationDigestRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageReconciliationDigestRow[]>
+}
+
+export type TenancyLineageReconciliationQueueArbitrationRepository = {
+  upsert(row: TenancyLineageReconciliationQueueArbitrationRow): Promise<void>
+  get(id: string): Promise<TenancyLineageReconciliationQueueArbitrationRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageReconciliationQueueArbitrationRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageReconciliationQueueArbitrationRow[]>
+}
+
+export type TenancyLineageDigestClosureCheckpointRepository = {
+  upsert(row: TenancyLineageDigestClosureCheckpointRow): Promise<void>
+  get(id: string): Promise<TenancyLineageDigestClosureCheckpointRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageDigestClosureCheckpointRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageDigestClosureCheckpointRow[]>
+}
+
+export type TenancyLineageClosureAdjudicationRepository = {
+  upsert(row: TenancyLineageClosureAdjudicationRow): Promise<void>
+  get(id: string): Promise<TenancyLineageClosureAdjudicationRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageClosureAdjudicationRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageClosureAdjudicationRow[]>
+}
+
+export type TenancyLineageArbitrationDebtRetirementLedgerRepository = {
+  upsert(row: TenancyLineageArbitrationDebtRetirementLedgerRow): Promise<void>
+  get(id: string): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow[]>
+}
+
+export type TenancyLineageClosureAdjudicationSettlementRepository = {
+  upsert(row: TenancyLineageClosureAdjudicationSettlementRow): Promise<void>
+  get(id: string): Promise<TenancyLineageClosureAdjudicationSettlementRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageClosureAdjudicationSettlementRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageClosureAdjudicationSettlementRow[]>
+}
+
+export type TenancyLineageArbitrationDebtRetirementDisputeLedgerRepository = {
+  upsert(row: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow): Promise<void>
+  get(id: string): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow | null>
+  listByFirm(firmId: string): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]>
+  listByLineageRoot(
+    lineageRootSessionReferenceId: string
+  ): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]>
+}
+
+export type TenancyExternalSessionIdentityBridgeRepository = {
+  upsert(row: TenancyExternalSessionIdentityBridgeRow): Promise<void>
+  get(id: string): Promise<TenancyExternalSessionIdentityBridgeRow | null>
+  listByFirm(firmId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
+  listByLineageRoot(lineageRootSessionReferenceId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
+  listBySessionReference(sessionReferenceId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
 }
 
 export type SpineRepositories = {
@@ -660,10 +753,20 @@ export type SpineRepositories = {
   committeeOutputs: CommitteeBrainOutputRepository
   reportingIndex: MatterClientSearchIndexRepository
   draftTemplateAnalytics: DraftTemplateAnalyticsRepository
+  matterReportExportAnalytics: MatterReportExportAnalyticsRepository
+  matterReportRelevanceSnapshots: MatterReportRelevanceSnapshotRepository
   workflowOpsActivity: WorkflowOpsActivityRepository
+  workflowOpsAlertDigests: WorkflowOpsAlertDigestRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
+  tenancyLineageReconciliationQueueArbitrations: TenancyLineageReconciliationQueueArbitrationRepository
+  tenancyLineageDigestClosureCheckpoints: TenancyLineageDigestClosureCheckpointRepository
+  tenancyLineageClosureAdjudications: TenancyLineageClosureAdjudicationRepository
+  tenancyLineageArbitrationDebtRetirementLedgers: TenancyLineageArbitrationDebtRetirementLedgerRepository
+  tenancyLineageClosureAdjudicationSettlements: TenancyLineageClosureAdjudicationSettlementRepository
+  tenancyLineageArbitrationDebtRetirementDisputeLedgers: TenancyLineageArbitrationDebtRetirementDisputeLedgerRepository
+  tenancyExternalSessionIdentityBridges: TenancyExternalSessionIdentityBridgeRepository
 }
 
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
@@ -1913,6 +2016,34 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         return [...store.draftTemplateAnalytics.values()].filter((row) => row.firmId === firmId)
       },
     },
+    matterReportExportAnalytics: {
+      async upsert(row) {
+        store.matterReportExportAnalytics.set(row.id, row)
+      },
+      async get(id) {
+        return store.matterReportExportAnalytics.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.matterReportExportAnalytics.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.matterReportExportAnalytics.values()].filter((row) => row.matterId === matterId)
+      },
+    },
+    matterReportRelevanceSnapshots: {
+      async upsert(row) {
+        store.matterReportRelevanceSnapshots.set(row.id, row)
+      },
+      async get(id) {
+        return store.matterReportRelevanceSnapshots.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.matterReportRelevanceSnapshots.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.matterReportRelevanceSnapshots.values()].filter((row) => row.matterId === matterId)
+      },
+    },
     workflowOpsActivity: {
       async upsert(row) {
         store.workflowOpsActivity.set(row.id, row)
@@ -1922,6 +2053,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsActivity.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    workflowOpsAlertDigests: {
+      async upsert(row) {
+        store.workflowOpsAlertDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertDigests.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertDigests.values()].filter((row) => row.matterId === matterId)
       },
     },
     tenancySessionReferences: {
@@ -1966,6 +2111,137 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async listByFirm(firmId) {
         return [...store.tenancyLineageReconciliationDigests.values()].filter(
           (row) => row.firmId === firmId
+        )
+      },
+    },
+    tenancyLineageReconciliationQueueArbitrations: {
+      async upsert(row) {
+        store.tenancyLineageReconciliationQueueArbitrations.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageReconciliationQueueArbitrations.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageReconciliationQueueArbitrations.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageReconciliationQueueArbitrations.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageDigestClosureCheckpoints: {
+      async upsert(row) {
+        store.tenancyLineageDigestClosureCheckpoints.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageDigestClosureCheckpoints.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageDigestClosureCheckpoints.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageDigestClosureCheckpoints.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageClosureAdjudications: {
+      async upsert(row) {
+        store.tenancyLineageClosureAdjudications.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageClosureAdjudications.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageClosureAdjudications.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageClosureAdjudications.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageArbitrationDebtRetirementLedgers: {
+      async upsert(row) {
+        store.tenancyLineageArbitrationDebtRetirementLedgers.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageArbitrationDebtRetirementLedgers.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageClosureAdjudicationSettlements: {
+      async upsert(row) {
+        store.tenancyLineageClosureAdjudicationSettlements.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageClosureAdjudicationSettlements.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageClosureAdjudicationSettlements.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageClosureAdjudicationSettlements.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyLineageArbitrationDebtRetirementDisputeLedgers: {
+      async upsert(row) {
+        store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+    },
+    tenancyExternalSessionIdentityBridges: {
+      async upsert(row) {
+        store.tenancyExternalSessionIdentityBridges.set(row.id, row)
+      },
+      async get(id) {
+        return store.tenancyExternalSessionIdentityBridges.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
+          (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
+        )
+      },
+      async listBySessionReference(sessionReferenceId) {
+        return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
+          (row) => row.sessionReferenceId === sessionReferenceId
         )
       },
     },

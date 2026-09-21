@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto"
 import type { Classification } from "@/platform/p1/types"
 import { classificationRank } from "@/platform/p1/types"
 
+export type { Classification } from "@/platform/p1/types"
+
 export type Role =
   | "partner"
   | "associate"
@@ -174,6 +176,197 @@ export type TenancyLineageReconciliationDigestRow = {
   unresolvedRevocationCount: number
   status: "aligned" | "needs_review"
   reasons: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageReconciliationQueueArbitrationDisposition =
+  | "confirm_needs_review"
+  | "dismiss_needs_review"
+  | "mark_reconciled"
+
+export type TenancyLineageReconciliationQueueArbitrationRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  digestStatus: "aligned" | "needs_review"
+  status: "queued" | "assigned" | "arbitrated"
+  assignedPartnerId: string | null
+  assignedBy: string | null
+  assignedAt: number | null
+  slaWindowStartedAt: number | null
+  slaWindowDueAt: number | null
+  disposition: TenancyLineageReconciliationQueueArbitrationDisposition | null
+  dispositionBy: string | null
+  dispositionAt: number | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageDigestClosureCheckpointRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  status: "pending_attestation" | "closed_attested" | "reopened"
+  attestedBy: string | null
+  attestedAt: number | null
+  closureReason: string | null
+  reopenTrigger: string | null
+  reopenedBy: string | null
+  reopenedAt: number | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageClosureAdjudicationStatus =
+  | "standby"
+  | "quorum_pending"
+  | "verdict_window_open"
+  | "verdict_recorded"
+
+export type TenancyLineageClosureAdjudicationRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  arbitrationQueueId: string
+  closureCheckpointId: string
+  status: TenancyLineageClosureAdjudicationStatus
+  requiredPanelQuorum: number
+  confirmedPanelPartnerIds: string[]
+  verdictWindowStartedAt: number | null
+  verdictWindowDueAt: number | null
+  verdictDisposition: TenancyLineageReconciliationQueueArbitrationDisposition | null
+  verdictRecordedBy: string | null
+  verdictRecordedAt: number | null
+  dispositionDriftReasons: string[]
+  reopenedClosureTrigger: string | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageArbitrationDebtRetirementStatus =
+  | "pressure_open"
+  | "retirement_attested"
+  | "carryover_reopened"
+
+export type TenancyLineageArbitrationDebtRetirementLedgerRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  arbitrationQueueId: string
+  closureCheckpointId: string
+  status: TenancyLineageArbitrationDebtRetirementStatus
+  unresolvedQueuePressureCount: number
+  ownerAssignmentDebtCount: number
+  assignedPartnerId: string | null
+  retirementAttestedBy: string | null
+  retirementAttestedAt: number | null
+  retirementNote: string | null
+  carryoverSignals: string[]
+  carryoverReopenedBy: string | null
+  carryoverReopenedAt: number | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageClosureAdjudicationSettlementStatus =
+  | "draft"
+  | "publication_checkpointed"
+  | "correction_logged"
+  | "sla_confirmed"
+
+export type TenancyLineageClosureAdjudicationSettlementRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  adjudicationId: string
+  status: TenancyLineageClosureAdjudicationSettlementStatus
+  verdictPublicationCheckpointedBy: string | null
+  verdictPublicationCheckpointedAt: number | null
+  verdictPublicationChannel: string | null
+  publicationCorrectionNote: string | null
+  publicationCorrectionBy: string | null
+  publicationCorrectionAt: number | null
+  settlementConfirmationSlaStartedAt: number | null
+  settlementConfirmationSlaDueAt: number | null
+  settlementConfirmedBy: string | null
+  settlementConfirmedAt: number | null
+  settlementSlaBreached: boolean
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyLineageArbitrationDebtRetirementDisputeStatus =
+  | "open"
+  | "reviewer_assigned"
+  | "resolved"
+  | "rollback_controlled"
+
+export type TenancyLineageArbitrationDebtRetirementDisputeResolutionOutcome =
+  | "uphold_retirement"
+  | "reopen_debt"
+  | "require_rollback_review"
+
+export type TenancyLineageArbitrationDebtRetirementDisputeLedgerRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  digestId: string
+  debtLedgerId: string
+  status: TenancyLineageArbitrationDebtRetirementDisputeStatus
+  challengeReason: string
+  challengeOpenedBy: string
+  challengeOpenedAt: number
+  reviewerId: string | null
+  reviewerAssignedBy: string | null
+  reviewerAssignedAt: number | null
+  resolutionOutcome: TenancyLineageArbitrationDebtRetirementDisputeResolutionOutcome | null
+  resolvedBy: string | null
+  resolvedAt: number | null
+  resolutionNote: string | null
+  rollbackControlBy: string | null
+  rollbackControlAt: number | null
+  rollbackControlNote: string | null
+  notes: string[]
+  updatedAt: number
+}
+
+export type TenancyExternalSessionIdentityBridgeStatus =
+  | "attested"
+  | "quarantined"
+  | "cleared"
+
+export type TenancyExternalSessionIdentityBridgeMismatchStatus =
+  | "aligned"
+  | "mismatch_detected"
+  | "assertion_missing"
+
+export type TenancyExternalSessionIdentityBridgeRow = {
+  id: string
+  firmId: string
+  lineageRootSessionReferenceId: string
+  sessionReferenceId: string
+  authBoundary: TenancyAuthBoundary
+  sessionExternalSessionId: string | null
+  status: TenancyExternalSessionIdentityBridgeStatus
+  mismatchStatus: TenancyExternalSessionIdentityBridgeMismatchStatus
+  mismatchReasons: string[]
+  assertedIssuer: string | null
+  assertedSubject: string | null
+  assertedExternalSessionId: string | null
+  attestedBy: string | null
+  attestedAt: number | null
+  quarantinedBy: string | null
+  quarantinedAt: number | null
+  quarantineReason: string | null
+  clearedBy: string | null
+  clearedAt: number | null
+  clearReason: string | null
+  notes: string[]
   updatedAt: number
 }
 
@@ -1726,6 +1919,39 @@ export type DraftTemplateAnalyticsRow = {
   updatedAt: number
 }
 
+export type MatterReportExportAnalyticsRow = {
+  id: string
+  firmId: string
+  matterId: string
+  classification: Classification
+  exportCount: number
+  lastExportedAt: number | null
+  lastExportedBy: string | null
+  lastExportFormat: "csv" | "json" | "pdf" | null
+  lastExportScope: "summary" | "detailed" | "relevance_review" | null
+  lastExportReason: string | null
+  updatedAt: number
+}
+
+export type MatterReportRelevanceScoreBand = "high" | "medium" | "low"
+
+export type MatterReportRelevanceFreshnessStatus = "fresh" | "stale"
+
+export type MatterReportRelevanceSnapshotRow = {
+  id: string
+  firmId: string
+  matterId: string
+  classification: Classification
+  relevanceScore: number
+  scoreBand: MatterReportRelevanceScoreBand
+  freshnessStatus: MatterReportRelevanceFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export type WorkflowOpsActivityRow = {
   id: string
   firmId: string
@@ -1741,6 +1967,33 @@ export type WorkflowOpsActivityRow = {
   detail: string
   tags: string[]
   createdAt: number
+}
+
+export type WorkflowOpsAlertDigestSeverity = "low" | "medium" | "high" | "critical"
+
+export type WorkflowOpsAlertDigestFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertDigestRow = {
+  id: string
+  firmId: string
+  matterId: string | null
+  classification: Classification
+  severity: WorkflowOpsAlertDigestSeverity
+  backlogPressureCount: number
+  unresolvedFollowUpDebtCount: number
+  staleQueueWindowCount: number
+  freshnessStatus: WorkflowOpsAlertDigestFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  acknowledgedAt: number | null
+  acknowledgedBy: string | null
+  acknowledgedReason: string | null
+  snoozedUntil: number | null
+  snoozedBy: string | null
+  snoozedReason: string | null
+  updatedAt: number
 }
 
 export class SpineStore {
@@ -1844,10 +2097,25 @@ export class SpineStore {
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
+  matterReportExportAnalytics = new Map<string, MatterReportExportAnalyticsRow>()
+  matterReportRelevanceSnapshots = new Map<string, MatterReportRelevanceSnapshotRow>()
   workflowOpsActivity = new Map<string, WorkflowOpsActivityRow>()
+  workflowOpsAlertDigests = new Map<string, WorkflowOpsAlertDigestRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()
+  tenancyLineageReconciliationQueueArbitrations =
+    new Map<string, TenancyLineageReconciliationQueueArbitrationRow>()
+  tenancyLineageDigestClosureCheckpoints =
+    new Map<string, TenancyLineageDigestClosureCheckpointRow>()
+  tenancyLineageClosureAdjudications = new Map<string, TenancyLineageClosureAdjudicationRow>()
+  tenancyLineageArbitrationDebtRetirementLedgers =
+    new Map<string, TenancyLineageArbitrationDebtRetirementLedgerRow>()
+  tenancyLineageClosureAdjudicationSettlements =
+    new Map<string, TenancyLineageClosureAdjudicationSettlementRow>()
+  tenancyLineageArbitrationDebtRetirementDisputeLedgers =
+    new Map<string, TenancyLineageArbitrationDebtRetirementDisputeLedgerRow>()
+  tenancyExternalSessionIdentityBridges = new Map<string, TenancyExternalSessionIdentityBridgeRow>()
   corpusMetadata = {
     embedding_model: "text-embedding-3-small",
     embedding_dim: "1536",

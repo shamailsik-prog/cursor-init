@@ -14,10 +14,10 @@ import {
 import { GET as filingsGet, POST as filingsPost } from "@/app/api/d4/filings/route"
 import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
-import { GET as opsReportingGet } from "@/app/api/d2/ops-reporting/route"
+import { GET as opsReportingGet, POST as opsReportingPost } from "@/app/api/d2/ops-reporting/route"
 import { GET as tenancyGet, POST as tenancyPost } from "@/app/api/p5/tenancy/route"
 import { GET as clientsGet, POST as clientsPost } from "@/app/api/d1/clients/route"
-import { GET as reportingGet } from "@/app/api/d1/reporting/route"
+import { GET as reportingGet, POST as reportingPost } from "@/app/api/d1/reporting/route"
 import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
@@ -7055,6 +7055,75 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const acknowledge = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "e3a06f30-74f4-4167-b367-c5f8d6d00f6e",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_workflow_ops_alert_digest",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime digest acknowledge",
+          }),
+        })
+      )
+      expect(acknowledge.status).toBe(200)
+      const acknowledgeJson = (await acknowledge.json()) as {
+        result: { digest: { acknowledgedBy: string | null } }
+      }
+      expect(acknowledgeJson.result.digest.acknowledgedBy).toBe("partner_a")
+
+      const snoozeUntil = Date.now() + 60_000
+      const snooze = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "958ea837-92ab-4db2-a705-f26c87ff257f",
+          },
+          body: JSON.stringify({
+            action: "snooze_workflow_ops_alert_digest",
+            actorId: "partner_a",
+            matterId,
+            snoozedUntil: snoozeUntil,
+            reason: "runtime digest snooze",
+          }),
+        })
+      )
+      expect(snooze.status).toBe(200)
+      const snoozeJson = (await snooze.json()) as {
+        result: { digest: { snoozedBy: string | null; snoozedUntil: number | null } }
+      }
+      expect(snoozeJson.result.digest.snoozedBy).toBe("partner_a")
+      expect((snoozeJson.result.digest.snoozedUntil ?? 0) >= snoozeUntil).toBe(true)
+
+      getRuntimeStore().workflowOpsAlertDigests = new Map()
+      const alertDigestView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(alertDigestView.status).toBe(200)
+      const alertDigestJson = (await alertDigestView.json()) as {
+        items: Array<{
+          matterId: string | null
+          severity: string
+          acknowledgedBy: string | null
+          snoozedBy: string | null
+        }>
+      }
+      expect(
+        alertDigestJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.acknowledgedBy === "partner_a" &&
+            row.snoozedBy === "partner_a"
+        )
+      ).toBe(true)
+
       const persistedOps = await getDocs(collection(ctx.firestore(), "workflow_ops_activity"))
       expect(
         persistedOps.docs.some(
@@ -7070,6 +7139,16 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.source === "court_ops" &&
             entry.data()?.action === "court_ops_resolve_follow_up"
+        )
+      ).toBe(true)
+      const persistedAlertDigests = await getDocs(collection(ctx.firestore(), "workflow_ops_alert_digests"))
+      expect(
+        persistedAlertDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.acknowledgedBy === "partner_a" &&
+            entry.data()?.snoozedBy === "partner_a"
         )
       ).toBe(true)
     })
@@ -7306,7 +7385,7 @@ describe("Runtime persistence mode", () => {
     })
   })
 
-  it("persists matter/client search index rows and rehydrates reporting after reset", async () => {
+  it("persists reporting index and matter analytics scaffolding after reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
 
@@ -7377,6 +7456,70 @@ describe("Runtime persistence mode", () => {
       const clerkJson = (await clerkList.json()) as { total: number }
       expect(clerkJson.total).toBe(0)
 
+      const exportRecord = await reportingPost(
+        new Request("http://127.0.0.1/api/d1/reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1e24ccf1-f751-46d4-b53d-8f6d41f51b13",
+          },
+          body: JSON.stringify({
+            action: "record_matter_report_export",
+            actorId: "partner_a",
+            matterId,
+            exportFormat: "csv",
+            exportScope: "summary",
+            reason: "runtime persistence verification",
+          }),
+        })
+      )
+      expect(exportRecord.status).toBe(200)
+
+      const recompute = await reportingPost(
+        new Request("http://127.0.0.1/api/d1/reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f678e4f7-7da5-4d17-9ef9-4530f3d0e5c7",
+          },
+          body: JSON.stringify({
+            action: "recompute_matter_report_relevance",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime recompute check",
+            provenanceTags: ["runtime_mode_test"],
+          }),
+        })
+      )
+      expect(recompute.status).toBe(200)
+
+      getRuntimeStore().matterReportExportAnalytics = new Map()
+      getRuntimeStore().matterReportRelevanceSnapshots = new Map()
+
+      const exportView = await reportingGet(
+        new Request(
+          `http://127.0.0.1/api/d1/reporting?view=matter_report_export_analytics&actorId=partner_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(exportView.status).toBe(200)
+      const exportViewJson = (await exportView.json()) as {
+        items: Array<{ matterId: string; exportCount: number; relevance: { freshnessStatus: string } | null }>
+      }
+      expect(exportViewJson.items.some((row) => row.matterId === matterId && row.exportCount >= 1)).toBe(true)
+      expect(exportViewJson.items[0]?.relevance?.freshnessStatus).toBe("fresh")
+
+      const relevanceView = await reportingGet(
+        new Request(
+          `http://127.0.0.1/api/d1/reporting?view=matter_report_relevance_snapshots&actorId=partner_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(relevanceView.status).toBe(200)
+      const relevanceJson = (await relevanceView.json()) as {
+        items: Array<{ matterId: string; scoreBand: string; freshnessStatus: string }>
+      }
+      expect(relevanceJson.items.some((row) => row.matterId === matterId)).toBe(true)
+      expect(["low", "medium", "high"]).toContain(relevanceJson.items[0]?.scoreBand ?? "")
+
       const persistedIndex = await getDocs(collection(ctx.firestore(), "matter_client_search_index"))
       expect(
         persistedIndex.docs.some(
@@ -7392,6 +7535,28 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.rowType === "client" &&
             entry.data()?.label === "Indexed Client"
+        )
+      ).toBe(true)
+      const persistedExportAnalytics = await getDocs(
+        collection(ctx.firestore(), "matter_report_export_analytics")
+      )
+      expect(
+        persistedExportAnalytics.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.lastExportFormat === "csv"
+        )
+      ).toBe(true)
+      const persistedRelevanceSnapshots = await getDocs(
+        collection(ctx.firestore(), "matter_report_relevance_snapshots")
+      )
+      expect(
+        persistedRelevanceSnapshots.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.freshnessStatus === "fresh"
         )
       ).toBe(true)
     })
@@ -7880,6 +8045,491 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const attestIdentityBridgeFirst = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "95f13a1d-3962-4ccb-ad34-c7af9545f169",
+          },
+          body: JSON.stringify({
+            action: "attest_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            assertedIssuer: "idp.runtime.local",
+            assertedSubject: "partner_a:runtime-diverged",
+            assertedExternalSessionId: "ext-runtime-lineage-diverged",
+            note: "Runtime bridge attestation",
+          }),
+        })
+      )
+      expect(attestIdentityBridgeFirst.status).toBe(200)
+      const attestIdentityBridgeReplay = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "95f13a1d-3962-4ccb-ad34-c7af9545f169",
+          },
+          body: JSON.stringify({
+            action: "attest_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            assertedIssuer: "idp.runtime.local",
+            assertedSubject: "partner_a:runtime-diverged",
+            assertedExternalSessionId: "ext-runtime-lineage-diverged",
+            note: "Runtime bridge attestation",
+          }),
+        })
+      )
+      expect(attestIdentityBridgeReplay.status).toBe(200)
+      const attestIdentityBridgeReplayJson = (await attestIdentityBridgeReplay.json()) as {
+        reused: boolean
+      }
+      expect(attestIdentityBridgeReplayJson.reused).toBe(true)
+
+      const attestIdentityBridgeMismatch = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1fb5ff52-c4e8-4b26-a983-c839bf35b80c",
+          },
+          body: JSON.stringify({
+            action: "attest_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            assertedIssuer: "idp.runtime.local",
+            assertedSubject: "partner_a:runtime-diverged",
+            assertedExternalSessionId: "ext-runtime-lineage-diverged-mismatch",
+            note: "Runtime mismatch trigger",
+          }),
+        })
+      )
+      expect(attestIdentityBridgeMismatch.status).toBe(200)
+
+      const quarantineIdentityBridgeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f59af8af-c89f-4a46-bf85-dd89cfd8f2d4",
+          },
+          body: JSON.stringify({
+            action: "quarantine_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            quarantineReason: "Runtime issuer drift quarantine",
+            note: "Runtime quarantine",
+          }),
+        })
+      )
+      expect(quarantineIdentityBridgeRes.status).toBe(200)
+
+      const identityBridgeMismatchViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_external_session_identity_bridges&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=quarantined&mismatchStatus=mismatch_detected&limit=10&cursor=0`
+        )
+      )
+      expect(identityBridgeMismatchViewRes.status).toBe(200)
+      const identityBridgeMismatchViewJson = (await identityBridgeMismatchViewRes.json()) as {
+        items: Array<{ status: string; mismatchStatus: string; sessionReferenceId: string }>
+      }
+      expect(
+        identityBridgeMismatchViewJson.items.some(
+          (row) =>
+            row.status === "quarantined" &&
+            row.mismatchStatus === "mismatch_detected" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
+
+      const clearIdentityBridgeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f9861e95-b2cd-4c74-b70d-52e76f4a8b54",
+          },
+          body: JSON.stringify({
+            action: "clear_external_session_identity_bridge",
+            actorId: "partner_a",
+            firmId: "firmA",
+            sessionReferenceId: reissueDivergedJson.result.sessionReference.id,
+            clearReason: "Runtime manual override after bridge review",
+            note: "Runtime clear bridge",
+          }),
+        })
+      )
+      expect(clearIdentityBridgeRes.status).toBe(200)
+
+      const identityBridgeClearedViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_external_session_identity_bridges&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=cleared&mismatchStatus=aligned&limit=10&cursor=0`
+        )
+      )
+      expect(identityBridgeClearedViewRes.status).toBe(200)
+      const identityBridgeClearedViewJson = (await identityBridgeClearedViewRes.json()) as {
+        items: Array<{ status: string; mismatchStatus: string }>
+      }
+      expect(
+        identityBridgeClearedViewJson.items.some(
+          (row) => row.status === "cleared" && row.mismatchStatus === "aligned"
+        )
+      ).toBe(true)
+
+      const queueQueuedRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_reconciliation_queue&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=queued&limit=10&cursor=0`
+        )
+      )
+      expect(queueQueuedRes.status).toBe(200)
+      const queueQueuedJson = (await queueQueuedRes.json()) as {
+        items: Array<{ id: string; status: string }>
+      }
+      expect(
+        queueQueuedJson.items.some(
+          (row) =>
+            row.id === `tenancy-lineage-arbitration:${actorSessionJson.sessionReference.id}` &&
+            row.status === "queued"
+        )
+      ).toBe(true)
+
+      const assignQueueRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "c25565f3-93d5-4b09-838c-7628c4d95cfd",
+          },
+          body: JSON.stringify({
+            action: "assign_lineage_reconciliation_queue",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            assignedPartnerId: "partner_a",
+            slaWindowMinutes: 120,
+            note: "Runtime queue assignment",
+          }),
+        })
+      )
+      expect(assignQueueRes.status).toBe(200)
+
+      const arbitrateQueueRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "42e8d9ca-e90c-4a93-b804-6f57a7b7d7d9",
+          },
+          body: JSON.stringify({
+            action: "arbitrate_lineage_reconciliation_queue",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            disposition: "confirm_needs_review",
+            note: "Runtime queue arbitration",
+          }),
+        })
+      )
+      expect(arbitrateQueueRes.status).toBe(200)
+
+      const closureAttestFirst = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8d0e2821-7af5-406d-86fb-44f143eb0c0e",
+          },
+          body: JSON.stringify({
+            action: "attest_lineage_digest_closure",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            closureReason: "Runtime closure attestation",
+            note: "Close checkpoint in runtime test",
+          }),
+        })
+      )
+      expect(closureAttestFirst.status).toBe(200)
+      const closureAttestReplay = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8d0e2821-7af5-406d-86fb-44f143eb0c0e",
+          },
+          body: JSON.stringify({
+            action: "attest_lineage_digest_closure",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            closureReason: "Runtime closure attestation",
+            note: "Close checkpoint in runtime test",
+          }),
+        })
+      )
+      expect(closureAttestReplay.status).toBe(200)
+      const closureAttestReplayJson = (await closureAttestReplay.json()) as { reused: boolean }
+      expect(closureAttestReplayJson.reused).toBe(true)
+
+      const reopenClosureRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "3d91fb88-5ca6-4e2e-a293-f9ebebde2c3a",
+          },
+          body: JSON.stringify({
+            action: "reopen_lineage_digest_closure",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            reopenTrigger: "Runtime reopened due follow-up divergence check",
+            note: "Reopen checkpoint in runtime test",
+          }),
+        })
+      )
+      expect(reopenClosureRes.status).toBe(200)
+
+      const governAdjudicationRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "6d08f9c2-083e-4cbf-8308-19809a06e17f",
+          },
+          body: JSON.stringify({
+            action: "govern_lineage_closure_adjudication",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            panelPartnerIds: ["partner_a"],
+            requiredPanelQuorum: 1,
+            verdictWindowMinutes: 45,
+            note: "Runtime closure adjudication governance",
+          }),
+        })
+      )
+      expect(governAdjudicationRes.status).toBe(200)
+
+      const recordVerdictRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "85eff7bf-c374-44f4-b7ff-64d1f3fbf39e",
+          },
+          body: JSON.stringify({
+            action: "record_lineage_closure_adjudication_verdict",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            disposition: "mark_reconciled",
+            dispositionDriftReasons: ["runtime_verdict_alignment"],
+            note: "Runtime verdict recording",
+          }),
+        })
+      )
+      expect(recordVerdictRes.status).toBe(200)
+
+      const attestDebtRetirementFirst = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b7288f0f-a12d-45bd-8ba1-7f5fefd8be52",
+          },
+          body: JSON.stringify({
+            action: "attest_lineage_arbitration_debt_retirement",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            retirementNote: "Runtime queue pressure retired after verdict",
+            note: "Runtime debt retirement attestation",
+          }),
+        })
+      )
+      expect(attestDebtRetirementFirst.status).toBe(200)
+      const attestDebtRetirementReplay = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "b7288f0f-a12d-45bd-8ba1-7f5fefd8be52",
+          },
+          body: JSON.stringify({
+            action: "attest_lineage_arbitration_debt_retirement",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            retirementNote: "Runtime queue pressure retired after verdict",
+            note: "Runtime debt retirement attestation",
+          }),
+        })
+      )
+      expect(attestDebtRetirementReplay.status).toBe(200)
+      const attestDebtRetirementReplayJson = (await attestDebtRetirementReplay.json()) as {
+        reused: boolean
+      }
+      expect(attestDebtRetirementReplayJson.reused).toBe(true)
+
+      const reopenDebtRetirementRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8eb4e6a7-f1d7-4a00-a5f9-c7f81057f6e2",
+          },
+          body: JSON.stringify({
+            action: "reopen_lineage_arbitration_debt_retirement",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            carryoverSignal: "Runtime carryover reopened after attestation",
+            note: "Runtime carryover reopen",
+          }),
+        })
+      )
+      expect(reopenDebtRetirementRes.status).toBe(200)
+
+      const checkpointSettlementPublicationRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1a5857ba-4adf-45f8-85ea-6ce2f9cc2513",
+          },
+          body: JSON.stringify({
+            action: "checkpoint_lineage_closure_adjudication_settlement_publication",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            publicationChannel: "runtime_workboard",
+            note: "Runtime publication checkpoint",
+          }),
+        })
+      )
+      expect(checkpointSettlementPublicationRes.status).toBe(200)
+
+      const settlementCorrectionRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "26af7f6c-0ce5-4b07-85eb-f9e6f599a5d6",
+          },
+          body: JSON.stringify({
+            action: "log_lineage_closure_adjudication_settlement_correction",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            correctionNote: "Runtime correction before settlement confirmation",
+            note: "Runtime correction trace",
+          }),
+        })
+      )
+      expect(settlementCorrectionRes.status).toBe(200)
+
+      const settlementConfirmRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "2a0f8e1e-f66d-4dc9-a133-177cf2eb38b7",
+          },
+          body: JSON.stringify({
+            action: "confirm_lineage_closure_adjudication_settlement_sla",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            note: "Runtime settlement confirmation",
+          }),
+        })
+      )
+      expect(settlementConfirmRes.status).toBe(200)
+
+      const openDebtDisputeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "8bd83f8f-e744-477b-8be2-3d6da4e8cfa3",
+          },
+          body: JSON.stringify({
+            action: "open_lineage_arbitration_debt_retirement_dispute",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            challengeReason: "Runtime debt retirement evidence challenge",
+            note: "Runtime dispute intake",
+          }),
+        })
+      )
+      expect(openDebtDisputeRes.status).toBe(200)
+
+      const assignDebtDisputeReviewerRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f007639c-ee2a-4ef0-af7e-aa0d34904801",
+          },
+          body: JSON.stringify({
+            action: "assign_lineage_arbitration_debt_retirement_dispute_reviewer",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            reviewerId: "partner_a",
+            note: "Runtime reviewer assignment",
+          }),
+        })
+      )
+      expect(assignDebtDisputeReviewerRes.status).toBe(200)
+
+      const resolveDebtDisputeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "50028312-5e53-4018-9ad2-1e84f19195ca",
+          },
+          body: JSON.stringify({
+            action: "resolve_lineage_arbitration_debt_retirement_dispute",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            resolutionOutcome: "require_rollback_review",
+            resolutionNote: "Runtime dispute resolved with rollback review",
+            note: "Runtime dispute resolution",
+          }),
+        })
+      )
+      expect(resolveDebtDisputeRes.status).toBe(200)
+
+      const rollbackDebtDisputeRes = await tenancyPost(
+        new Request("http://127.0.0.1/api/p5/tenancy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "62b88f88-a2f7-485c-b663-22cdb52e81e1",
+          },
+          body: JSON.stringify({
+            action: "control_lineage_arbitration_debt_retirement_dispute_rollback",
+            actorId: "partner_a",
+            firmId: "firmA",
+            lineageRootSessionReferenceId: actorSessionJson.sessionReference.id,
+            rollbackControlNote: "Runtime rollback control engaged",
+            note: "Runtime rollback guardrail",
+          }),
+        })
+      )
+      expect(rollbackDebtDisputeRes.status).toBe(200)
+
       const resolveDispute = await tenancyPost(
         new Request("http://127.0.0.1/api/p5/tenancy", {
           method: "POST",
@@ -7943,6 +8593,102 @@ describe("Runtime persistence mode", () => {
       expect(
         disputesResolvedJson.items.some(
           (row) => row.id === disputeFirstJson.result.dispute.id && row.disposition === "mark_reconciled"
+        )
+      ).toBe(true)
+
+      const queueArbitratedRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_reconciliation_queue&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=arbitrated&limit=10&cursor=0`
+        )
+      )
+      expect(queueArbitratedRes.status).toBe(200)
+      const queueArbitratedJson = (await queueArbitratedRes.json()) as {
+        items: Array<{ status: string; disposition: string | null }>
+      }
+      expect(
+        queueArbitratedJson.items.some(
+          (row) => row.status === "arbitrated" && row.disposition === "confirm_needs_review"
+        )
+      ).toBe(true)
+
+      const closureReopenedRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_digest_closure_checkpoints&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=reopened&limit=10&cursor=0`
+        )
+      )
+      expect(closureReopenedRes.status).toBe(200)
+      const closureReopenedJson = (await closureReopenedRes.json()) as {
+        items: Array<{ status: string; reopenTrigger: string | null }>
+      }
+      expect(
+        closureReopenedJson.items.some(
+          (row) =>
+            row.status === "reopened" &&
+            row.reopenTrigger === "Runtime reopened due follow-up divergence check"
+        )
+      ).toBe(true)
+
+      const adjudicationViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_closure_adjudications&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=verdict_recorded&limit=10&cursor=0`
+        )
+      )
+      expect(adjudicationViewRes.status).toBe(200)
+      const adjudicationViewJson = (await adjudicationViewRes.json()) as {
+        items: Array<{ status: string; verdictDisposition: string | null }>
+      }
+      expect(
+        adjudicationViewJson.items.some(
+          (row) => row.status === "verdict_recorded" && row.verdictDisposition === "mark_reconciled"
+        )
+      ).toBe(true)
+
+      const debtLedgerViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_arbitration_debt_retirement_ledgers&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=retirement_attested&limit=10&cursor=0`
+        )
+      )
+      expect(debtLedgerViewRes.status).toBe(200)
+      const debtLedgerViewJson = (await debtLedgerViewRes.json()) as {
+        items: Array<{ status: string; carryoverSignals: string[] }>
+      }
+      expect(
+        debtLedgerViewJson.items.some(
+          (row) =>
+            row.status === "retirement_attested" &&
+            row.carryoverSignals.includes("Runtime carryover reopened after attestation")
+        )
+      ).toBe(true)
+
+      const settlementViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_closure_adjudication_settlements&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=sla_confirmed&limit=10&cursor=0`
+        )
+      )
+      expect(settlementViewRes.status).toBe(200)
+      const settlementViewJson = (await settlementViewRes.json()) as {
+        items: Array<{ status: string; settlementConfirmedBy: string | null }>
+      }
+      expect(
+        settlementViewJson.items.some(
+          (row) => row.status === "sla_confirmed" && row.settlementConfirmedBy === "partner_a"
+        )
+      ).toBe(true)
+
+      const disputeLedgerViewRes = await tenancyGet(
+        new Request(
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_arbitration_debt_retirement_dispute_ledgers&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=rollback_controlled&limit=10&cursor=0`
+        )
+      )
+      expect(disputeLedgerViewRes.status).toBe(200)
+      const disputeLedgerViewJson = (await disputeLedgerViewRes.json()) as {
+        items: Array<{ status: string; rollbackControlNote: string | null }>
+      }
+      expect(
+        disputeLedgerViewJson.items.some(
+          (row) =>
+            row.status === "rollback_controlled" &&
+            row.rollbackControlNote === "Runtime rollback control engaged"
         )
       ).toBe(true)
 
@@ -8025,7 +8771,7 @@ describe("Runtime persistence mode", () => {
 
       const auditRes = await tenancyGet(
         new Request(
-          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=10&cursor=0"
+          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=60&cursor=0"
         )
       )
       expect(auditRes.status).toBe(200)
@@ -8085,6 +8831,134 @@ describe("Runtime persistence mode", () => {
             row.action === "tenant_resolve_lineage_dispute" &&
             row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id &&
             row.delegatedBoundaryReconciliationStatus === "aligned"
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_assign_lineage_reconciliation_queue" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_arbitrate_lineage_reconciliation_queue" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_attest_lineage_digest_closure" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_reopen_lineage_digest_closure" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_govern_lineage_closure_adjudication" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_record_lineage_closure_adjudication_verdict" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_attest_lineage_arbitration_debt_retirement" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_reopen_lineage_arbitration_debt_retirement" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action ===
+              "tenant_checkpoint_lineage_closure_adjudication_settlement_publication" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_log_lineage_closure_adjudication_settlement_correction" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_confirm_lineage_closure_adjudication_settlement_sla" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_open_lineage_arbitration_debt_retirement_dispute" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action ===
+              "tenant_assign_lineage_arbitration_debt_retirement_dispute_reviewer" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_resolve_lineage_arbitration_debt_retirement_dispute" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_control_lineage_arbitration_debt_retirement_dispute_rollback" &&
+            row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_attest_external_session_identity_bridge" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_quarantine_external_session_identity_bridge" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
+        )
+      ).toBe(true)
+      expect(
+        auditJson.items.some(
+          (row) =>
+            row.action === "tenant_clear_external_session_identity_bridge" &&
+            row.sessionReferenceId === reissueDivergedJson.result.sessionReference.id
         )
       ).toBe(true)
 
@@ -8161,6 +9035,95 @@ describe("Runtime persistence mode", () => {
       expect(persistedDigest.exists()).toBe(true)
       expect(persistedDigest.data()?.lineageRootSessionReferenceId).toBe(
         actorSessionJson.sessionReference.id
+      )
+      const persistedArbitrationQueue = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_reconciliation_queue_arbitrations",
+          `tenancy-lineage-arbitration:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedArbitrationQueue.exists()).toBe(true)
+      expect(persistedArbitrationQueue.data()?.status).toBe("arbitrated")
+      expect(persistedArbitrationQueue.data()?.disposition).toBe("confirm_needs_review")
+      const persistedClosureCheckpoint = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_digest_closure_checkpoints",
+          `tenancy-lineage-closure:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedClosureCheckpoint.exists()).toBe(true)
+      expect(persistedClosureCheckpoint.data()?.status).toBe("reopened")
+      expect(persistedClosureCheckpoint.data()?.reopenTrigger).toBe(
+        "Runtime reopened due follow-up divergence check"
+      )
+
+      const persistedClosureAdjudication = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_closure_adjudications",
+          `tenancy-lineage-closure-adjudication:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedClosureAdjudication.exists()).toBe(true)
+      expect(persistedClosureAdjudication.data()?.status).toBe("verdict_recorded")
+      expect(persistedClosureAdjudication.data()?.verdictDisposition).toBe("mark_reconciled")
+
+      const persistedDebtLedger = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_arbitration_debt_retirement_ledgers",
+          `tenancy-lineage-arbitration-debt:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedDebtLedger.exists()).toBe(true)
+      expect(persistedDebtLedger.data()?.status).toBe("retirement_attested")
+      expect(persistedDebtLedger.data()?.carryoverSignals).toContain(
+        "Runtime carryover reopened after attestation"
+      )
+
+      const persistedSettlement = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_closure_adjudication_settlements",
+          `tenancy-lineage-closure-settlement:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedSettlement.exists()).toBe(true)
+      expect(persistedSettlement.data()?.status).toBe("sla_confirmed")
+      expect(persistedSettlement.data()?.verdictPublicationChannel).toBe("runtime_workboard")
+      expect(persistedSettlement.data()?.publicationCorrectionNote).toBe(
+        "Runtime correction before settlement confirmation"
+      )
+
+      const persistedDebtDisputeLedger = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_lineage_arbitration_debt_retirement_dispute_ledgers",
+          `tenancy-lineage-arbitration-debt-dispute:${actorSessionJson.sessionReference.id}`
+        )
+      )
+      expect(persistedDebtDisputeLedger.exists()).toBe(true)
+      expect(persistedDebtDisputeLedger.data()?.status).toBe("rollback_controlled")
+      expect(persistedDebtDisputeLedger.data()?.resolutionOutcome).toBe("require_rollback_review")
+      expect(persistedDebtDisputeLedger.data()?.rollbackControlNote).toBe(
+        "Runtime rollback control engaged"
+      )
+
+      const persistedIdentityBridge = await getDoc(
+        doc(
+          ctx.firestore(),
+          "tenancy_external_session_identity_bridges",
+          `tenancy-external-session-identity-bridge:${reissueDivergedJson.result.sessionReference.id}`
+        )
+      )
+      expect(persistedIdentityBridge.exists()).toBe(true)
+      expect(persistedIdentityBridge.data()?.status).toBe("cleared")
+      expect(persistedIdentityBridge.data()?.mismatchStatus).toBe("aligned")
+      expect(persistedIdentityBridge.data()?.assertedIssuer).toBe("idp.runtime.local")
+      expect(persistedIdentityBridge.data()?.clearReason).toBe(
+        "Runtime manual override after bridge review"
       )
 
       const persistedClerkSessionRef = await getDoc(

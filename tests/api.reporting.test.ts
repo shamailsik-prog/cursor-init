@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { GET as clientsGet, POST as clientsPost } from "@/app/api/d1/clients/route"
 import { GET as mattersGet, POST as mattersPost } from "@/app/api/d1/matters/route"
-import { GET as reportingGet } from "@/app/api/d1/reporting/route"
+import { GET as reportingGet, POST as reportingPost } from "@/app/api/d1/reporting/route"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 
 afterEach(() => {
@@ -36,6 +36,19 @@ function postMatter(body: unknown, key: string) {
 
 function getReport(params: URLSearchParams) {
   return reportingGet(new Request(`http://127.0.0.1/api/d1/reporting?${params.toString()}`))
+}
+
+function postReport(body: unknown, key: string) {
+  return reportingPost(
+    new Request("http://127.0.0.1/api/d1/reporting", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": key,
+      },
+      body: JSON.stringify(body),
+    })
+  )
 }
 
 describe("GET /api/d1/reporting", () => {
@@ -166,5 +179,113 @@ describe("GET /api/d1/reporting", () => {
       new Request("http://127.0.0.1/api/d1/matters?userId=partner_a&limit=10&cursor=0")
     )
     expect(mattersListStillWorks.status).toBe(200)
+  })
+
+  it("tracks report export analytics and relevance recompute with partner governance", async () => {
+    const createdMatter = await postMatter(
+      {
+        action: "create",
+        actorId: "partner_a",
+        firmId: "firmA",
+        clientId: "client_a",
+        title: "Export Governance Matter",
+        courtId: "SHC",
+        classification: "internal",
+      },
+      "e10f3d9c-5e4d-43ff-a9e6-6d5f60799489"
+    )
+    expect(createdMatter.status).toBe(200)
+    const createdJson = (await createdMatter.json()) as { result: { matter: { id: string } } }
+    const matterId = createdJson.result.matter.id
+
+    const denied = await postReport(
+      {
+        action: "record_matter_report_export",
+        actorId: "associate_a",
+        matterId,
+        exportFormat: "csv",
+        exportScope: "summary",
+      },
+      "ffbad764-1df6-40ef-892f-cbbd6760621d"
+    )
+    expect(denied.status).toBe(403)
+
+    const exportRes = await postReport(
+      {
+        action: "record_matter_report_export",
+        actorId: "partner_a",
+        matterId,
+        exportFormat: "csv",
+        exportScope: "summary",
+        reason: "weekly governance packet",
+      },
+      "148fe9a4-b108-4ae8-b1d4-2efbf65dad35"
+    )
+    expect(exportRes.status).toBe(200)
+    const exportJson = (await exportRes.json()) as {
+      result: {
+        exportAnalytics: { exportCount: number; lastExportFormat: string | null }
+      }
+      reused: boolean
+    }
+    expect(exportJson.reused).toBe(false)
+    expect(exportJson.result.exportAnalytics.exportCount).toBe(1)
+    expect(exportJson.result.exportAnalytics.lastExportFormat).toBe("csv")
+
+    const recomputeRes = await postReport(
+      {
+        action: "recompute_matter_report_relevance",
+        actorId: "partner_a",
+        matterId,
+        reason: "post-export relevance pass",
+        provenanceTags: ["manual_override", "matter:priority"],
+      },
+      "dff91741-a0a2-4ab4-a761-b42cdc58eb06"
+    )
+    expect(recomputeRes.status).toBe(200)
+    const recomputeJson = (await recomputeRes.json()) as {
+      result: {
+        relevanceSnapshot: { scoreBand: string; freshnessStatus: string; provenanceTags: string[] }
+      }
+    }
+    expect(["low", "medium", "high"]).toContain(recomputeJson.result.relevanceSnapshot.scoreBand)
+    expect(recomputeJson.result.relevanceSnapshot.freshnessStatus).toBe("fresh")
+    expect(recomputeJson.result.relevanceSnapshot.provenanceTags).toContain("manual_override")
+
+    const exportView = await getReport(
+      new URLSearchParams({
+        view: "matter_report_export_analytics",
+        actorId: "partner_a",
+        matterId,
+        scoreBand: recomputeJson.result.relevanceSnapshot.scoreBand,
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(exportView.status).toBe(200)
+    const exportViewJson = (await exportView.json()) as {
+      items: Array<{ matterId: string; relevance: { freshnessStatus: string } | null }>
+    }
+    expect(exportViewJson.items.some((row) => row.matterId === matterId)).toBe(true)
+    expect(exportViewJson.items[0]?.relevance?.freshnessStatus).toBe("fresh")
+
+    const relevanceView = await getReport(
+      new URLSearchParams({
+        view: "matter_report_relevance_snapshots",
+        actorId: "partner_a",
+        matterId,
+        scoreBand: recomputeJson.result.relevanceSnapshot.scoreBand,
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(relevanceView.status).toBe(200)
+    const relevanceViewJson = (await relevanceView.json()) as {
+      items: Array<{ matterId: string; freshnessStatus: string }>
+    }
+    expect(relevanceViewJson.items.some((row) => row.matterId === matterId)).toBe(true)
+    expect(relevanceViewJson.items[0]?.freshnessStatus).toBe("fresh")
   })
 })

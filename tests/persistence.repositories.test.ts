@@ -25,7 +25,9 @@ describe("Firestore repository adapters", () => {
   it("round-trips matters/documents/drafts/workflow/filings without secrets (emulator)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore()
-      const repos = createFirestoreRepositories(db)
+      const repos = createFirestoreRepositories(
+        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
+      )
 
       await repos.users.upsert({
         id: "associate_a",
@@ -129,6 +131,267 @@ describe("Firestore repository adapters", () => {
       expect(
         tenancyDigestsByFirm.some((row) => row.lineageRootSessionReferenceId === "tsr_1")
       ).toBe(true)
+      await repos.tenancyLineageReconciliationQueueArbitrations.upsert({
+        id: "tenancy-lineage-arbitration:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        digestId: "tenancy-lineage-digest:tsr_1",
+        digestStatus: "needs_review",
+        status: "assigned",
+        assignedPartnerId: "partner_a",
+        assignedBy: "partner_a",
+        assignedAt: 106,
+        slaWindowStartedAt: 106,
+        slaWindowDueAt: 406,
+        disposition: null,
+        dispositionBy: null,
+        dispositionAt: null,
+        notes: ["queue assigned"],
+        updatedAt: 106,
+      })
+      const tenancyQueue = await repos.tenancyLineageReconciliationQueueArbitrations.get(
+        "tenancy-lineage-arbitration:tsr_1"
+      )
+      expect(tenancyQueue?.status).toBe("assigned")
+      const tenancyQueueByFirm =
+        await repos.tenancyLineageReconciliationQueueArbitrations.listByFirm("firmA")
+      expect(
+        tenancyQueueByFirm.some((row) => row.lineageRootSessionReferenceId === "tsr_1")
+      ).toBe(true)
+      const tenancyQueueByRoot =
+        await repos.tenancyLineageReconciliationQueueArbitrations.listByLineageRoot("tsr_1")
+      expect(tenancyQueueByRoot.some((row) => row.id === "tenancy-lineage-arbitration:tsr_1")).toBe(
+        true
+      )
+      await repos.tenancyLineageDigestClosureCheckpoints.upsert({
+        id: "tenancy-lineage-closure:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        digestId: "tenancy-lineage-digest:tsr_1",
+        status: "closed_attested",
+        attestedBy: "partner_a",
+        attestedAt: 107,
+        closureReason: "queue arbitration completed",
+        reopenTrigger: null,
+        reopenedBy: null,
+        reopenedAt: null,
+        notes: ["closure attested"],
+        updatedAt: 107,
+      })
+      const tenancyClosure = await repos.tenancyLineageDigestClosureCheckpoints.get(
+        "tenancy-lineage-closure:tsr_1"
+      )
+      expect(tenancyClosure?.status).toBe("closed_attested")
+      const tenancyClosuresByFirm = await repos.tenancyLineageDigestClosureCheckpoints.listByFirm(
+        "firmA"
+      )
+      expect(tenancyClosuresByFirm.some((row) => row.id === "tenancy-lineage-closure:tsr_1")).toBe(
+        true
+      )
+      const tenancyClosuresByRoot =
+        await repos.tenancyLineageDigestClosureCheckpoints.listByLineageRoot("tsr_1")
+      expect(tenancyClosuresByRoot.some((row) => row.id === "tenancy-lineage-closure:tsr_1")).toBe(
+        true
+      )
+      await repos.tenancyLineageClosureAdjudications.upsert({
+        id: "tenancy-lineage-closure-adjudication:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        digestId: "tenancy-lineage-digest:tsr_1",
+        arbitrationQueueId: "tenancy-lineage-arbitration:tsr_1",
+        closureCheckpointId: "tenancy-lineage-closure:tsr_1",
+        status: "quorum_pending",
+        requiredPanelQuorum: 2,
+        confirmedPanelPartnerIds: ["partner_a"],
+        verdictWindowStartedAt: null,
+        verdictWindowDueAt: null,
+        verdictDisposition: null,
+        verdictRecordedBy: null,
+        verdictRecordedAt: null,
+        dispositionDriftReasons: ["closure_checkpoint_reopened"],
+        reopenedClosureTrigger: "digest_regressed:open_lineage_dispute",
+        notes: ["quorum pending"],
+        updatedAt: 108,
+      })
+      const tenancyAdjudication = await repos.tenancyLineageClosureAdjudications.get(
+        "tenancy-lineage-closure-adjudication:tsr_1"
+      )
+      expect(tenancyAdjudication?.status).toBe("quorum_pending")
+      const tenancyAdjudicationsByFirm = await repos.tenancyLineageClosureAdjudications.listByFirm(
+        "firmA"
+      )
+      expect(
+        tenancyAdjudicationsByFirm.some(
+          (row) => row.id === "tenancy-lineage-closure-adjudication:tsr_1"
+        )
+      ).toBe(true)
+      const tenancyAdjudicationsByRoot =
+        await repos.tenancyLineageClosureAdjudications.listByLineageRoot("tsr_1")
+      expect(
+        tenancyAdjudicationsByRoot.some(
+          (row) => row.id === "tenancy-lineage-closure-adjudication:tsr_1"
+        )
+      ).toBe(true)
+      await repos.tenancyLineageArbitrationDebtRetirementLedgers.upsert({
+        id: "tenancy-lineage-arbitration-debt:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        digestId: "tenancy-lineage-digest:tsr_1",
+        arbitrationQueueId: "tenancy-lineage-arbitration:tsr_1",
+        closureCheckpointId: "tenancy-lineage-closure:tsr_1",
+        status: "pressure_open",
+        unresolvedQueuePressureCount: 3,
+        ownerAssignmentDebtCount: 1,
+        assignedPartnerId: null,
+        retirementAttestedBy: null,
+        retirementAttestedAt: null,
+        retirementNote: null,
+        carryoverSignals: ["open_dispute_pressure", "owner_assignment_debt"],
+        carryoverReopenedBy: null,
+        carryoverReopenedAt: null,
+        notes: ["queue pressure open"],
+        updatedAt: 109,
+      })
+      const tenancyDebtLedger = await repos.tenancyLineageArbitrationDebtRetirementLedgers.get(
+        "tenancy-lineage-arbitration-debt:tsr_1"
+      )
+      expect(tenancyDebtLedger?.status).toBe("pressure_open")
+      const tenancyDebtLedgersByFirm =
+        await repos.tenancyLineageArbitrationDebtRetirementLedgers.listByFirm("firmA")
+      expect(
+        tenancyDebtLedgersByFirm.some((row) => row.id === "tenancy-lineage-arbitration-debt:tsr_1")
+      ).toBe(true)
+      const tenancyDebtLedgersByRoot =
+        await repos.tenancyLineageArbitrationDebtRetirementLedgers.listByLineageRoot("tsr_1")
+      expect(
+        tenancyDebtLedgersByRoot.some((row) => row.id === "tenancy-lineage-arbitration-debt:tsr_1")
+      ).toBe(true)
+      await repos.tenancyLineageClosureAdjudicationSettlements.upsert({
+        id: "tenancy-lineage-closure-settlement:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        digestId: "tenancy-lineage-digest:tsr_1",
+        adjudicationId: "tenancy-lineage-closure-adjudication:tsr_1",
+        status: "publication_checkpointed",
+        verdictPublicationCheckpointedBy: "partner_a",
+        verdictPublicationCheckpointedAt: 110,
+        verdictPublicationChannel: "partner_workboard",
+        publicationCorrectionNote: null,
+        publicationCorrectionBy: null,
+        publicationCorrectionAt: null,
+        settlementConfirmationSlaStartedAt: 111,
+        settlementConfirmationSlaDueAt: 211,
+        settlementConfirmedBy: null,
+        settlementConfirmedAt: null,
+        settlementSlaBreached: false,
+        notes: ["publication logged"],
+        updatedAt: 112,
+      })
+      const tenancySettlement = await repos.tenancyLineageClosureAdjudicationSettlements.get(
+        "tenancy-lineage-closure-settlement:tsr_1"
+      )
+      expect(tenancySettlement?.status).toBe("publication_checkpointed")
+      const tenancySettlementsByFirm =
+        await repos.tenancyLineageClosureAdjudicationSettlements.listByFirm("firmA")
+      expect(
+        tenancySettlementsByFirm.some((row) => row.id === "tenancy-lineage-closure-settlement:tsr_1")
+      ).toBe(true)
+      const tenancySettlementsByRoot =
+        await repos.tenancyLineageClosureAdjudicationSettlements.listByLineageRoot("tsr_1")
+      expect(
+        tenancySettlementsByRoot.some((row) => row.id === "tenancy-lineage-closure-settlement:tsr_1")
+      ).toBe(true)
+      await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.upsert({
+        id: "tenancy-lineage-arbitration-debt-dispute:tsr_1",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        digestId: "tenancy-lineage-digest:tsr_1",
+        debtLedgerId: "tenancy-lineage-arbitration-debt:tsr_1",
+        status: "reviewer_assigned",
+        challengeReason: "retirement packet incomplete",
+        challengeOpenedBy: "partner_a",
+        challengeOpenedAt: 113,
+        reviewerId: "partner_a",
+        reviewerAssignedBy: "partner_a",
+        reviewerAssignedAt: 114,
+        resolutionOutcome: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNote: null,
+        rollbackControlBy: null,
+        rollbackControlAt: null,
+        rollbackControlNote: null,
+        notes: ["review pending"],
+        updatedAt: 115,
+      })
+      const tenancyDebtDispute =
+        await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(
+          "tenancy-lineage-arbitration-debt-dispute:tsr_1"
+        )
+      expect(tenancyDebtDispute?.status).toBe("reviewer_assigned")
+      const tenancyDebtDisputesByFirm =
+        await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.listByFirm("firmA")
+      expect(
+        tenancyDebtDisputesByFirm.some(
+          (row) => row.id === "tenancy-lineage-arbitration-debt-dispute:tsr_1"
+        )
+      ).toBe(true)
+      const tenancyDebtDisputesByRoot =
+        await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.listByLineageRoot("tsr_1")
+      expect(
+        tenancyDebtDisputesByRoot.some(
+          (row) => row.id === "tenancy-lineage-arbitration-debt-dispute:tsr_1"
+        )
+      ).toBe(true)
+      await repos.tenancyExternalSessionIdentityBridges.upsert({
+        id: "tenancy-external-session-identity-bridge:tsr_1_child",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        sessionReferenceId: "tsr_1_child",
+        authBoundary: "external_session_hint",
+        sessionExternalSessionId: "ext-tsr-1-child",
+        status: "attested",
+        mismatchStatus: "aligned",
+        mismatchReasons: [],
+        assertedIssuer: "idp.local",
+        assertedSubject: "subject:partner_a",
+        assertedExternalSessionId: "ext-tsr-1-child",
+        attestedBy: "partner_a",
+        attestedAt: 116,
+        quarantinedBy: null,
+        quarantinedAt: null,
+        quarantineReason: null,
+        clearedBy: null,
+        clearedAt: null,
+        clearReason: null,
+        notes: ["initial bridge attestation"],
+        updatedAt: 117,
+      })
+      const tenancyIdentityBridge = await repos.tenancyExternalSessionIdentityBridges.get(
+        "tenancy-external-session-identity-bridge:tsr_1_child"
+      )
+      expect(tenancyIdentityBridge?.status).toBe("attested")
+      const tenancyIdentityBridgesByFirm =
+        await repos.tenancyExternalSessionIdentityBridges.listByFirm("firmA")
+      expect(
+        tenancyIdentityBridgesByFirm.some(
+          (row) => row.id === "tenancy-external-session-identity-bridge:tsr_1_child"
+        )
+      ).toBe(true)
+      const tenancyIdentityBridgesByRoot =
+        await repos.tenancyExternalSessionIdentityBridges.listByLineageRoot("tsr_1")
+      expect(
+        tenancyIdentityBridgesByRoot.some(
+          (row) => row.id === "tenancy-external-session-identity-bridge:tsr_1_child"
+        )
+      ).toBe(true)
+      const tenancyIdentityBridgesBySession =
+        await repos.tenancyExternalSessionIdentityBridges.listBySessionReference("tsr_1_child")
+      expect(
+        tenancyIdentityBridgesBySession.some(
+          (row) => row.id === "tenancy-external-session-identity-bridge:tsr_1_child"
+        )
+      ).toBe(true)
       await repos.committeeOutputs.create({
         id: "cbo_1",
         firmId: "firmA",
@@ -196,6 +459,49 @@ describe("Firestore repository adapters", () => {
           (row) => row.templateId === "motion_template" && row.templateSearchCount === 7
         )
       ).toBe(true)
+      await repos.matterReportExportAnalytics.upsert({
+        id: "matter_report_export:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        classification: "internal",
+        exportCount: 2,
+        lastExportedAt: 45,
+        lastExportedBy: "partner_a",
+        lastExportFormat: "csv",
+        lastExportScope: "summary",
+        lastExportReason: "weekly_export",
+        updatedAt: 45,
+      })
+      const exportAnalytics = await repos.matterReportExportAnalytics.get("matter_report_export:mat_1")
+      expect(exportAnalytics?.exportCount).toBe(2)
+      const exportAnalyticsByFirm = await repos.matterReportExportAnalytics.listByFirm("firmA")
+      expect(exportAnalyticsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const exportAnalyticsByMatter = await repos.matterReportExportAnalytics.listByMatter("mat_1")
+      expect(
+        exportAnalyticsByMatter.some(
+          (row) => row.lastExportFormat === "csv" && row.lastExportScope === "summary"
+        )
+      ).toBe(true)
+      await repos.matterReportRelevanceSnapshots.upsert({
+        id: "matter_report_relevance:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        classification: "internal",
+        relevanceScore: 72,
+        scoreBand: "medium",
+        freshnessStatus: "fresh",
+        provenanceTags: ["matter_status:live", "case_number_status:recorded"],
+        recomputedAt: 46,
+        recomputedBy: "partner_a",
+        recomputeReason: "manual_recompute",
+        updatedAt: 46,
+      })
+      const relevanceSnapshot = await repos.matterReportRelevanceSnapshots.get("matter_report_relevance:mat_1")
+      expect(relevanceSnapshot?.scoreBand).toBe("medium")
+      const relevanceByFirm = await repos.matterReportRelevanceSnapshots.listByFirm("firmA")
+      expect(relevanceByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const relevanceByMatter = await repos.matterReportRelevanceSnapshots.listByMatter("mat_1")
+      expect(relevanceByMatter.some((row) => row.recomputeReason === "manual_recompute")).toBe(true)
       await repos.workflowOpsActivity.upsert({
         id: "ops:workflow_event:wfe_1",
         firmId: "firmA",
@@ -216,6 +522,34 @@ describe("Firestore repository adapters", () => {
       expect(opsRow?.action).toBe("workflow_transition")
       const opsRows = await repos.workflowOpsActivity.listByFirm("firmA")
       expect(opsRows.some((row) => row.id === "ops:workflow_event:wfe_1")).toBe(true)
+      await repos.workflowOpsAlertDigests.upsert({
+        id: "workflow_ops_alert:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        classification: "internal",
+        severity: "high",
+        backlogPressureCount: 5,
+        unresolvedFollowUpDebtCount: 2,
+        staleQueueWindowCount: 1,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "follow_up", "pressure"],
+        recomputedAt: 47,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_runtime_check",
+        acknowledgedAt: null,
+        acknowledgedBy: null,
+        acknowledgedReason: null,
+        snoozedUntil: null,
+        snoozedBy: null,
+        snoozedReason: null,
+        updatedAt: 48,
+      })
+      const alertDigest = await repos.workflowOpsAlertDigests.get("workflow_ops_alert:mat_1")
+      expect(alertDigest?.severity).toBe("high")
+      const alertDigestsByFirm = await repos.workflowOpsAlertDigests.listByFirm("firmA")
+      expect(alertDigestsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const alertDigestsByMatter = await repos.workflowOpsAlertDigests.listByMatter("mat_1")
+      expect(alertDigestsByMatter.some((row) => row.recomputeReason === "ops_runtime_check")).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

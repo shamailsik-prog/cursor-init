@@ -160,7 +160,7 @@ export function OperatorAuditConsole() {
     ) {
       return ""
     }
-    const entity = body.result[key]
+    const entity = (body.result as Record<string, unknown>)[key]
     if (typeof entity !== "object" || entity === null || !("id" in entity) || typeof entity.id !== "string") {
       return ""
     }

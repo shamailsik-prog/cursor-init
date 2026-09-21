@@ -1,16 +1,16 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-20  
-Primary source: `docs/audits/phase-reaudit-48-59-after-stream2.md` plus `docs/audits/phase-reaudit-70-73-after-stream1.md`.
+Last updated: 2026-09-21  
+Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
-Requested re-audit anchor commit: `2dd668d4d061fbca490aca10393cb7c8c61058c9` (PR #92 merge tip state).
+Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
 
 ## Executive verdict
 
 No audited sample phase qualifies as **DONE product**.
 
 - `backend_real`: PASS across sampled batches (#34-#37, #38-#47, #48-#59, #60-#69, #70-#73).
-- `frontend_real`: mixed; #34-#37, #48-#59, and #70-#73 pass via `/ops`; Batch D/F widened-scope lanes remain pending dedicated independent refresh re-audits.
+- `frontend_real`: PASS across sampled lanes (#34-#37, #38-#47, #48-#59, #60-#69, #70-#73) via `/ops` route call paths.
 - `transport_stub`: still true because filing transport remains `TODO(firm)` + `_stub` + `blocked_todo_firm`.
 
 Because `transport_stub=true`, final status remains **PARTIAL** for all sampled phases.
@@ -36,9 +36,10 @@ Because `transport_stub=true`, final status remains **PARTIAL** for all sampled 
   - PR #88 tip `fbeba2c0de41`
   - PR #90 tip `835578cb3742`
   - PR #92 tip `453d7929fcb9`
-- #70-#73 now satisfy frontend call-site requirements in `/ops` with phase-specific actions + views.
-- Stream 2 follow-up landed additional Batch E remediation/rollover `/ops` call sites and views; Batch E is now independently re-audited as `FRONTEND_REAL=PASS` while retaining `transport_stub=true` cap.
-- Batch D/F still require dedicated independent refresh re-audits in their owning streams before their partial verdicts can be revised.
+- PR #99 tip `8ba7dbaa804f` (helper fix) is now merged and at current `origin/main` tip.
+- #70-#73 satisfy frontend call-site requirements in `/ops` with phase-specific actions + views.
+- Batch D/E/F action lattices are now executable in `/ops`: `runApiCallAllowingStatuses` is defined, imported from `app/ops/api-call-helpers.ts`, and wired through action paths.
+- Stream 2 follow-up extends Batch E remediation/rollover `/ops` call sites and governance reads; independent re-audit is recorded in `docs/audits/phase-reaudit-48-59-after-stream2.md`.
 - COMPLETE claim hard-fail remains enforced while transport stubs exist via:
   - `ci_gates/check_pr_phase_claims.py`
   - `.github/workflows/pr-phase-claim-gate.yml`
@@ -89,77 +90,146 @@ The gate fails when either condition is true:
 - Audit files:
   - `docs/audits/phase-sample-48-59-findings.md` (baseline forensic sample)
   - `docs/audits/phase-reaudit-48-59-after-stream2.md` (post-`/ops` frontend wiring re-audit)
-- Verdict: **PARTIAL only** (not COMPLETE)
+- Verdict: **NOT COMPLETE / PARTIAL only**
 - Date: 2026-09-20
 
 ### Blocking findings
 
-1. Baseline forensic sample originally found `FRONTEND_REAL` missing; Stream 2 re-audit now verifies Batch E action+view call sites are wired in `/ops`.
-2. Filing transport across `#49-#53` remains explicit stub/TODO(firm) boundary (`_stub` channels, `blocked_todo_firm`, `todo_firm_external_transport_blocked`), so transport realism is incomplete and must stay fail-closed.
+1. Filing transport across `#49-#53` remains explicit stub/TODO(firm) boundary (`_stub` channels, `blocked_todo_firm`, `todo_firm_external_transport_blocked`), so transport realism is incomplete and must stay fail-closed.
+2. COMPLETE/product-done classification remains blocked until external firm transport is implemented and re-audited.
 
 ### DoD summary
 
 - `SHA on main`: PASS (`#48-#59` confirmed on `main` by audit).
 - `BACKEND_REAL`: PASS/PARTIAL (transport-related items are internal parity only while external transport remains blocked).
-- `FRONTEND_REAL`: PASS (`/ops` Batch E action lattice + governance read lattice now exercised through real `/api/d4/filings` call paths).
+- `FRONTEND_REAL`: PASS (`/ops` Batch E filing/escalation lattice executes through defined helper wiring).
 - `stubs policy`: PASS (explicit and fail-closed).
 
 ## Batch D ledger — PR #38-#47 (independent audit)
 
 - Audit file: `docs/audits/phase-sample-38-47-findings.md`
-- Verdict: **PARTIAL** (major overall; blockers present on filing-linked items)
+- Verdict: **PARTIAL** (major overall; product-level transport cap remains)
 - Date: 2026-09-20
-
-> Note: Batch D rows below are historical at the time of that audit pass. A dedicated refresh re-audit is still required in the Batch D stream before changing these ledger verdicts.
 
 ### DoD summary
 
 - `SHA on main`: PASS (`#38-#47` confirmed on `main` by audit).
 - `BACKEND_REAL`: PASS across sampled claims.
-- `FRONTEND_REAL`: PARTIAL (view coverage is present, but action lane is blocked by undefined `runApiCallAllowingStatuses` in `/ops`).
+- `FRONTEND_REAL`: PASS (Batch D actions + views execute through `/ops` with helper wiring present).
 - `stubs policy`: filing-linked slices remain capped by explicit transport stubs (`TODO(firm)`, `_stub`, `blocked_todo_firm`).
 
 ### PR matrix (Batch D)
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #38 | Follow-up source persistence | `f78abce` | Yes | PASS | PARTIAL (action path wired but blocked by missing helper in `/ops`) | true | PARTIAL | major |
-| #39 | Membership persistence | `f93ec73` | Yes | PASS | PASS (`/ops` route family) | true | PARTIAL | blocker |
-| #40 | Tenancy membership | `2a411b5` | Yes | PASS | PARTIAL (`/api/p5/tenancy` reads wired; action lane blocked by missing helper) | true | PARTIAL | major |
-| #41 | Tenancy audit | `e0ee204` | Yes | PASS | PARTIAL (`/api/p5/tenancy` audit read wired; action lane blocked by missing helper) | true | PARTIAL | major |
-| #42 | Entity/client persistence | `b895247` | Yes | PASS | PARTIAL (`/api/d1/clients` call sites wired; create/conflict actions blocked by missing helper) | true | PARTIAL | major |
-| #43 | Audit write-through non-tenancy | `9ed9195` | Yes | PASS | PARTIAL (affected action lane blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #44 | Committee-brain output persistence | `a48f868` | Yes | PASS | PARTIAL (write path in batch action lane blocked by missing helper; list read is wired) | true | PARTIAL | major |
-| #45 | Matter/client reporting + search index | `2d2d0a8` | Yes | PASS | PARTIAL (reporting read wired; related action lane blocked by missing helper) | true | PARTIAL | major |
+| #38 | Follow-up source persistence | `f78abce` | Yes | PASS | PASS (action path executes via helper in `/ops`) | true | PARTIAL | major |
+| #39 | Membership persistence | `f93ec73` | Yes | PASS | PASS (`/ops` route family) | true | PARTIAL | major |
+| #40 | Tenancy membership | `2a411b5` | Yes | PASS | PASS (`/api/p5/tenancy` reads + action lane execute in `/ops`) | true | PARTIAL | major |
+| #41 | Tenancy audit | `e0ee204` | Yes | PASS | PASS (`/api/p5/tenancy` audit + action lane execute in `/ops`) | true | PARTIAL | major |
+| #42 | Entity/client persistence | `b895247` | Yes | PASS | PASS (`/api/d1/clients` create/conflict + views execute in `/ops`) | true | PARTIAL | major |
+| #43 | Audit write-through non-tenancy | `9ed9195` | Yes | PASS | PASS (action lane executes via helper in `/ops`) | true | PARTIAL | major |
+| #44 | Committee-brain output persistence | `a48f868` | Yes | PASS | PASS (write + list lanes execute in `/ops`) | true | PARTIAL | major |
+| #45 | Matter/client reporting + search index | `2d2d0a8` | Yes | PASS | PASS (reporting reads + related action lane execute in `/ops`) | true | PARTIAL | major |
 | #46 | Draft template analytics | `b896b60` | Yes | PASS | PASS (`/ops` templates + compose + drafts views) | true | PARTIAL | major |
-| #47 | Workflow ops reporting | `be269a9` | Yes | PASS | PARTIAL (`/api/d2/ops-reporting` read wired; batch action lane helper gap remains) | true | PARTIAL | major |
+| #47 | Workflow ops reporting | `be269a9` | Yes | PASS | PASS (`/api/d2/ops-reporting` read path plus Batch D action lane execute in `/ops`) | true | PARTIAL | major |
 
 ## Batch F ledger — PR #60-#69 (independent audit)
 
 - Audit file: `docs/audits/phase-sample-60-69-findings.md`
-- Verdict: **PARTIAL (blocker severity)** for COMPLETE-product classification
+- Verdict: **PARTIAL** (major overall; product-level transport cap remains)
 - Date: 2026-09-20
-
-> Note: Batch F rows below are historical at the time of that audit pass. A dedicated refresh re-audit is still required in the Batch F stream before changing these ledger verdicts.
 
 ### Blocking findings
 
-1. Follow-up `/ops` lattice wiring landed, but `FRONTEND_REAL` remains partial because the lattice helper `runApiCallAllowingStatuses` is undefined.
-2. `transport_stub` remains true (`TODO(firm)`, `_stub`, `blocked_todo_firm`) so COMPLETE/product-done remains fail-closed.
-3. Metadata-to-implementation drift appears in #66-#69 claim text vs runtime-affecting merged deltas.
+1. `transport_stub` remains true (`TODO(firm)`, `_stub`, `blocked_todo_firm`) so COMPLETE/product-done remains fail-closed.
+2. Metadata-to-implementation drift appears in #66-#69 claim text vs runtime-affecting merged deltas.
 
 ### PR matrix (Batch F)
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real (`/ops`) | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #60 | Remediation expiry + rollover breach watch | `72cc388` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #61 | Remediation lifecycle + reaffirmation SLA | `625ccc5` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #62 | Closure compliance digest + follow-up queue | `ab9cdca` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #63 | Closure SLA windows + auto-assignment | `5b2bd06` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #64 | Closure attestation + SLA exception digest | `5f0651e` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #65 | Attestation dispute + exception expiry enforcement | `8733a06` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #66 | Exception adjudication + enforcement rebalance | `c598fc9` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #67 | Panel quorum + rebalance execution | `1a3dd2c` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #68 | Adjudication SLO + rebalance safeguards | `f563876` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
-| #69 | SLO debt remediation + safeguard expiry | `15254ca` | Yes | PASS | PARTIAL (action lattice blocked by missing helper in `/ops`) | true | PARTIAL | blocker |
+| #60 | Remediation expiry + rollover breach watch | `72cc388` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #61 | Remediation lifecycle + reaffirmation SLA | `625ccc5` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #62 | Closure compliance digest + follow-up queue | `ab9cdca` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #63 | Closure SLA windows + auto-assignment | `5b2bd06` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #64 | Closure attestation + SLA exception digest | `5f0651e` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #65 | Attestation dispute + exception expiry enforcement | `8733a06` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #66 | Exception adjudication + enforcement rebalance | `c598fc9` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #67 | Panel quorum + rebalance execution | `1a3dd2c` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #68 | Adjudication SLO + rebalance safeguards | `f563876` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+| #69 | SLO debt remediation + safeguard expiry | `15254ca` | Yes | PASS | PASS (`/ops` governance lattice executes via helper) | true | PARTIAL | major |
+
+## Targeted ledger — PR #111 tenancy lineage adjudication/debt retirement
+
+- Audit file: `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`
+- Verdict: **PASS** (backend-scoped claim verified)
+- Date: 2026-09-21
+
+### DoD summary
+
+- `SHA on main`: PASS (`origin/main` at `a5235b5`; PR branch tip is ancestor of `main`).
+- `BACKEND_REAL`: PASS (tenancy actions/views + persistence + rules + tests verified).
+- `FRONTEND_REAL`: PASS as claim-honesty check (`frontend_real=false` is consistent for backend-only scope).
+- `stubs policy`: PASS (no COMPLETE/product-done overclaim; `transport_stub=true` remains explicit).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #111 | tenancy reconciliation closure adjudication + arbitration debt-retirement scaffolding | `a5235b5` | Yes | PASS | PASS (backend-only claim, `frontend_real=false`) | true | PASS (backend-scoped) | low |
+
+## Targeted ledger — PR #114 tenancy external-session identity bridge + IdP parity scaffolding
+
+- Audit file: `docs/audits/phase-pr114-tenancy-identity-bridge.md`
+- Verdict: **PARTIAL** (backend-real implementation with claim-hygiene/process failures)
+- Date: 2026-09-21
+
+### DoD summary
+
+- `SHA on main`: PASS (`origin/main` at `ce57557`; feature commit `6c4c293` is merged parent).
+- `backend_real=true` (tenancy identity-bridge actions/views + persistence + rules + tests verified).
+- `frontend_real=false` (backend-only delivery; no frontend call-site completion claim for this phase).
+- `transport_stub=true` (global filing transport TODO/stub markers still present).
+- `status=PARTIAL` (NOT COMPLETE / NOT product-done; PR metadata had a complete-claim policy failure).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #114 | tenancy external-session identity bridge + IdP parity scaffolding | `ce57557` | Yes | true | false | true | PARTIAL | major |
+
+## Re-audit addendum — PR #114 after label amend PR #117
+
+- Audit file: `docs/audits/phase-pr114-tenancy-identity-bridge.md`
+- Date: 2026-09-21
+- Main tip audited: `bf24a57e6056`
+- Verdict: **PARTIAL (minor)** — accepted transport-stub cap with corrected label honesty.
+
+### Re-audit findings
+
+1. Label amend is landed on `main` and docs now explicitly declare:
+   - `backend_real=true`
+   - `frontend_real=false`
+   - `transport_stub=true`
+   - `status=PARTIAL`
+   - NOT COMPLETE / NOT product-done wording
+2. Claim-gate replay outcome:
+   - historical PR #114 metadata shape still fails as expected (missing explicit flags + COMPLETE overclaim while stubs exist),
+   - amended honest metadata passes `ci_gates/check_pr_phase_claims.py`.
+3. Backend reality still holds for this phase:
+   - tenancy route action/view surfaces present,
+   - tenancy admin handlers + mismatch computation present,
+   - persistence + Firestore rules wiring present.
+4. No regressions observed in targeted checks:
+   - `tests/api.tenancy.test.ts` PASS,
+   - `tests/persistence.repositories.test.ts` PASS,
+   - `tests/persistence.runtime-mode.test.ts` PASS,
+   - Gate `G-0` PASS,
+   - Gate `G-1` PASS.
+
+### Updated targeted matrix entry
+
+| PR | Audit pass | Main tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #114 | Re-audit after PR #117 label amend | `bf24a57` | true | false | true | PARTIAL | minor |
 

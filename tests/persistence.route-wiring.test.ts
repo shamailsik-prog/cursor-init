@@ -83,7 +83,10 @@ const baseStore = {
   filingEscalationClosureQueueReentryCompliance: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
+  matterReportExportAnalytics: new Map(),
+  matterReportRelevanceSnapshots: new Map(),
   workflowOpsActivity: new Map(),
+  workflowOpsAlertDigests: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -1650,6 +1653,47 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
     },
+    matterReportExportAnalytics: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "matter_report_export:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          classification: "internal",
+          exportCount: 3,
+          lastExportedAt: 90,
+          lastExportedBy: "partner_a",
+          lastExportFormat: "csv",
+          lastExportScope: "summary",
+          lastExportReason: "repo mock",
+          updatedAt: 91,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    matterReportRelevanceSnapshots: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "matter_report_relevance:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          classification: "internal",
+          relevanceScore: 68,
+          scoreBand: "medium",
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "relevance"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 92,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
     workflowOpsActivity: {
       upsert: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
@@ -1671,6 +1715,35 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
           createdAt: 3,
         },
       ]),
+    },
+    workflowOpsAlertDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          classification: "internal",
+          severity: "high",
+          backlogPressureCount: 5,
+          unresolvedFollowUpDebtCount: 2,
+          staleQueueWindowCount: 1,
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "alert"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          acknowledgedAt: null,
+          acknowledgedBy: null,
+          acknowledgedReason: null,
+          snoozedUntil: null,
+          snoozedBy: null,
+          snoozedReason: null,
+          updatedAt: 4,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
     },
   })),
 }))
@@ -2338,6 +2411,21 @@ describe("Route wiring uses repository adapters", () => {
     expect(json.items.map((item) => item.id)).toContain("idx_repo")
   })
 
+  it("reporting route analytics view uses export/relevance repositories", async () => {
+    const { GET } = await import("@/app/api/d1/reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d1/reporting?view=matter_report_export_analytics&actorId=associate_a&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ matterId: string; exportCount: number; relevance: { scoreBand: string } | null }>
+    }
+    expect(json.items.some((item) => item.matterId === "mat_1" && item.exportCount === 3)).toBe(true)
+    expect(json.items[0]?.relevance?.scoreBand).toBe("medium")
+  })
+
   it("draft templates route GET uses repository draftTemplateAnalytics listByFirm", async () => {
     const { GET } = await import("@/app/api/d4/drafts/route")
     const res = await GET(
@@ -2360,5 +2448,18 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("ops_repo")
+  })
+
+  it("ops reporting alert-digest view uses repository workflowOpsAlertDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&severity=high&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; severity: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert:mat_1")
+    expect(json.items[0]?.severity).toBe("high")
   })
 })

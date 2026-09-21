@@ -136,10 +136,20 @@ service cloud.firestore {
     match /tenancy_session_references/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_lineage_dispute_attestations/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_lineage_reconciliation_digests/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_lineage_reconciliation_queue_arbitrations/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_lineage_digest_closure_checkpoints/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_lineage_closure_adjudications/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_lineage_arbitration_debt_retirement_ledgers/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_lineage_closure_adjudication_settlements/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_lineage_arbitration_debt_retirement_dispute_ledgers/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    match /tenancy_external_session_identity_bridges/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /committee_outputs/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /matter_client_search_index/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /draft_template_analytics/{id} { allow read: if sameFirm() && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /matter_report_export_analytics/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /matter_report_relevance_snapshots/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /workflow_ops_activity/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    match /workflow_ops_alert_digests/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_packet_artifacts/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_submission_dispatch_queue/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_annexures/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
