@@ -369,3 +369,25 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #127 | workflow alert enforcement-attestation + closure-debt variance digest scaffolding | `fdcce4c` | Yes | true | false | true | PASS (backend-scoped) | low |
 
+## Targeted ledger — PR #131 workflow alert enforcement waiver ledger + variance remediation queue scaffolding
+
+- Audit file: `docs/audits/phase-pr131-workflow-waiver-remediation.md`
+- Date: 2026-09-21
+- Main tip audited: `eb142f8`
+- Verdict: **PASS** (low) — backend-real implementation, label-honest metadata, and focused checks verified on merged SHA.
+
+### DoD summary
+
+- `SHA on main`: PASS (`origin/main` resolves to `eb142f8`; ancestry check succeeds).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertEnforcementWaiverLedgerRow` + `WorkflowOpsAlertVarianceRemediationQueueRow`, memory/Firestore repos, Firestore rules, and `/api/d2/ops-reporting` waiver/remediation views + actions are present).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; merged file list excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`transport_stub=true` remains explicit with PARTIAL classification).
+- `focused tests+gates`: PASS (targeted unit/route-wiring + Firestore rules/runtime + `G-0` + `G-1` green in independent rerun).
+- `process flags`: PASS (backend-only slice; `/ops` call-site evidence not required when `frontend_real=false` and no `app/ops/**` changes).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #131 | workflow alert enforcement waiver ledger + variance remediation queue scaffolding | `eb142f8` | Yes | true | false | true | PASS (backend-scoped) | low |
+
