@@ -57,6 +57,7 @@ import type {
   MatterReportExportAnalyticsRow,
   MatterReportRelevanceSnapshotRow,
   WorkflowOpsActivityRow,
+  WorkflowOpsAlertDigestRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -596,6 +597,13 @@ export type WorkflowOpsActivityRepository = {
   listByFirm(firmId: string): Promise<WorkflowOpsActivityRow[]>
 }
 
+export type WorkflowOpsAlertDigestRepository = {
+  upsert(row: WorkflowOpsAlertDigestRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertDigestRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertDigestRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertDigestRow[]>
+}
+
 export type TenancySessionReferenceRepository = {
   upsert(row: TenancySessionReferenceRow): Promise<void>
   get(id: string): Promise<TenancySessionReferenceRow | null>
@@ -748,6 +756,7 @@ export type SpineRepositories = {
   matterReportExportAnalytics: MatterReportExportAnalyticsRepository
   matterReportRelevanceSnapshots: MatterReportRelevanceSnapshotRepository
   workflowOpsActivity: WorkflowOpsActivityRepository
+  workflowOpsAlertDigests: WorkflowOpsAlertDigestRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
@@ -2044,6 +2053,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsActivity.values()].filter((row) => row.firmId === firmId)
+      },
+    },
+    workflowOpsAlertDigests: {
+      async upsert(row) {
+        store.workflowOpsAlertDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertDigests.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertDigests.values()].filter((row) => row.matterId === matterId)
       },
     },
     tenancySessionReferences: {

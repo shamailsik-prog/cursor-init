@@ -66,6 +66,7 @@ import type {
   MatterReportExportAnalyticsRow,
   MatterReportRelevanceSnapshotRow,
   WorkflowOpsActivityRow,
+  WorkflowOpsAlertDigestRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -1750,6 +1751,23 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<WorkflowOpsActivityRow>(db, "workflow_ops_activity", firmId)
+      },
+    },
+    workflowOpsAlertDigests: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_digests", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertDigestRow>(db, "workflow_ops_alert_digests", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertDigestRow>(db, "workflow_ops_alert_digests", firmId)
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_digests"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertDigestRow)
+          .filter((row) => row.matterId === matterId)
       },
     },
     tenancySessionReferences: {

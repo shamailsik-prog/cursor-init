@@ -134,6 +134,11 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d1/reporting` with partner-governed analytics actions (`record_matter_report_export`, `recompute_matter_report_relevance`) and monitoring views (`view=matter_report_export_analytics`, `view=matter_report_relevance_snapshots`) filterable by matter, score band, and freshness state.
 - Captured matter-level usage counters, last-export metadata, and relevance provenance tags while preserving idempotent replay semantics and audit provenance (`reporting_matter_export_recorded`, `reporting_matter_relevance_recomputed`) in internal scaffolding mode.
 - Extended API, route-wiring, repository, and runtime-mode persistence coverage for analytics/relevance lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for PR #118 (`be5b3e4`):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
 
 ## NEXT PHASE (queued for follow-up agent)
 

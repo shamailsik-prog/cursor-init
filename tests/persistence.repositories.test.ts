@@ -522,6 +522,34 @@ describe("Firestore repository adapters", () => {
       expect(opsRow?.action).toBe("workflow_transition")
       const opsRows = await repos.workflowOpsActivity.listByFirm("firmA")
       expect(opsRows.some((row) => row.id === "ops:workflow_event:wfe_1")).toBe(true)
+      await repos.workflowOpsAlertDigests.upsert({
+        id: "workflow_ops_alert:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        classification: "internal",
+        severity: "high",
+        backlogPressureCount: 5,
+        unresolvedFollowUpDebtCount: 2,
+        staleQueueWindowCount: 1,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "follow_up", "pressure"],
+        recomputedAt: 47,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_runtime_check",
+        acknowledgedAt: null,
+        acknowledgedBy: null,
+        acknowledgedReason: null,
+        snoozedUntil: null,
+        snoozedBy: null,
+        snoozedReason: null,
+        updatedAt: 48,
+      })
+      const alertDigest = await repos.workflowOpsAlertDigests.get("workflow_ops_alert:mat_1")
+      expect(alertDigest?.severity).toBe("high")
+      const alertDigestsByFirm = await repos.workflowOpsAlertDigests.listByFirm("firmA")
+      expect(alertDigestsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const alertDigestsByMatter = await repos.workflowOpsAlertDigests.listByMatter("mat_1")
+      expect(alertDigestsByMatter.some((row) => row.recomputeReason === "ops_runtime_check")).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

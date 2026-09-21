@@ -14,7 +14,7 @@ import {
 import { GET as filingsGet, POST as filingsPost } from "@/app/api/d4/filings/route"
 import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
-import { GET as opsReportingGet } from "@/app/api/d2/ops-reporting/route"
+import { GET as opsReportingGet, POST as opsReportingPost } from "@/app/api/d2/ops-reporting/route"
 import { GET as tenancyGet, POST as tenancyPost } from "@/app/api/p5/tenancy/route"
 import { GET as clientsGet, POST as clientsPost } from "@/app/api/d1/clients/route"
 import { GET as reportingGet, POST as reportingPost } from "@/app/api/d1/reporting/route"
@@ -7055,6 +7055,75 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const acknowledge = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "e3a06f30-74f4-4167-b367-c5f8d6d00f6e",
+          },
+          body: JSON.stringify({
+            action: "acknowledge_workflow_ops_alert_digest",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime digest acknowledge",
+          }),
+        })
+      )
+      expect(acknowledge.status).toBe(200)
+      const acknowledgeJson = (await acknowledge.json()) as {
+        result: { digest: { acknowledgedBy: string | null } }
+      }
+      expect(acknowledgeJson.result.digest.acknowledgedBy).toBe("partner_a")
+
+      const snoozeUntil = Date.now() + 60_000
+      const snooze = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "958ea837-92ab-4db2-a705-f26c87ff257f",
+          },
+          body: JSON.stringify({
+            action: "snooze_workflow_ops_alert_digest",
+            actorId: "partner_a",
+            matterId,
+            snoozedUntil: snoozeUntil,
+            reason: "runtime digest snooze",
+          }),
+        })
+      )
+      expect(snooze.status).toBe(200)
+      const snoozeJson = (await snooze.json()) as {
+        result: { digest: { snoozedBy: string | null; snoozedUntil: number | null } }
+      }
+      expect(snoozeJson.result.digest.snoozedBy).toBe("partner_a")
+      expect((snoozeJson.result.digest.snoozedUntil ?? 0) >= snoozeUntil).toBe(true)
+
+      getRuntimeStore().workflowOpsAlertDigests = new Map()
+      const alertDigestView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(alertDigestView.status).toBe(200)
+      const alertDigestJson = (await alertDigestView.json()) as {
+        items: Array<{
+          matterId: string | null
+          severity: string
+          acknowledgedBy: string | null
+          snoozedBy: string | null
+        }>
+      }
+      expect(
+        alertDigestJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.acknowledgedBy === "partner_a" &&
+            row.snoozedBy === "partner_a"
+        )
+      ).toBe(true)
+
       const persistedOps = await getDocs(collection(ctx.firestore(), "workflow_ops_activity"))
       expect(
         persistedOps.docs.some(
@@ -7070,6 +7139,16 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.source === "court_ops" &&
             entry.data()?.action === "court_ops_resolve_follow_up"
+        )
+      ).toBe(true)
+      const persistedAlertDigests = await getDocs(collection(ctx.firestore(), "workflow_ops_alert_digests"))
+      expect(
+        persistedAlertDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.acknowledgedBy === "partner_a" &&
+            entry.data()?.snoozedBy === "partner_a"
         )
       ).toBe(true)
     })
