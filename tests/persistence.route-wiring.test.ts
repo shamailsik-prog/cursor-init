@@ -86,6 +86,7 @@ const baseStore = {
   matterReportExportAnalytics: new Map(),
   matterReportRelevanceSnapshots: new Map(),
   workflowOpsActivity: new Map(),
+  workflowOpsAlertDigests: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -1715,6 +1716,35 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
     },
+    workflowOpsAlertDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          classification: "internal",
+          severity: "high",
+          backlogPressureCount: 5,
+          unresolvedFollowUpDebtCount: 2,
+          staleQueueWindowCount: 1,
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "alert"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          acknowledgedAt: null,
+          acknowledgedBy: null,
+          acknowledgedReason: null,
+          snoozedUntil: null,
+          snoozedBy: null,
+          snoozedReason: null,
+          updatedAt: 4,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -2418,5 +2448,18 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("ops_repo")
+  })
+
+  it("ops reporting alert-digest view uses repository workflowOpsAlertDigests listByFirm", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&severity=high&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; severity: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert:mat_1")
+    expect(json.items[0]?.severity).toBe("high")
   })
 })

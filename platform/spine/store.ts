@@ -1967,6 +1967,33 @@ export type WorkflowOpsActivityRow = {
   createdAt: number
 }
 
+export type WorkflowOpsAlertDigestSeverity = "low" | "medium" | "high" | "critical"
+
+export type WorkflowOpsAlertDigestFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertDigestRow = {
+  id: string
+  firmId: string
+  matterId: string | null
+  classification: Classification
+  severity: WorkflowOpsAlertDigestSeverity
+  backlogPressureCount: number
+  unresolvedFollowUpDebtCount: number
+  staleQueueWindowCount: number
+  freshnessStatus: WorkflowOpsAlertDigestFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  acknowledgedAt: number | null
+  acknowledgedBy: string | null
+  acknowledgedReason: string | null
+  snoozedUntil: number | null
+  snoozedBy: string | null
+  snoozedReason: string | null
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2071,6 +2098,7 @@ export class SpineStore {
   matterReportExportAnalytics = new Map<string, MatterReportExportAnalyticsRow>()
   matterReportRelevanceSnapshots = new Map<string, MatterReportRelevanceSnapshotRow>()
   workflowOpsActivity = new Map<string, WorkflowOpsActivityRow>()
+  workflowOpsAlertDigests = new Map<string, WorkflowOpsAlertDigestRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()
