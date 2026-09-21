@@ -413,3 +413,25 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #133 | workflow waiver-expiry + variance-remediation SLA scaffolding | `632fbda` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
 
+## Targeted ledger — PR #136 workflow alert waiver-expiry disputes + remediation SLA breach escalation
+
+- Audit file: `docs/audits/phase-pr136-workflow-waiver-dispute-sla-escalation.md`
+- Date: 2026-09-21
+- Feature merge SHA on `main`: `f20cdf1` (distinct from post-merge tip `f270e0b` which lands PR #135 claim-gate negation fix)
+- Verdict: **PARTIAL** (medium) — backend-real slice and focused validation are green; claim-gate replay still fails on PR metadata wording (`docs-only` scaffold rule + `never COMPLETE` token not negated by post-#135 regex).
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `f20cdf1`; PR head `42e7b0b` is merge parent-2).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertWaiverExpiryDisputeRow` + `WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow`, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` dispute/escalation views + open/assign/resolve actions, audit write-through paths present).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; merged file list excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS semantically (PARTIAL + `transport_stub=true`); machine-gate wording hazards documented in audit F).
+- `focused tests+gates`: PASS (targeted unit/route-wiring + Firestore persistence/runtime + `G-0` + `G-1` green in independent rerun).
+- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` replay on PR #136 metadata at post-#135 gate: scaffold/docs-only false positive from roadmap bullet + `never COMPLETE` not covered by negation disclaimer regex).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #136 | workflow alert waiver-expiry disputes + remediation SLA breach escalation | `f20cdf1` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
+
