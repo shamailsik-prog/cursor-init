@@ -83,6 +83,8 @@ const baseStore = {
   filingEscalationClosureQueueReentryCompliance: new Map(),
   matterClientSearchIndex: new Map(),
   draftTemplateAnalytics: new Map(),
+  matterReportExportAnalytics: new Map(),
+  matterReportRelevanceSnapshots: new Map(),
   workflowOpsActivity: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
@@ -1650,6 +1652,47 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
     },
+    matterReportExportAnalytics: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "matter_report_export:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          classification: "internal",
+          exportCount: 3,
+          lastExportedAt: 90,
+          lastExportedBy: "partner_a",
+          lastExportFormat: "csv",
+          lastExportScope: "summary",
+          lastExportReason: "repo mock",
+          updatedAt: 91,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    matterReportRelevanceSnapshots: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "matter_report_relevance:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          classification: "internal",
+          relevanceScore: 68,
+          scoreBand: "medium",
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "relevance"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 92,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
     workflowOpsActivity: {
       upsert: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
@@ -2336,6 +2379,21 @@ describe("Route wiring uses repository adapters", () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { items: Array<{ id: string }> }
     expect(json.items.map((item) => item.id)).toContain("idx_repo")
+  })
+
+  it("reporting route analytics view uses export/relevance repositories", async () => {
+    const { GET } = await import("@/app/api/d1/reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d1/reporting?view=matter_report_export_analytics&actorId=associate_a&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ matterId: string; exportCount: number; relevance: { scoreBand: string } | null }>
+    }
+    expect(json.items.some((item) => item.matterId === "mat_1" && item.exportCount === 3)).toBe(true)
+    expect(json.items[0]?.relevance?.scoreBand).toBe("medium")
   })
 
   it("draft templates route GET uses repository draftTemplateAnalytics listByFirm", async () => {

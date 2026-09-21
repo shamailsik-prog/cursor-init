@@ -1917,6 +1917,39 @@ export type DraftTemplateAnalyticsRow = {
   updatedAt: number
 }
 
+export type MatterReportExportAnalyticsRow = {
+  id: string
+  firmId: string
+  matterId: string
+  classification: Classification
+  exportCount: number
+  lastExportedAt: number | null
+  lastExportedBy: string | null
+  lastExportFormat: "csv" | "json" | "pdf" | null
+  lastExportScope: "summary" | "detailed" | "relevance_review" | null
+  lastExportReason: string | null
+  updatedAt: number
+}
+
+export type MatterReportRelevanceScoreBand = "high" | "medium" | "low"
+
+export type MatterReportRelevanceFreshnessStatus = "fresh" | "stale"
+
+export type MatterReportRelevanceSnapshotRow = {
+  id: string
+  firmId: string
+  matterId: string
+  classification: Classification
+  relevanceScore: number
+  scoreBand: MatterReportRelevanceScoreBand
+  freshnessStatus: MatterReportRelevanceFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export type WorkflowOpsActivityRow = {
   id: string
   firmId: string
@@ -2035,6 +2068,8 @@ export class SpineStore {
   committeeOutputs = new Map<string, CommitteeBrainOutput>()
   matterClientSearchIndex = new Map<string, MatterClientSearchIndexRow>()
   draftTemplateAnalytics = new Map<string, DraftTemplateAnalyticsRow>()
+  matterReportExportAnalytics = new Map<string, MatterReportExportAnalyticsRow>()
+  matterReportRelevanceSnapshots = new Map<string, MatterReportRelevanceSnapshotRow>()
   workflowOpsActivity = new Map<string, WorkflowOpsActivityRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()

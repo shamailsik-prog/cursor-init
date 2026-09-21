@@ -17,7 +17,7 @@ import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops
 import { GET as opsReportingGet } from "@/app/api/d2/ops-reporting/route"
 import { GET as tenancyGet, POST as tenancyPost } from "@/app/api/p5/tenancy/route"
 import { GET as clientsGet, POST as clientsPost } from "@/app/api/d1/clients/route"
-import { GET as reportingGet } from "@/app/api/d1/reporting/route"
+import { GET as reportingGet, POST as reportingPost } from "@/app/api/d1/reporting/route"
 import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
@@ -7306,7 +7306,7 @@ describe("Runtime persistence mode", () => {
     })
   })
 
-  it("persists matter/client search index rows and rehydrates reporting after reset", async () => {
+  it("persists reporting index and matter analytics scaffolding after reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
 
@@ -7377,6 +7377,70 @@ describe("Runtime persistence mode", () => {
       const clerkJson = (await clerkList.json()) as { total: number }
       expect(clerkJson.total).toBe(0)
 
+      const exportRecord = await reportingPost(
+        new Request("http://127.0.0.1/api/d1/reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "1e24ccf1-f751-46d4-b53d-8f6d41f51b13",
+          },
+          body: JSON.stringify({
+            action: "record_matter_report_export",
+            actorId: "partner_a",
+            matterId,
+            exportFormat: "csv",
+            exportScope: "summary",
+            reason: "runtime persistence verification",
+          }),
+        })
+      )
+      expect(exportRecord.status).toBe(200)
+
+      const recompute = await reportingPost(
+        new Request("http://127.0.0.1/api/d1/reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "f678e4f7-7da5-4d17-9ef9-4530f3d0e5c7",
+          },
+          body: JSON.stringify({
+            action: "recompute_matter_report_relevance",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime recompute check",
+            provenanceTags: ["runtime_mode_test"],
+          }),
+        })
+      )
+      expect(recompute.status).toBe(200)
+
+      getRuntimeStore().matterReportExportAnalytics = new Map()
+      getRuntimeStore().matterReportRelevanceSnapshots = new Map()
+
+      const exportView = await reportingGet(
+        new Request(
+          `http://127.0.0.1/api/d1/reporting?view=matter_report_export_analytics&actorId=partner_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(exportView.status).toBe(200)
+      const exportViewJson = (await exportView.json()) as {
+        items: Array<{ matterId: string; exportCount: number; relevance: { freshnessStatus: string } | null }>
+      }
+      expect(exportViewJson.items.some((row) => row.matterId === matterId && row.exportCount >= 1)).toBe(true)
+      expect(exportViewJson.items[0]?.relevance?.freshnessStatus).toBe("fresh")
+
+      const relevanceView = await reportingGet(
+        new Request(
+          `http://127.0.0.1/api/d1/reporting?view=matter_report_relevance_snapshots&actorId=partner_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(relevanceView.status).toBe(200)
+      const relevanceJson = (await relevanceView.json()) as {
+        items: Array<{ matterId: string; scoreBand: string; freshnessStatus: string }>
+      }
+      expect(relevanceJson.items.some((row) => row.matterId === matterId)).toBe(true)
+      expect(["low", "medium", "high"]).toContain(relevanceJson.items[0]?.scoreBand ?? "")
+
       const persistedIndex = await getDocs(collection(ctx.firestore(), "matter_client_search_index"))
       expect(
         persistedIndex.docs.some(
@@ -7392,6 +7456,28 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.rowType === "client" &&
             entry.data()?.label === "Indexed Client"
+        )
+      ).toBe(true)
+      const persistedExportAnalytics = await getDocs(
+        collection(ctx.firestore(), "matter_report_export_analytics")
+      )
+      expect(
+        persistedExportAnalytics.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.lastExportFormat === "csv"
+        )
+      ).toBe(true)
+      const persistedRelevanceSnapshots = await getDocs(
+        collection(ctx.firestore(), "matter_report_relevance_snapshots")
+      )
+      expect(
+        persistedRelevanceSnapshots.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.freshnessStatus === "fresh"
         )
       ).toBe(true)
     })
