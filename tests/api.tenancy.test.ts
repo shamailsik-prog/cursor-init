@@ -479,6 +479,145 @@ describe("GET/POST /api/p5/tenancy", () => {
     )
     expect(lineageCrossFirmDenied.status).toBe(400)
 
+    const attestIdentityBridgePayload = {
+      action: "attest_external_session_identity_bridge",
+      actorId: "partner_a",
+      firmId: "firmA",
+      sessionReferenceId: lineageDivergedJson.result.sessionReference.id,
+      assertedIssuer: "idp.sandbox.local",
+      assertedSubject: "partner_a:lineage-diverged",
+      assertedExternalSessionId: "ext-lineage-diverged",
+      note: "Initial bridge attestation for lineage divergence monitor",
+    }
+    const attestIdentityBridgeFirst = await post(
+      attestIdentityBridgePayload,
+      "3c6ac89d-5f85-4e57-8ab0-2ec1ce96f58d"
+    )
+    const attestIdentityBridgeReplay = await post(
+      attestIdentityBridgePayload,
+      "3c6ac89d-5f85-4e57-8ab0-2ec1ce96f58d"
+    )
+    expect(attestIdentityBridgeFirst.status).toBe(200)
+    expect(attestIdentityBridgeReplay.status).toBe(200)
+    const attestIdentityBridgeFirstJson = (await attestIdentityBridgeFirst.json()) as {
+      reused: boolean
+      result: { bridge: { status: string; mismatchStatus: string; assertedIssuer: string | null } }
+    }
+    const attestIdentityBridgeReplayJson = (await attestIdentityBridgeReplay.json()) as {
+      reused: boolean
+    }
+    expect(attestIdentityBridgeFirstJson.reused).toBe(false)
+    expect(attestIdentityBridgeReplayJson.reused).toBe(true)
+    expect(attestIdentityBridgeFirstJson.result.bridge.status).toBe("attested")
+    expect(attestIdentityBridgeFirstJson.result.bridge.mismatchStatus).toBe("aligned")
+    expect(attestIdentityBridgeFirstJson.result.bridge.assertedIssuer).toBe("idp.sandbox.local")
+
+    const attestIdentityBridgeMismatch = await post(
+      {
+        ...attestIdentityBridgePayload,
+        assertedExternalSessionId: "ext-lineage-diverged-mismatch",
+        note: "Trigger mismatch telemetry",
+      },
+      "5f87ae48-fd7d-47c2-bf44-b97e50db021f"
+    )
+    expect(attestIdentityBridgeMismatch.status).toBe(200)
+    const attestIdentityBridgeMismatchJson = (await attestIdentityBridgeMismatch.json()) as {
+      result: { bridge: { mismatchStatus: string; mismatchReasons: string[] } }
+    }
+    expect(attestIdentityBridgeMismatchJson.result.bridge.mismatchStatus).toBe("mismatch_detected")
+    expect(attestIdentityBridgeMismatchJson.result.bridge.mismatchReasons).toContain(
+      "asserted_external_session_id_mismatch"
+    )
+
+    const quarantineIdentityBridge = await post(
+      {
+        action: "quarantine_external_session_identity_bridge",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: lineageDivergedJson.result.sessionReference.id,
+        quarantineReason: "issuer drift pending legal review",
+        note: "Quarantine identity bridge for review",
+      },
+      "041c12b3-2115-4206-af10-943345f9ba7f"
+    )
+    expect(quarantineIdentityBridge.status).toBe(200)
+    const quarantineIdentityBridgeJson = (await quarantineIdentityBridge.json()) as {
+      result: { bridge: { status: string; mismatchStatus: string; quarantineReason: string | null } }
+    }
+    expect(quarantineIdentityBridgeJson.result.bridge.status).toBe("quarantined")
+    expect(quarantineIdentityBridgeJson.result.bridge.mismatchStatus).toBe("mismatch_detected")
+    expect(quarantineIdentityBridgeJson.result.bridge.quarantineReason).toBe(
+      "issuer drift pending legal review"
+    )
+
+    const identityBridgeMismatchView = await get(
+      new URLSearchParams({
+        view: "session_external_session_identity_bridges",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "quarantined",
+        mismatchStatus: "mismatch_detected",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(identityBridgeMismatchView.status).toBe(200)
+    const identityBridgeMismatchViewJson = (await identityBridgeMismatchView.json()) as {
+      items: Array<{ status: string; mismatchStatus: string; sessionReferenceId: string }>
+    }
+    expect(
+      identityBridgeMismatchViewJson.items.some(
+        (row) =>
+          row.status === "quarantined" &&
+          row.mismatchStatus === "mismatch_detected" &&
+          row.sessionReferenceId === lineageDivergedJson.result.sessionReference.id
+      )
+    ).toBe(true)
+
+    const clearIdentityBridge = await post(
+      {
+        action: "clear_external_session_identity_bridge",
+        actorId: "partner_a",
+        firmId: "firmA",
+        sessionReferenceId: lineageDivergedJson.result.sessionReference.id,
+        clearReason: "verified via partner reconciler override",
+        note: "Clear quarantine after review",
+      },
+      "b1597460-8532-48dd-b232-5e2bafcf3f94"
+    )
+    expect(clearIdentityBridge.status).toBe(200)
+    const clearIdentityBridgeJson = (await clearIdentityBridge.json()) as {
+      result: { bridge: { status: string; mismatchStatus: string; clearReason: string | null } }
+    }
+    expect(clearIdentityBridgeJson.result.bridge.status).toBe("cleared")
+    expect(clearIdentityBridgeJson.result.bridge.mismatchStatus).toBe("aligned")
+    expect(clearIdentityBridgeJson.result.bridge.clearReason).toBe(
+      "verified via partner reconciler override"
+    )
+
+    const identityBridgeClearedView = await get(
+      new URLSearchParams({
+        view: "session_external_session_identity_bridges",
+        actorId: "partner_a",
+        firmId: "firmA",
+        rootSessionRefId: actorSessionJson.sessionReference.id,
+        status: "cleared",
+        mismatchStatus: "aligned",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(identityBridgeClearedView.status).toBe(200)
+    const identityBridgeClearedViewJson = (await identityBridgeClearedView.json()) as {
+      items: Array<{ status: string; mismatchStatus: string }>
+    }
+    expect(
+      identityBridgeClearedViewJson.items.some(
+        (row) => row.status === "cleared" && row.mismatchStatus === "aligned"
+      )
+    ).toBe(true)
+
     const disputePayload = {
       action: "attest_session_lineage_dispute",
       actorId: "partner_a",
@@ -1280,6 +1419,27 @@ describe("GET/POST /api/p5/tenancy", () => {
         (row) =>
           row.action === "tenant_control_lineage_arbitration_debt_retirement_dispute_rollback" &&
           row.delegatedBoundaryLineageRootSessionReferenceId === actorSessionJson.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_attest_external_session_identity_bridge" &&
+          row.sessionReferenceId === lineageDivergedJson.result.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_quarantine_external_session_identity_bridge" &&
+          row.sessionReferenceId === lineageDivergedJson.result.sessionReference.id
+      )
+    ).toBe(true)
+    expect(
+      auditJson.items.some(
+        (row) =>
+          row.action === "tenant_clear_external_session_identity_bridge" &&
+          row.sessionReferenceId === lineageDivergedJson.result.sessionReference.id
       )
     ).toBe(true)
   })

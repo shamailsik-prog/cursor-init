@@ -72,6 +72,7 @@ import type {
   TenancyLineageClosureAdjudicationRow,
   TenancyLineageClosureAdjudicationSettlementRow,
   TenancyLineageArbitrationDebtRetirementDisputeLedgerRow,
+  TenancyExternalSessionIdentityBridgeRow,
   TenancyLineageReconciliationDigestRow,
   TenancyLineageReconciliationQueueArbitrationRow,
   TenancyLineageDigestClosureCheckpointRow,
@@ -1926,6 +1927,37 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return rows.docs
           .map((entry) => entry.data() as TenancyLineageArbitrationDebtRetirementDisputeLedgerRow)
           .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
+      },
+    },
+    tenancyExternalSessionIdentityBridges: {
+      async upsert(row) {
+        await setById(db, "tenancy_external_session_identity_bridges", row)
+      },
+      async get(id) {
+        return getById<TenancyExternalSessionIdentityBridgeRow>(
+          db,
+          "tenancy_external_session_identity_bridges",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<TenancyExternalSessionIdentityBridgeRow>(
+          db,
+          "tenancy_external_session_identity_bridges",
+          firmId
+        )
+      },
+      async listByLineageRoot(lineageRootSessionReferenceId) {
+        const rows = await getDocs(collection(db, "tenancy_external_session_identity_bridges"))
+        return rows.docs
+          .map((entry) => entry.data() as TenancyExternalSessionIdentityBridgeRow)
+          .filter((row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId)
+      },
+      async listBySessionReference(sessionReferenceId) {
+        const rows = await getDocs(collection(db, "tenancy_external_session_identity_bridges"))
+        return rows.docs
+          .map((entry) => entry.data() as TenancyExternalSessionIdentityBridgeRow)
+          .filter((row) => row.sessionReferenceId === sessionReferenceId)
       },
     },
   }

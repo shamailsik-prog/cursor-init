@@ -125,12 +125,16 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/p5/tenancy` with settlement/dispute lifecycle actions (`checkpoint_lineage_closure_adjudication_settlement_publication`, `log_lineage_closure_adjudication_settlement_correction`, `confirm_lineage_closure_adjudication_settlement_sla`, `open_lineage_arbitration_debt_retirement_dispute`, `assign_lineage_arbitration_debt_retirement_dispute_reviewer`, `resolve_lineage_arbitration_debt_retirement_dispute`, `control_lineage_arbitration_debt_retirement_dispute_rollback`) and monitoring views (`view=session_lineage_closure_adjudication_settlements`, `view=session_lineage_arbitration_debt_retirement_dispute_ledgers`).
 - Captured verdict publication checkpoints, correction provenance, SLA confirmation/breach state, dispute challenge intake, reviewer assignment, resolution outcomes, and rollback-control attestations across digest-backed synchronization paths.
 - Extended API + runtime persistence tests for settlement/dispute lifecycle transitions, idempotent replay behavior, pagination/filter visibility, Firestore rehydration parity, and audit provenance traceability.
+- Added durable external-session identity bridge rows to runtime store + memory/Firestore repositories (`tenancy_external_session_identity_bridges`) linking session references with asserted issuer/subject snapshots and mismatch telemetry.
+- Extended `/api/p5/tenancy` with identity-bridge lifecycle actions (`attest_external_session_identity_bridge`, `quarantine_external_session_identity_bridge`, `clear_external_session_identity_bridge`) and partner monitoring view (`view=session_external_session_identity_bridges`) filterable by lifecycle + mismatch status per lineage root.
+- Captured bridge mismatch reasons for auth-boundary drift and external-session-ID drift while preserving partner-governed quarantine/clear audit provenance in internal scaffolding mode.
+- Extended API + runtime persistence tests for identity-bridge lifecycle transitions, idempotent replay behavior, lineage-root mismatch filtering, Firestore rehydration parity, and persisted/audit trace checks.
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **tenancy external-session identity bridge + IdP parity scaffolding**:
+Build **matters analytics + report export relevance scaffolding**:
 
-1. Add external-session identity bridge rows linking tenancy session references to asserted IdP subject/issuer snapshots with mismatch reason telemetry.
-2. Extend `/api/p5/tenancy` with partner-governed identity bridge actions (attest, quarantine, clear) and monitoring views scoped by mismatch status per lineage root.
-3. Extend tenancy route + runtime tests for identity bridge lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
-4. Keep this scoped to internal scaffolding (no production IdP token exchange claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.
+1. Add report-export analytics rows for matter-level usage counters, last-export metadata, and relevance score snapshots with provenance tags.
+2. Extend analytics/report routes with partner-governed export/recompute actions and paginated views filterable by matter, score-band, and freshness state.
+3. Extend unit/runtime persistence tests for export/relevance lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+4. Keep this scoped to internal scaffolding (no external BI delivery claims) while preserving COMPLETE/stub and scaffold-claim gate behavior.

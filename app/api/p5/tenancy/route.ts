@@ -19,6 +19,7 @@ import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { syncFirmAudit } from "@/platform/persistence/auditSync"
 import { syncFirmTenancySessionReferences } from "@/platform/persistence/tenancySessionReferenceSync"
 import {
+  syncFirmTenancyExternalSessionIdentityBridges,
   syncFirmTenancyLineageArbitrationDebtRetirementLedgers,
   syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers,
   syncFirmTenancyLineageClosureAdjudications,
@@ -31,6 +32,7 @@ import {
 import {
   arbitrateLineageReconciliationQueue,
   assignLineageReconciliationArbitration,
+  attestExternalSessionIdentityBridge,
   attestLineageArbitrationDebtRetirement,
   attestSessionLineageDispute,
   buildSessionContext,
@@ -45,9 +47,11 @@ import {
   listLineageArbitrationDebtRetirementDisputeLedgers,
   listLineageClosureAdjudications,
   listLineageClosureAdjudicationSettlements,
+  listExternalSessionIdentityBridges,
   invalidateSessionReferencesForPrivilegeDrift,
   logLineageClosureAdjudicationSettlementCorrection,
   openLineageArbitrationDebtRetirementDispute,
+  quarantineExternalSessionIdentityBridge,
   listLineageDigestClosureCheckpoints,
   listLineageReconciliationQueueArbitrations,
   listLineageReconciliationDigests,
@@ -60,6 +64,7 @@ import {
   reopenLineageDigestClosureCheckpoint,
   reopenLineageArbitrationDebtRetirement,
   resolveLineageArbitrationDebtRetirementDispute,
+  clearExternalSessionIdentityBridge,
   recomputeLineageReconciliationDigest,
   listFirmUsers,
   reissueTenancySessionReference,
@@ -260,6 +265,35 @@ type ControlLineageArbitrationDebtRetirementDisputeRollbackBody = {
   note?: string
 }
 
+type AttestExternalSessionIdentityBridgeBody = {
+  action: "attest_external_session_identity_bridge"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  assertedIssuer?: string
+  assertedSubject?: string
+  assertedExternalSessionId?: string
+  note?: string
+}
+
+type QuarantineExternalSessionIdentityBridgeBody = {
+  action: "quarantine_external_session_identity_bridge"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  quarantineReason?: string
+  note?: string
+}
+
+type ClearExternalSessionIdentityBridgeBody = {
+  action: "clear_external_session_identity_bridge"
+  actorId?: string
+  firmId?: string
+  sessionReferenceId?: string
+  clearReason?: string
+  note?: string
+}
+
 type Body =
   | UpdateRoleBody
   | RevokeSessionReferenceBody
@@ -281,6 +315,9 @@ type Body =
   | AssignLineageArbitrationDebtRetirementDisputeReviewerBody
   | ResolveLineageArbitrationDebtRetirementDisputeBody
   | ControlLineageArbitrationDebtRetirementDisputeRollbackBody
+  | AttestExternalSessionIdentityBridgeBody
+  | QuarantineExternalSessionIdentityBridgeBody
+  | ClearExternalSessionIdentityBridgeBody
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -438,6 +475,24 @@ function parseDebtRetirementDisputeResolutionOutcome(
   throw new Error(
     "resolutionOutcome must be uphold_retirement, reopen_debt, or require_rollback_review"
   )
+}
+
+function parseExternalSessionIdentityBridgeStatus(
+  value: string | null
+): "attested" | "quarantined" | "cleared" | undefined {
+  if (!value) return undefined
+  if (value === "attested" || value === "quarantined" || value === "cleared") return value
+  throw new Error("status must be attested, quarantined, or cleared")
+}
+
+function parseExternalSessionIdentityBridgeMismatchStatus(
+  value: string | null
+): "aligned" | "mismatch_detected" | "assertion_missing" | undefined {
+  if (!value) return undefined
+  if (value === "aligned" || value === "mismatch_detected" || value === "assertion_missing") {
+    return value
+  }
+  throw new Error("mismatchStatus must be aligned, mismatch_detected, or assertion_missing")
 }
 
 function isRole(value: unknown): value is Role {
@@ -1168,6 +1223,42 @@ export async function GET(request: Request) {
       })
     }
 
+    if (view === "session_external_session_identity_bridges") {
+      const actorId = url.searchParams.get("actorId")
+      const firmId = url.searchParams.get("firmId")
+      const lineageRootSessionReferenceId = normalizeOptionalString(
+        url.searchParams.get("rootSessionRefId")
+      )
+      const status = parseExternalSessionIdentityBridgeStatus(url.searchParams.get("status"))
+      const mismatchStatus = parseExternalSessionIdentityBridgeMismatchStatus(
+        url.searchParams.get("mismatchStatus")
+      )
+      if (!actorId || !firmId) {
+        return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyExternalSessionIdentityBridges(store, repos, firmId)
+      const bridges = listExternalSessionIdentityBridges(
+        store,
+        actorId,
+        firmId,
+        status,
+        mismatchStatus,
+        lineageRootSessionReferenceId,
+        limit,
+        cursor
+      )
+      return NextResponse.json({
+        view: "session_external_session_identity_bridges",
+        items: bridges.items,
+        total: bridges.total,
+        limit,
+        cursor,
+        nextCursor: bridges.nextCursor,
+      })
+    }
+
     return NextResponse.json({ error: "unknown view" }, { status: 400 })
   } catch (err) {
     const message = err instanceof Error ? err.message : "tenancy read failed"
@@ -1214,7 +1305,10 @@ export async function POST(request: Request) {
     parsed.action !== "open_lineage_arbitration_debt_retirement_dispute" &&
     parsed.action !== "assign_lineage_arbitration_debt_retirement_dispute_reviewer" &&
     parsed.action !== "resolve_lineage_arbitration_debt_retirement_dispute" &&
-    parsed.action !== "control_lineage_arbitration_debt_retirement_dispute_rollback"
+    parsed.action !== "control_lineage_arbitration_debt_retirement_dispute_rollback" &&
+    parsed.action !== "attest_external_session_identity_bridge" &&
+    parsed.action !== "quarantine_external_session_identity_bridge" &&
+    parsed.action !== "clear_external_session_identity_bridge"
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -1449,6 +1543,46 @@ export async function POST(request: Request) {
     ) {
       return NextResponse.json(
         { error: "actorId, firmId, lineageRootSessionReferenceId, and rollbackControlNote are required" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "attest_external_session_identity_bridge") {
+    if (
+      !parsed.actorId ||
+      !parsed.firmId ||
+      !parsed.sessionReferenceId ||
+      !normalizeOptionalString(parsed.assertedIssuer) ||
+      !normalizeOptionalString(parsed.assertedSubject)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "actorId, firmId, sessionReferenceId, assertedIssuer, and assertedSubject are required",
+        },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "quarantine_external_session_identity_bridge") {
+    if (
+      !parsed.actorId ||
+      !parsed.firmId ||
+      !parsed.sessionReferenceId ||
+      !normalizeOptionalString(parsed.quarantineReason)
+    ) {
+      return NextResponse.json(
+        { error: "actorId, firmId, sessionReferenceId, and quarantineReason are required" },
+        { status: 400 }
+      )
+    }
+  } else if (parsed.action === "clear_external_session_identity_bridge") {
+    if (
+      !parsed.actorId ||
+      !parsed.firmId ||
+      !parsed.sessionReferenceId ||
+      !normalizeOptionalString(parsed.clearReason)
+    ) {
+      return NextResponse.json(
+        { error: "actorId, firmId, sessionReferenceId, and clearReason are required" },
         { status: 400 }
       )
     }
@@ -2539,6 +2673,95 @@ export async function POST(request: Request) {
           status: digest.status,
           reasons: digest.reasons,
         },
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "attest_external_session_identity_bridge") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const sessionReferenceId = parsed.sessionReferenceId
+      const assertedIssuer = normalizeOptionalString(parsed.assertedIssuer)
+      const assertedSubject = normalizeOptionalString(parsed.assertedSubject)
+      if (!actorId || !firmId || !sessionReferenceId || !assertedIssuer || !assertedSubject) {
+        throw new Error(
+          "actorId, firmId, sessionReferenceId, assertedIssuer, and assertedSubject are required"
+        )
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyExternalSessionIdentityBridges(store, repos, firmId)
+      const attested = attestExternalSessionIdentityBridge(store, {
+        actorId,
+        firmId,
+        sessionReferenceId,
+        assertedIssuer,
+        assertedSubject,
+        assertedExternalSessionId: normalizeOptionalString(parsed.assertedExternalSessionId),
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyExternalSessionIdentityBridges.upsert(attested.bridge)
+      await repos.audit.append(attested.auditEntry)
+      const payload = {
+        action: "attest_external_session_identity_bridge",
+        bridge: attested.bridge,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "quarantine_external_session_identity_bridge") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const sessionReferenceId = parsed.sessionReferenceId
+      const quarantineReason = normalizeOptionalString(parsed.quarantineReason)
+      if (!actorId || !firmId || !sessionReferenceId || !quarantineReason) {
+        throw new Error("actorId, firmId, sessionReferenceId, and quarantineReason are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyExternalSessionIdentityBridges(store, repos, firmId)
+      const quarantined = quarantineExternalSessionIdentityBridge(store, {
+        actorId,
+        firmId,
+        sessionReferenceId,
+        quarantineReason,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyExternalSessionIdentityBridges.upsert(quarantined.bridge)
+      await repos.audit.append(quarantined.auditEntry)
+      const payload = {
+        action: "quarantine_external_session_identity_bridge",
+        bridge: quarantined.bridge,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "clear_external_session_identity_bridge") {
+      const actorId = parsed.actorId
+      const firmId = parsed.firmId
+      const sessionReferenceId = parsed.sessionReferenceId
+      const clearReason = normalizeOptionalString(parsed.clearReason)
+      if (!actorId || !firmId || !sessionReferenceId || !clearReason) {
+        throw new Error("actorId, firmId, sessionReferenceId, and clearReason are required")
+      }
+      await syncFirmUsers(store, repos, firmId)
+      await syncFirmTenancySessionReferences(store, repos, firmId)
+      await syncFirmTenancyExternalSessionIdentityBridges(store, repos, firmId)
+      const cleared = clearExternalSessionIdentityBridge(store, {
+        actorId,
+        firmId,
+        sessionReferenceId,
+        clearReason,
+        note: normalizeOptionalString(parsed.note),
+      })
+      await repos.tenancyExternalSessionIdentityBridges.upsert(cleared.bridge)
+      await repos.audit.append(cleared.auditEntry)
+      const payload = {
+        action: "clear_external_session_identity_bridge",
+        bridge: cleared.bridge,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

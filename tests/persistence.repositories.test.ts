@@ -341,6 +341,55 @@ describe("Firestore repository adapters", () => {
           (row) => row.id === "tenancy-lineage-arbitration-debt-dispute:tsr_1"
         )
       ).toBe(true)
+      await repos.tenancyExternalSessionIdentityBridges.upsert({
+        id: "tenancy-external-session-identity-bridge:tsr_1_child",
+        firmId: "firmA",
+        lineageRootSessionReferenceId: "tsr_1",
+        sessionReferenceId: "tsr_1_child",
+        authBoundary: "external_session_hint",
+        sessionExternalSessionId: "ext-tsr-1-child",
+        status: "attested",
+        mismatchStatus: "aligned",
+        mismatchReasons: [],
+        assertedIssuer: "idp.local",
+        assertedSubject: "subject:partner_a",
+        assertedExternalSessionId: "ext-tsr-1-child",
+        attestedBy: "partner_a",
+        attestedAt: 116,
+        quarantinedBy: null,
+        quarantinedAt: null,
+        quarantineReason: null,
+        clearedBy: null,
+        clearedAt: null,
+        clearReason: null,
+        notes: ["initial bridge attestation"],
+        updatedAt: 117,
+      })
+      const tenancyIdentityBridge = await repos.tenancyExternalSessionIdentityBridges.get(
+        "tenancy-external-session-identity-bridge:tsr_1_child"
+      )
+      expect(tenancyIdentityBridge?.status).toBe("attested")
+      const tenancyIdentityBridgesByFirm =
+        await repos.tenancyExternalSessionIdentityBridges.listByFirm("firmA")
+      expect(
+        tenancyIdentityBridgesByFirm.some(
+          (row) => row.id === "tenancy-external-session-identity-bridge:tsr_1_child"
+        )
+      ).toBe(true)
+      const tenancyIdentityBridgesByRoot =
+        await repos.tenancyExternalSessionIdentityBridges.listByLineageRoot("tsr_1")
+      expect(
+        tenancyIdentityBridgesByRoot.some(
+          (row) => row.id === "tenancy-external-session-identity-bridge:tsr_1_child"
+        )
+      ).toBe(true)
+      const tenancyIdentityBridgesBySession =
+        await repos.tenancyExternalSessionIdentityBridges.listBySessionReference("tsr_1_child")
+      expect(
+        tenancyIdentityBridgesBySession.some(
+          (row) => row.id === "tenancy-external-session-identity-bridge:tsr_1_child"
+        )
+      ).toBe(true)
       await repos.committeeOutputs.create({
         id: "cbo_1",
         firmId: "firmA",
