@@ -28,6 +28,9 @@ import {
   type WorkflowOpsAlertClosureDebtVarianceDigestRow,
   type WorkflowOpsAlertClosureDebtVarianceFreshnessStatus,
   type WorkflowOpsAlertClosureDebtVarianceStatus,
+  type WorkflowOpsAlertEnforcementWaiverFreshnessStatus,
+  type WorkflowOpsAlertEnforcementWaiverLedgerRow,
+  type WorkflowOpsAlertEnforcementWaiverStatus,
   type WorkflowOpsAlertDisputeEnforcementFreshnessStatus,
   type WorkflowOpsAlertDisputeEnforcementLedgerRow,
   type WorkflowOpsAlertDisputeEnforcementStatus,
@@ -39,6 +42,9 @@ import {
   type WorkflowOpsAlertEscalationFreshnessStatus,
   type WorkflowOpsAlertEscalationLedgerRow,
   type WorkflowOpsAlertEscalationStatus,
+  type WorkflowOpsAlertVarianceRemediationQueueFreshnessStatus,
+  type WorkflowOpsAlertVarianceRemediationQueueRow,
+  type WorkflowOpsAlertVarianceRemediationQueueStatus,
 } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -89,6 +95,8 @@ type View =
   | "alert_closure_debt_reconciliation_digests"
   | "alert_enforcement_attestations"
   | "alert_closure_debt_variance_digests"
+  | "alert_enforcement_waiver_ledgers"
+  | "alert_variance_remediation_queues"
 
 function parseView(value: string | null): View | undefined {
   if (!value || value === "activity") return "activity"
@@ -101,6 +109,8 @@ function parseView(value: string | null): View | undefined {
   if (value === "alert_closure_debt_reconciliation_digests") return value
   if (value === "alert_enforcement_attestations") return value
   if (value === "alert_closure_debt_variance_digests") return value
+  if (value === "alert_enforcement_waiver_ledgers") return value
+  if (value === "alert_variance_remediation_queues") return value
   return undefined
 }
 
@@ -197,6 +207,27 @@ function parseVarianceStatus(value: string | null): WorkflowOpsAlertClosureDebtV
   return undefined
 }
 
+function parseWaiverStatus(value: string | null): WorkflowOpsAlertEnforcementWaiverStatus | undefined {
+  if (
+    value === "not_requested" ||
+    value === "pending_attestation" ||
+    value === "attested" ||
+    value === "waived"
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function parseRemediationQueueStatus(
+  value: string | null
+): WorkflowOpsAlertVarianceRemediationQueueStatus | undefined {
+  if (value === "not_queued" || value === "queued" || value === "assigned" || value === "resolved") {
+    return value
+  }
+  return undefined
+}
+
 function parseDisputeOutcome(
   value: unknown
 ): WorkflowOpsAlertAttestationDisputeResolutionOutcome | undefined {
@@ -216,6 +247,27 @@ function parseSnoozedUntil(value: unknown, now: number): number {
   }
   if (parsed <= now) {
     throw new Error("snoozedUntil must be in the future")
+  }
+  return parsed
+}
+
+function parseOptionalFutureEpochMs(
+  value: unknown,
+  now: number,
+  fieldName: string
+): number | null {
+  if (value === undefined || value === null || value === "") return null
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : Number.NaN
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${fieldName} must be a unix epoch milliseconds number`)
+  }
+  if (parsed <= now) {
+    throw new Error(`${fieldName} must be in the future`)
   }
   return parsed
 }
@@ -267,6 +319,14 @@ function alertEnforcementAttestationId(matterId: string): string {
 
 function alertClosureDebtVarianceDigestId(matterId: string): string {
   return `workflow_ops_alert_closure_debt_variance:${matterId}`
+}
+
+function alertEnforcementWaiverLedgerId(matterId: string): string {
+  return `workflow_ops_alert_enforcement_waiver:${matterId}`
+}
+
+function alertVarianceRemediationQueueId(matterId: string): string {
+  return `workflow_ops_alert_variance_remediation_queue:${matterId}`
 }
 
 function severityRank(value: WorkflowOpsAlertDigestSeverity): number {
@@ -438,6 +498,20 @@ function asVarianceFreshnessStatus(
   recomputedAt: number,
   now: number
 ): WorkflowOpsAlertClosureDebtVarianceFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asEnforcementWaiverFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertEnforcementWaiverFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asVarianceRemediationQueueFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertVarianceRemediationQueueFreshnessStatus {
   return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
 }
 
@@ -776,6 +850,87 @@ function buildWorkflowOpsAlertClosureDebtVarianceDigestRow(params: {
   }
 }
 
+function buildWorkflowOpsAlertEnforcementWaiverLedgerRow(params: {
+  enforcement: WorkflowOpsAlertDisputeEnforcementLedgerRow
+  enforcementAttestation: WorkflowOpsAlertEnforcementAttestationRow
+  actorId: string
+  reason: string
+  existing: WorkflowOpsAlertEnforcementWaiverLedgerRow | null
+  now: number
+}): WorkflowOpsAlertEnforcementWaiverLedgerRow {
+  const { enforcement, enforcementAttestation, actorId, reason, existing, now } = params
+  const defaultStatus: WorkflowOpsAlertEnforcementWaiverStatus =
+    enforcement.enforcementStatus === "waived" ? "waived" : "not_requested"
+  const waiverStatus = existing?.waiverStatus ?? defaultStatus
+  return {
+    id: alertEnforcementWaiverLedgerId(enforcement.matterId),
+    firmId: enforcement.firmId,
+    matterId: enforcement.matterId,
+    enforcementAttestationId: enforcementAttestation.id,
+    classification: enforcement.classification,
+    waiverStatus,
+    requestedBy: existing?.requestedBy ?? null,
+    requestedAt: existing?.requestedAt ?? null,
+    attestedBy: existing?.attestedBy ?? null,
+    attestedAt: existing?.attestedAt ?? null,
+    waivedBy: existing?.waivedBy ?? (waiverStatus === "waived" ? actorId : null),
+    waivedAt: existing?.waivedAt ?? (waiverStatus === "waived" ? now : null),
+    waiverReason: existing?.waiverReason ?? enforcement.waiverReason ?? null,
+    waiverExpiresAt: existing?.waiverExpiresAt ?? null,
+    lastStatusChangedAt: existing?.lastStatusChangedAt ?? null,
+    freshnessStatus: asEnforcementWaiverFreshnessStatus(enforcement.recomputedAt, now),
+    provenanceTags: normalizeProvenanceTags([
+      `reason:${reason}`,
+      `enforcement_status:${enforcement.enforcementStatus}`,
+      `required_outcome:${enforcement.requiredOutcome ?? "none"}`,
+      ...enforcement.provenanceTags.map((tag) => `enforcement_${tag}`),
+    ]),
+    recomputedAt: now,
+    recomputedBy: actorId,
+    recomputeReason: reason,
+    updatedAt: now,
+  }
+}
+
+function buildWorkflowOpsAlertVarianceRemediationQueueRow(params: {
+  variance: WorkflowOpsAlertClosureDebtVarianceDigestRow
+  actorId: string
+  reason: string
+  existing: WorkflowOpsAlertVarianceRemediationQueueRow | null
+  now: number
+}): WorkflowOpsAlertVarianceRemediationQueueRow {
+  const { variance, actorId, reason, existing, now } = params
+  const queueStatus = existing?.queueStatus ?? "not_queued"
+  return {
+    id: alertVarianceRemediationQueueId(variance.matterId),
+    firmId: variance.firmId,
+    matterId: variance.matterId,
+    closureDebtVarianceDigestId: variance.id,
+    classification: variance.classification,
+    queueStatus,
+    queueReason: existing?.queueReason ?? null,
+    queuedAt: existing?.queuedAt ?? null,
+    ownerId: existing?.ownerId ?? variance.reviewOwnerId ?? null,
+    assignedAt: existing?.assignedAt ?? null,
+    resolvedAt: existing?.resolvedAt ?? null,
+    resolutionReason: existing?.resolutionReason ?? null,
+    outstandingVarianceCountSnapshot: existing?.outstandingVarianceCountSnapshot ?? variance.outstandingVarianceCount,
+    varianceDeltaSnapshot: existing?.varianceDeltaSnapshot ?? variance.varianceDelta,
+    lastStatusChangedAt: existing?.lastStatusChangedAt ?? null,
+    freshnessStatus: asVarianceRemediationQueueFreshnessStatus(variance.recomputedAt, now),
+    provenanceTags: normalizeProvenanceTags([
+      `reason:${reason}`,
+      `variance_status:${variance.varianceStatus}`,
+      `variance_delta:${variance.varianceDelta}`,
+      ...variance.provenanceTags.map((tag) => `variance_${tag}`),
+    ]),
+    recomputedAt: now,
+    recomputedBy: actorId,
+    recomputeReason: reason,
+    updatedAt: now,
+  }
+}
+
 async function resolveActor(params: {
   actorId: string
   store: ReturnType<typeof getRuntimeStore>
@@ -864,6 +1019,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
   closureDebtReconciliationDigests: WorkflowOpsAlertClosureDebtReconciliationDigestRow[]
   enforcementAttestations: WorkflowOpsAlertEnforcementAttestationRow[]
   closureDebtVarianceDigests: WorkflowOpsAlertClosureDebtVarianceDigestRow[]
+  enforcementWaiverLedgers: WorkflowOpsAlertEnforcementWaiverLedgerRow[]
+  varianceRemediationQueues: WorkflowOpsAlertVarianceRemediationQueueRow[]
 }> {
   const { digests, actorId, reason, store, repos } = params
   const now = Date.now()
@@ -875,6 +1032,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
   const closureDebtReconciliationDigests: WorkflowOpsAlertClosureDebtReconciliationDigestRow[] = []
   const enforcementAttestations: WorkflowOpsAlertEnforcementAttestationRow[] = []
   const closureDebtVarianceDigests: WorkflowOpsAlertClosureDebtVarianceDigestRow[] = []
+  const enforcementWaiverLedgers: WorkflowOpsAlertEnforcementWaiverLedgerRow[] = []
+  const varianceRemediationQueues: WorkflowOpsAlertVarianceRemediationQueueRow[] = []
 
   for (const digest of digests) {
     if (!digest.matterId) continue
@@ -886,6 +1045,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     const reconciliationKey = alertClosureDebtReconciliationDigestId(digest.matterId)
     const enforcementAttestationKey = alertEnforcementAttestationId(digest.matterId)
     const varianceKey = alertClosureDebtVarianceDigestId(digest.matterId)
+    const waiverKey = alertEnforcementWaiverLedgerId(digest.matterId)
+    const remediationQueueKey = alertVarianceRemediationQueueId(digest.matterId)
     const existingAttestation = await repos.workflowOpsAlertAttestations.get(attestationKey)
     const existingEscalation = await repos.workflowOpsAlertEscalationLedgers.get(escalationKey)
     const existingDispute = await repos.workflowOpsAlertAttestationDisputes.get(disputeKey)
@@ -896,6 +1057,9 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     const existingEnforcementAttestation =
       await repos.workflowOpsAlertEnforcementAttestations.get(enforcementAttestationKey)
     const existingVariance = await repos.workflowOpsAlertClosureDebtVarianceDigests.get(varianceKey)
+    const existingWaiver = await repos.workflowOpsAlertEnforcementWaiverLedgers.get(waiverKey)
+    const existingRemediationQueue =
+      await repos.workflowOpsAlertVarianceRemediationQueues.get(remediationQueueKey)
 
     const attestation = buildWorkflowOpsAlertAttestationRow({
       digest,
@@ -953,6 +1117,21 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       existing: existingVariance,
       now,
     })
+    const waiverLedger = buildWorkflowOpsAlertEnforcementWaiverLedgerRow({
+      enforcement: enforcementLedger,
+      enforcementAttestation,
+      actorId,
+      reason,
+      existing: existingWaiver,
+      now,
+    })
+    const remediationQueue = buildWorkflowOpsAlertVarianceRemediationQueueRow({
+      variance: varianceDigest,
+      actorId,
+      reason,
+      existing: existingRemediationQueue,
+      now,
+    })
 
     await repos.workflowOpsAlertAttestations.upsert(attestation)
     await repos.workflowOpsAlertEscalationLedgers.upsert(escalation)
@@ -962,6 +1141,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert(reconciliationDigest)
     await repos.workflowOpsAlertEnforcementAttestations.upsert(enforcementAttestation)
     await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(varianceDigest)
+    await repos.workflowOpsAlertEnforcementWaiverLedgers.upsert(waiverLedger)
+    await repos.workflowOpsAlertVarianceRemediationQueues.upsert(remediationQueue)
     store.workflowOpsAlertAttestations.set(attestation.id, attestation)
     store.workflowOpsAlertEscalationLedgers.set(escalation.id, escalation)
     store.workflowOpsAlertAttestationDisputes.set(dispute.id, dispute)
@@ -976,6 +1157,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       enforcementAttestation
     )
     store.workflowOpsAlertClosureDebtVarianceDigests.set(varianceDigest.id, varianceDigest)
+    store.workflowOpsAlertEnforcementWaiverLedgers.set(waiverLedger.id, waiverLedger)
+    store.workflowOpsAlertVarianceRemediationQueues.set(remediationQueue.id, remediationQueue)
     attestations.push(attestation)
     escalationLedgers.push(escalation)
     attestationDisputes.push(dispute)
@@ -984,6 +1167,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     closureDebtReconciliationDigests.push(reconciliationDigest)
     enforcementAttestations.push(enforcementAttestation)
     closureDebtVarianceDigests.push(varianceDigest)
+    enforcementWaiverLedgers.push(waiverLedger)
+    varianceRemediationQueues.push(remediationQueue)
   }
 
   return {
@@ -995,6 +1180,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     closureDebtReconciliationDigests,
     enforcementAttestations,
     closureDebtVarianceDigests,
+    enforcementWaiverLedgers,
+    varianceRemediationQueues,
   }
 }
 
@@ -1168,6 +1355,50 @@ type ResolveWorkflowOpsAlertClosureDebtVarianceBody = {
   reason?: unknown
 }
 
+type CreateWorkflowOpsAlertEnforcementWaiverBody = {
+  action: "create_workflow_ops_alert_enforcement_waiver"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type AttestWorkflowOpsAlertEnforcementWaiverBody = {
+  action: "attest_workflow_ops_alert_enforcement_waiver"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type WaiveWorkflowOpsAlertEnforcementWaiverBody = {
+  action: "waive_workflow_ops_alert_enforcement_waiver"
+  actorId?: string
+  matterId?: string
+  waiverExpiresAt?: unknown
+  reason?: unknown
+}
+
+type QueueWorkflowOpsAlertVarianceRemediationBody = {
+  action: "queue_workflow_ops_alert_variance_remediation"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type AssignWorkflowOpsAlertVarianceRemediationOwnerBody = {
+  action: "assign_workflow_ops_alert_variance_remediation_owner"
+  actorId?: string
+  matterId?: string
+  ownerId?: unknown
+  reason?: unknown
+}
+
+type ResolveWorkflowOpsAlertVarianceRemediationBody = {
+  action: "resolve_workflow_ops_alert_variance_remediation"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
 type Body =
   | ViewActivityBody
   | AcknowledgeWorkflowOpsAlertDigestBody
@@ -1193,6 +1424,12 @@ type Body =
   | OpenWorkflowOpsAlertClosureDebtVarianceBody
   | AssignWorkflowOpsAlertClosureDebtVarianceOwnerBody
   | ResolveWorkflowOpsAlertClosureDebtVarianceBody
+  | CreateWorkflowOpsAlertEnforcementWaiverBody
+  | AttestWorkflowOpsAlertEnforcementWaiverBody
+  | WaiveWorkflowOpsAlertEnforcementWaiverBody
+  | QueueWorkflowOpsAlertVarianceRemediationBody
+  | AssignWorkflowOpsAlertVarianceRemediationOwnerBody
+  | ResolveWorkflowOpsAlertVarianceRemediationBody
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
@@ -1219,6 +1456,10 @@ export async function GET(request: Request) {
     url.searchParams.get("enforcementAttestationStatus")
   )
   const varianceStatus = parseVarianceStatus(url.searchParams.get("varianceStatus"))
+  const waiverStatus = parseWaiverStatus(url.searchParams.get("waiverStatus"))
+  const remediationQueueStatus = parseRemediationQueueStatus(
+    url.searchParams.get("remediationQueueStatus")
+  )
   const terms = normalizeTerms(url.searchParams.get("q"))
   const limit = parseLimit(url.searchParams.get("limit"))
   const cursor = parseCursor(url.searchParams.get("cursor"))
@@ -1500,14 +1741,64 @@ export async function GET(request: Request) {
     })
   }
 
-  const all = (await repos.workflowOpsAlertClosureDebtVarianceDigests.listByFirm(refreshedActor.firmId))
+  if (view === "alert_closure_debt_variance_digests") {
+    const all = (await repos.workflowOpsAlertClosureDebtVarianceDigests.listByFirm(refreshedActor.firmId))
+      .map((row) => ({
+        ...row,
+        freshnessStatus: asVarianceFreshnessStatus(row.recomputedAt, now),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) => (varianceStatus ? row.varianceStatus === varianceStatus : true))
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view: "alert_closure_debt_variance_digests",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
+  if (view === "alert_enforcement_waiver_ledgers") {
+    const all = (await repos.workflowOpsAlertEnforcementWaiverLedgers.listByFirm(refreshedActor.firmId))
+      .map((row) => ({
+        ...row,
+        freshnessStatus: asEnforcementWaiverFreshnessStatus(row.recomputedAt, now),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) => (waiverStatus ? row.waiverStatus === waiverStatus : true))
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view: "alert_enforcement_waiver_ledgers",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
+  const all = (await repos.workflowOpsAlertVarianceRemediationQueues.listByFirm(refreshedActor.firmId))
     .map((row) => ({
       ...row,
-      freshnessStatus: asVarianceFreshnessStatus(row.recomputedAt, now),
+      freshnessStatus: asVarianceRemediationQueueFreshnessStatus(row.recomputedAt, now),
     }))
     .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
-    .filter((row) => (varianceStatus ? row.varianceStatus === varianceStatus : true))
+    .filter((row) => (remediationQueueStatus ? row.queueStatus === remediationQueueStatus : true))
     .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
     .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
     .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -1515,7 +1806,7 @@ export async function GET(request: Request) {
   const items = all.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
   return NextResponse.json({
-    view: "alert_closure_debt_variance_digests",
+    view: "alert_variance_remediation_queues",
     items,
     total: all.length,
     limit,
@@ -1566,7 +1857,13 @@ export async function POST(request: Request) {
       parsed.action !== "reopen_workflow_ops_alert_dispute_enforcement_attestation" &&
       parsed.action !== "open_workflow_ops_alert_closure_debt_variance" &&
       parsed.action !== "assign_workflow_ops_alert_closure_debt_variance_owner" &&
-      parsed.action !== "resolve_workflow_ops_alert_closure_debt_variance")
+      parsed.action !== "resolve_workflow_ops_alert_closure_debt_variance" &&
+      parsed.action !== "create_workflow_ops_alert_enforcement_waiver" &&
+      parsed.action !== "attest_workflow_ops_alert_enforcement_waiver" &&
+      parsed.action !== "waive_workflow_ops_alert_enforcement_waiver" &&
+      parsed.action !== "queue_workflow_ops_alert_variance_remediation" &&
+      parsed.action !== "assign_workflow_ops_alert_variance_remediation_owner" &&
+      parsed.action !== "resolve_workflow_ops_alert_variance_remediation")
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -1671,6 +1968,14 @@ export async function POST(request: Request) {
     (await repos.workflowOpsAlertClosureDebtVarianceDigests.get(
       alertClosureDebtVarianceDigestId(matter.id)
     ))
+  const currentWaiverLedger =
+    governance.enforcementWaiverLedgers.find((row) => row.matterId === matter.id) ??
+    store.workflowOpsAlertEnforcementWaiverLedgers.get(alertEnforcementWaiverLedgerId(matter.id)) ??
+    (await repos.workflowOpsAlertEnforcementWaiverLedgers.get(alertEnforcementWaiverLedgerId(matter.id)))
+  const currentVarianceRemediationQueue =
+    governance.varianceRemediationQueues.find((row) => row.matterId === matter.id) ??
+    store.workflowOpsAlertVarianceRemediationQueues.get(alertVarianceRemediationQueueId(matter.id)) ??
+    (await repos.workflowOpsAlertVarianceRemediationQueues.get(alertVarianceRemediationQueueId(matter.id)))
   if (
     !currentAttestation ||
     !currentEscalation ||
@@ -1679,7 +1984,9 @@ export async function POST(request: Request) {
     !currentEnforcement ||
     !currentReconciliation ||
     !currentEnforcementAttestation ||
-    !currentVariance
+    !currentVariance ||
+    !currentWaiverLedger ||
+    !currentVarianceRemediationQueue
   ) {
     return NextResponse.json({ error: "alert governance rows are unavailable for matter" }, { status: 404 })
   }
@@ -2516,6 +2823,320 @@ export async function POST(request: Request) {
         digest: current,
         reconciliation: currentReconciliation,
         variance: nextVariance,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "create_workflow_ops_alert_enforcement_waiver") {
+      if (
+        currentEnforcement.enforcementStatus !== "in_progress" &&
+        currentEnforcement.enforcementStatus !== "enforced" &&
+        currentEnforcement.enforcementStatus !== "waived"
+      ) {
+        return NextResponse.json(
+          { error: "waiver can only be created when enforcement is in_progress, enforced, or waived" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(parsed.reason, "enforcement_waiver_created")
+      const nextWaiver: WorkflowOpsAlertEnforcementWaiverLedgerRow = {
+        ...currentWaiverLedger,
+        waiverStatus: "pending_attestation",
+        requestedBy: actor.id,
+        requestedAt: currentWaiverLedger.requestedAt ?? now,
+        attestedBy: null,
+        attestedAt: null,
+        waivedBy: null,
+        waivedAt: null,
+        waiverReason: reason,
+        waiverExpiresAt: null,
+        lastStatusChangedAt: now,
+        freshnessStatus: asEnforcementWaiverFreshnessStatus(currentEnforcement.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertEnforcementWaiverLedgers.upsert(nextWaiver)
+      store.workflowOpsAlertEnforcementWaiverLedgers.set(nextWaiver.id, nextWaiver)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_enforcement_waiver_created",
+        actorId: actor.id,
+        target: nextWaiver.matterId,
+        classification: nextWaiver.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        enforcement: currentEnforcement,
+        enforcementWaiver: nextWaiver,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "attest_workflow_ops_alert_enforcement_waiver") {
+      if (currentWaiverLedger.waiverStatus !== "pending_attestation") {
+        return NextResponse.json(
+          { error: "waiver must be pending_attestation before attestation" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(parsed.reason, "enforcement_waiver_attested")
+      const nextWaiver: WorkflowOpsAlertEnforcementWaiverLedgerRow = {
+        ...currentWaiverLedger,
+        waiverStatus: "attested",
+        attestedBy: actor.id,
+        attestedAt: now,
+        waiverReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asEnforcementWaiverFreshnessStatus(currentEnforcement.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertEnforcementWaiverLedgers.upsert(nextWaiver)
+      store.workflowOpsAlertEnforcementWaiverLedgers.set(nextWaiver.id, nextWaiver)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_enforcement_waiver_attested",
+        actorId: actor.id,
+        target: nextWaiver.matterId,
+        classification: nextWaiver.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        enforcementWaiver: nextWaiver,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "waive_workflow_ops_alert_enforcement_waiver") {
+      const reason = normalizeReason(parsed.reason, "enforcement_waiver_waived")
+      const waiverExpiresAt = parseOptionalFutureEpochMs(parsed.waiverExpiresAt, now, "waiverExpiresAt")
+      const nextWaiver: WorkflowOpsAlertEnforcementWaiverLedgerRow = {
+        ...currentWaiverLedger,
+        waiverStatus: "waived",
+        waivedBy: actor.id,
+        waivedAt: now,
+        waiverReason: reason,
+        waiverExpiresAt,
+        lastStatusChangedAt: now,
+        freshnessStatus: asEnforcementWaiverFreshnessStatus(currentEnforcement.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertEnforcementWaiverLedgers.upsert(nextWaiver)
+      store.workflowOpsAlertEnforcementWaiverLedgers.set(nextWaiver.id, nextWaiver)
+
+      const nextEnforcement: WorkflowOpsAlertDisputeEnforcementLedgerRow = {
+        ...currentEnforcement,
+        enforcementStatus: "waived",
+        waivedAt: now,
+        waiverReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asEnforcementFreshnessStatus(currentDispute.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert(nextEnforcement)
+      store.workflowOpsAlertDisputeEnforcementLedgers.set(nextEnforcement.id, nextEnforcement)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_enforcement_waiver_waived",
+        actorId: actor.id,
+        target: nextWaiver.matterId,
+        classification: nextWaiver.classification,
+        reason: `${reason}:${waiverExpiresAt ?? "no_expiry"}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        enforcement: nextEnforcement,
+        enforcementWaiver: nextWaiver,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "queue_workflow_ops_alert_variance_remediation") {
+      const reason = normalizeReason(parsed.reason, "variance_remediation_queued")
+      const nextVariance: WorkflowOpsAlertClosureDebtVarianceDigestRow = {
+        ...currentVariance,
+        varianceStatus:
+          currentVariance.varianceStatus === "variance_resolved" ||
+          currentVariance.varianceStatus === "within_tolerance"
+            ? "variance_open"
+            : currentVariance.varianceStatus,
+        outstandingVarianceCount: Math.max(currentVariance.outstandingVarianceCount, 1),
+        varianceDelta: Math.max(currentVariance.varianceDelta, 1),
+        varianceOpenedAt: currentVariance.varianceOpenedAt ?? now,
+        varianceResolvedAt: null,
+        varianceReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asVarianceFreshnessStatus(currentReconciliation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(nextVariance)
+      store.workflowOpsAlertClosureDebtVarianceDigests.set(nextVariance.id, nextVariance)
+
+      const nextQueue: WorkflowOpsAlertVarianceRemediationQueueRow = {
+        ...currentVarianceRemediationQueue,
+        queueStatus: "queued",
+        queueReason: reason,
+        queuedAt: currentVarianceRemediationQueue.queuedAt ?? now,
+        ownerId: nextVariance.reviewOwnerId ?? currentVarianceRemediationQueue.ownerId,
+        assignedAt: null,
+        resolvedAt: null,
+        resolutionReason: null,
+        outstandingVarianceCountSnapshot: Math.max(nextVariance.outstandingVarianceCount, 1),
+        varianceDeltaSnapshot: Math.max(nextVariance.varianceDelta, 1),
+        lastStatusChangedAt: now,
+        freshnessStatus: asVarianceRemediationQueueFreshnessStatus(nextVariance.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertVarianceRemediationQueues.upsert(nextQueue)
+      store.workflowOpsAlertVarianceRemediationQueues.set(nextQueue.id, nextQueue)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_variance_remediation_queued",
+        actorId: actor.id,
+        target: nextQueue.matterId,
+        classification: nextQueue.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        variance: nextVariance,
+        remediationQueue: nextQueue,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "assign_workflow_ops_alert_variance_remediation_owner") {
+      const ownerId = typeof parsed.ownerId === "string" ? parsed.ownerId.trim() : ""
+      if (!ownerId) {
+        return NextResponse.json({ error: "ownerId is required" }, { status: 400 })
+      }
+      if (
+        currentVarianceRemediationQueue.queueStatus !== "queued" &&
+        currentVarianceRemediationQueue.queueStatus !== "assigned"
+      ) {
+        return NextResponse.json(
+          { error: "variance remediation queue must be queued before assignment" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(parsed.reason, "variance_remediation_owner_assigned")
+      const nextQueue: WorkflowOpsAlertVarianceRemediationQueueRow = {
+        ...currentVarianceRemediationQueue,
+        queueStatus: "assigned",
+        queueReason: reason,
+        ownerId,
+        assignedAt: now,
+        resolvedAt: null,
+        resolutionReason: null,
+        lastStatusChangedAt: now,
+        freshnessStatus: asVarianceRemediationQueueFreshnessStatus(currentVariance.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertVarianceRemediationQueues.upsert(nextQueue)
+      store.workflowOpsAlertVarianceRemediationQueues.set(nextQueue.id, nextQueue)
+
+      const nextVariance: WorkflowOpsAlertClosureDebtVarianceDigestRow = {
+        ...currentVariance,
+        varianceStatus: "variance_reviewing",
+        reviewOwnerId: ownerId,
+        varianceOpenedAt: currentVariance.varianceOpenedAt ?? now,
+        varianceResolvedAt: null,
+        varianceReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asVarianceFreshnessStatus(currentReconciliation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(nextVariance)
+      store.workflowOpsAlertClosureDebtVarianceDigests.set(nextVariance.id, nextVariance)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_variance_remediation_owner_assigned",
+        actorId: actor.id,
+        target: nextQueue.matterId,
+        classification: nextQueue.classification,
+        reason: `${reason}:${ownerId}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        variance: nextVariance,
+        remediationQueue: nextQueue,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_workflow_ops_alert_variance_remediation") {
+      if (
+        currentVarianceRemediationQueue.queueStatus !== "queued" &&
+        currentVarianceRemediationQueue.queueStatus !== "assigned"
+      ) {
+        return NextResponse.json(
+          { error: "variance remediation queue must be queued or assigned before resolution" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(parsed.reason, "variance_remediation_resolved")
+      const nextQueue: WorkflowOpsAlertVarianceRemediationQueueRow = {
+        ...currentVarianceRemediationQueue,
+        queueStatus: "resolved",
+        queueReason: reason,
+        resolvedAt: now,
+        resolutionReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asVarianceRemediationQueueFreshnessStatus(currentVariance.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertVarianceRemediationQueues.upsert(nextQueue)
+      store.workflowOpsAlertVarianceRemediationQueues.set(nextQueue.id, nextQueue)
+
+      const nextVariance: WorkflowOpsAlertClosureDebtVarianceDigestRow = {
+        ...currentVariance,
+        varianceStatus: "variance_resolved",
+        outstandingVarianceCount: 0,
+        varianceDelta: 0,
+        varianceResolvedAt: now,
+        varianceReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asVarianceFreshnessStatus(currentReconciliation.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(nextVariance)
+      store.workflowOpsAlertClosureDebtVarianceDigests.set(nextVariance.id, nextVariance)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_variance_remediation_resolved",
+        actorId: actor.id,
+        target: nextQueue.matterId,
+        classification: nextQueue.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        variance: nextVariance,
+        remediationQueue: nextQueue,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

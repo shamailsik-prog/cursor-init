@@ -2231,6 +2231,70 @@ export type WorkflowOpsAlertClosureDebtVarianceDigestRow = {
   updatedAt: number
 }
 
+export type WorkflowOpsAlertEnforcementWaiverStatus =
+  | "not_requested"
+  | "pending_attestation"
+  | "attested"
+  | "waived"
+
+export type WorkflowOpsAlertEnforcementWaiverFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertEnforcementWaiverLedgerRow = {
+  id: string
+  firmId: string
+  matterId: string
+  enforcementAttestationId: string
+  classification: Classification
+  waiverStatus: WorkflowOpsAlertEnforcementWaiverStatus
+  requestedBy: string | null
+  requestedAt: number | null
+  attestedBy: string | null
+  attestedAt: number | null
+  waivedBy: string | null
+  waivedAt: number | null
+  waiverReason: string | null
+  waiverExpiresAt: number | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertEnforcementWaiverFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertVarianceRemediationQueueStatus =
+  | "not_queued"
+  | "queued"
+  | "assigned"
+  | "resolved"
+
+export type WorkflowOpsAlertVarianceRemediationQueueFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationQueueRow = {
+  id: string
+  firmId: string
+  matterId: string
+  closureDebtVarianceDigestId: string
+  classification: Classification
+  queueStatus: WorkflowOpsAlertVarianceRemediationQueueStatus
+  queueReason: string | null
+  queuedAt: number | null
+  ownerId: string | null
+  assignedAt: number | null
+  resolvedAt: number | null
+  resolutionReason: string | null
+  outstandingVarianceCountSnapshot: number
+  varianceDeltaSnapshot: number
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertVarianceRemediationQueueFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2348,6 +2412,10 @@ export class SpineStore {
     new Map<string, WorkflowOpsAlertEnforcementAttestationRow>()
   workflowOpsAlertClosureDebtVarianceDigests =
     new Map<string, WorkflowOpsAlertClosureDebtVarianceDigestRow>()
+  workflowOpsAlertEnforcementWaiverLedgers =
+    new Map<string, WorkflowOpsAlertEnforcementWaiverLedgerRow>()
+  workflowOpsAlertVarianceRemediationQueues =
+    new Map<string, WorkflowOpsAlertVarianceRemediationQueueRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()

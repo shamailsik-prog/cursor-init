@@ -696,6 +696,122 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(varianceResolveJson.result.variance.varianceStatus).toBe("variance_resolved")
     expect(varianceResolveJson.result.variance.outstandingVarianceCount).toBe(0)
 
+    const waiverCreate = await postOpsReport(
+      {
+        action: "create_workflow_ops_alert_enforcement_waiver",
+        actorId: "partner_a",
+        matterId,
+        reason: "waiver request opened",
+      },
+      "4f052e0d-26fd-47c7-b025-e723eab9f680"
+    )
+    expect(waiverCreate.status).toBe(200)
+    const waiverCreateJson = (await waiverCreate.json()) as {
+      result: { enforcementWaiver: { waiverStatus: string; requestedBy: string | null } }
+    }
+    expect(waiverCreateJson.result.enforcementWaiver.waiverStatus).toBe("pending_attestation")
+    expect(waiverCreateJson.result.enforcementWaiver.requestedBy).toBe("partner_a")
+
+    const waiverAttest = await postOpsReport(
+      {
+        action: "attest_workflow_ops_alert_enforcement_waiver",
+        actorId: "partner_a",
+        matterId,
+        reason: "waiver attested",
+      },
+      "8135ecef-f97d-4f75-9de2-01f2f3e79f88"
+    )
+    expect(waiverAttest.status).toBe(200)
+    const waiverAttestJson = (await waiverAttest.json()) as {
+      result: { enforcementWaiver: { waiverStatus: string; attestedBy: string | null } }
+    }
+    expect(waiverAttestJson.result.enforcementWaiver.waiverStatus).toBe("attested")
+    expect(waiverAttestJson.result.enforcementWaiver.attestedBy).toBe("partner_a")
+
+    const waiverExpiry = Date.now() + 120_000
+    const waiverWaive = await postOpsReport(
+      {
+        action: "waive_workflow_ops_alert_enforcement_waiver",
+        actorId: "partner_a",
+        matterId,
+        waiverExpiresAt: waiverExpiry,
+        reason: "waiver approved",
+      },
+      "72711dea-a895-4f3c-ba2c-3dff64ecf4ca"
+    )
+    expect(waiverWaive.status).toBe(200)
+    const waiverWaiveJson = (await waiverWaive.json()) as {
+      result: {
+        enforcementWaiver: { waiverStatus: string; waivedBy: string | null; waiverExpiresAt: number | null }
+      }
+    }
+    expect(waiverWaiveJson.result.enforcementWaiver.waiverStatus).toBe("waived")
+    expect(waiverWaiveJson.result.enforcementWaiver.waivedBy).toBe("partner_a")
+    expect((waiverWaiveJson.result.enforcementWaiver.waiverExpiresAt ?? 0) >= waiverExpiry).toBe(true)
+
+    const varianceReopenForQueue = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_closure_debt_variance",
+        actorId: "partner_a",
+        matterId,
+        reason: "variance reopened for remediation queue",
+      },
+      "c040eb98-df3a-476f-962c-5ec3356f324e"
+    )
+    expect(varianceReopenForQueue.status).toBe(200)
+
+    const remediationQueue = await postOpsReport(
+      {
+        action: "queue_workflow_ops_alert_variance_remediation",
+        actorId: "partner_a",
+        matterId,
+        reason: "queue remediation",
+      },
+      "33ef17f5-1f37-4a2e-a745-8534f2441088"
+    )
+    expect(remediationQueue.status).toBe(200)
+    const remediationQueueJson = (await remediationQueue.json()) as {
+      result: { remediationQueue: { queueStatus: string } }
+    }
+    expect(remediationQueueJson.result.remediationQueue.queueStatus).toBe("queued")
+
+    const remediationAssign = await postOpsReport(
+      {
+        action: "assign_workflow_ops_alert_variance_remediation_owner",
+        actorId: "partner_a",
+        matterId,
+        ownerId: "associate_a",
+        reason: "assign remediation owner",
+      },
+      "7ddace0f-131b-43a2-bf1f-748bcfb60338"
+    )
+    expect(remediationAssign.status).toBe(200)
+    const remediationAssignJson = (await remediationAssign.json()) as {
+      result: { remediationQueue: { queueStatus: string; ownerId: string | null } }
+    }
+    expect(remediationAssignJson.result.remediationQueue.queueStatus).toBe("assigned")
+    expect(remediationAssignJson.result.remediationQueue.ownerId).toBe("associate_a")
+
+    const remediationResolve = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_variance_remediation",
+        actorId: "partner_a",
+        matterId,
+        reason: "remediation resolved",
+      },
+      "665f2411-4fcf-4af8-ad2e-4fc65f073ffc"
+    )
+    expect(remediationResolve.status).toBe(200)
+    const remediationResolveJson = (await remediationResolve.json()) as {
+      result: {
+        remediationQueue: { queueStatus: string; ownerId: string | null }
+        variance: { varianceStatus: string }
+      }
+    }
+    expect(remediationResolveJson.result.remediationQueue.queueStatus).toBe("resolved")
+    expect(remediationResolveJson.result.remediationQueue.ownerId).toBe("associate_a")
+    expect(remediationResolveJson.result.variance.varianceStatus).toBe("variance_resolved")
+
     const attestationView = await getOpsReport(
       new URLSearchParams({
         view: "alert_attestations",
@@ -788,7 +904,7 @@ describe("GET /api/d2/ops-reporting", () => {
         view: "alert_dispute_enforcement_ledgers",
         actorId: "associate_a",
         matterId,
-        enforcementStatus: "enforced",
+        enforcementStatus: "waived",
         freshnessStatus: "fresh",
         limit: "10",
         cursor: "0",
@@ -802,7 +918,7 @@ describe("GET /api/d2/ops-reporting", () => {
       enforcementViewJson.items.some(
         (row) =>
           row.matterId === matterId &&
-          row.enforcementStatus === "enforced" &&
+          row.enforcementStatus === "waived" &&
           row.ownerId === "associate_a"
       )
     ).toBe(true)
@@ -876,6 +992,49 @@ describe("GET /api/d2/ops-reporting", () => {
           row.matterId === matterId &&
           row.varianceStatus === "variance_resolved" &&
           row.outstandingVarianceCount === 0
+      )
+    ).toBe(true)
+
+    const waiverView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_enforcement_waiver_ledgers",
+        actorId: "associate_a",
+        matterId,
+        waiverStatus: "waived",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverView.status).toBe(200)
+    const waiverViewJson = (await waiverView.json()) as {
+      items: Array<{ matterId: string; waiverStatus: string; waivedBy: string | null }>
+    }
+    expect(
+      waiverViewJson.items.some(
+        (row) => row.matterId === matterId && row.waiverStatus === "waived" && row.waivedBy === "partner_a"
+      )
+    ).toBe(true)
+
+    const remediationQueueView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_variance_remediation_queues",
+        actorId: "associate_a",
+        matterId,
+        remediationQueueStatus: "resolved",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationQueueView.status).toBe(200)
+    const remediationQueueViewJson = (await remediationQueueView.json()) as {
+      items: Array<{ matterId: string; queueStatus: string; ownerId: string | null }>
+    }
+    expect(
+      remediationQueueViewJson.items.some(
+        (row) =>
+          row.matterId === matterId && row.queueStatus === "resolved" && row.ownerId === "associate_a"
       )
     ).toBe(true)
   })
