@@ -2012,6 +2012,63 @@ describe("GET /api/d2/ops-reporting", () => {
         .externalDistributionAuditLedgerStatus
     ).toBe("distribution_channel_registered")
 
+    const externalDistributionSignerRoster = await postOpsReport(
+      {
+        action:
+          "record_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_attestation_signer_roster",
+        actorId: "partner_a",
+        matterId,
+        attestationSignerRoster: "partner_a,clerk_a",
+        reason: "adjudication SLO external distribution attestation signer roster recorded",
+      },
+      "f5efab1f-91ab-4e22-acf7-0b4c5d8e9a6a"
+    )
+    expect(externalDistributionSignerRoster.status).toBe(200)
+
+    const externalDistributionPublicationFreeze = await postOpsReport(
+      {
+        action:
+          "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_publication_freeze",
+        actorId: "partner_a",
+        matterId,
+        publicationFreezeReason: "partner handoff slice publication freeze",
+        reason: "adjudication SLO external distribution publication freeze checkpointed",
+      },
+      "f5efab2f-91ab-4e22-acf7-0b4c5d8e9a6b"
+    )
+    expect(externalDistributionPublicationFreeze.status).toBe(200)
+
+    const partnerHandoffOutboundRegistry = await postOpsReport(
+      {
+        action:
+          "register_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_outbound_registry",
+        actorId: "partner_a",
+        matterId,
+        outboundPartnerHandoffRegistry: "partner_handoff_outbound_registry_stub",
+        reason: "adjudication SLO external distribution partner handoff outbound registry registered",
+      },
+      "f5efab3f-91ab-4e22-acf7-0b4c5d8e9a6c"
+    )
+    expect(partnerHandoffOutboundRegistry.status).toBe(200)
+    const partnerHandoffOutboundRegistryJson = (await partnerHandoffOutboundRegistry.json()) as {
+      result: {
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestation: {
+          partnerHandoffAttestationStatus: string
+          partnerHandoffBacklogCount: number
+        }
+      }
+    }
+    expect(
+      partnerHandoffOutboundRegistryJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestation
+        .partnerHandoffAttestationStatus
+    ).toBe("outbound_registry_registered")
+    expect(
+      partnerHandoffOutboundRegistryJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestation
+        .partnerHandoffBacklogCount
+    ).toBeGreaterThanOrEqual(1)
+
     const queueReentryDebtRetirementDisputeResolve = await postOpsReport(
       {
         action:

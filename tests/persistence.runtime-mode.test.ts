@@ -9387,6 +9387,36 @@ describe("Runtime persistence mode", () => {
             entry.data()?.closureVerificationStatus === "closure_verification_pending"
         )
       ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestations"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.partnerHandoffAttestationStatus === "partner_handoff_attestation_pending"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_exports"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.archivalExportStatus === "archival_export_pending"
+        )
+      ).toBe(true)
     })
   }, 45_000)
 
