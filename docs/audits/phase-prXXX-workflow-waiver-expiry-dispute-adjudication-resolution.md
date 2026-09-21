@@ -3,7 +3,7 @@
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
 PR: `#139`  
-Head SHA: `8e2b7ef461ff74dd876c814811bb7c7e1b14a430`
+Head SHA: `cbc9d5e051193ba6feb6ca213fb12c924012575b`
 
 ## Scope stub
 
