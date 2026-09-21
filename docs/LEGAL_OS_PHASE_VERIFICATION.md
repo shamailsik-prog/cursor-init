@@ -915,3 +915,28 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #175 | archival-export custody handoff + transport-boundary receipt closure attestation | `40366e0` / slice `966bf1b` / base `62c863b` | Yes | true | false | true | **PASS** (backend-scoped; not COMPLETE) | low (prior major retired) |
 
+## Targeted ledger — PR #180 archival-export custody handoff + closure attestation external transport receipt acknowledgment (stub-honest)
+
+- Audit file: `docs/audits/phase-pr180-workflow-slo-transport-receipt-acknowledgment.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `bf93647907c870c9dc639a55b4575655f445356c` (merge parents `38b4291` + slice head `a5b691fef059cc19f223bd9c78a35d12860411f4`)
+- Main tip at audit close: `bf93647`
+- Stack base: `38b4291` (post PR #179); Firestore id helper from PR #174 on lineage; parent custody/closure entities from PR #175 (#178 repositories compile fix)
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **PASS (low)** — dual-track external transport receipt acknowledgment scaffolding verified; Firestore hashed ids ≤1500 bytes; repositories suite compiles; emulator trio **22/22**; focused Vitest **105/105**; G-0/G-1 green; claim-gate replay green. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (slice `a5b691f` + merge `bf93647` on `origin/main` @ audit close).
+- `BACKEND_REAL`: PASS (two acknowledgment row types, memory/Firestore repos, Firestore deny-write rules, governance `workflowOpsAlertArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentClosureAttestationExternalTransportReceiptAcknowledgmentGovernance.ts` + `buildWorkflowOpsChainedDocumentId`, `/api/d2/ops-reporting` two views + six partner actions, stub-honest acknowledge defaults).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `38b4291..a5b691f` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, negated product-done disclaimer).
+- `focused tests+gates`: PASS (API/route-wiring/custody-id **105**; Firestore repos/runtime/rules **22**; `G-0`; `G-1` **10/10**). Non-blocking: five partner POST actions lack dedicated HTTP assertions; POST `Body` types missing optional checkpoint fields (`tsc` drift, runtime JSON cast OK).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #180 metadata with `38b4291..a5b691f` exits 0 @ `ede9a9c`). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #180 | archival-export custody handoff + closure attestation external transport receipt acknowledgment (stub-honest) | `bf93647` / slice `a5b691f` / base `38b4291` | Yes | true | false | true | **PASS** (backend-scoped; not COMPLETE) | low |
+
