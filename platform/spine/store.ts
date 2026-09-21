@@ -3441,6 +3441,79 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     updatedAt: number
   }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffStatus =
+  | "archival_export_custody_handoff_pending"
+  | "archival_export_custody_handoff_checkpointed"
+  | "archival_export_custody_handoff_finalized"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    partnerDeliveryReceiptFreezeOverrideSealVerificationId: string
+    classification: Classification
+    archivalExportCustodyHandoffStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffStatus
+    partnerDeliveryReceiptFreezeOverrideSealVerificationStatusSnapshot: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
+    archivalExportCustodyHandoffCheckpointedBy: string | null
+    archivalExportCustodyHandoffCheckpointedAt: number | null
+    archivalExportCustodyHandoffReference: string | null
+    archivalExportCustodyHandedOffBy: string | null
+    archivalExportCustodyHandedOffAt: number | null
+    archivalExportCustodyHandoffDigest: string | null
+    sealVerificationCustodyBacklogCount: number
+    partnerDeliverySealBacklogCountSnapshot: number
+    archivalExportCustodyHandoffNote: string | null
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus =
+  | "transport_boundary_receipt_reconciliation_closure_attestation_pending"
+  | "transport_boundary_receipt_reconciliation_closure_attestation_digest_checkpointed"
+  | "transport_boundary_receipt_reconciliation_closure_attested"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    partnerDeliveryTransportBoundaryReceiptReconciliationId: string
+    classification: Classification
+    partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
+    partnerDeliveryTransportBoundaryReceiptReconciliationStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
+    transportBoundaryReceiptReconciliationClosureAttestationDigestCheckpointedBy: string | null
+    transportBoundaryReceiptReconciliationClosureAttestationDigestCheckpointedAt: number | null
+    transportBoundaryReceiptReconciliationClosureAttestationDigest: string | null
+    transportBoundaryReceiptReconciliationClosureAttestedBy: string | null
+    transportBoundaryReceiptReconciliationClosureAttestedAt: number | null
+    transportBoundaryReceiptReconciliationClosureAttestationReference: string | null
+    reconciliationClosureLagHours: number
+    reconciliationClosureLagCount: number
+    archivalTransportReconciliationLagCountSnapshot: number
+    partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationNote: string | null
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -3678,6 +3751,16 @@ export class SpineStore {
     new Map<
       string,
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationRow
+    >()
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs =
+    new Map<
+      string,
+      WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow
+    >()
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations =
+    new Map<
+      string,
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow
     >()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()

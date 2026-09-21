@@ -2068,6 +2068,97 @@ describe("Firestore repository adapters", () => {
       expect(
         transportBoundaryReceiptReconciliation?.partnerDeliveryTransportBoundaryReceiptReconciliationStatus
       ).toBe("transport_boundary_receipt_reconciliation_pending")
+      const {
+        workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffId,
+        workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationId,
+      } = await import(
+        "@/platform/persistence/workflowOpsAlertPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationGovernance"
+      )
+      const custodyHandoffId =
+        workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffId(
+          freezeOverrideSealVerification!.id
+        )
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs.upsert(
+        {
+          id: custodyHandoffId,
+          firmId: "firmA",
+          matterId: "mat_1",
+          partnerDeliveryReceiptFreezeOverrideSealVerificationId: freezeOverrideSealVerification!.id,
+          classification: "internal",
+          archivalExportCustodyHandoffStatus: "archival_export_custody_handoff_pending",
+          partnerDeliveryReceiptFreezeOverrideSealVerificationStatusSnapshot:
+            "partner_delivery_receipt_freeze_override_seal_verification_pending",
+          archivalExportCustodyHandoffCheckpointedBy: null,
+          archivalExportCustodyHandoffCheckpointedAt: null,
+          archivalExportCustodyHandoffReference: null,
+          archivalExportCustodyHandedOffBy: null,
+          archivalExportCustodyHandedOffAt: null,
+          archivalExportCustodyHandoffDigest: null,
+          sealVerificationCustodyBacklogCount: 0,
+          partnerDeliverySealBacklogCountSnapshot: 0,
+          archivalExportCustodyHandoffNote: "ops_archival_export_custody_handoff_seed",
+          lastStatusChangedAt: 92,
+          freshnessStatus: "fresh",
+          provenanceTags: ["workflow", "archival_export_custody_handoff"],
+          recomputedAt: 92,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_archival_export_custody_handoff_seed",
+          updatedAt: 92,
+        }
+      )
+      const custodyHandoff =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs.get(
+          custodyHandoffId
+        )
+      expect(custodyHandoff?.archivalExportCustodyHandoffStatus).toBe(
+        "archival_export_custody_handoff_pending"
+      )
+      expect(custodyHandoffId.length).toBeLessThanOrEqual(1500)
+      const closureAttestationId =
+        workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationId(
+          transportBoundaryReceiptReconciliation!.id
+        )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.upsert(
+        {
+          id: closureAttestationId,
+          firmId: "firmA",
+          matterId: "mat_1",
+          partnerDeliveryTransportBoundaryReceiptReconciliationId:
+            transportBoundaryReceiptReconciliation!.id,
+          classification: "internal",
+          partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus:
+            "transport_boundary_receipt_reconciliation_closure_attestation_pending",
+          partnerDeliveryTransportBoundaryReceiptReconciliationStatusSnapshot:
+            "transport_boundary_receipt_reconciliation_pending",
+          transportBoundaryReceiptReconciliationClosureAttestationDigestCheckpointedBy: null,
+          transportBoundaryReceiptReconciliationClosureAttestationDigestCheckpointedAt: null,
+          transportBoundaryReceiptReconciliationClosureAttestationDigest: null,
+          transportBoundaryReceiptReconciliationClosureAttestedBy: null,
+          transportBoundaryReceiptReconciliationClosureAttestedAt: null,
+          transportBoundaryReceiptReconciliationClosureAttestationReference: null,
+          reconciliationClosureLagHours: 0,
+          reconciliationClosureLagCount: 0,
+          archivalTransportReconciliationLagCountSnapshot: 0,
+          partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationNote:
+            "ops_transport_boundary_receipt_reconciliation_closure_attestation_seed",
+          lastStatusChangedAt: 93,
+          freshnessStatus: "fresh",
+          provenanceTags: ["workflow", "transport_boundary_receipt_reconciliation_closure_attestation"],
+          recomputedAt: 93,
+          recomputedBy: "partner_a",
+          recomputeReason:
+            "ops_transport_boundary_receipt_reconciliation_closure_attestation_seed",
+          updatedAt: 93,
+        }
+      )
+      const closureAttestation =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.get(
+          closureAttestationId
+        )
+      expect(
+        closureAttestation?.partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
+      ).toBe("transport_boundary_receipt_reconciliation_closure_attestation_pending")
+      expect(closureAttestationId.length).toBeLessThanOrEqual(1500)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
