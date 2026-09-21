@@ -391,3 +391,25 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #131 | workflow alert enforcement waiver ledger + variance remediation queue scaffolding | `eb142f8` | Yes | true | false | true | PASS (backend-scoped) | low |
 
+## Targeted ledger — PR #133 workflow waiver-expiry + variance-remediation SLA scaffolding
+
+- Audit file: `docs/audits/phase-pr133-workflow-waiver-expiry-remediation-sla.md`
+- Date: 2026-09-21
+- Main tip audited: `632fbda`
+- Verdict: **PARTIAL** (medium) — backend implementation and focused tests/gates are green, but process-flag replay fails on COMPLETE-token wording in PR metadata.
+
+### DoD summary
+
+- `SHA on main`: PASS (`origin/main` resolves to `632fbda`; merge parent-2 is claimed PR head `270f503`).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertWaiverExpiryDigestRow` + `WorkflowOpsAlertVarianceRemediationSlaLedgerRow`, memory/Firestore repos, Firestore rules, and `/api/d2/ops-reporting` views/actions are present).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; merged file list excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS semantically (classification remains PARTIAL), with wording hazard noted for regex-based checks.
+- `focused tests+gates`: PASS (targeted unit/route-wiring + Firestore persistence/runtime + `G-0` + `G-1` green in independent rerun).
+- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` replay on PR #133 metadata treats `no COMPLETE/product-done claim` as a positive COMPLETE claim and blocks policy check).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #133 | workflow waiver-expiry + variance-remediation SLA scaffolding | `632fbda` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
+
