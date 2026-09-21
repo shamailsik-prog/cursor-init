@@ -347,3 +347,25 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #126 | Re-audit after gate fix + docs reconciliation | `746a35f` | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #127 workflow alert enforcement-attestation + closure-debt variance digest scaffolding
+
+- Audit file: `docs/audits/phase-pr127-workflow-enforcement-attestation-variance.md`
+- Date: 2026-09-21
+- Main tip audited: `746a35f`
+- Verdict: **PASS** (low) — backend-real implementation, claim-honest metadata, and process gates all verified on current policy.
+
+### DoD summary
+
+- `SHA on main`: PASS (`fdcce4c` merge and feature commits `9897154`/`53e637e` are on `origin/main`).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertEnforcementAttestationRow` + `WorkflowOpsAlertClosureDebtVarianceDigestRow`, repository wiring, Firestore rules, `/api/d2/ops-reporting` views/actions, idempotency and audit write-through present).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; PR diff excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`transport_stub=true` remains explicit with bounded slice claim).
+- `focused tests+gates`: PASS (targeted API/route-wiring + Firestore runtime suites + `G-0` + `G-1` green in independent rerun).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay passes under current policy when `frontend_real=false` and no `app/ops/**` file changes).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #127 | workflow alert enforcement-attestation + closure-debt variance digest scaffolding | `fdcce4c` | Yes | true | false | true | PASS (backend-scoped) | low |
+
