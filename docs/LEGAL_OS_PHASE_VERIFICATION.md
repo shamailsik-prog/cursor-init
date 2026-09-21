@@ -233,3 +233,24 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #114 | Re-audit after PR #117 label amend | `bf24a57` | true | false | true | PARTIAL | minor |
 
+## Targeted ledger — PR #120 workflow operations alert digest scaffolding
+
+- Audit file: `docs/audits/phase-pr120-workflow-ops-alert-digest.md`
+- Date: 2026-09-21
+- Main tip audited: `c62d095`
+- Verdict: **PASS** (low) — backend-real, claim-honest, process-complete for scoped slice.
+
+### DoD summary
+
+- `SHA on main`: PASS (`b73cb41` and roadmap note `68d1b68` are on `origin/main`).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertDigestRow` + store map, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` alert-digest view + acknowledge/snooze idempotent actions + audit write-through).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false` and PR diff excludes `/ops` edits).
+- `no COMPLETE/product-done overclaim`: PASS (`transport_stub=true` with bounded "pending Auditor" claim).
+- `focused tests+gates`: PASS (targeted API/route-wiring + Firestore runtime suites + `G-0` + `G-1` all green).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #120 | workflow operations monitoring + alert digest scaffolding | `b73cb41` | Yes | true | false | true | PASS (backend-scoped) | low |
+
