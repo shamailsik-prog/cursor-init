@@ -890,3 +890,28 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #175 | archival-export custody handoff + transport-boundary receipt closure attestation | `40366e0` / slice `966bf1b` / base `62c863b` | Yes | true | false | true | **FAIL** (not COMPLETE) | major |
 
+## Targeted ledger — PR #175 RE-AUDIT (remediation PR #178)
+
+- Audit file: `docs/audits/phase-pr175-workflow-slo-custody-handoff-closure-attestation.md` (RE-AUDIT addendum)
+- Date: 2026-09-21
+- Feature merge SHA (unchanged): `40366e0` (slice `966bf1b`; stack `62c863b`)
+- Remediation merge on `main`: `36dca9c` (PR #178; fix `dc1fc0f`)
+- Main tip at re-audit close: `36dca9c811ca37bfb8dd373baab0c7942208f32e`
+- Prior FAIL ledger commit: `136922e` (PR #177 docs; on `main` lineage)
+- Verdict: **PASS (auditor closure)** — duplicate `closureAttestation` in `tests/persistence.repositories.test.ts` renamed to `transportBoundaryReceiptReconciliationClosureAttestation` for workflow-ops binding; Firestore emulator trio **22/22**. **Not COMPLETE** (`transport_stub=true`).
+
+### DoD summary (re-audit)
+
+- `SHA on main`: PASS (feature `966bf1b` / `40366e0` + remediation `dc1fc0f` / `36dca9c` on `main`).
+- `BACKEND_REAL`: **PASS** (unchanged from initial audit; Firestore integrated persistence green).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`).
+- `focused tests+gates`: **PASS** (Firestore trio **22/22**; `G-0`; `G-1` **10/10**; prior partial Vitest **124** lane still valid on feature SHA). Non-blocking: six partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
+- `process flags`: PASS (claim-gate replay on PR #175 metadata, `62c863b..966bf1b`, exit 0 @ `ede9a9c`).
+
+### PR matrix (re-audit)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #175 | archival-export custody handoff + transport-boundary receipt closure attestation | `40366e0` / slice `966bf1b` / base `62c863b` | Yes | true | false | true | **PASS** (backend-scoped; not COMPLETE) | low (prior major retired) |
+
