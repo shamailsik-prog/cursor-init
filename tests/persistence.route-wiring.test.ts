@@ -3130,6 +3130,79 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs:
+      {
+        upsert: vi.fn(),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "9d597dfb71e405c8f3eebc98ce5e8a74ec1a6145b7d6588ebadc37394f4fd422",
+            firmId: "firmA",
+            matterId: "mat_1",
+            partnerDeliveryReceiptFreezeOverrideSealVerificationId:
+              "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+            classification: "internal",
+            archivalExportCustodyHandoffStatus: "archival_export_custody_handoff_checkpointed",
+            partnerDeliveryReceiptFreezeOverrideSealVerificationStatusSnapshot:
+              "partner_delivery_receipt_freeze_override_seal_verified",
+            archivalExportCustodyHandoffCheckpointedBy: "partner_a",
+            archivalExportCustodyHandoffCheckpointedAt: Date.now(),
+            archivalExportCustodyHandoffReference: "custody-handoff-stub",
+            archivalExportCustodyHandedOffBy: null,
+            archivalExportCustodyHandedOffAt: null,
+            archivalExportCustodyHandoffDigest: null,
+            sealVerificationCustodyBacklogCount: 1,
+            partnerDeliverySealBacklogCountSnapshot: 0,
+            archivalExportCustodyHandoffNote: "repo custody handoff",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "archival_export_custody_handoff"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 45,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations:
+      {
+        upsert: vi.fn(),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "e7a6499493b94450bfe195714aa0f484329785b98a1b5537c362518bb250349a",
+            firmId: "firmA",
+            matterId: "mat_1",
+            partnerDeliveryTransportBoundaryReceiptReconciliationId:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+            classification: "internal",
+            partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus:
+              "transport_boundary_receipt_reconciliation_closure_attestation_digest_checkpointed",
+            partnerDeliveryTransportBoundaryReceiptReconciliationStatusSnapshot:
+              "partner_delivery_transport_boundary_receipt_reconciliation_finalized",
+            transportBoundaryReceiptReconciliationClosureAttestationDigestCheckpointedBy: "partner_a",
+            transportBoundaryReceiptReconciliationClosureAttestationDigestCheckpointedAt: Date.now(),
+            transportBoundaryReceiptReconciliationClosureAttestationDigest: "closure-attestation-stub",
+            transportBoundaryReceiptReconciliationClosureAttestedBy: null,
+            transportBoundaryReceiptReconciliationClosureAttestedAt: null,
+            transportBoundaryReceiptReconciliationClosureAttestationReference: null,
+            reconciliationClosureLagHours: 2,
+            reconciliationClosureLagCount: 0,
+            archivalTransportReconciliationLagCountSnapshot: 0,
+            partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationNote:
+              "repo closure attestation",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_boundary_receipt_reconciliation_closure_attestation"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 46,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -4456,5 +4529,37 @@ describe("Route wiring uses repository adapters", () => {
     expect(json.items[0]?.partnerDeliveryTransportBoundaryReceiptReconciliationStatus).toBe(
       "archival_export_transport_boundary_receipt_reconciled"
     )
+  })
+
+  it("ops reporting archival export custody handoff view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoffs&actorId=associate_a&archivalExportCustodyHandoffStatus=archival_export_custody_handoff_checkpointed&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ archivalExportCustodyHandoffStatus: string }>
+    }
+    expect(json.items[0]?.archivalExportCustodyHandoffStatus).toBe(
+      "archival_export_custody_handoff_checkpointed"
+    )
+  })
+
+  it("ops reporting transport boundary receipt reconciliation closure attestation view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestations&actorId=associate_a&partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus=transport_boundary_receipt_reconciliation_closure_attestation_digest_checkpointed&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus: string }>
+    }
+    expect(
+      json.items[0]?.partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
+    ).toBe("transport_boundary_receipt_reconciliation_closure_attestation_digest_checkpointed")
   })
 })
