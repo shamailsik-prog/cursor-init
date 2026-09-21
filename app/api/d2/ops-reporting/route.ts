@@ -272,20 +272,8 @@ function buildWorkflowOpsAlertAttestationRow(params: {
   now: number
 }): WorkflowOpsAlertAttestationRow {
   const { digest, actorId, reason, existing, now } = params
-  let attestationStatus: WorkflowOpsAlertAttestationStatus = existing?.attestationStatus ?? "pending_attestation"
-  if (existing?.attestationStatus === "attested") {
-    const attestedAt = existing.lastAttestedAt ?? 0
-    if (attestedAt < digest.recomputedAt) {
-      attestationStatus = "reopened"
-    }
-  }
-  if (
-    attestationStatus === "reopened" &&
-    existing?.lastAttestedAt !== null &&
-    (existing?.lastAttestedAt ?? 0) >= digest.recomputedAt
-  ) {
-    attestationStatus = "attested"
-  }
+  const attestationStatus: WorkflowOpsAlertAttestationStatus =
+    existing?.attestationStatus ?? "pending_attestation"
   return {
     id: alertAttestationId(digest.matterId ?? digest.id),
     firmId: digest.firmId,
@@ -318,17 +306,7 @@ function buildWorkflowOpsAlertEscalationLedgerRow(params: {
 }): WorkflowOpsAlertEscalationLedgerRow {
   const { digest, actorId, reason, existing, now } = params
   const defaultStatus = computeDefaultEscalationStatus(digest.severity)
-  let escalationStatus = existing?.escalationStatus ?? defaultStatus
-
-  if (escalationStatus === "not_required" && defaultStatus === "open") {
-    escalationStatus = "open"
-  }
-  if (escalationStatus === "resolved" && defaultStatus === "open") {
-    const resolvedAt = existing?.resolvedAt ?? 0
-    if (resolvedAt < digest.recomputedAt) {
-      escalationStatus = "open"
-    }
-  }
+  const escalationStatus = existing?.escalationStatus ?? defaultStatus
 
   const openedAt =
     escalationStatus === "open" || escalationStatus === "assigned"
@@ -617,7 +595,7 @@ export async function GET(request: Request) {
     store,
     repos,
   })
-  const governanceRows = await ensureWorkflowOpsAlertGovernanceRows({
+  await ensureWorkflowOpsAlertGovernanceRows({
     digests,
     actorId: refreshedActor.id,
     reason: "read_scaffold_seed",
@@ -660,7 +638,7 @@ export async function GET(request: Request) {
   }
 
   if (view === "alert_attestations") {
-    const all = governanceRows.attestations
+    const all = (await repos.workflowOpsAlertAttestations.listByFirm(refreshedActor.firmId))
       .map((row) => ({
         ...row,
         freshnessStatus: asAttestationFreshnessStatus(row.recomputedAt, now),
@@ -684,7 +662,7 @@ export async function GET(request: Request) {
     })
   }
 
-  const all = governanceRows.escalationLedgers
+  const all = (await repos.workflowOpsAlertEscalationLedgers.listByFirm(refreshedActor.firmId))
     .map((row) => ({
       ...row,
       freshnessStatus: asEscalationFreshnessStatus(row.recomputedAt, now),
