@@ -64,6 +64,8 @@ import type {
   WorkflowOpsAlertEscalationClosureRow,
   WorkflowOpsAlertDisputeEnforcementLedgerRow,
   WorkflowOpsAlertClosureDebtReconciliationDigestRow,
+  WorkflowOpsAlertEnforcementAttestationRow,
+  WorkflowOpsAlertClosureDebtVarianceDigestRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -652,6 +654,20 @@ export type WorkflowOpsAlertClosureDebtReconciliationDigestRepository = {
   listByMatter(matterId: string): Promise<WorkflowOpsAlertClosureDebtReconciliationDigestRow[]>
 }
 
+export type WorkflowOpsAlertEnforcementAttestationRepository = {
+  upsert(row: WorkflowOpsAlertEnforcementAttestationRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertEnforcementAttestationRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertEnforcementAttestationRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertEnforcementAttestationRow[]>
+}
+
+export type WorkflowOpsAlertClosureDebtVarianceDigestRepository = {
+  upsert(row: WorkflowOpsAlertClosureDebtVarianceDigestRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertClosureDebtVarianceDigestRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertClosureDebtVarianceDigestRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertClosureDebtVarianceDigestRow[]>
+}
+
 export type TenancySessionReferenceRepository = {
   upsert(row: TenancySessionReferenceRow): Promise<void>
   get(id: string): Promise<TenancySessionReferenceRow | null>
@@ -811,6 +827,8 @@ export type SpineRepositories = {
   workflowOpsAlertEscalationClosures: WorkflowOpsAlertEscalationClosureRepository
   workflowOpsAlertDisputeEnforcementLedgers: WorkflowOpsAlertDisputeEnforcementLedgerRepository
   workflowOpsAlertClosureDebtReconciliationDigests: WorkflowOpsAlertClosureDebtReconciliationDigestRepository
+  workflowOpsAlertEnforcementAttestations: WorkflowOpsAlertEnforcementAttestationRepository
+  workflowOpsAlertClosureDebtVarianceDigests: WorkflowOpsAlertClosureDebtVarianceDigestRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
@@ -2221,6 +2239,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByMatter(matterId) {
         return [...store.workflowOpsAlertClosureDebtReconciliationDigests.values()].filter(
+          (row) => row.matterId === matterId
+        )
+      },
+    },
+    workflowOpsAlertEnforcementAttestations: {
+      async upsert(row) {
+        store.workflowOpsAlertEnforcementAttestations.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertEnforcementAttestations.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertEnforcementAttestations.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertEnforcementAttestations.values()].filter(
+          (row) => row.matterId === matterId
+        )
+      },
+    },
+    workflowOpsAlertClosureDebtVarianceDigests: {
+      async upsert(row) {
+        store.workflowOpsAlertClosureDebtVarianceDigests.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertClosureDebtVarianceDigests.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertClosureDebtVarianceDigests.values()].filter(
+          (row) => row.firmId === firmId
+        )
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertClosureDebtVarianceDigests.values()].filter(
           (row) => row.matterId === matterId
         )
       },

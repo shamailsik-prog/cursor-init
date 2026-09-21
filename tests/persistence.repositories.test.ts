@@ -727,6 +727,72 @@ describe("Firestore repository adapters", () => {
       expect(
         closureDebtReconciliationByMatter.some((row) => row.recomputeReason === "ops_reconciliation_seed")
       ).toBe(true)
+      await repos.workflowOpsAlertEnforcementAttestations.upsert({
+        id: "workflow_ops_alert_enforcement_attestation:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        disputeEnforcementLedgerId: "workflow_ops_alert_dispute_enforcement:mat_1",
+        classification: "internal",
+        attestationStatus: "pending_attestation",
+        requiredOutcome: "upheld",
+        enforcementStatusSnapshot: "enforced",
+        lastAttestedAt: null,
+        lastAttestedBy: null,
+        attestationReason: null,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "enforcement_attestation"],
+        recomputedAt: 55,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_enforcement_attestation_seed",
+        updatedAt: 55,
+      })
+      const enforcementAttestation = await repos.workflowOpsAlertEnforcementAttestations.get(
+        "workflow_ops_alert_enforcement_attestation:mat_1"
+      )
+      expect(enforcementAttestation?.attestationStatus).toBe("pending_attestation")
+      const enforcementAttestationsByFirm = await repos.workflowOpsAlertEnforcementAttestations.listByFirm(
+        "firmA"
+      )
+      expect(enforcementAttestationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const enforcementAttestationsByMatter = await repos.workflowOpsAlertEnforcementAttestations.listByMatter(
+        "mat_1"
+      )
+      expect(
+        enforcementAttestationsByMatter.some(
+          (row) => row.recomputeReason === "ops_enforcement_attestation_seed"
+        )
+      ).toBe(true)
+      await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert({
+        id: "workflow_ops_alert_closure_debt_variance:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        closureDebtReconciliationDigestId: "workflow_ops_alert_closure_debt_reconciliation:mat_1",
+        classification: "internal",
+        varianceStatus: "variance_open",
+        outstandingVarianceCount: 1,
+        varianceDelta: 1,
+        reviewOwnerId: "associate_a",
+        varianceOpenedAt: 56,
+        varianceResolvedAt: null,
+        varianceReason: "seeded variance",
+        lastStatusChangedAt: 56,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "variance_digest"],
+        recomputedAt: 56,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_variance_seed",
+        updatedAt: 56,
+      })
+      const varianceDigest = await repos.workflowOpsAlertClosureDebtVarianceDigests.get(
+        "workflow_ops_alert_closure_debt_variance:mat_1"
+      )
+      expect(varianceDigest?.varianceStatus).toBe("variance_open")
+      const varianceDigestsByFirm = await repos.workflowOpsAlertClosureDebtVarianceDigests.listByFirm("firmA")
+      expect(varianceDigestsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const varianceDigestsByMatter = await repos.workflowOpsAlertClosureDebtVarianceDigests.listByMatter(
+        "mat_1"
+      )
+      expect(varianceDigestsByMatter.some((row) => row.recomputeReason === "ops_variance_seed")).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
