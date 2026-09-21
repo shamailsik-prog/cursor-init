@@ -793,6 +793,74 @@ describe("Firestore repository adapters", () => {
         "mat_1"
       )
       expect(varianceDigestsByMatter.some((row) => row.recomputeReason === "ops_variance_seed")).toBe(true)
+      await repos.workflowOpsAlertEnforcementWaiverLedgers.upsert({
+        id: "workflow_ops_alert_enforcement_waiver:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        enforcementAttestationId: "workflow_ops_alert_enforcement_attestation:mat_1",
+        classification: "internal",
+        waiverStatus: "pending_attestation",
+        requestedBy: "partner_a",
+        requestedAt: 57,
+        attestedBy: null,
+        attestedAt: null,
+        waivedBy: null,
+        waivedAt: null,
+        waiverReason: "waiver requested",
+        waiverExpiresAt: null,
+        lastStatusChangedAt: 57,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "enforcement_waiver"],
+        recomputedAt: 57,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_waiver_seed",
+        updatedAt: 57,
+      })
+      const waiverLedger = await repos.workflowOpsAlertEnforcementWaiverLedgers.get(
+        "workflow_ops_alert_enforcement_waiver:mat_1"
+      )
+      expect(waiverLedger?.waiverStatus).toBe("pending_attestation")
+      const waiverLedgersByFirm = await repos.workflowOpsAlertEnforcementWaiverLedgers.listByFirm("firmA")
+      expect(waiverLedgersByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const waiverLedgersByMatter = await repos.workflowOpsAlertEnforcementWaiverLedgers.listByMatter(
+        "mat_1"
+      )
+      expect(waiverLedgersByMatter.some((row) => row.recomputeReason === "ops_waiver_seed")).toBe(true)
+      await repos.workflowOpsAlertVarianceRemediationQueues.upsert({
+        id: "workflow_ops_alert_variance_remediation_queue:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        closureDebtVarianceDigestId: "workflow_ops_alert_closure_debt_variance:mat_1",
+        classification: "internal",
+        queueStatus: "queued",
+        queueReason: "queued for remediation",
+        queuedAt: 58,
+        ownerId: "associate_a",
+        assignedAt: null,
+        resolvedAt: null,
+        resolutionReason: null,
+        outstandingVarianceCountSnapshot: 1,
+        varianceDeltaSnapshot: 1,
+        lastStatusChangedAt: 58,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "variance_remediation_queue"],
+        recomputedAt: 58,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_variance_queue_seed",
+        updatedAt: 58,
+      })
+      const varianceRemediationQueue = await repos.workflowOpsAlertVarianceRemediationQueues.get(
+        "workflow_ops_alert_variance_remediation_queue:mat_1"
+      )
+      expect(varianceRemediationQueue?.queueStatus).toBe("queued")
+      const varianceRemediationQueuesByFirm =
+        await repos.workflowOpsAlertVarianceRemediationQueues.listByFirm("firmA")
+      expect(varianceRemediationQueuesByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const varianceRemediationQueuesByMatter =
+        await repos.workflowOpsAlertVarianceRemediationQueues.listByMatter("mat_1")
+      expect(
+        varianceRemediationQueuesByMatter.some((row) => row.recomputeReason === "ops_variance_queue_seed")
+      ).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

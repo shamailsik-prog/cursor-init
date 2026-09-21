@@ -188,11 +188,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert enforcement-waiver ledger rows and variance-remediation queue rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_enforcement_waiver_ledgers`, `workflow_ops_alert_variance_remediation_queues`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with waiver/remediation monitoring views (`view=alert_enforcement_waiver_ledgers`, `view=alert_variance_remediation_queues`) and partner-governed lifecycle actions (`create_workflow_ops_alert_enforcement_waiver`, `attest_workflow_ops_alert_enforcement_waiver`, `waive_workflow_ops_alert_enforcement_waiver`, `queue_workflow_ops_alert_variance_remediation`, `assign_workflow_ops_alert_variance_remediation_owner`, `resolve_workflow_ops_alert_variance_remediation`) filterable by matter, lifecycle status, and freshness state.
+- Captured waiver request/attestation/approval state, optional waiver-expiry governance, remediation queue assignment lifecycle, and remediation resolution provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_enforcement_waiver_created`, `ops_reporting_alert_enforcement_waiver_attested`, `ops_reporting_alert_enforcement_waiver_waived`, `ops_reporting_alert_variance_remediation_queued`, `ops_reporting_alert_variance_remediation_owner_assigned`, `ops_reporting_alert_variance_remediation_resolved`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for waiver/remediation lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for this slice (pending PR + merge SHA assignment):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert enforcement waiver ledger + variance remediation queue scaffolding**:
+Build **workflow alert waiver expiry watchdog + remediation queue SLA scaffolding**:
 
-1. Add workflow alert enforcement waiver-ledger rows and closure-debt variance remediation queue rows for waiver governance and outstanding variance execution tracking.
-2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed waiver/remediation actions and paginated views filterable by matter, waiver status, and freshness state.
-3. Extend unit/runtime persistence tests for waiver/remediation lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+1. Add workflow alert waiver-expiry digest rows and remediation queue SLA ledger rows to track waiver expiry risk and remediation queue aging breaches.
+2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed expiry/SLA actions and paginated views filterable by matter, expiry risk status, queue SLA status, and freshness state.
+3. Extend unit/runtime persistence tests for expiry/SLA lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving scaffold-claim gate behavior.

@@ -95,6 +95,8 @@ const baseStore = {
   workflowOpsAlertClosureDebtReconciliationDigests: new Map(),
   workflowOpsAlertEnforcementAttestations: new Map(),
   workflowOpsAlertClosureDebtVarianceDigests: new Map(),
+  workflowOpsAlertEnforcementWaiverLedgers: new Map(),
+  workflowOpsAlertVarianceRemediationQueues: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -1968,6 +1970,66 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertEnforcementWaiverLedgers: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_enforcement_waiver:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          enforcementAttestationId: "workflow_ops_alert_enforcement_attestation:mat_1",
+          classification: "internal",
+          waiverStatus: "pending_attestation",
+          requestedBy: "partner_a",
+          requestedAt: Date.now(),
+          attestedBy: null,
+          attestedAt: null,
+          waivedBy: null,
+          waivedAt: null,
+          waiverReason: "waiver requested",
+          waiverExpiresAt: null,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "waiver"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 13,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationQueues: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_variance_remediation_queue:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          closureDebtVarianceDigestId: "workflow_ops_alert_closure_debt_variance:mat_1",
+          classification: "internal",
+          queueStatus: "queued",
+          queueReason: "queued for remediation",
+          queuedAt: Date.now(),
+          ownerId: null,
+          assignedAt: null,
+          resolvedAt: null,
+          resolutionReason: null,
+          outstandingVarianceCountSnapshot: 1,
+          varianceDeltaSnapshot: 1,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "variance_queue"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 14,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -2790,5 +2852,33 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string; varianceStatus: string }> }
     expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_closure_debt_variance:mat_1")
     expect(json.items[0]?.varianceStatus).toBe("variance_open")
+  })
+
+  it("ops reporting enforcement-waiver view uses repository workflowOpsAlertEnforcementWaiverLedgers", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_enforcement_waiver_ledgers&actorId=associate_a&waiverStatus=pending_attestation&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; waiverStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_enforcement_waiver:mat_1")
+    expect(json.items[0]?.waiverStatus).toBe("pending_attestation")
+  })
+
+  it("ops reporting variance-remediation queue view uses repository workflowOpsAlertVarianceRemediationQueues", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_queues&actorId=associate_a&remediationQueueStatus=queued&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; queueStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_queue:mat_1"
+    )
+    expect(json.items[0]?.queueStatus).toBe("queued")
   })
 })
