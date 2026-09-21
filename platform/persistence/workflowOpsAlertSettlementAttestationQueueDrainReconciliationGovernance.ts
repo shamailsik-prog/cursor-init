@@ -1,3 +1,4 @@
+import { buildWorkflowOpsChainedDocumentId } from "@/platform/persistence/workflowOpsChainedDocumentId"
 import type {
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow,
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationStatus,
@@ -12,13 +13,13 @@ const HOUR_MS = 60 * 60 * 1000
 export function workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationId(
   settlementId: string
 ): string {
-  return `workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:${settlementId}`
+  return buildWorkflowOpsChainedDocumentId(`workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation`, settlementId)
 }
 
 export function workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationId(
   queueDrainId: string
 ): string {
-  return `workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:${queueDrainId}`
+  return buildWorkflowOpsChainedDocumentId(`workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation`, queueDrainId)
 }
 
 export function buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow(
