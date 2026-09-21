@@ -591,11 +591,6 @@ function buildWorkflowOpsAlertClosureDebtReconciliationDigestRow(params: {
   const { closure, actorId, reason, existing, now } = params
   const closureReopened = closure.closureStatus === "reopened"
   const existingReopenDebtCount = existing?.reopenDebtCount ?? 0
-  const existingOutstandingDebtCount = existing?.outstandingDebtCount ?? 0
-  const reopenDebtCount = closureReopened ? Math.max(existingReopenDebtCount, 1) : existingReopenDebtCount
-  const outstandingDebtCount = closureReopened
-    ? Math.max(existingOutstandingDebtCount, 1)
-    : existingOutstandingDebtCount
   const defaultStatus: WorkflowOpsAlertClosureDebtReconciliationStatus = closureReopened
     ? "debt_open"
     : "in_balance"
@@ -603,6 +598,13 @@ function buildWorkflowOpsAlertClosureDebtReconciliationDigestRow(params: {
   if (closureReopened && reconciliationStatus === "in_balance") {
     reconciliationStatus = "debt_open"
   }
+  const reopenDebtCount = closureReopened ? Math.max(existingReopenDebtCount, 1) : existingReopenDebtCount
+  const outstandingDebtCount =
+    reconciliationStatus === "reconciled"
+      ? existing?.outstandingDebtCount ?? 0
+      : closureReopened
+        ? Math.max(existing?.outstandingDebtCount ?? 0, 1)
+        : existing?.outstandingDebtCount ?? 0
   return {
     id: alertClosureDebtReconciliationDigestId(closure.matterId),
     firmId: closure.firmId,

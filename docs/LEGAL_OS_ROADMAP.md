@@ -168,11 +168,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert dispute-enforcement ledgers and closure-debt reconciliation digests to runtime store + memory/Firestore repositories (`workflow_ops_alert_dispute_enforcement_ledgers`, `workflow_ops_alert_closure_debt_reconciliation_digests`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with enforcement/reconciliation monitoring views (`view=alert_dispute_enforcement_ledgers`, `view=alert_closure_debt_reconciliation_digests`) and partner-governed lifecycle actions (`start_workflow_ops_alert_dispute_enforcement`, `complete_workflow_ops_alert_dispute_enforcement`, `waive_workflow_ops_alert_dispute_enforcement`, `flag_workflow_ops_alert_closure_reopen_debt`, `start_workflow_ops_alert_closure_debt_reconciliation`, `resolve_workflow_ops_alert_closure_debt_reconciliation`) filterable by matter, lifecycle status, and freshness state.
+- Captured dispute-outcome enforcement checkpoints, enforcement completion/waiver posture, reopened-closure debt pressure, reconciliation assignment, and debt resolution provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_dispute_enforcement_started`, `ops_reporting_alert_dispute_enforcement_completed`, `ops_reporting_alert_dispute_enforcement_waived`, `ops_reporting_alert_closure_reopen_debt_flagged`, `ops_reporting_alert_closure_debt_reconciliation_started`, `ops_reporting_alert_closure_debt_reconciliation_resolved`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for enforcement/reconciliation lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for PR #126:
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert dispute outcome enforcement + closure debt reconciliation scaffolding**:
+Build **workflow alert enforcement attestation + reconciliation variance digest scaffolding**:
 
-1. Add workflow alert dispute enforcement ledger rows and closure-debt reconciliation digest rows for outcome compliance tracking and reopen debt pressure.
-2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed enforcement/reconciliation actions and paginated views filterable by matter, enforcement status, and freshness state.
-3. Extend unit/runtime persistence tests for enforcement/reconciliation lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+1. Add workflow alert enforcement attestation rows and closure-debt reconciliation variance digest rows for post-enforcement policy attestations and debt drift visibility.
+2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed attestation/variance actions and paginated views filterable by matter, attestation status, and freshness state.
+3. Extend unit/runtime persistence tests for attestation/variance lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving scaffold-claim gate behavior.

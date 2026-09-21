@@ -711,20 +711,22 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_reconciliation_seed",
         updatedAt: 54,
       })
-      const reconciliation = await repos.workflowOpsAlertClosureDebtReconciliationDigests.get(
+      const closureDebtReconciliation = await repos.workflowOpsAlertClosureDebtReconciliationDigests.get(
         "workflow_ops_alert_closure_debt_reconciliation:mat_1"
       )
-      expect(reconciliation?.reconciliationStatus).toBe("debt_open")
-      const reconciliationByFirm = await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByFirm(
+      expect(closureDebtReconciliation?.reconciliationStatus).toBe("debt_open")
+      const closureDebtReconciliationByFirm =
+        await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByFirm(
         "firmA"
-      )
-      expect(reconciliationByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const reconciliationByMatter = await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByMatter(
+        )
+      expect(closureDebtReconciliationByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const closureDebtReconciliationByMatter =
+        await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByMatter(
         "mat_1"
-      )
-      expect(reconciliationByMatter.some((row) => row.recomputeReason === "ops_reconciliation_seed")).toBe(
-        true
-      )
+        )
+      expect(
+        closureDebtReconciliationByMatter.some((row) => row.recomputeReason === "ops_reconciliation_seed")
+      ).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
