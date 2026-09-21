@@ -3359,6 +3359,84 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_custody_ack_recon_external_distribution_audit_ledger",
+            firmId: "firmA",
+            matterId: "mat_1",
+            archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationId:
+              "repo_custody_handoff_external_transport_receipt_ack_reconciliation",
+            classification: "internal",
+            externalDistributionAuditLedgerStatus:
+              "archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_pending",
+            archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationStatusSnapshot:
+              "archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_pending",
+            reconciliationFinalizedDigestAnchoredBy: null,
+            reconciliationFinalizedDigestAnchoredAt: null,
+            reconciliationFinalizedDigestAnchor: null,
+            externalDistributionAuditLedgerEntryRecordedBy: null,
+            externalDistributionAuditLedgerEntryRecordedAt: null,
+            externalDistributionAuditLedgerEntryReference: null,
+            externalDistributionAuditLedgerFinalizedBy: null,
+            externalDistributionAuditLedgerFinalizedAt: null,
+            externalTransportChannel: "blocked_todo_firm",
+            externalDistributionAuditLedgerBacklogCount: 1,
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot: 1,
+            externalDistributionAuditLedgerNote: "repo custody ack recon audit ledger",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 51,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_closure_ack_recon_partner_handoff_attestation",
+            firmId: "firmA",
+            matterId: "mat_1",
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationId:
+              "repo_closure_external_transport_receipt_ack_reconciliation",
+            classification: "internal",
+            partnerHandoffAttestationStatus:
+              "closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_pending",
+            closureAttestationExternalTransportReceiptAcknowledgmentReconciliationStatusSnapshot:
+              "closure_attestation_external_transport_receipt_acknowledgment_reconciliation_pending",
+            outboundPartnerHandoffRegistry: null,
+            outboundRegistryRegisteredBy: null,
+            outboundRegistryRegisteredAt: null,
+            partnerHandoffAttestedBy: null,
+            partnerHandoffAttestedAt: null,
+            partnerHandoffReference: null,
+            partnerHandoffAttestationFinalizedBy: null,
+            partnerHandoffAttestationFinalizedAt: null,
+            externalTransportChannel: "blocked_todo_firm",
+            partnerHandoffAttestationBacklogCount: 1,
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot: 1,
+            partnerHandoffAttestationNote: "repo closure ack recon partner handoff",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 52,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 

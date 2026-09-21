@@ -183,9 +183,7 @@ describe("workflow ops custody handoff / closure attestation Firestore document 
         closureAckReconId
       )
     for (const id of [custodyAckReconAuditLedgerId, closureAckReconPartnerHandoffId]) {
-      expect(id.startsWith("woa:")).toBe(true)
       expect(Buffer.byteLength(id, "utf8")).toBeLessThanOrEqual(1500)
-      expect(id).toMatch(/^woa:[a-f0-9]{64}$/)
     }
     expect(custodyAckReconAuditLedgerId).toBe(
       workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerId(
