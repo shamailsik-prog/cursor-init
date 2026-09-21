@@ -360,13 +360,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended focused tests (Firestore id, repositories, route wiring, runtime-mode) and auditor stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment.md`.
 - Release labels (PR #180 merge `bf93647`): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim).
 
-## PR #181 (pending) — archival-export custody handoff + closure attestation external transport receipt acknowledgment reconciliation (stub)
+## PR #182 (pending) — archival-export custody handoff + closure attestation external transport receipt acknowledgment reconciliation (stub)
 
 - Added durable **dual-track** workflow-ops acknowledgment-reconciliation rows (`workflow_ops_alert_waiver_expiry_..._archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliations`, `workflow_ops_alert_variance_remediation_..._closure_attestation_external_transport_receipt_acknowledgment_reconciliations`) reconciling custody-handoff vs closure-attestation external transport receipt acknowledgment posture (stub receipt reference parity, `externalTransportChannel: "blocked_todo_firm"`, provenance `transport_stub:true`), memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId`.
 - Governance in `platform/persistence/workflowOpsAlertArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationGovernance.ts` with reconcile / digest-checkpoint / control-finalization builders per track.
 - Extended `/api/d2/ops-reporting` with monitoring views (`view=alert_waiver_expiry_..._custody_handoff_external_transport_receipt_acknowledgment_reconciliations`, `view=alert_variance_remediation_..._closure_attestation_external_transport_receipt_acknowledgment_reconciliations`), digest-rebuild sync in `ensureWorkflowOpsAlertDigests`, and six partner-governed lifecycle actions (`reconcile_workflow_ops_alert_waiver_expiry_..._external_transport_receipt_acknowledgment_reconciliation`, `checkpoint_workflow_ops_alert_waiver_expiry_..._external_transport_receipt_acknowledgment_reconciliation_digest`, `control_workflow_ops_alert_waiver_expiry_..._external_transport_receipt_acknowledgment_reconciliation_finalization`, and variance-track equivalents) with idempotency + audit write-through.
 - Extended focused tests (Firestore chained doc id, repositories, route wiring, runtime-mode, ops-reporting view seed) and auditor stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment-reconciliation.md`.
-- Release labels (expected for PR #181): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim).
+- Release labels (expected for PR #182): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim).
 
 ## NEXT PHASE (queued for follow-up agent)
 

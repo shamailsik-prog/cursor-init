@@ -2,7 +2,7 @@
 
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
-PR: `#181` (`cursor/acknowledgment-reconciliation-22fa` → `main`, open)  
+PR: `#182` (`cursor/acknowledgment-reconciliation-22fa` → `main`, open)  
 Main tip audited: `bf93647` (post PR #180 merge)
 
 ## Verdict (lead)
