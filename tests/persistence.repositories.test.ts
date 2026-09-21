@@ -1661,6 +1661,89 @@ describe("Firestore repository adapters", () => {
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
         )
       expect(queueReentryDebtRetirement?.debtRetirementStatus).toBe("exception_debt_assigned")
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.upsert(
+        {
+          id:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          dispositionFinalizationId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          classification: "internal",
+          publicationGovernanceStatus: "publication_governance_pending",
+          dispositionFinalizationStatusSnapshot: "final_ruling_issued",
+          publicationCorrectionLoggedBy: null,
+          publicationCorrectionLoggedAt: null,
+          publicationCorrectionNote: null,
+          publicationRollbackCheckpointedBy: null,
+          publicationRollbackCheckpointedAt: null,
+          publicationRollbackReason: null,
+          distributionAttestationReviewedBy: null,
+          distributionAttestationReviewedAt: null,
+          distributionAttestationDecision: null,
+          arbitrationPublicationExceptionBacklogCount: 0,
+          arbitrationRulingAgingHoursSnapshot: 1,
+          publicationGovernanceNote: "ops_disposition_publication_governance_seed",
+          lastStatusChangedAt: 82,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance",
+          ],
+          recomputedAt: 82,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_disposition_publication_governance_seed",
+          updatedAt: 82,
+        }
+      )
+      const dispositionPublicationGovernance =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.get(
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
+        )
+      expect(dispositionPublicationGovernance?.publicationGovernanceStatus).toBe(
+        "publication_governance_pending"
+      )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.upsert(
+        {
+          id:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          debtRetirementId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+          classification: "internal",
+          disputeReconciliationStatus: "reconciliation_pending",
+          debtRetirementStatusSnapshot: "exception_debt_assigned",
+          retirementDisputeOpenedBy: null,
+          retirementDisputeOpenedAt: null,
+          retirementDisputeReason: null,
+          retirementDisputeResolvedBy: null,
+          retirementDisputeResolvedAt: null,
+          retirementDisputeResolution: null,
+          retirementRollbackControlledBy: null,
+          retirementRollbackControlledAt: null,
+          retirementRollbackCount: 0,
+          queueReentryRetirementReconciliationDriftCount: 2,
+          reconciliationNote: "ops_debt_retirement_dispute_reconciliation_seed",
+          lastStatusChangedAt: 83,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_reentry_debt_retirement_dispute_reconciliation",
+          ],
+          recomputedAt: 83,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_debt_retirement_dispute_reconciliation_seed",
+          updatedAt: 83,
+        }
+      )
+      const debtRetirementDisputeReconciliation =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
+        )
+      expect(debtRetirementDisputeReconciliation?.disputeReconciliationStatus).toBe(
+        "reconciliation_pending"
+      )
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
