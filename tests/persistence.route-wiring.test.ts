@@ -93,6 +93,8 @@ const baseStore = {
   workflowOpsAlertEscalationClosures: new Map(),
   workflowOpsAlertDisputeEnforcementLedgers: new Map(),
   workflowOpsAlertClosureDebtReconciliationDigests: new Map(),
+  workflowOpsAlertEnforcementAttestations: new Map(),
+  workflowOpsAlertClosureDebtVarianceDigests: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -1912,6 +1914,60 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertEnforcementAttestations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_enforcement_attestation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          disputeEnforcementLedgerId: "workflow_ops_alert_dispute_enforcement:mat_1",
+          classification: "internal",
+          attestationStatus: "pending_attestation",
+          requiredOutcome: "upheld",
+          enforcementStatusSnapshot: "enforced",
+          lastAttestedAt: null,
+          lastAttestedBy: null,
+          attestationReason: null,
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "enforcement_attestation"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 11,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertClosureDebtVarianceDigests: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_closure_debt_variance:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          closureDebtReconciliationDigestId: "workflow_ops_alert_closure_debt_reconciliation:mat_1",
+          classification: "internal",
+          varianceStatus: "variance_open",
+          outstandingVarianceCount: 1,
+          varianceDelta: 1,
+          reviewOwnerId: null,
+          varianceOpenedAt: Date.now(),
+          varianceResolvedAt: null,
+          varianceReason: null,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "variance"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 12,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -2708,5 +2764,31 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_closure_debt_reconciliation:mat_1"
     )
     expect(json.items[0]?.reconciliationStatus).toBe("debt_open")
+  })
+
+  it("ops reporting enforcement-attestation view uses repository workflowOpsAlertEnforcementAttestations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_enforcement_attestations&actorId=associate_a&enforcementAttestationStatus=pending_attestation&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; attestationStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_enforcement_attestation:mat_1")
+    expect(json.items[0]?.attestationStatus).toBe("pending_attestation")
+  })
+
+  it("ops reporting closure-debt variance view uses repository workflowOpsAlertClosureDebtVarianceDigests", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_closure_debt_variance_digests&actorId=associate_a&varianceStatus=variance_open&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; varianceStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_closure_debt_variance:mat_1")
+    expect(json.items[0]?.varianceStatus).toBe("variance_open")
   })
 })

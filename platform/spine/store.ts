@@ -2174,6 +2174,63 @@ export type WorkflowOpsAlertClosureDebtReconciliationDigestRow = {
   updatedAt: number
 }
 
+export type WorkflowOpsAlertEnforcementAttestationStatus =
+  | "pending_attestation"
+  | "attested"
+  | "reopened"
+
+export type WorkflowOpsAlertEnforcementAttestationFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertEnforcementAttestationRow = {
+  id: string
+  firmId: string
+  matterId: string
+  disputeEnforcementLedgerId: string
+  classification: Classification
+  attestationStatus: WorkflowOpsAlertEnforcementAttestationStatus
+  requiredOutcome: WorkflowOpsAlertAttestationDisputeResolutionOutcome | null
+  enforcementStatusSnapshot: WorkflowOpsAlertDisputeEnforcementStatus
+  lastAttestedAt: number | null
+  lastAttestedBy: string | null
+  attestationReason: string | null
+  freshnessStatus: WorkflowOpsAlertEnforcementAttestationFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertClosureDebtVarianceStatus =
+  | "within_tolerance"
+  | "variance_open"
+  | "variance_reviewing"
+  | "variance_resolved"
+
+export type WorkflowOpsAlertClosureDebtVarianceFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertClosureDebtVarianceDigestRow = {
+  id: string
+  firmId: string
+  matterId: string
+  closureDebtReconciliationDigestId: string
+  classification: Classification
+  varianceStatus: WorkflowOpsAlertClosureDebtVarianceStatus
+  outstandingVarianceCount: number
+  varianceDelta: number
+  reviewOwnerId: string | null
+  varianceOpenedAt: number | null
+  varianceResolvedAt: number | null
+  varianceReason: string | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertClosureDebtVarianceFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2287,6 +2344,10 @@ export class SpineStore {
     new Map<string, WorkflowOpsAlertDisputeEnforcementLedgerRow>()
   workflowOpsAlertClosureDebtReconciliationDigests =
     new Map<string, WorkflowOpsAlertClosureDebtReconciliationDigestRow>()
+  workflowOpsAlertEnforcementAttestations =
+    new Map<string, WorkflowOpsAlertEnforcementAttestationRow>()
+  workflowOpsAlertClosureDebtVarianceDigests =
+    new Map<string, WorkflowOpsAlertClosureDebtVarianceDigestRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()

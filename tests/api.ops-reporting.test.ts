@@ -595,6 +595,107 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(reconciliationResolveJson.result.reconciliation.reconciliationStatus).toBe("reconciled")
     expect(reconciliationResolveJson.result.reconciliation.outstandingDebtCount).toBe(0)
 
+    const enforcementAttest = await postOpsReport(
+      {
+        action: "attest_workflow_ops_alert_dispute_enforcement",
+        actorId: "partner_a",
+        matterId,
+        reason: "enforcement attested",
+      },
+      "3b1e9a69-c65f-4ea7-a9d0-dd3e7e2d0747"
+    )
+    expect(enforcementAttest.status).toBe(200)
+    const enforcementAttestJson = (await enforcementAttest.json()) as {
+      result: { enforcementAttestation: { attestationStatus: string; lastAttestedBy: string | null } }
+    }
+    expect(enforcementAttestJson.result.enforcementAttestation.attestationStatus).toBe("attested")
+    expect(enforcementAttestJson.result.enforcementAttestation.lastAttestedBy).toBe("partner_a")
+
+    const enforcementAttestationReopen = await postOpsReport(
+      {
+        action: "reopen_workflow_ops_alert_dispute_enforcement_attestation",
+        actorId: "partner_a",
+        matterId,
+        reason: "attestation follow-up required",
+      },
+      "2e89bdbc-c45c-40ca-b43d-58acb7d6f8bc"
+    )
+    expect(enforcementAttestationReopen.status).toBe(200)
+    const enforcementAttestationReopenJson = (await enforcementAttestationReopen.json()) as {
+      result: {
+        enforcement: { enforcementStatus: string }
+        enforcementAttestation: { attestationStatus: string }
+      }
+    }
+    expect(enforcementAttestationReopenJson.result.enforcement.enforcementStatus).toBe("in_progress")
+    expect(enforcementAttestationReopenJson.result.enforcementAttestation.attestationStatus).toBe(
+      "reopened"
+    )
+
+    const enforcementRecomplete = await postOpsReport(
+      {
+        action: "complete_workflow_ops_alert_dispute_enforcement",
+        actorId: "partner_a",
+        matterId,
+        reason: "enforcement re-completed after attestation reopen",
+      },
+      "5c4467a2-5f3c-452e-acf6-74f2f31492d3"
+    )
+    expect(enforcementRecomplete.status).toBe(200)
+    const enforcementRecompleteJson = (await enforcementRecomplete.json()) as {
+      result: { enforcement: { enforcementStatus: string } }
+    }
+    expect(enforcementRecompleteJson.result.enforcement.enforcementStatus).toBe("enforced")
+
+    const varianceOpen = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_closure_debt_variance",
+        actorId: "partner_a",
+        matterId,
+        reason: "variance detected",
+      },
+      "c891e12a-4a39-497e-b7a0-bafbc3e7def4"
+    )
+    expect(varianceOpen.status).toBe(200)
+    const varianceOpenJson = (await varianceOpen.json()) as {
+      result: { variance: { varianceStatus: string; outstandingVarianceCount: number } }
+    }
+    expect(varianceOpenJson.result.variance.varianceStatus).toBe("variance_open")
+    expect(varianceOpenJson.result.variance.outstandingVarianceCount).toBeGreaterThanOrEqual(1)
+
+    const varianceAssign = await postOpsReport(
+      {
+        action: "assign_workflow_ops_alert_closure_debt_variance_owner",
+        actorId: "partner_a",
+        matterId,
+        ownerId: "associate_a",
+        reason: "variance review assignment",
+      },
+      "8bda1d98-dac1-42cc-a7d8-bf4d05963784"
+    )
+    expect(varianceAssign.status).toBe(200)
+    const varianceAssignJson = (await varianceAssign.json()) as {
+      result: { variance: { varianceStatus: string; reviewOwnerId: string | null } }
+    }
+    expect(varianceAssignJson.result.variance.varianceStatus).toBe("variance_reviewing")
+    expect(varianceAssignJson.result.variance.reviewOwnerId).toBe("associate_a")
+
+    const varianceResolve = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_closure_debt_variance",
+        actorId: "partner_a",
+        matterId,
+        reason: "variance resolved",
+      },
+      "8acde31e-862a-4a17-a5e8-f9c19f92ea0e"
+    )
+    expect(varianceResolve.status).toBe(200)
+    const varianceResolveJson = (await varianceResolve.json()) as {
+      result: { variance: { varianceStatus: string; outstandingVarianceCount: number } }
+    }
+    expect(varianceResolveJson.result.variance.varianceStatus).toBe("variance_resolved")
+    expect(varianceResolveJson.result.variance.outstandingVarianceCount).toBe(0)
+
     const attestationView = await getOpsReport(
       new URLSearchParams({
         view: "alert_attestations",
@@ -727,6 +828,54 @@ describe("GET /api/d2/ops-reporting", () => {
           row.matterId === matterId &&
           row.reconciliationStatus === "reconciled" &&
           row.outstandingDebtCount === 0
+      )
+    ).toBe(true)
+
+    const enforcementAttestationView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_enforcement_attestations",
+        actorId: "associate_a",
+        matterId,
+        enforcementAttestationStatus: "reopened",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(enforcementAttestationView.status).toBe(200)
+    const enforcementAttestationViewJson = (await enforcementAttestationView.json()) as {
+      items: Array<{ matterId: string; attestationStatus: string; lastAttestedBy: string | null }>
+    }
+    expect(
+      enforcementAttestationViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.attestationStatus === "reopened" &&
+          row.lastAttestedBy === "partner_a"
+      )
+    ).toBe(true)
+
+    const varianceView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_closure_debt_variance_digests",
+        actorId: "associate_a",
+        matterId,
+        varianceStatus: "variance_resolved",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(varianceView.status).toBe(200)
+    const varianceViewJson = (await varianceView.json()) as {
+      items: Array<{ matterId: string; varianceStatus: string; outstandingVarianceCount: number }>
+    }
+    expect(
+      varianceViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.varianceStatus === "variance_resolved" &&
+          row.outstandingVarianceCount === 0
       )
     ).toBe(true)
   })

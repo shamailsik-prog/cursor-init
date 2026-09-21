@@ -7404,6 +7404,114 @@ describe("Runtime persistence mode", () => {
       expect(reconciliationResolveJson.result.reconciliation.reconciliationStatus).toBe("reconciled")
       expect(reconciliationResolveJson.result.reconciliation.outstandingDebtCount).toBe(0)
 
+      const enforcementAttest = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "eec70c60-90f2-46b5-8ea9-e6874fe87f7d",
+          },
+          body: JSON.stringify({
+            action: "attest_workflow_ops_alert_dispute_enforcement",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime enforcement attested",
+          }),
+        })
+      )
+      expect(enforcementAttest.status).toBe(200)
+
+      const enforcementAttestationReopen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "81fcbab6-91ba-43ec-af34-c5edb4a2f77d",
+          },
+          body: JSON.stringify({
+            action: "reopen_workflow_ops_alert_dispute_enforcement_attestation",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime attestation reopened",
+          }),
+        })
+      )
+      expect(enforcementAttestationReopen.status).toBe(200)
+
+      const enforcementRecomplete = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "dd6173b8-b1d4-4700-a9b5-ca756339d972",
+          },
+          body: JSON.stringify({
+            action: "complete_workflow_ops_alert_dispute_enforcement",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime enforcement re-complete",
+          }),
+        })
+      )
+      expect(enforcementRecomplete.status).toBe(200)
+
+      const varianceOpen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "47052f56-0e5d-4466-96d5-b87d851a72ea",
+          },
+          body: JSON.stringify({
+            action: "open_workflow_ops_alert_closure_debt_variance",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime variance open",
+          }),
+        })
+      )
+      expect(varianceOpen.status).toBe(200)
+
+      const varianceAssign = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "465a5db8-fc6d-4af4-86ef-959587599448",
+          },
+          body: JSON.stringify({
+            action: "assign_workflow_ops_alert_closure_debt_variance_owner",
+            actorId: "partner_a",
+            matterId,
+            ownerId: "associate_a",
+            reason: "runtime variance assignment",
+          }),
+        })
+      )
+      expect(varianceAssign.status).toBe(200)
+
+      const varianceResolve = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "7f7fa08c-36dc-4286-a19b-c53c99db90f4",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow_ops_alert_closure_debt_variance",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime variance resolved",
+          }),
+        })
+      )
+      expect(varianceResolve.status).toBe(200)
+      const varianceResolveJson = (await varianceResolve.json()) as {
+        result: { variance: { varianceStatus: string; outstandingVarianceCount: number } }
+      }
+      expect(varianceResolveJson.result.variance.varianceStatus).toBe("variance_resolved")
+      expect(varianceResolveJson.result.variance.outstandingVarianceCount).toBe(0)
+
       getRuntimeStore().workflowOpsAlertDigests = new Map()
       getRuntimeStore().workflowOpsAlertAttestations = new Map()
       getRuntimeStore().workflowOpsAlertEscalationLedgers = new Map()
@@ -7411,6 +7519,8 @@ describe("Runtime persistence mode", () => {
       getRuntimeStore().workflowOpsAlertEscalationClosures = new Map()
       getRuntimeStore().workflowOpsAlertDisputeEnforcementLedgers = new Map()
       getRuntimeStore().workflowOpsAlertClosureDebtReconciliationDigests = new Map()
+      getRuntimeStore().workflowOpsAlertEnforcementAttestations = new Map()
+      getRuntimeStore().workflowOpsAlertClosureDebtVarianceDigests = new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -7536,6 +7646,42 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
 
+      const enforcementAttestationView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_enforcement_attestations&actorId=associate_a&matterId=${matterId}&enforcementAttestationStatus=reopened&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(enforcementAttestationView.status).toBe(200)
+      const enforcementAttestationViewJson = (await enforcementAttestationView.json()) as {
+        items: Array<{ matterId: string; attestationStatus: string; lastAttestedBy: string | null }>
+      }
+      expect(
+        enforcementAttestationViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.attestationStatus === "reopened" &&
+            row.lastAttestedBy === "partner_a"
+        )
+      ).toBe(true)
+
+      const varianceView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_closure_debt_variance_digests&actorId=associate_a&matterId=${matterId}&varianceStatus=variance_resolved&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(varianceView.status).toBe(200)
+      const varianceViewJson = (await varianceView.json()) as {
+        items: Array<{ matterId: string; varianceStatus: string; outstandingVarianceCount: number }>
+      }
+      expect(
+        varianceViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.varianceStatus === "variance_resolved" &&
+            row.outstandingVarianceCount === 0
+        )
+      ).toBe(true)
+
       const persistedOps = await getDocs(collection(ctx.firestore(), "workflow_ops_activity"))
       expect(
         persistedOps.docs.some(
@@ -7629,6 +7775,30 @@ describe("Runtime persistence mode", () => {
             entry.data()?.matterId === matterId &&
             entry.data()?.reconciliationStatus === "reconciled" &&
             entry.data()?.outstandingDebtCount === 0
+        )
+      ).toBe(true)
+      const persistedEnforcementAttestations = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_enforcement_attestations")
+      )
+      expect(
+        persistedEnforcementAttestations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.attestationStatus === "reopened" &&
+            entry.data()?.lastAttestedBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedVarianceDigests = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_closure_debt_variance_digests")
+      )
+      expect(
+        persistedVarianceDigests.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.varianceStatus === "variance_resolved" &&
+            entry.data()?.outstandingVarianceCount === 0
         )
       ).toBe(true)
     })
