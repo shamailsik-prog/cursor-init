@@ -9417,6 +9417,37 @@ describe("Runtime persistence mode", () => {
             entry.data()?.archivalExportStatus === "archival_export_pending"
         )
       ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledgers"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.outboundRegistryAttestationLedgerStatus ===
+              "outbound_registry_attestation_ledger_pending"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipts"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.partnerDeliveryReceiptStatus === "partner_delivery_receipt_pending"
+        )
+      ).toBe(true)
     })
   }, 45_000)
 

@@ -125,6 +125,12 @@ import {
   type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportFreshnessStatus,
   type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow,
   type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportStatus,
+  type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerFreshnessStatus,
+  type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow,
+  type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus,
+  type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptFreshnessStatus,
+  type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow,
+  type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus,
 } from "@/platform/spine/store"
 
 import {
@@ -169,6 +175,12 @@ import {
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportId,
   workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationId,
 } from "@/platform/persistence/workflowOpsAlertSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationQueueReentryDebtRetirementDisputeReconciliationClosureVerificationArchivalExportGovernance"
+import {
+  buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow,
+  buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow,
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptId,
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerId,
+} from "@/platform/persistence/workflowOpsAlertPartnerHandoffOutboundRegistryAttestationLedgerPartnerDeliveryReceiptGovernance"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -254,6 +266,8 @@ type View =
   | "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verifications"
   | "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestations"
   | "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_exports"
+  | "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledgers"
+  | "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipts"
 
 function parseView(value: string | null): View | undefined {
   if (!value || value === "activity") return "activity"
@@ -364,6 +378,18 @@ function parseView(value: string | null): View | undefined {
   if (
     value ===
     "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_exports"
+  ) {
+    return value
+  }
+  if (
+    value ===
+    "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledgers"
+  ) {
+    return value
+  }
+  if (
+    value ===
+    "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipts"
   ) {
     return value
   }
@@ -816,6 +842,33 @@ function parseWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitratio
     value === "outbound_registry_registered" ||
     value === "partner_handoff_attested" ||
     value === "outbound_registry_freeze_override_checkpointed"
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function parseWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus(
+  value: string | null
+): WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus | undefined {
+  if (
+    value === "outbound_registry_attestation_ledger_pending" ||
+    value === "outbound_attestation_ledger_checkpointed" ||
+    value === "partner_delivery_receipt_freeze_override_digested"
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function parseRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus(
+  value: string | null
+): WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus | undefined {
+  if (
+    value === "partner_delivery_receipt_pending" ||
+    value === "partner_delivery_sla_breach_digested" ||
+    value === "archival_export_transport_boundary_attested" ||
+    value === "partner_delivery_receipt_finalized"
   ) {
     return value
   }
@@ -1372,6 +1425,20 @@ function asWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDi
   recomputedAt: number,
   now: number
 ): WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptFreshnessStatus {
   return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
 }
 
@@ -2871,6 +2938,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
   varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow[]
   waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow[]
   varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow[]
+  waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]
+  varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow[]
 }> {
   const { digests, actorId, reason, store, repos } = params
   const now = Date.now()
@@ -2928,6 +2997,10 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
   const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow[] =
     []
   const varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow[] =
+    []
+  const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[] =
+    []
+  const varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow[] =
     []
 
   for (const digest of digests) {
@@ -3018,6 +3091,14 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     const remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportKey =
       workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportId(
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationKey
+      )
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerKey =
+      workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerId(
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationKey
+      )
+    const remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptKey =
+      workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptId(
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportKey
       )
     const existingAttestation = await repos.workflowOpsAlertAttestations.get(attestationKey)
     const existingEscalation = await repos.workflowOpsAlertEscalationLedgers.get(escalationKey)
@@ -3185,6 +3266,22 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       ) ??
       (await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.get(
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportKey
+      )) ??
+      null
+    const existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger =
+      store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerKey
+      ) ??
+      (await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerKey
+      )) ??
+      null
+    const existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt =
+      store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get(
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptKey
+      ) ??
+      (await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get(
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptKey
       )) ??
       null
 
@@ -3830,6 +3927,69 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
         existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExport
     }
 
+    const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger =
+      buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow(
+        {
+          partnerHandoffAttestation:
+            waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationToPersist,
+          existing:
+            existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger,
+          actorId,
+          reason,
+          now,
+        }
+      )
+    let waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerToPersist =
+      existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger &&
+      (existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+        .outboundRegistryAttestationLedgerStatus === "outbound_attestation_ledger_checkpointed" ||
+        existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+          .outboundRegistryAttestationLedgerStatus === "partner_delivery_receipt_freeze_override_digested")
+        ? existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+        : waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+    if (
+      existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger &&
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerToPersist
+        .outboundRegistryAttestationLedgerStatus === "outbound_registry_attestation_ledger_pending" &&
+      existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+        .outboundRegistryAttestationLedgerStatus !== "outbound_registry_attestation_ledger_pending"
+    ) {
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerToPersist =
+        existingWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+    }
+    const remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt =
+      buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow(
+        {
+          archivalExport:
+            remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportToPersist,
+          existing:
+            existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt,
+          actorId,
+          reason,
+          now,
+        }
+      )
+    let remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptToPersist =
+      existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt &&
+      (existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+        .partnerDeliveryReceiptStatus === "partner_delivery_sla_breach_digested" ||
+        existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+          .partnerDeliveryReceiptStatus === "archival_export_transport_boundary_attested" ||
+        existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+          .partnerDeliveryReceiptStatus === "partner_delivery_receipt_finalized")
+        ? existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+        : remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+    if (
+      existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt &&
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptToPersist
+        .partnerDeliveryReceiptStatus === "partner_delivery_receipt_pending" &&
+      existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+        .partnerDeliveryReceiptStatus !== "partner_delivery_receipt_pending"
+    ) {
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptToPersist =
+        existingRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+    }
+
     await repos.workflowOpsAlertAttestations.upsert(attestation)
     await repos.workflowOpsAlertEscalationLedgers.upsert(escalation)
     await repos.workflowOpsAlertAttestationDisputes.upsert(dispute)
@@ -3911,6 +4071,12 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     )
     await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.upsert(
       remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportToPersist
+    )
+    await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.upsert(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerToPersist
+    )
+    await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.upsert(
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptToPersist
     )
     store.workflowOpsAlertAttestations.set(attestation.id, attestation)
     store.workflowOpsAlertEscalationLedgers.set(escalation.id, escalation)
@@ -4026,6 +4192,14 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportToPersist.id,
       remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportToPersist
     )
+    store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.set(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerToPersist.id,
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerToPersist
+    )
+    store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.set(
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptToPersist.id,
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptToPersist
+    )
     attestations.push(attestation)
     escalationLedgers.push(escalation)
     attestationDisputes.push(dispute)
@@ -4104,6 +4278,12 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.push(
       remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportToPersist
     )
+    waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.push(
+      waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerToPersist
+    )
+    varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.push(
+      remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptToPersist
+    )
   }
 
   return {
@@ -4143,6 +4323,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications,
     waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations,
     varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports,
+    waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers,
+    varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts,
   }
 }
 
@@ -5241,6 +5423,18 @@ export async function GET(request: Request) {
       url.searchParams.get(
         "remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportStatus"
       ) ?? url.searchParams.get("archivalExportStatus")
+    )
+  const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus =
+    parseWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus(
+      url.searchParams.get(
+        "waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus"
+      ) ?? url.searchParams.get("outboundRegistryAttestationLedgerStatus")
+    )
+  const remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus =
+    parseRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus(
+      url.searchParams.get(
+        "remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus"
+      ) ?? url.searchParams.get("partnerDeliveryReceiptStatus")
     )
   const terms = normalizeTerms(url.searchParams.get("q"))
   const limit = parseLimit(url.searchParams.get("limit"))
@@ -6573,6 +6767,91 @@ export async function GET(request: Request) {
     })
   }
 
+
+  if (
+    view ===
+    "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledgers"
+  ) {
+    const all = (
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.listByFirm(
+        refreshedActor.firmId
+      )
+    )
+      .map((row) => ({
+        ...row,
+        freshnessStatus:
+          asWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerFreshnessStatus(
+            row.recomputedAt,
+            now
+          ),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) =>
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
+          ? row.outboundRegistryAttestationLedgerStatus ===
+            waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
+          : true
+      )
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view:
+        "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledgers",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
+  if (
+    view ===
+    "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipts"
+  ) {
+    const all = (
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.listByFirm(
+        refreshedActor.firmId
+      )
+    )
+      .map((row) => ({
+        ...row,
+        freshnessStatus:
+          asRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptFreshnessStatus(
+            row.recomputedAt,
+            now
+          ),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) =>
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus
+          ? row.partnerDeliveryReceiptStatus ===
+            remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus
+          : true
+      )
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view:
+        "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipts",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
   return NextResponse.json({ error: "unknown view" }, { status: 400 })
 }
 
@@ -6751,7 +7030,19 @@ export async function POST(request: Request) {
       parsed.action !==
         "digest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_sla_breach" &&
       parsed.action !==
-        "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_finalization")
+        "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_finalization" &&
+      parsed.action !==
+        "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_outbound_registry_attestation_ledger" &&
+      parsed.action !==
+        "digest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_partner_delivery_receipt_freeze_override" &&
+      parsed.action !==
+        "control_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_outbound_registry_attestation_ledger_seal" &&
+      parsed.action !==
+        "digest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_sla_breach" &&
+      parsed.action !==
+        "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary" &&
+      parsed.action !==
+        "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt_finalization")
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -7310,6 +7601,87 @@ export async function POST(request: Request) {
         )
       )
     ))
+
+  const currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger =
+    store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
+      workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerId(
+        workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationId(
+          workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerId(
+            workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceId(
+              workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationId(
+                workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationId(
+                  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationId(
+                    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementId(matter.id)
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    ) ??
+    governance.waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.find(
+      (row) => row.matterId === matter.id
+    ) ??
+    (await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
+      workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerId(
+        workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationId(
+          workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerId(
+            workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceId(
+              workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationId(
+                workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationId(
+                  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationId(
+                    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementId(matter.id)
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    ))
+  const currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt =
+    store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get(
+      workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptId(
+        workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportId(
+          workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationId(
+            workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationId(
+              workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementId(
+                workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceId(
+                  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationId(
+                    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainId(
+                      matter.id
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    ) ??
+    governance.varianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.find(
+      (row) => row.matterId === matter.id
+    ) ??
+    (await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get(
+      workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptId(
+        workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportId(
+          workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationId(
+            workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationId(
+              workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementId(
+                workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceId(
+                  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationId(
+                    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainId(
+                      matter.id
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    ))
   if (
     !currentAttestation ||
     !currentEscalation ||
@@ -7346,7 +7718,9 @@ export async function POST(request: Request) {
     !currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedger ||
     !currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerification ||
     !currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestation ||
-    !currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExport
+    !currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExport ||
+    !currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger ||
+    !currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
   ) {
     return NextResponse.json({ error: "alert governance rows are unavailable for matter" }, { status: 404 })
   }
@@ -13477,6 +13851,429 @@ export async function POST(request: Request) {
         digest: current,
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExport:
           nextArchivalExport,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+
+    if (
+      parsed.action ===
+      "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_outbound_registry_attestation_ledger"
+    ) {
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "outbound registry attestation ledger checkpoint requires partner role" },
+          { status: 403 }
+        )
+      }
+      const outboundAttestationLedgerReference =
+        typeof parsed.outboundAttestationLedgerReference === "string" &&
+        parsed.outboundAttestationLedgerReference.trim().length > 0
+          ? parsed.outboundAttestationLedgerReference.trim()
+          : null
+      if (!outboundAttestationLedgerReference) {
+        return NextResponse.json({ error: "outboundAttestationLedgerReference is required" }, { status: 400 })
+      }
+      if (
+        currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestation
+          .partnerHandoffAttestationStatus !== "partner_handoff_attested" &&
+        currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestation
+          .partnerHandoffAttestationStatus !== "outbound_registry_freeze_override_checkpointed"
+      ) {
+        return NextResponse.json(
+          { error: "outbound registry attestation ledger requires partner handoff attestation" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason ?? outboundAttestationLedgerReference,
+        "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_outbound_registry_attestation_ledger_checkpointed"
+      )
+      const nextOutboundRegistryAttestationLedger =
+        buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow(
+          {
+            partnerHandoffAttestation:
+              currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestation,
+            existing:
+              currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger,
+            outboundAttestationLedgerCheckpointedBy: actor.id,
+            outboundAttestationLedgerReference,
+            actorId: actor.id,
+            reason,
+            now,
+            note: outboundAttestationLedgerReference,
+          }
+        )
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.upsert(
+        nextOutboundRegistryAttestationLedger
+      )
+      store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.set(
+        nextOutboundRegistryAttestationLedger.id,
+        nextOutboundRegistryAttestationLedger
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_outbound_registry_attestation_ledger_checkpointed",
+        actorId: actor.id,
+        target: nextOutboundRegistryAttestationLedger.matterId,
+        classification: nextOutboundRegistryAttestationLedger.classification,
+        reason: outboundAttestationLedgerReference,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger:
+          nextOutboundRegistryAttestationLedger,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "digest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_partner_delivery_receipt_freeze_override"
+    ) {
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "partner delivery receipt freeze override digest requires partner role" },
+          { status: 403 }
+        )
+      }
+      const partnerDeliveryReceiptFreezeOverrideDigest =
+        typeof parsed.partnerDeliveryReceiptFreezeOverrideDigest === "string" &&
+        parsed.partnerDeliveryReceiptFreezeOverrideDigest.trim().length > 0
+          ? parsed.partnerDeliveryReceiptFreezeOverrideDigest.trim()
+          : null
+      if (!partnerDeliveryReceiptFreezeOverrideDigest) {
+        return NextResponse.json(
+          { error: "partnerDeliveryReceiptFreezeOverrideDigest is required" },
+          { status: 400 }
+        )
+      }
+      if (
+        currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+          .outboundRegistryAttestationLedgerStatus !== "outbound_attestation_ledger_checkpointed"
+      ) {
+        return NextResponse.json(
+          { error: "freeze override digest requires outbound attestation ledger checkpoint" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason ?? partnerDeliveryReceiptFreezeOverrideDigest,
+        "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_partner_delivery_receipt_freeze_override_digested"
+      )
+      const nextOutboundRegistryAttestationLedger =
+        buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow(
+          {
+            partnerHandoffAttestation:
+              currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestation,
+            existing:
+              currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger,
+            partnerDeliveryReceiptFreezeOverrideDigestedBy: actor.id,
+            partnerDeliveryReceiptFreezeOverrideDigest,
+            actorId: actor.id,
+            reason,
+            now,
+            note: partnerDeliveryReceiptFreezeOverrideDigest,
+          }
+        )
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.upsert(
+        nextOutboundRegistryAttestationLedger
+      )
+      store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.set(
+        nextOutboundRegistryAttestationLedger.id,
+        nextOutboundRegistryAttestationLedger
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_partner_delivery_receipt_freeze_override_digested",
+        actorId: actor.id,
+        target: nextOutboundRegistryAttestationLedger.matterId,
+        classification: nextOutboundRegistryAttestationLedger.classification,
+        reason: partnerDeliveryReceiptFreezeOverrideDigest,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger:
+          nextOutboundRegistryAttestationLedger,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "control_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_outbound_registry_attestation_ledger_seal"
+    ) {
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "outbound registry attestation ledger seal requires partner role" },
+          { status: 403 }
+        )
+      }
+      if (
+        currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+          .outboundRegistryAttestationLedgerStatus !== "partner_delivery_receipt_freeze_override_digested"
+      ) {
+        return NextResponse.json(
+          { error: "attestation ledger seal requires freeze override digest" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason,
+        "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_outbound_registry_attestation_ledger_sealed"
+      )
+      const nextOutboundRegistryAttestationLedger = {
+        ...currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger,
+        partnerDeliveryBacklogCount: 0,
+        recomputedAt: now,
+        recomputedBy: actor.id,
+        recomputeReason: reason,
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.upsert(
+        nextOutboundRegistryAttestationLedger
+      )
+      store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.set(
+        nextOutboundRegistryAttestationLedger.id,
+        nextOutboundRegistryAttestationLedger
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_outbound_registry_attestation_ledger_sealed",
+        actorId: actor.id,
+        target: nextOutboundRegistryAttestationLedger.matterId,
+        classification: nextOutboundRegistryAttestationLedger.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger:
+          nextOutboundRegistryAttestationLedger,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "digest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_sla_breach"
+    ) {
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "archival export partner delivery sla breach digest requires partner role" },
+          { status: 403 }
+        )
+      }
+      const partnerDeliverySlaBreachDigest =
+        typeof parsed.partnerDeliverySlaBreachDigest === "string" &&
+        parsed.partnerDeliverySlaBreachDigest.trim().length > 0
+          ? parsed.partnerDeliverySlaBreachDigest.trim()
+          : null
+      if (!partnerDeliverySlaBreachDigest) {
+        return NextResponse.json({ error: "partnerDeliverySlaBreachDigest is required" }, { status: 400 })
+      }
+      if (
+        currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExport
+          .archivalExportStatus !== "archival_export_finalized"
+      ) {
+        return NextResponse.json(
+          { error: "partner delivery sla breach digest requires archival export finalization" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason ?? partnerDeliverySlaBreachDigest,
+        "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_sla_breach_digested"
+      )
+      const nextPartnerDeliveryReceipt =
+        buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow(
+          {
+            archivalExport:
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExport,
+            existing:
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt,
+            partnerDeliverySlaBreachDigestedBy: actor.id,
+            partnerDeliverySlaBreachDigest,
+            actorId: actor.id,
+            reason,
+            now,
+            note: partnerDeliverySlaBreachDigest,
+          }
+        )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.upsert(
+        nextPartnerDeliveryReceipt
+      )
+      store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.set(
+        nextPartnerDeliveryReceipt.id,
+        nextPartnerDeliveryReceipt
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_sla_breach_digested",
+        actorId: actor.id,
+        target: nextPartnerDeliveryReceipt.matterId,
+        classification: nextPartnerDeliveryReceipt.classification,
+        reason: partnerDeliverySlaBreachDigest,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt:
+          nextPartnerDeliveryReceipt,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary"
+    ) {
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "archival export transport boundary attestation requires partner role" },
+          { status: 403 }
+        )
+      }
+      const archivalExportTransportBoundaryReference =
+        typeof parsed.archivalExportTransportBoundaryReference === "string" &&
+        parsed.archivalExportTransportBoundaryReference.trim().length > 0
+          ? parsed.archivalExportTransportBoundaryReference.trim()
+          : null
+      if (!archivalExportTransportBoundaryReference) {
+        return NextResponse.json(
+          { error: "archivalExportTransportBoundaryReference is required" },
+          { status: 400 }
+        )
+      }
+      if (
+        currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+          .partnerDeliveryReceiptStatus !== "partner_delivery_sla_breach_digested"
+      ) {
+        return NextResponse.json(
+          { error: "transport boundary attestation requires partner delivery sla breach digest" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason ?? archivalExportTransportBoundaryReference,
+        "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_attested"
+      )
+      const nextPartnerDeliveryReceipt =
+        buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow(
+          {
+            archivalExport:
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExport,
+            existing:
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt,
+            archivalExportTransportBoundaryAttestedBy: actor.id,
+            archivalExportTransportBoundaryReference,
+            actorId: actor.id,
+            reason,
+            now,
+            note: archivalExportTransportBoundaryReference,
+          }
+        )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.upsert(
+        nextPartnerDeliveryReceipt
+      )
+      store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.set(
+        nextPartnerDeliveryReceipt.id,
+        nextPartnerDeliveryReceipt
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_attested",
+        actorId: actor.id,
+        target: nextPartnerDeliveryReceipt.matterId,
+        classification: nextPartnerDeliveryReceipt.classification,
+        reason: archivalExportTransportBoundaryReference,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt:
+          nextPartnerDeliveryReceipt,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (
+      parsed.action ===
+      "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt_finalization"
+    ) {
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "partner delivery receipt finalization requires partner role" },
+          { status: 403 }
+        )
+      }
+      if (
+        currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt
+          .partnerDeliveryReceiptStatus !== "archival_export_transport_boundary_attested"
+      ) {
+        return NextResponse.json(
+          { error: "partner delivery receipt finalization requires transport boundary attestation" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(
+        parsed.reason,
+        "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt_finalized"
+      )
+      const nextPartnerDeliveryReceipt =
+        buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow(
+          {
+            archivalExport:
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExport,
+            existing:
+              currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt,
+            partnerDeliveryReceiptFinalizedBy: actor.id,
+            actorId: actor.id,
+            reason,
+            now,
+            note: reason,
+          }
+        )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.upsert(
+        nextPartnerDeliveryReceipt
+      )
+      store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.set(
+        nextPartnerDeliveryReceipt.id,
+        nextPartnerDeliveryReceipt
+      )
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action:
+          "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt_finalized",
+        actorId: actor.id,
+        target: nextPartnerDeliveryReceipt.matterId,
+        classification: nextPartnerDeliveryReceipt.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipt:
+          nextPartnerDeliveryReceipt,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
