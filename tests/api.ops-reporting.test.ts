@@ -2775,4 +2775,55 @@ describe("GET /api/d2/ops-reporting", () => {
     ).toBe(true)
   })
 
+  it("lists custody handoff external transport receipt acknowledgment rows after governance seed", async () => {
+    const matterId = seedOpsMatter("internal")
+    const doc = uploadDocument(getRuntimeStore(), {
+      firmId: "firmA",
+      matterId,
+      bytes: Buffer.from("%PDF-external-transport-ack%"),
+      sourceChannel: "web",
+      classification: "internal",
+      idempotencyKey: "a0b2157a-9f8c-4c4a-847f-772d8cbc2e5f",
+    })
+    const workflowTransition = await postWorkflow(
+      {
+        action: "transition",
+        actorId: "associate_a",
+        documentId: doc.docId,
+        nextStatus: "processing",
+      },
+      "93e2b34e-48f3-4b17-a52b-c931fc7cdde9"
+    )
+    expect(workflowTransition.status).toBe(200)
+
+    const res = await getOpsReport(
+      new URLSearchParams({
+        view:
+          "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgments",
+        actorId: "associate_a",
+        matterId,
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{
+        matterId: string
+        archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentStatus: string
+        externalTransportChannel: string
+        provenanceTags: string[]
+      }>
+    }
+    expect(
+      json.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentStatus ===
+            "archival_export_custody_handoff_external_transport_receipt_acknowledgment_pending" &&
+          row.externalTransportChannel === "blocked_todo_firm" &&
+          row.provenanceTags.includes("transport_stub:true")
+      )
+    ).toBe(true)
+  })
 })
