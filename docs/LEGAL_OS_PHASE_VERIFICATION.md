@@ -296,3 +296,25 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #124 | workflow alert dispute adjudication + escalation closure scaffolding | `6ad8413` | Yes | true | false | true | PASS (backend-scoped) | low |
 
+## Targeted ledger — PR #126 workflow alert dispute enforcement + closure debt reconciliation scaffolding
+
+- Audit file: `docs/audits/phase-pr126-workflow-enforcement-debt-reconciliation.md`
+- Date: 2026-09-21
+- Main tip audited: `1862544`
+- Verdict: **PARTIAL** (medium) — backend implementation and gates are green, but process-flag call-site evidence format fails claim-gate policy.
+
+### DoD summary
+
+- `SHA on main`: PASS (`origin/main` resolves to `1862544`; PR #126 merge is present on `main`).
+- `BACKEND_REAL`: PASS (`WorkflowOpsAlertDisputeEnforcementLedgerRow` + `WorkflowOpsAlertClosureDebtReconciliationDigestRow`, memory/Firestore repos, Firestore rules, and `/api/d2/ops-reporting` enforcement/reconciliation views + actions are present).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; commit deltas exclude `/ops` files).
+- `no COMPLETE/product-done overclaim`: PASS (`transport_stub=true` remains explicit with bounded pending-auditor claim).
+- `focused tests+gates`: PASS (targeted API/route-wiring + Firestore runtime suites + `G-0` + `G-1` all green in independent rerun).
+- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` replay blocks PR metadata because call-site evidence is mapped to route handlers instead of `/ops` call-sites under `app/ops/operator-audit-console.tsx`).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #126 | workflow alert dispute enforcement + closure debt reconciliation scaffolding | `1862544` | Yes | true | false | true | PARTIAL (process-flag noncompliance) | medium |
+
