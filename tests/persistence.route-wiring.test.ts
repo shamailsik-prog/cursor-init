@@ -105,6 +105,9 @@ const baseStore = {
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints: new Map(),
   workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships: new Map(),
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations: new Map(),
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations: new Map(),
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations:
+    new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -2293,6 +2296,78 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          waiverExpiryDisputeAdjudicationSloStewardshipId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo:mat_1",
+          classification: "internal",
+          debtStatus: "breach_closure_attested",
+          sloStatusSnapshot: "breach_acknowledged",
+          dueWindowDebtMsSnapshot: 0,
+          debtRetiredMs: 120_000,
+          remediationRecordedBy: "partner_a",
+          remediationRecordedAt: Date.now(),
+          tierDownshiftedBy: "partner_a",
+          tierDownshiftedAt: Date.now(),
+          breachClosureAttestedBy: "partner_a",
+          breachClosureAttestedAt: Date.now(),
+          remediationNote: "repo slo debt remediation",
+          reopenPressureCount: 1,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "waiver_expiry_dispute_adjudication_slo_debt"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 23,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations:
+      {
+        upsert: vi.fn(),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1",
+            firmId: "firmA",
+            matterId: "mat_1",
+            expiryAttestationId:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1",
+            classification: "internal",
+            exceptionStatus: "exception_reconciled",
+            attestationStatusSnapshot: "expiry_acknowledged",
+            expiryRiskStatusSnapshot: "expires_soon",
+            exceptionOpenedBy: "partner_a",
+            exceptionOpenedAt: Date.now(),
+            assigneeId: "associate_a",
+            assigneeAssignedAt: Date.now(),
+            reconciledBy: "partner_a",
+            reconciledAt: Date.now(),
+            overdueExceptionCount: 1,
+            reconciliationNote: "repo checkpoint expiry exception",
+            reopenPressureCount: 2,
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: [
+              "repo",
+              "variance_remediation_sla_breach_resolution_checkpoint_expiry_exception",
+            ],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 24,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -3257,5 +3332,35 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1"
     )
     expect(json.items[0]?.attestationStatus).toBe("expiry_acknowledged")
+  })
+
+  it("ops reporting waiver-expiry dispute adjudication SLO debt-remediation view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_remediations&actorId=associate_a&waiverExpiryDisputeAdjudicationSloDebtStatus=breach_closure_attested&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; debtStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation:mat_1"
+    )
+    expect(json.items[0]?.debtStatus).toBe("breach_closure_attested")
+  })
+
+  it("ops reporting checkpoint expiry-attestation exception-reconciliation view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations&actorId=associate_a&remediationSlaBreachResolutionCheckpointExpiryAttestationExceptionStatus=exception_reconciled&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; exceptionStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1"
+    )
+    expect(json.items[0]?.exceptionStatus).toBe("exception_reconciled")
   })
 })

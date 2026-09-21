@@ -238,11 +238,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert waiver-expiry dispute adjudication SLO debt-remediation rows and remediation-SLA breach resolution-checkpoint expiry-attestation exception-reconciliation rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediations`, `workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with debt-remediation/exception-reconciliation monitoring views (`view=alert_waiver_expiry_dispute_adjudication_slo_debt_remediations`, `view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations`) and partner-governed lifecycle actions (`record_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation`, `downshift_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_tier`, `attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_breach_closure`, `open_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception`, `assign_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_owner`, `reconcile_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception`) filterable by matter, debt status, exception status, and freshness state.
+- Captured due-window debt retirement, tier-downshift posture, breach-closure attestation, overdue expiry-exception intake, owner assignment, and reconciliation closure provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation_recorded`, `ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_tier_downshifted`, `ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_breach_closure_attested`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_opened`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_owner_assigned`, `ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciled`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for debt-remediation/exception-reconciliation lifecycle transitions, idempotent replay behavior, pagination/filtering, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for this slice (pending PR + merge SHA assignment):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert waiver-expiry dispute adjudication SLO debt-remediation + remediation SLA breach resolution-checkpoint expiry-attestation exception reconciliation scaffolding**:
+Build **workflow alert adjudication SLO debt-burndown + checkpoint expiry-attestation queue orchestration scaffolding**:
 
-1. Add adjudication SLO debt-remediation rows plus checkpoint expiry-attestation exception/reconciliation rows to track remaining due-window debt retirement and overdue expiry exceptions.
-2. Extend `app/api/d2/ops-reporting/route.ts` with debt-remediation/exception-reconciliation actions and paginated views filterable by matter, debt status, exception status, and freshness state.
-3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for debt-remediation/exception-reconciliation transitions, idempotent replay, and audit provenance traceability.
+1. Add adjudication SLO debt-burndown rows plus checkpoint expiry-attestation queue orchestration rows to track remaining debt velocity and overdue expiry queue drain posture.
+2. Extend `app/api/d2/ops-reporting/route.ts` with burndown/queue-orchestration actions and paginated views filterable by matter, burndown status, queue status, and freshness state.
+3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for burndown/queue-orchestration transitions, idempotent replay, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding only (no external pager/on-call transport claims) while preserving scaffold-claim gate behavior.

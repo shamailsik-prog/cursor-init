@@ -2585,6 +2585,82 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
   updatedAt: number
 }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationStatus =
+  | "not_required"
+  | "debt_watch"
+  | "remediation_recorded"
+  | "tier_downshifted"
+  | "breach_closure_attested"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow = {
+  id: string
+  firmId: string
+  matterId: string
+  waiverExpiryDisputeAdjudicationSloStewardshipId: string
+  classification: Classification
+  debtStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationStatus
+  sloStatusSnapshot: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipStatus
+  dueWindowDebtMsSnapshot: number
+  debtRetiredMs: number
+  remediationRecordedBy: string | null
+  remediationRecordedAt: number | null
+  tierDownshiftedBy: string | null
+  tierDownshiftedAt: number | null
+  breachClosureAttestedBy: string | null
+  breachClosureAttestedAt: number | null
+  remediationNote: string | null
+  reopenPressureCount: number
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationStatus =
+  | "not_required"
+  | "exception_open"
+  | "exception_assigned"
+  | "exception_reconciled"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    expiryAttestationId: string
+    classification: Classification
+    exceptionStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationStatus
+    attestationStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationStatus
+    expiryRiskStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryRiskStatus
+    exceptionOpenedBy: string | null
+    exceptionOpenedAt: number | null
+    assigneeId: string | null
+    assigneeAssignedAt: number | null
+    reconciledBy: string | null
+    reconciledAt: number | null
+    overdueExceptionCount: number
+    reconciliationNote: string | null
+    reopenPressureCount: number
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2722,6 +2798,13 @@ export class SpineStore {
     new Map<string, WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow>()
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations =
     new Map<string, WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow>()
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations =
+    new Map<string, WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow>()
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations =
+    new Map<
+      string,
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow
+    >()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()
