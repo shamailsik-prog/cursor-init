@@ -133,3 +133,68 @@ Evidence:
 - **Auditor verdict:** `PARTIAL`
 - **Severity:** `medium` (process-flag machine compliance)
 - **Product classification:** `PARTIAL` (`transport_stub=true`; not COMPLETE / not product-done)
+
+---
+
+## Independent Phase Auditor RE-AUDIT addendum (process-flag remediation)
+
+Date: 2026-09-21  
+Re-audit trigger: `main` @ `ede9a9c4abe95eb5ae9a4c92a703d815cc8a99d6` (`fix(ci): parse markdown-table phase labels; document key=value PR template`; docs ledger from `9f59d99` / PR #159)  
+Feature merge SHA (unchanged): `caad961d3c475b9fd45de59e4400458868aacd33`  
+PR head replay SHAs: `BASE_SHA=48823fc`, `HEAD_SHA=0fbdc29`
+
+### Verdict (lead)
+
+**PASS (auditor closure).** Prior **PARTIAL (medium)** is **retired** — it applied only to process-flag machine replay failure. Product scope remains **PARTIAL** (`transport_stub=true`; **not COMPLETE** / not product-done).
+
+### 1) Gate + template on `main` @ `ede9a9c`
+
+Status: **PASS**
+
+- `ci_gates/check_pr_phase_claims.py`: `FLAG_TABLE_ROW_RE` + `parse_flags()` accepts markdown-table rows (`| backend_real | true |`, bold/backtick cells).
+- `tests/pr-phase-claim-gate.test.ts`: **20/20** passed (independent rerun on re-audit branch tracking `origin/main`).
+- `docs/LEGAL_OS_PHASE_VERIFICATION.md`: standing **PR body template** requires plain `key=value` lines; notes table parsing as belt-and-suspenders.
+
+### 2) Live claim-gate replay — Origin PR #158 metadata
+
+Status: **PASS**
+
+Command (verbatim Origin title/body via `origin pr view 158`, diff `48823fc..0fbdc29`):
+
+```bash
+PR_TITLE='Workflow alert SLO settlement-arbitration + queue-reentry-compliance scaffolding'
+PR_BODY="$(origin pr view 158 --json body | jq -r .body)"
+BASE_SHA=48823fc7fe34c2209f5d3c060d4d142d6834fced
+HEAD_SHA=0fbdc29f6f7013c2d0874f8311dfe55de4d0543c
+python3 ci_gates/check_pr_phase_claims.py
+```
+
+Observed: exit **0**, `PASS: PR phase-claim gate.`
+
+PR #158 body now includes both machine-readable `key=value` block (`backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL`) and the human release-label table.
+
+### 3) A–E spot-check (feature SHA `caad961` unchanged)
+
+Status: **PASS** (no regression vs initial audit)
+
+| Dimension | Re-audit | Notes |
+|---|---|---|
+| A BACKEND_REAL | PASS | `workflowOpsAlertSettlementArbitrationQueueReentryComplianceGovernance.ts` present; `/api/d2/ops-reporting` views/actions for settlement-arbitration + queue-reentry-compliance unchanged on merge lineage `48823fc..0fbdc29`. |
+| B FE honesty | PASS | `frontend_real=false`; diff still excludes `app/ops/**`. |
+| C No COMPLETE overclaim | PASS | PR metadata: `classification=PARTIAL`, `transport_stub=true`, explicit no product-done disclaimer. |
+| D SHA on `main` | PASS | `caad961` remains ancestor of `origin/main`; `ede9a9c` is process/docs-only atop feature merge. |
+| E Focused tests + gates | PASS | Spot-check @ current `main`: `bash ci_gates/gate_g0.sh` PASS; `python3 ci_gates/gate_g1.py` PASS. Initial audit full vitest/Firestore reruns @ `caad961` stand (86 + 22). Non-blocking: three partner HTTP actions still lack dedicated mega-test assertions. |
+
+### 4) F Process flags
+
+Status: **PASS** (was **FAIL (medium)** in initial audit)
+
+### Final re-audit adjudication
+
+| Dimension | Initial (2026-09-21 @ `caad961`) | Re-audit (@ `ede9a9c`) |
+|---|---|---|
+| A–E | PASS | PASS |
+| F Process flags | FAIL (medium) | **PASS** |
+| **Auditor verdict** | PARTIAL (medium) | **PASS** |
+| **Product classification** | PARTIAL | PARTIAL (`transport_stub=true`; not COMPLETE) |
+| **Severity** | medium (process only) | **low** (residual test-coverage gap only) |

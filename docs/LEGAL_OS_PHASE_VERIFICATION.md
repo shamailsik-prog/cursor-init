@@ -675,12 +675,12 @@ The gate fails when either condition is true:
 
 ## Targeted ledger — PR #158 workflow alert adjudication SLO settlement-arbitration + checkpoint expiry-attestation queue-reentry-compliance
 
-- Audit file: `docs/audits/phase-pr158-workflow-slo-settlement-arbitration-queue-reentry.md`
-- Date: 2026-09-21
+- Audit file: `docs/audits/phase-pr158-workflow-slo-settlement-arbitration-queue-reentry.md` (initial audit + **re-audit addendum** 2026-09-21)
+- Date: 2026-09-21 (re-audit addendum same day)
 - Merge SHA on `main`: `caad961d3c475b9fd45de59e4400458868aacd33` (parent-2 / final PR head `0fbdc29`; stacked on PR #156 lane via base `48823fc`)
-- Main tip at audit close: `caad961`
-- Claim-gate anchor: `90b0996` (PR #135 negation hardening; preserved on merge)
-- Verdict: **PARTIAL (medium)** — backend-real, label-honest semantically, focused tests/gates green; claim-gate replay fails on markdown-table release labels. Product scope remains PARTIAL because `transport_stub=true`.
+- Process-flag remediation on `main`: `ede9a9c4abe95eb5ae9a4c92a703d815cc8a99d6` (markdown-table label parsing + `key=value` PR template; follows audit ledger `9f59d99` / PR #159)
+- Claim-gate anchor: `ede9a9c` (supersedes `90b0996` for table-row parsing behavior)
+- Verdict: **PASS (auditor closure)** — A–F green including live PR #158 claim-gate replay exit 0 @ `ede9a9c`. Product scope remains **PARTIAL** (`transport_stub=true`; not COMPLETE).
 
 ### DoD summary
 
@@ -689,11 +689,11 @@ The gate fails when either condition is true:
 - `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `48823fc..0fbdc29` excludes `app/ops/**`).
 - `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
 - `focused tests+gates`: PASS (API/route-wiring 86; Firestore repos/runtime/rules 22; `G-0`; `G-1`). Non-blocking: three partner actions lack dedicated HTTP assertions in `api.ops-reporting` mega test.
-- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` verbatim PR #158 body replay with `48823fc..0fbdc29` exits 1 — table-encoded flags not parsed). Builder `phase-prXXX-…` stub not used as evidence.
+- `process flags`: **PASS** (`ci_gates/check_pr_phase_claims.py` verbatim PR #158 body replay with `48823fc..0fbdc29` exits 0 @ `ede9a9c`; PR body includes `key=value` block plus table). Claim-gate vitest **20/20**. Builder `phase-prXXX-…` stub not used as evidence.
 
 ### PR matrix (targeted)
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #158 | workflow alert adjudication SLO settlement-arbitration + checkpoint expiry-attestation queue-reentry-compliance | `caad961` | Yes | true | false | true | PARTIAL (backend-real; process-flag gate replay failure) | medium |
+| #158 | workflow alert adjudication SLO settlement-arbitration + checkpoint expiry-attestation queue-reentry-compliance | `caad961` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
