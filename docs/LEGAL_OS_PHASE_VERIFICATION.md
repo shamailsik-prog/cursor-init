@@ -463,3 +463,22 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #136 | workflow alert waiver-expiry disputes + remediation SLA breach escalation | `f20cdf1` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
 
+## Re-audit addendum — PR #136 after claim-gate residual fix (PR #142)
+
+- Audit file: `docs/audits/phase-pr136-workflow-waiver-dispute-sla-escalation.md` (forensic record unchanged; see addendum for process-flag delta)
+- Date: 2026-09-21
+- Main tip audited: `f023e42`
+- Verdict: **PARTIAL** (medium) unchanged for product scope (`transport_stub=true`); **process flags now PASS** on PR #136 metadata replay after residual gate hardening.
+
+### Re-audit findings
+
+1. `ci_gates/check_pr_phase_claims.py` on `main` treats `never COMPLETE while transport_stub=true` as a negated disclaimer and ignores incidental `(docs-only queue update)` phrasing when substantive paths changed.
+2. Live replay against PR #136 title/body with `BASE_SHA=0b9152155b0b` / `HEAD_SHA=42e7b0b` returns **PASS** (exit code `0`).
+3. Feature SHA `f20cdf1` and A–E evidence from the original audit remain valid; only process-flag compliance moved from FAIL → PASS.
+
+### Updated targeted matrix entry (superseding)
+
+| PR | Audit pass | Main tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #136 | Re-audit after PR #142 claim-gate residual fix | `f023e42` | true | false | true | PARTIAL (backend-real; process flags compliant) | medium |
+
