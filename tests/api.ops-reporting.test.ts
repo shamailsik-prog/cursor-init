@@ -1796,6 +1796,31 @@ describe("GET /api/d2/ops-reporting", () => {
     )
     expect(settlementArbitrationPanelConfirmation.status).toBe(200)
 
+    const settlementArbitrationFinalRuling = await postOpsReport(
+      {
+        action:
+          "issue_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_final_ruling",
+        actorId: "partner_a",
+        matterId,
+        rulingSummary: "runtime final ruling for disposition finalization",
+        reason: "adjudication SLO settlement arbitration final ruling issued",
+      },
+      "b0ad550f-91ab-4e22-a7f6-0b4c5d8e9a50"
+    )
+    expect(settlementArbitrationFinalRuling.status).toBe(200)
+    const settlementArbitrationFinalRulingJson = (await settlementArbitrationFinalRuling.json()) as {
+      result: {
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalization: {
+          dispositionFinalizationStatus: string
+        }
+      }
+    }
+    expect(
+      settlementArbitrationFinalRulingJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalization
+        .dispositionFinalizationStatus
+    ).toBe("final_ruling_issued")
+
     const queueReentryException = await postOpsReport(
       {
         action:
@@ -1819,6 +1844,56 @@ describe("GET /api/d2/ops-reporting", () => {
         .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliance
         .complianceStatus
     ).toBe("reentry_exception_attested")
+
+    const queueReentryTimeoutWaiver = await postOpsReport(
+      {
+        action:
+          "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_timeout_waiver",
+        actorId: "partner_a",
+        matterId,
+        waiverHours: 4,
+        reason: "checkpoint expiry attestation queue reentry timeout waiver checkpointed",
+      },
+      "c0bd660f-91ab-4e22-a8f6-0b4c5d8e9a51"
+    )
+    expect(queueReentryTimeoutWaiver.status).toBe(200)
+
+    const queueReentryReconciliationResume = await postOpsReport(
+      {
+        action:
+          "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_reconciliation_resume",
+        actorId: "partner_a",
+        matterId,
+        reason: "checkpoint expiry attestation queue reentry reconciliation resumed",
+      },
+      "d0cd770f-91ab-4e22-a9f6-0b4c5d8e9a52"
+    )
+    expect(queueReentryReconciliationResume.status).toBe(200)
+
+    const queueReentryExceptionDebtAssign = await postOpsReport(
+      {
+        action:
+          "assign_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_exception_debt",
+        actorId: "partner_a",
+        matterId,
+        debtAssigneeId: "associate_a",
+        reason: "checkpoint expiry attestation queue reentry exception debt assigned",
+      },
+      "e0dd880f-91ab-4e22-aaf6-0b4c5d8e9a53"
+    )
+    expect(queueReentryExceptionDebtAssign.status).toBe(200)
+    const queueReentryExceptionDebtAssignJson = (await queueReentryExceptionDebtAssign.json()) as {
+      result: {
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirement: {
+          debtRetirementStatus: string
+        }
+      }
+    }
+    expect(
+      queueReentryExceptionDebtAssignJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirement
+        .debtRetirementStatus
+    ).toBe("exception_debt_assigned")
 
     const remediationResolve = await postOpsReport(
       {

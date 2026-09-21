@@ -2970,6 +2970,85 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     updatedAt: number
   }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationStatus =
+  | "disposition_pending"
+  | "final_ruling_issued"
+  | "dissent_memorialized"
+  | "ruling_publication_checkpointed"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    settlementArbitrationId: string
+    classification: Classification
+    dispositionFinalizationStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationStatus
+    settlementArbitrationStatusSnapshot: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationStatus
+    finalRulingIssuedBy: string | null
+    finalRulingIssuedAt: number | null
+    finalRulingSummary: string | null
+    dissentMemorializedBy: string | null
+    dissentMemorializedAt: number | null
+    dissentMemorializedNote: string | null
+    rulingPublicationCheckpointedBy: string | null
+    rulingPublicationCheckpointedAt: number | null
+    rulingPublicationChannel: string | null
+    arbitrationRulingAgingHours: number
+    dispositionNote: string | null
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementStatus =
+  | "retirement_pending"
+  | "exception_debt_assigned"
+  | "debt_retirement_attested"
+  | "debt_aging_auto_escalated"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    queueReentryComplianceId: string
+    classification: Classification
+    debtRetirementStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementStatus
+    complianceStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceStatus
+    exceptionDebtAssignedBy: string | null
+    exceptionDebtAssignedAt: number | null
+    debtAssigneeId: string | null
+    debtRetirementAttestedBy: string | null
+    debtRetirementAttestedAt: number | null
+    debtRetiredCount: number
+    debtAgingAutoEscalatedBy: string | null
+    debtAgingAutoEscalatedAt: number | null
+    debtAgingEscalationHours: number | null
+    queueReentryExceptionDebtCountSnapshot: number
+    queueReentryRetirementBurnCount: number
+    retirementNote: string | null
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -3147,6 +3226,16 @@ export class SpineStore {
     new Map<
       string,
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow
+    >()
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations =
+    new Map<
+      string,
+      WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow
+    >()
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements =
+    new Map<
+      string,
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow
     >()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()

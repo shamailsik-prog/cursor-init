@@ -2675,6 +2675,87 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations:
+      {
+        upsert: vi.fn(),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id:
+              "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+            firmId: "firmA",
+            matterId: "mat_1",
+            settlementArbitrationId:
+              "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+            classification: "internal",
+            dispositionFinalizationStatus: "ruling_publication_checkpointed",
+            settlementArbitrationStatusSnapshot: "panel_confirmation_attested",
+            finalRulingIssuedBy: "partner_a",
+            finalRulingIssuedAt: Date.now(),
+            finalRulingSummary: "repo final ruling",
+            dissentMemorializedBy: "partner_a",
+            dissentMemorializedAt: Date.now(),
+            dissentMemorializedNote: "repo dissent",
+            rulingPublicationCheckpointedBy: "partner_a",
+            rulingPublicationCheckpointedAt: Date.now(),
+            rulingPublicationChannel: "internal_panel_registry",
+            arbitrationRulingAgingHours: 2,
+            dispositionNote: "repo disposition finalization",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: [
+              "repo",
+              "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization",
+            ],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 33,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements:
+      {
+        upsert: vi.fn(),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+            firmId: "firmA",
+            matterId: "mat_1",
+            queueReentryComplianceId:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+            classification: "internal",
+            debtRetirementStatus: "debt_aging_auto_escalated",
+            complianceStatusSnapshot: "reconciliation_resumed",
+            exceptionDebtAssignedBy: "partner_a",
+            exceptionDebtAssignedAt: Date.now(),
+            debtAssigneeId: "associate_a",
+            debtRetirementAttestedBy: "partner_a",
+            debtRetirementAttestedAt: Date.now(),
+            debtRetiredCount: 1,
+            debtAgingAutoEscalatedBy: "partner_a",
+            debtAgingAutoEscalatedAt: Date.now(),
+            debtAgingEscalationHours: 12,
+            queueReentryExceptionDebtCountSnapshot: 1,
+            queueReentryRetirementBurnCount: 1,
+            retirementNote: "repo queue reentry debt retirement",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: [
+              "repo",
+              "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_reentry_debt_retirement",
+            ],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 34,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -3797,5 +3878,39 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
     )
     expect(json.items[0]?.complianceStatus).toBe("reentry_exception_attested")
+  })
+
+  it("ops reporting disposition finalization view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalizations&actorId=associate_a&dispositionFinalizationStatus=ruling_publication_checkpointed&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ id: string; dispositionFinalizationStatus: string }>
+    }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
+    )
+    expect(json.items[0]?.dispositionFinalizationStatus).toBe("ruling_publication_checkpointed")
+  })
+
+  it("ops reporting queue reentry debt retirement view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirements&actorId=associate_a&debtRetirementStatus=debt_aging_auto_escalated&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ id: string; debtRetirementStatus: string }>
+    }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
+    )
+    expect(json.items[0]?.debtRetirementStatus).toBe("debt_aging_auto_escalated")
   })
 })

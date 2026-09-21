@@ -8448,6 +8448,10 @@ describe("Runtime persistence mode", () => {
         new Map()
       getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances =
         new Map()
+      getRuntimeStore().workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations =
+        new Map()
+      getRuntimeStore().workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements =
+        new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -9287,6 +9291,36 @@ describe("Runtime persistence mode", () => {
             entry.data()?.firmId === "firmA" &&
             entry.data()?.matterId === matterId &&
             entry.data()?.complianceStatus === "compliance_pending"
+        )
+      ).toBe(true)
+      const persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalizations"
+          )
+        )
+      expect(
+        persistedWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.dispositionFinalizationStatus === "disposition_pending"
+        )
+      ).toBe(true)
+      const persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirements =
+        await getDocs(
+          collection(
+            ctx.firestore(),
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirements"
+          )
+        )
+      expect(
+        persistedRemediationSlaBreachResolutionCheckpointExpiryQueueReentryComplianceDebtRetirements.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.debtRetirementStatus === "retirement_pending"
         )
       ).toBe(true)
     })
