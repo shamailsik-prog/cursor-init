@@ -158,11 +158,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert attestation-dispute rows and escalation-closure rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_attestation_disputes`, `workflow_ops_alert_escalation_closures`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with dispute/closure monitoring views (`view=alert_attestation_disputes`, `view=alert_escalation_closures`) and partner-governed lifecycle actions (`open_workflow_ops_alert_attestation_dispute`, `assign_workflow_ops_alert_attestation_dispute_reviewer`, `resolve_workflow_ops_alert_attestation_dispute`, `checkpoint_workflow_ops_alert_escalation_closure`, `close_workflow_ops_alert_escalation_closure`, `reopen_workflow_ops_alert_escalation_closure`) filterable by matter, lifecycle status, and freshness state.
+- Captured attestation contest intake, reviewer assignment, adjudication outcomes, closure checkpoints, closure confirmations, and closure reopen provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_attestation_dispute_opened`, `ops_reporting_alert_attestation_dispute_reviewer_assigned`, `ops_reporting_alert_attestation_dispute_resolved`, `ops_reporting_alert_escalation_closure_checkpoint_recorded`, `ops_reporting_alert_escalation_closure_closed`, `ops_reporting_alert_escalation_closure_reopened`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for dispute/closure lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for PR #124:
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert dispute adjudication + escalation closure scaffolding**:
+Build **workflow alert dispute outcome enforcement + closure debt reconciliation scaffolding**:
 
-1. Add workflow alert attestation-dispute rows and escalation-closure ledger rows for contested attestations, reviewer assignment, and closure checkpoints.
-2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed dispute/closure actions and paginated views filterable by matter, dispute status, and freshness state.
-3. Extend unit/runtime persistence tests for dispute/closure lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+1. Add workflow alert dispute enforcement ledger rows and closure-debt reconciliation digest rows for outcome compliance tracking and reopen debt pressure.
+2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed enforcement/reconciliation actions and paginated views filterable by matter, enforcement status, and freshness state.
+3. Extend unit/runtime persistence tests for enforcement/reconciliation lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving scaffold-claim gate behavior.
