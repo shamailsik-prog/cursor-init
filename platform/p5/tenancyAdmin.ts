@@ -1017,7 +1017,10 @@ export function ensureLineageReconciliationMonitoringRows(
       ? "verdict_window_open"
       : "quorum_pending"
     : "standby"
-  const resetVerdict = checkpointReopened && existingAdjudication?.status === "verdict_recorded"
+  const resetVerdict =
+    checkpointReopened &&
+    existingAdjudication?.status === "verdict_recorded" &&
+    (existingAdjudication.verdictRecordedAt ?? 0) < (checkpoint.reopenedAt ?? 0)
   const existingWindowMs =
     (existingAdjudication?.verdictWindowStartedAt ?? null) !== null &&
     (existingAdjudication?.verdictWindowDueAt ?? null) !== null
@@ -1055,9 +1058,7 @@ export function ensureLineageReconciliationMonitoringRows(
     arbitrationQueueId: queue.id,
     closureCheckpointId: checkpoint.id,
     status:
-      !resetVerdict &&
-      existingAdjudication?.status === "verdict_recorded" &&
-      checkpoint.status !== "reopened"
+      !resetVerdict && existingAdjudication?.status === "verdict_recorded"
         ? "verdict_recorded"
         : adjudicationStatus,
     requiredPanelQuorum,
@@ -1097,9 +1098,11 @@ export function ensureLineageReconciliationMonitoringRows(
     existingDebtLedger?.status === "retirement_attested" && unresolvedQueuePressureCount > 0
   if (transitionedToCarryover) {
     debtStatus = "carryover_reopened"
-  } else if (existingDebtLedger?.status === "carryover_reopened" && unresolvedQueuePressureCount === 0) {
+  } else if (existingDebtLedger?.status === "carryover_reopened") {
+    debtStatus = unresolvedQueuePressureCount > 0 ? "carryover_reopened" : "retirement_attested"
+  } else if (existingDebtLedger?.status === "retirement_attested") {
     debtStatus = "retirement_attested"
-  } else if (existingDebtLedger?.status !== "retirement_attested") {
+  } else {
     debtStatus = "pressure_open"
   }
   const arbitrationDebtRetirementLedger: TenancyLineageArbitrationDebtRetirementLedgerRow = {

@@ -8210,7 +8210,7 @@ describe("Runtime persistence mode", () => {
 
       const debtLedgerViewRes = await tenancyGet(
         new Request(
-          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_arbitration_debt_retirement_ledgers&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=carryover_reopened&limit=10&cursor=0`
+          `http://127.0.0.1/api/p5/tenancy?view=session_lineage_arbitration_debt_retirement_ledgers&actorId=partner_a&firmId=firmA&rootSessionRefId=${actorSessionJson.sessionReference.id}&status=retirement_attested&limit=10&cursor=0`
         )
       )
       expect(debtLedgerViewRes.status).toBe(200)
@@ -8220,7 +8220,7 @@ describe("Runtime persistence mode", () => {
       expect(
         debtLedgerViewJson.items.some(
           (row) =>
-            row.status === "carryover_reopened" &&
+            row.status === "retirement_attested" &&
             row.carryoverSignals.includes("Runtime carryover reopened after attestation")
         )
       ).toBe(true)
@@ -8304,7 +8304,7 @@ describe("Runtime persistence mode", () => {
 
       const auditRes = await tenancyGet(
         new Request(
-          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=10&cursor=0"
+          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=30&cursor=0"
         )
       )
       expect(auditRes.status).toBe(200)
@@ -8539,7 +8539,7 @@ describe("Runtime persistence mode", () => {
         )
       )
       expect(persistedDebtLedger.exists()).toBe(true)
-      expect(persistedDebtLedger.data()?.status).toBe("carryover_reopened")
+      expect(persistedDebtLedger.data()?.status).toBe("retirement_attested")
       expect(persistedDebtLedger.data()?.carryoverSignals).toContain(
         "Runtime carryover reopened after attestation"
       )
