@@ -148,12 +148,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - frontend_real: false
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
+- Added durable workflow alert attestation rows and escalation ledger rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_attestations`, `workflow_ops_alert_escalation_ledgers`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with attestation/escalation monitoring views (`view=alert_attestations`, `view=alert_escalation_ledgers`) and partner-governed lifecycle actions (`attest_workflow_ops_alert_digest`, `open_workflow_ops_alert_escalation`, `assign_workflow_ops_alert_escalation_owner`, `resolve_workflow_ops_alert_escalation`) filterable by matter, lifecycle status, and freshness state.
+- Captured stale-digest attestation checkpoints, escalation-owner assignment state, and escalation-resolution provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_attested`, `ops_reporting_alert_escalation_opened`, `ops_reporting_alert_escalation_owner_assigned`, `ops_reporting_alert_escalation_resolved`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for attestation/escalation lifecycle transitions, pagination/filter behavior, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for PR #122 (`d4e1d25`):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
 
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert attestation + escalation ledger scaffolding**:
+Build **workflow alert dispute adjudication + escalation closure scaffolding**:
 
-1. Add workflow alert attestation rows and escalation ledger rows for stale-digest exception handling, owner assignment, and resolution checkpoints.
-2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed attestation/escalation actions plus paginated views filterable by matter, escalation status, and freshness state.
-3. Extend unit/runtime persistence tests for attestation/escalation lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
+1. Add workflow alert attestation-dispute rows and escalation-closure ledger rows for contested attestations, reviewer assignment, and closure checkpoints.
+2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed dispute/closure actions and paginated views filterable by matter, dispute status, and freshness state.
+3. Extend unit/runtime persistence tests for dispute/closure lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
 4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving scaffold-claim gate behavior.

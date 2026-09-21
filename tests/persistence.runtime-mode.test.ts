@@ -7100,7 +7100,93 @@ describe("Runtime persistence mode", () => {
       expect(snoozeJson.result.digest.snoozedBy).toBe("partner_a")
       expect((snoozeJson.result.digest.snoozedUntil ?? 0) >= snoozeUntil).toBe(true)
 
+      const attest = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "cb9bc09d-49f7-4be8-ad2f-77b1eb977f48",
+          },
+          body: JSON.stringify({
+            action: "attest_workflow_ops_alert_digest",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime attestation",
+          }),
+        })
+      )
+      expect(attest.status).toBe(200)
+      const attestJson = (await attest.json()) as {
+        result: { attestation: { attestationStatus: string; lastAttestedBy: string | null } }
+      }
+      expect(attestJson.result.attestation.attestationStatus).toBe("attested")
+      expect(attestJson.result.attestation.lastAttestedBy).toBe("partner_a")
+
+      const escalationOpen = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "fbce8709-5090-4f76-9e63-b88080f5c690",
+          },
+          body: JSON.stringify({
+            action: "open_workflow_ops_alert_escalation",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime escalation open",
+          }),
+        })
+      )
+      expect(escalationOpen.status).toBe(200)
+
+      const escalationAssign = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "67a058ea-1655-4c20-a8d3-6282b85a9642",
+          },
+          body: JSON.stringify({
+            action: "assign_workflow_ops_alert_escalation_owner",
+            actorId: "partner_a",
+            matterId,
+            ownerId: "clerk_a",
+            reason: "runtime escalation assignment",
+          }),
+        })
+      )
+      expect(escalationAssign.status).toBe(200)
+      const escalationAssignJson = (await escalationAssign.json()) as {
+        result: { escalation: { escalationStatus: string; ownerId: string | null } }
+      }
+      expect(escalationAssignJson.result.escalation.escalationStatus).toBe("assigned")
+      expect(escalationAssignJson.result.escalation.ownerId).toBe("clerk_a")
+
+      const escalationResolve = await opsReportingPost(
+        new Request("http://127.0.0.1/api/d2/ops-reporting", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "44ef6cbd-f32f-4e6d-b950-3d8d4fc7a8cf",
+          },
+          body: JSON.stringify({
+            action: "resolve_workflow_ops_alert_escalation",
+            actorId: "partner_a",
+            matterId,
+            reason: "runtime escalation resolved",
+          }),
+        })
+      )
+      expect(escalationResolve.status).toBe(200)
+      const escalationResolveJson = (await escalationResolve.json()) as {
+        result: { escalation: { escalationStatus: string; resolutionReason: string | null } }
+      }
+      expect(escalationResolveJson.result.escalation.escalationStatus).toBe("resolved")
+      expect(escalationResolveJson.result.escalation.resolutionReason).toBe("runtime escalation resolved")
+
       getRuntimeStore().workflowOpsAlertDigests = new Map()
+      getRuntimeStore().workflowOpsAlertAttestations = new Map()
+      getRuntimeStore().workflowOpsAlertEscalationLedgers = new Map()
       const alertDigestView = await opsReportingGet(
         new Request(
           `http://127.0.0.1/api/d2/ops-reporting?view=alert_digests&actorId=associate_a&matterId=${matterId}&freshnessStatus=fresh&limit=20&cursor=0`
@@ -7121,6 +7207,39 @@ describe("Runtime persistence mode", () => {
             row.matterId === matterId &&
             row.acknowledgedBy === "partner_a" &&
             row.snoozedBy === "partner_a"
+        )
+      ).toBe(true)
+
+      const attestationView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_attestations&actorId=associate_a&matterId=${matterId}&attestationStatus=attested&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(attestationView.status).toBe(200)
+      const attestationViewJson = (await attestationView.json()) as {
+        items: Array<{ matterId: string; attestationStatus: string }>
+      }
+      expect(
+        attestationViewJson.items.some(
+          (row) => row.matterId === matterId && row.attestationStatus === "attested"
+        )
+      ).toBe(true)
+
+      const escalationView = await opsReportingGet(
+        new Request(
+          `http://127.0.0.1/api/d2/ops-reporting?view=alert_escalation_ledgers&actorId=associate_a&matterId=${matterId}&escalationStatus=resolved&freshnessStatus=fresh&limit=20&cursor=0`
+        )
+      )
+      expect(escalationView.status).toBe(200)
+      const escalationViewJson = (await escalationView.json()) as {
+        items: Array<{ matterId: string; escalationStatus: string; ownerId: string | null }>
+      }
+      expect(
+        escalationViewJson.items.some(
+          (row) =>
+            row.matterId === matterId &&
+            row.escalationStatus === "resolved" &&
+            row.ownerId === "clerk_a"
         )
       ).toBe(true)
 
@@ -7149,6 +7268,28 @@ describe("Runtime persistence mode", () => {
             entry.data()?.matterId === matterId &&
             entry.data()?.acknowledgedBy === "partner_a" &&
             entry.data()?.snoozedBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedAttestations = await getDocs(collection(ctx.firestore(), "workflow_ops_alert_attestations"))
+      expect(
+        persistedAttestations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.attestationStatus === "attested" &&
+            entry.data()?.lastAttestedBy === "partner_a"
+        )
+      ).toBe(true)
+      const persistedEscalations = await getDocs(
+        collection(ctx.firestore(), "workflow_ops_alert_escalation_ledgers")
+      )
+      expect(
+        persistedEscalations.docs.some(
+          (entry) =>
+            entry.data()?.firmId === "firmA" &&
+            entry.data()?.matterId === matterId &&
+            entry.data()?.escalationStatus === "resolved" &&
+            entry.data()?.ownerId === "clerk_a"
         )
       ).toBe(true)
     })

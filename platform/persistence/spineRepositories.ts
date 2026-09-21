@@ -58,6 +58,8 @@ import type {
   MatterReportRelevanceSnapshotRow,
   WorkflowOpsActivityRow,
   WorkflowOpsAlertDigestRow,
+  WorkflowOpsAlertAttestationRow,
+  WorkflowOpsAlertEscalationLedgerRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -604,6 +606,20 @@ export type WorkflowOpsAlertDigestRepository = {
   listByMatter(matterId: string): Promise<WorkflowOpsAlertDigestRow[]>
 }
 
+export type WorkflowOpsAlertAttestationRepository = {
+  upsert(row: WorkflowOpsAlertAttestationRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertAttestationRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertAttestationRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertAttestationRow[]>
+}
+
+export type WorkflowOpsAlertEscalationLedgerRepository = {
+  upsert(row: WorkflowOpsAlertEscalationLedgerRow): Promise<void>
+  get(id: string): Promise<WorkflowOpsAlertEscalationLedgerRow | null>
+  listByFirm(firmId: string): Promise<WorkflowOpsAlertEscalationLedgerRow[]>
+  listByMatter(matterId: string): Promise<WorkflowOpsAlertEscalationLedgerRow[]>
+}
+
 export type TenancySessionReferenceRepository = {
   upsert(row: TenancySessionReferenceRow): Promise<void>
   get(id: string): Promise<TenancySessionReferenceRow | null>
@@ -757,6 +773,8 @@ export type SpineRepositories = {
   matterReportRelevanceSnapshots: MatterReportRelevanceSnapshotRepository
   workflowOpsActivity: WorkflowOpsActivityRepository
   workflowOpsAlertDigests: WorkflowOpsAlertDigestRepository
+  workflowOpsAlertAttestations: WorkflowOpsAlertAttestationRepository
+  workflowOpsAlertEscalationLedgers: WorkflowOpsAlertEscalationLedgerRepository
   tenancySessionReferences: TenancySessionReferenceRepository
   tenancyLineageDisputeAttestations: TenancyLineageDisputeAttestationRepository
   tenancyLineageReconciliationDigests: TenancyLineageReconciliationDigestRepository
@@ -2067,6 +2085,36 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByMatter(matterId) {
         return [...store.workflowOpsAlertDigests.values()].filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertAttestations: {
+      async upsert(row) {
+        store.workflowOpsAlertAttestations.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertAttestations.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertAttestations.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertAttestations.values()].filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertEscalationLedgers: {
+      async upsert(row) {
+        store.workflowOpsAlertEscalationLedgers.set(row.id, row)
+      },
+      async get(id) {
+        return store.workflowOpsAlertEscalationLedgers.get(id) ?? null
+      },
+      async listByFirm(firmId) {
+        return [...store.workflowOpsAlertEscalationLedgers.values()].filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId) {
+        return [...store.workflowOpsAlertEscalationLedgers.values()].filter(
+          (row) => row.matterId === matterId
+        )
       },
     },
     tenancySessionReferences: {

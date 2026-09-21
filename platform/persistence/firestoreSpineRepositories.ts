@@ -67,6 +67,8 @@ import type {
   MatterReportRelevanceSnapshotRow,
   WorkflowOpsActivityRow,
   WorkflowOpsAlertDigestRow,
+  WorkflowOpsAlertAttestationRow,
+  WorkflowOpsAlertEscalationLedgerRow,
   AuditEntry,
   CommitteeBrainOutput,
   TenancySessionReferenceRow,
@@ -1767,6 +1769,48 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const rows = await getDocs(collection(db, "workflow_ops_alert_digests"))
         return rows.docs
           .map((entry) => entry.data() as WorkflowOpsAlertDigestRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertAttestations: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_attestations", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertAttestationRow>(db, "workflow_ops_alert_attestations", id)
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertAttestationRow>(db, "workflow_ops_alert_attestations", firmId)
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_attestations"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertAttestationRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    },
+    workflowOpsAlertEscalationLedgers: {
+      async upsert(row) {
+        await setDoc(doc(db, "workflow_ops_alert_escalation_ledgers", row.id), row)
+      },
+      async get(id) {
+        return getById<WorkflowOpsAlertEscalationLedgerRow>(
+          db,
+          "workflow_ops_alert_escalation_ledgers",
+          id
+        )
+      },
+      async listByFirm(firmId) {
+        return listByFirm<WorkflowOpsAlertEscalationLedgerRow>(
+          db,
+          "workflow_ops_alert_escalation_ledgers",
+          firmId
+        )
+      },
+      async listByMatter(matterId) {
+        const rows = await getDocs(collection(db, "workflow_ops_alert_escalation_ledgers"))
+        return rows.docs
+          .map((entry) => entry.data() as WorkflowOpsAlertEscalationLedgerRow)
           .filter((row) => row.matterId === matterId)
       },
     },

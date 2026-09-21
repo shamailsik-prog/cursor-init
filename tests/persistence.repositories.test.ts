@@ -550,6 +550,55 @@ describe("Firestore repository adapters", () => {
       expect(alertDigestsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const alertDigestsByMatter = await repos.workflowOpsAlertDigests.listByMatter("mat_1")
       expect(alertDigestsByMatter.some((row) => row.recomputeReason === "ops_runtime_check")).toBe(true)
+      await repos.workflowOpsAlertAttestations.upsert({
+        id: "workflow_ops_alert_attestation:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        alertDigestId: "workflow_ops_alert:mat_1",
+        classification: "internal",
+        attestationStatus: "pending_attestation",
+        lastAttestedAt: null,
+        lastAttestedBy: null,
+        attestationReason: null,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "attestation"],
+        recomputedAt: 49,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_attestation_seed",
+        updatedAt: 49,
+      })
+      const attestation = await repos.workflowOpsAlertAttestations.get("workflow_ops_alert_attestation:mat_1")
+      expect(attestation?.attestationStatus).toBe("pending_attestation")
+      const attestationsByFirm = await repos.workflowOpsAlertAttestations.listByFirm("firmA")
+      expect(attestationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const attestationsByMatter = await repos.workflowOpsAlertAttestations.listByMatter("mat_1")
+      expect(attestationsByMatter.some((row) => row.recomputeReason === "ops_attestation_seed")).toBe(true)
+      await repos.workflowOpsAlertEscalationLedgers.upsert({
+        id: "workflow_ops_alert_escalation:mat_1",
+        firmId: "firmA",
+        matterId: "mat_1",
+        alertDigestId: "workflow_ops_alert:mat_1",
+        classification: "internal",
+        escalationStatus: "open",
+        severity: "high",
+        ownerId: null,
+        openedAt: 50,
+        lastStatusChangedAt: 50,
+        resolvedAt: null,
+        resolutionReason: null,
+        freshnessStatus: "fresh",
+        provenanceTags: ["workflow", "escalation"],
+        recomputedAt: 50,
+        recomputedBy: "partner_a",
+        recomputeReason: "ops_escalation_seed",
+        updatedAt: 50,
+      })
+      const escalation = await repos.workflowOpsAlertEscalationLedgers.get("workflow_ops_alert_escalation:mat_1")
+      expect(escalation?.escalationStatus).toBe("open")
+      const escalationsByFirm = await repos.workflowOpsAlertEscalationLedgers.listByFirm("firmA")
+      expect(escalationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
+      const escalationsByMatter = await repos.workflowOpsAlertEscalationLedgers.listByMatter("mat_1")
+      expect(escalationsByMatter.some((row) => row.recomputeReason === "ops_escalation_seed")).toBe(true)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
