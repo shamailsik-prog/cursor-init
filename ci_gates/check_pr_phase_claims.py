@@ -31,7 +31,14 @@ SCAFFOLD_ONLY_RE = re.compile(
 )
 
 COMPLETE_CLAIM_RE = re.compile(
-    r"\b(phase complete|complete product|fully done|product[-\s]?done|done product)\b",
+    r"\b(phase complete|complete product|fully done|product[-\s]?done|done product|complete)\b",
+    re.IGNORECASE,
+)
+NEGATED_COMPLETE_DISCLAIMER_RE = re.compile(
+    r"\b(?:no|not|without)\s+"
+    r"(?:(?:phase\s+)?complete|product[-\s]?done)"
+    r"(?:\s*/\s*(?:(?:phase\s+)?complete|product[-\s]?done))*"
+    r"\s+claims?\b",
     re.IGNORECASE,
 )
 SHAMAIL_SELF_CERTIFY_RE = re.compile(
@@ -113,6 +120,15 @@ def parse_flags(claim_text: str) -> dict[str, bool]:
     return parsed
 
 
+def has_complete_claim(claim_text: str) -> bool:
+    negated_spans = [match.span() for match in NEGATED_COMPLETE_DISCLAIMER_RE.finditer(claim_text)]
+    for claim_match in COMPLETE_CLAIM_RE.finditer(claim_text):
+        if any(start <= claim_match.start() and claim_match.end() <= end for start, end in negated_spans):
+            continue
+        return True
+    return False
+
+
 def main() -> int:
     claim_text = read_pr_claim_text()
     if not claim_text:
@@ -165,11 +181,13 @@ def main() -> int:
                 "PR touches app/ops; include at least one concrete /api/... fetch-path evidence entry."
             )
 
-    if COMPLETE_CLAIM_RE.search(claim_text) and transport_stub_present():
+    complete_claim_detected = has_complete_claim(claim_text)
+
+    if complete_claim_detected and transport_stub_present():
         failures.append(
             "PR claims COMPLETE/product-done while filing transport TODO/stub markers still exist."
         )
-    if COMPLETE_CLAIM_RE.search(claim_text):
+    if complete_claim_detected:
         if "frontend_real" in flags and not flags["frontend_real"]:
             failures.append("PR claims COMPLETE/product-done while frontend_real=false.")
         if "transport_stub" in flags and flags["transport_stub"]:
