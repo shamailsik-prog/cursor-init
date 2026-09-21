@@ -26,9 +26,9 @@ describe("workflow ops custody handoff / closure attestation Firestore document 
       )
 
     for (const id of [custodyId, closureId]) {
-      expect(id.length).toBe(64)
+      expect(id.startsWith("woa:")).toBe(true)
       expect(Buffer.byteLength(id, "utf8")).toBeLessThanOrEqual(1500)
-      expect(id).toMatch(/^[a-f0-9]{64}$/)
+      expect(id).toMatch(/^woa:[a-f0-9]{64}$/)
     }
   })
 
@@ -51,7 +51,7 @@ describe("workflow ops custody handoff / closure attestation Firestore document 
         sealParentId
       )
     expect(custodyA).toBe(custodyB)
-    expect(custodyA.length).toBe(64)
+    expect(Buffer.byteLength(custodyA, "utf8")).toBeLessThanOrEqual(1500)
 
     const closureA =
       workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationId(
@@ -62,6 +62,6 @@ describe("workflow ops custody handoff / closure attestation Firestore document 
         reconParentId
       )
     expect(closureA).toBe(closureB)
-    expect(closureA.length).toBe(64)
+    expect(Buffer.byteLength(closureA, "utf8")).toBeLessThanOrEqual(1500)
   })
 })
