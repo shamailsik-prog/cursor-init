@@ -22,6 +22,12 @@ import {
   type WorkflowOpsAlertDigestRow,
   type WorkflowOpsAlertDigestSeverity,
   type WorkflowOpsAlertEscalationClosureFreshnessStatus,
+  type WorkflowOpsAlertClosureDebtReconciliationDigestRow,
+  type WorkflowOpsAlertClosureDebtReconciliationFreshnessStatus,
+  type WorkflowOpsAlertClosureDebtReconciliationStatus,
+  type WorkflowOpsAlertDisputeEnforcementFreshnessStatus,
+  type WorkflowOpsAlertDisputeEnforcementLedgerRow,
+  type WorkflowOpsAlertDisputeEnforcementStatus,
   type WorkflowOpsAlertEscalationClosureRow,
   type WorkflowOpsAlertEscalationClosureStatus,
   type WorkflowOpsAlertEscalationFreshnessStatus,
@@ -73,6 +79,8 @@ type View =
   | "alert_escalation_ledgers"
   | "alert_attestation_disputes"
   | "alert_escalation_closures"
+  | "alert_dispute_enforcement_ledgers"
+  | "alert_closure_debt_reconciliation_digests"
 
 function parseView(value: string | null): View | undefined {
   if (!value || value === "activity") return "activity"
@@ -81,6 +89,8 @@ function parseView(value: string | null): View | undefined {
   if (value === "alert_escalation_ledgers") return value
   if (value === "alert_attestation_disputes") return value
   if (value === "alert_escalation_closures") return value
+  if (value === "alert_dispute_enforcement_ledgers") return value
+  if (value === "alert_closure_debt_reconciliation_digests") return value
   return undefined
 }
 
@@ -127,6 +137,30 @@ function parseClosureStatus(value: string | null): WorkflowOpsAlertEscalationClo
     value === "closed" ||
     value === "reopened"
   ) {
+    return value
+  }
+  return undefined
+}
+
+function parseEnforcementStatus(
+  value: string | null
+): WorkflowOpsAlertDisputeEnforcementStatus | undefined {
+  if (
+    value === "not_required" ||
+    value === "pending_enforcement" ||
+    value === "in_progress" ||
+    value === "enforced" ||
+    value === "waived"
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function parseReconciliationStatus(
+  value: string | null
+): WorkflowOpsAlertClosureDebtReconciliationStatus | undefined {
+  if (value === "in_balance" || value === "debt_open" || value === "reconciling" || value === "reconciled") {
     return value
   }
   return undefined
@@ -186,6 +220,14 @@ function alertAttestationDisputeId(matterId: string): string {
 
 function alertEscalationClosureId(matterId: string): string {
   return `workflow_ops_alert_escalation_closure:${matterId}`
+}
+
+function alertDisputeEnforcementLedgerId(matterId: string): string {
+  return `workflow_ops_alert_dispute_enforcement:${matterId}`
+}
+
+function alertClosureDebtReconciliationDigestId(matterId: string): string {
+  return `workflow_ops_alert_closure_debt_reconciliation:${matterId}`
 }
 
 function severityRank(value: WorkflowOpsAlertDigestSeverity): number {
@@ -329,6 +371,20 @@ function asClosureFreshnessStatus(
   recomputedAt: number,
   now: number
 ): WorkflowOpsAlertEscalationClosureFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asEnforcementFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertDisputeEnforcementFreshnessStatus {
+  return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
+}
+
+function asReconciliationFreshnessStatus(
+  recomputedAt: number,
+  now: number
+): WorkflowOpsAlertClosureDebtReconciliationFreshnessStatus {
   return now - recomputedAt <= FRESH_WINDOW_MS ? "fresh" : "stale"
 }
 
@@ -480,6 +536,104 @@ function buildWorkflowOpsAlertEscalationClosureRow(params: {
   }
 }
 
+function buildWorkflowOpsAlertDisputeEnforcementLedgerRow(params: {
+  dispute: WorkflowOpsAlertAttestationDisputeRow
+  actorId: string
+  reason: string
+  existing: WorkflowOpsAlertDisputeEnforcementLedgerRow | null
+  now: number
+}): WorkflowOpsAlertDisputeEnforcementLedgerRow {
+  const { dispute, actorId, reason, existing, now } = params
+  const requiredOutcome = dispute.disputeStatus === "resolved" ? dispute.resolutionOutcome ?? null : null
+  const requiresEnforcement = requiredOutcome === "upheld" || requiredOutcome === "overturned"
+  const defaultStatus: WorkflowOpsAlertDisputeEnforcementStatus = requiresEnforcement
+    ? "pending_enforcement"
+    : "not_required"
+  let enforcementStatus = existing?.enforcementStatus ?? defaultStatus
+  if (!requiresEnforcement && enforcementStatus !== "waived") {
+    enforcementStatus = "not_required"
+  }
+  return {
+    id: alertDisputeEnforcementLedgerId(dispute.matterId),
+    firmId: dispute.firmId,
+    matterId: dispute.matterId,
+    alertAttestationDisputeId: dispute.id,
+    classification: dispute.classification,
+    enforcementStatus,
+    requiredOutcome,
+    ownerId: existing?.ownerId ?? null,
+    checkpointAt: existing?.checkpointAt ?? null,
+    enforcedAt: enforcementStatus === "enforced" ? existing?.enforcedAt ?? now : null,
+    waivedAt: enforcementStatus === "waived" ? existing?.waivedAt ?? now : null,
+    waiverReason: enforcementStatus === "waived" ? existing?.waiverReason ?? null : null,
+    lastStatusChangedAt: existing?.lastStatusChangedAt ?? null,
+    freshnessStatus: asEnforcementFreshnessStatus(dispute.recomputedAt, now),
+    provenanceTags: normalizeProvenanceTags([
+      `reason:${reason}`,
+      `dispute_status:${dispute.disputeStatus}`,
+      `required_outcome:${requiredOutcome ?? "none"}`,
+      ...dispute.provenanceTags.map((tag) => `dispute_${tag}`),
+    ]),
+    recomputedAt: now,
+    recomputedBy: actorId,
+    recomputeReason: reason,
+    updatedAt: now,
+  }
+}
+
+function buildWorkflowOpsAlertClosureDebtReconciliationDigestRow(params: {
+  closure: WorkflowOpsAlertEscalationClosureRow
+  actorId: string
+  reason: string
+  existing: WorkflowOpsAlertClosureDebtReconciliationDigestRow | null
+  now: number
+}): WorkflowOpsAlertClosureDebtReconciliationDigestRow {
+  const { closure, actorId, reason, existing, now } = params
+  const closureReopened = closure.closureStatus === "reopened"
+  const existingReopenDebtCount = existing?.reopenDebtCount ?? 0
+  const defaultStatus: WorkflowOpsAlertClosureDebtReconciliationStatus = closureReopened
+    ? "debt_open"
+    : "in_balance"
+  let reconciliationStatus = existing?.reconciliationStatus ?? defaultStatus
+  if (closureReopened && reconciliationStatus === "in_balance") {
+    reconciliationStatus = "debt_open"
+  }
+  const reopenDebtCount = closureReopened ? Math.max(existingReopenDebtCount, 1) : existingReopenDebtCount
+  const outstandingDebtCount =
+    reconciliationStatus === "reconciled"
+      ? existing?.outstandingDebtCount ?? 0
+      : closureReopened
+        ? Math.max(existing?.outstandingDebtCount ?? 0, 1)
+        : existing?.outstandingDebtCount ?? 0
+  return {
+    id: alertClosureDebtReconciliationDigestId(closure.matterId),
+    firmId: closure.firmId,
+    matterId: closure.matterId,
+    alertEscalationClosureId: closure.id,
+    classification: closure.classification,
+    reconciliationStatus,
+    reopenDebtCount,
+    outstandingDebtCount,
+    lastReopenedAt: closureReopened ? closure.reopenedAt ?? existing?.lastReopenedAt ?? now : existing?.lastReopenedAt ?? null,
+    reconcilingOwnerId: existing?.reconcilingOwnerId ?? null,
+    reconciliationCheckpointAt: existing?.reconciliationCheckpointAt ?? null,
+    reconciledAt: reconciliationStatus === "reconciled" ? existing?.reconciledAt ?? now : null,
+    reconciliationReason: reconciliationStatus === "reconciled" ? existing?.reconciliationReason ?? null : null,
+    lastStatusChangedAt: existing?.lastStatusChangedAt ?? null,
+    freshnessStatus: asReconciliationFreshnessStatus(closure.recomputedAt, now),
+    provenanceTags: normalizeProvenanceTags([
+      `reason:${reason}`,
+      `closure_status:${closure.closureStatus}`,
+      `outstanding_debt:${outstandingDebtCount}`,
+      ...closure.provenanceTags.map((tag) => `closure_${tag}`),
+    ]),
+    recomputedAt: now,
+    recomputedBy: actorId,
+    recomputeReason: reason,
+    updatedAt: now,
+  }
+}
+
 async function resolveActor(params: {
   actorId: string
   store: ReturnType<typeof getRuntimeStore>
@@ -564,6 +718,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
   escalationLedgers: WorkflowOpsAlertEscalationLedgerRow[]
   attestationDisputes: WorkflowOpsAlertAttestationDisputeRow[]
   escalationClosures: WorkflowOpsAlertEscalationClosureRow[]
+  disputeEnforcementLedgers: WorkflowOpsAlertDisputeEnforcementLedgerRow[]
+  closureDebtReconciliationDigests: WorkflowOpsAlertClosureDebtReconciliationDigestRow[]
 }> {
   const { digests, actorId, reason, store, repos } = params
   const now = Date.now()
@@ -571,6 +727,8 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
   const escalationLedgers: WorkflowOpsAlertEscalationLedgerRow[] = []
   const attestationDisputes: WorkflowOpsAlertAttestationDisputeRow[] = []
   const escalationClosures: WorkflowOpsAlertEscalationClosureRow[] = []
+  const disputeEnforcementLedgers: WorkflowOpsAlertDisputeEnforcementLedgerRow[] = []
+  const closureDebtReconciliationDigests: WorkflowOpsAlertClosureDebtReconciliationDigestRow[] = []
 
   for (const digest of digests) {
     if (!digest.matterId) continue
@@ -578,10 +736,15 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
     const escalationKey = alertEscalationLedgerId(digest.matterId)
     const disputeKey = alertAttestationDisputeId(digest.matterId)
     const closureKey = alertEscalationClosureId(digest.matterId)
+    const enforcementKey = alertDisputeEnforcementLedgerId(digest.matterId)
+    const reconciliationKey = alertClosureDebtReconciliationDigestId(digest.matterId)
     const existingAttestation = await repos.workflowOpsAlertAttestations.get(attestationKey)
     const existingEscalation = await repos.workflowOpsAlertEscalationLedgers.get(escalationKey)
     const existingDispute = await repos.workflowOpsAlertAttestationDisputes.get(disputeKey)
     const existingClosure = await repos.workflowOpsAlertEscalationClosures.get(closureKey)
+    const existingEnforcement = await repos.workflowOpsAlertDisputeEnforcementLedgers.get(enforcementKey)
+    const existingReconciliation =
+      await repos.workflowOpsAlertClosureDebtReconciliationDigests.get(reconciliationKey)
 
     const attestation = buildWorkflowOpsAlertAttestationRow({
       digest,
@@ -611,22 +774,52 @@ async function ensureWorkflowOpsAlertGovernanceRows(params: {
       existing: existingClosure,
       now,
     })
+    const enforcementLedger = buildWorkflowOpsAlertDisputeEnforcementLedgerRow({
+      dispute,
+      actorId,
+      reason,
+      existing: existingEnforcement,
+      now,
+    })
+    const reconciliationDigest = buildWorkflowOpsAlertClosureDebtReconciliationDigestRow({
+      closure,
+      actorId,
+      reason,
+      existing: existingReconciliation,
+      now,
+    })
 
     await repos.workflowOpsAlertAttestations.upsert(attestation)
     await repos.workflowOpsAlertEscalationLedgers.upsert(escalation)
     await repos.workflowOpsAlertAttestationDisputes.upsert(dispute)
     await repos.workflowOpsAlertEscalationClosures.upsert(closure)
+    await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert(enforcementLedger)
+    await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert(reconciliationDigest)
     store.workflowOpsAlertAttestations.set(attestation.id, attestation)
     store.workflowOpsAlertEscalationLedgers.set(escalation.id, escalation)
     store.workflowOpsAlertAttestationDisputes.set(dispute.id, dispute)
     store.workflowOpsAlertEscalationClosures.set(closure.id, closure)
+    store.workflowOpsAlertDisputeEnforcementLedgers.set(enforcementLedger.id, enforcementLedger)
+    store.workflowOpsAlertClosureDebtReconciliationDigests.set(
+      reconciliationDigest.id,
+      reconciliationDigest
+    )
     attestations.push(attestation)
     escalationLedgers.push(escalation)
     attestationDisputes.push(dispute)
     escalationClosures.push(closure)
+    disputeEnforcementLedgers.push(enforcementLedger)
+    closureDebtReconciliationDigests.push(reconciliationDigest)
   }
 
-  return { attestations, escalationLedgers, attestationDisputes, escalationClosures }
+  return {
+    attestations,
+    escalationLedgers,
+    attestationDisputes,
+    escalationClosures,
+    disputeEnforcementLedgers,
+    closureDebtReconciliationDigests,
+  }
 }
 
 type ViewActivityBody = never
@@ -719,6 +912,50 @@ type ReopenWorkflowOpsAlertEscalationClosureBody = {
   reason?: unknown
 }
 
+type StartWorkflowOpsAlertDisputeEnforcementBody = {
+  action: "start_workflow_ops_alert_dispute_enforcement"
+  actorId?: string
+  matterId?: string
+  ownerId?: unknown
+  reason?: unknown
+}
+
+type CompleteWorkflowOpsAlertDisputeEnforcementBody = {
+  action: "complete_workflow_ops_alert_dispute_enforcement"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type WaiveWorkflowOpsAlertDisputeEnforcementBody = {
+  action: "waive_workflow_ops_alert_dispute_enforcement"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type FlagWorkflowOpsAlertClosureReopenDebtBody = {
+  action: "flag_workflow_ops_alert_closure_reopen_debt"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
+type StartWorkflowOpsAlertClosureDebtReconciliationBody = {
+  action: "start_workflow_ops_alert_closure_debt_reconciliation"
+  actorId?: string
+  matterId?: string
+  ownerId?: unknown
+  reason?: unknown
+}
+
+type ResolveWorkflowOpsAlertClosureDebtReconciliationBody = {
+  action: "resolve_workflow_ops_alert_closure_debt_reconciliation"
+  actorId?: string
+  matterId?: string
+  reason?: unknown
+}
+
 type Body =
   | ViewActivityBody
   | AcknowledgeWorkflowOpsAlertDigestBody
@@ -733,6 +970,12 @@ type Body =
   | CheckpointWorkflowOpsAlertEscalationClosureBody
   | CloseWorkflowOpsAlertEscalationClosureBody
   | ReopenWorkflowOpsAlertEscalationClosureBody
+  | StartWorkflowOpsAlertDisputeEnforcementBody
+  | CompleteWorkflowOpsAlertDisputeEnforcementBody
+  | WaiveWorkflowOpsAlertDisputeEnforcementBody
+  | FlagWorkflowOpsAlertClosureReopenDebtBody
+  | StartWorkflowOpsAlertClosureDebtReconciliationBody
+  | ResolveWorkflowOpsAlertClosureDebtReconciliationBody
 
 export async function GET(request: Request) {
   const store = getRuntimeStore()
@@ -753,6 +996,8 @@ export async function GET(request: Request) {
   const escalationStatus = parseEscalationStatus(url.searchParams.get("escalationStatus"))
   const disputeStatus = parseDisputeStatus(url.searchParams.get("disputeStatus"))
   const closureStatus = parseClosureStatus(url.searchParams.get("closureStatus"))
+  const enforcementStatus = parseEnforcementStatus(url.searchParams.get("enforcementStatus"))
+  const reconciliationStatus = parseReconciliationStatus(url.searchParams.get("reconciliationStatus"))
   const terms = normalizeTerms(url.searchParams.get("q"))
   const limit = parseLimit(url.searchParams.get("limit"))
   const cursor = parseCursor(url.searchParams.get("cursor"))
@@ -930,14 +1175,66 @@ export async function GET(request: Request) {
     })
   }
 
-  const all = (await repos.workflowOpsAlertEscalationClosures.listByFirm(refreshedActor.firmId))
+  if (view === "alert_escalation_closures") {
+    const all = (await repos.workflowOpsAlertEscalationClosures.listByFirm(refreshedActor.firmId))
+      .map((row) => ({
+        ...row,
+        freshnessStatus: asClosureFreshnessStatus(row.recomputedAt, now),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) => (closureStatus ? row.closureStatus === closureStatus : true))
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view: "alert_escalation_closures",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
+  if (view === "alert_dispute_enforcement_ledgers") {
+    const all = (await repos.workflowOpsAlertDisputeEnforcementLedgers.listByFirm(refreshedActor.firmId))
+      .map((row) => ({
+        ...row,
+        freshnessStatus: asEnforcementFreshnessStatus(row.recomputedAt, now),
+      }))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => (matterId ? row.matterId === matterId : true))
+      .filter((row) => (enforcementStatus ? row.enforcementStatus === enforcementStatus : true))
+      .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
+      .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+
+    const items = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
+    return NextResponse.json({
+      view: "alert_dispute_enforcement_ledgers",
+      items,
+      total: all.length,
+      limit,
+      cursor,
+      nextCursor,
+    })
+  }
+
+  const all = (await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByFirm(
+    refreshedActor.firmId
+  ))
     .map((row) => ({
       ...row,
-      freshnessStatus: asClosureFreshnessStatus(row.recomputedAt, now),
+      freshnessStatus: asReconciliationFreshnessStatus(row.recomputedAt, now),
     }))
     .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
-    .filter((row) => (closureStatus ? row.closureStatus === closureStatus : true))
+    .filter((row) => (reconciliationStatus ? row.reconciliationStatus === reconciliationStatus : true))
     .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
     .filter((row) => checkPermission(store, refreshedActor.id, "research", row.matterId).allow)
     .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -945,7 +1242,7 @@ export async function GET(request: Request) {
   const items = all.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
   return NextResponse.json({
-    view: "alert_escalation_closures",
+    view: "alert_closure_debt_reconciliation_digests",
     items,
     total: all.length,
     limit,
@@ -985,7 +1282,13 @@ export async function POST(request: Request) {
       parsed.action !== "resolve_workflow_ops_alert_attestation_dispute" &&
       parsed.action !== "checkpoint_workflow_ops_alert_escalation_closure" &&
       parsed.action !== "close_workflow_ops_alert_escalation_closure" &&
-      parsed.action !== "reopen_workflow_ops_alert_escalation_closure")
+      parsed.action !== "reopen_workflow_ops_alert_escalation_closure" &&
+      parsed.action !== "start_workflow_ops_alert_dispute_enforcement" &&
+      parsed.action !== "complete_workflow_ops_alert_dispute_enforcement" &&
+      parsed.action !== "waive_workflow_ops_alert_dispute_enforcement" &&
+      parsed.action !== "flag_workflow_ops_alert_closure_reopen_debt" &&
+      parsed.action !== "start_workflow_ops_alert_closure_debt_reconciliation" &&
+      parsed.action !== "resolve_workflow_ops_alert_closure_debt_reconciliation")
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
@@ -1068,7 +1371,26 @@ export async function POST(request: Request) {
     governance.escalationClosures.find((row) => row.matterId === matter.id) ??
     store.workflowOpsAlertEscalationClosures.get(alertEscalationClosureId(matter.id)) ??
     (await repos.workflowOpsAlertEscalationClosures.get(alertEscalationClosureId(matter.id)))
-  if (!currentAttestation || !currentEscalation || !currentDispute || !currentClosure) {
+  const currentEnforcement =
+    governance.disputeEnforcementLedgers.find((row) => row.matterId === matter.id) ??
+    store.workflowOpsAlertDisputeEnforcementLedgers.get(alertDisputeEnforcementLedgerId(matter.id)) ??
+    (await repos.workflowOpsAlertDisputeEnforcementLedgers.get(alertDisputeEnforcementLedgerId(matter.id)))
+  const currentReconciliation =
+    governance.closureDebtReconciliationDigests.find((row) => row.matterId === matter.id) ??
+    store.workflowOpsAlertClosureDebtReconciliationDigests.get(
+      alertClosureDebtReconciliationDigestId(matter.id)
+    ) ??
+    (await repos.workflowOpsAlertClosureDebtReconciliationDigests.get(
+      alertClosureDebtReconciliationDigestId(matter.id)
+    ))
+  if (
+    !currentAttestation ||
+    !currentEscalation ||
+    !currentDispute ||
+    !currentClosure ||
+    !currentEnforcement ||
+    !currentReconciliation
+  ) {
     return NextResponse.json({ error: "alert governance rows are unavailable for matter" }, { status: 404 })
   }
 
@@ -1483,6 +1805,231 @@ export async function POST(request: Request) {
         digest: current,
         escalation: nextEscalation,
         closure: nextClosure,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "start_workflow_ops_alert_dispute_enforcement") {
+      const ownerId = typeof parsed.ownerId === "string" ? parsed.ownerId.trim() : currentEnforcement.ownerId
+      if (
+        currentDispute.disputeStatus !== "resolved" ||
+        (currentDispute.resolutionOutcome !== "upheld" && currentDispute.resolutionOutcome !== "overturned")
+      ) {
+        return NextResponse.json(
+          { error: "dispute enforcement requires a resolved dispute with upheld or overturned outcome" },
+          { status: 400 }
+        )
+      }
+      const reason = normalizeReason(parsed.reason, "dispute_enforcement_started")
+      const nextEnforcement: WorkflowOpsAlertDisputeEnforcementLedgerRow = {
+        ...currentEnforcement,
+        enforcementStatus: "in_progress",
+        requiredOutcome: currentDispute.resolutionOutcome,
+        ownerId,
+        checkpointAt: now,
+        enforcedAt: null,
+        waivedAt: null,
+        waiverReason: null,
+        lastStatusChangedAt: now,
+        freshnessStatus: asEnforcementFreshnessStatus(currentDispute.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert(nextEnforcement)
+      store.workflowOpsAlertDisputeEnforcementLedgers.set(nextEnforcement.id, nextEnforcement)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_dispute_enforcement_started",
+        actorId: actor.id,
+        target: nextEnforcement.matterId,
+        classification: nextEnforcement.classification,
+        reason: `${reason}:${ownerId ?? "unassigned"}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        dispute: currentDispute,
+        enforcement: nextEnforcement,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "complete_workflow_ops_alert_dispute_enforcement") {
+      if (currentEnforcement.enforcementStatus === "not_required") {
+        return NextResponse.json({ error: "enforcement is not required for this dispute" }, { status: 400 })
+      }
+      const reason = normalizeReason(parsed.reason, "dispute_enforcement_completed")
+      const nextEnforcement: WorkflowOpsAlertDisputeEnforcementLedgerRow = {
+        ...currentEnforcement,
+        enforcementStatus: "enforced",
+        requiredOutcome: currentDispute.resolutionOutcome,
+        enforcedAt: now,
+        waivedAt: null,
+        waiverReason: null,
+        lastStatusChangedAt: now,
+        freshnessStatus: asEnforcementFreshnessStatus(currentDispute.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert(nextEnforcement)
+      store.workflowOpsAlertDisputeEnforcementLedgers.set(nextEnforcement.id, nextEnforcement)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_dispute_enforcement_completed",
+        actorId: actor.id,
+        target: nextEnforcement.matterId,
+        classification: nextEnforcement.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        dispute: currentDispute,
+        enforcement: nextEnforcement,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "waive_workflow_ops_alert_dispute_enforcement") {
+      const reason = normalizeReason(parsed.reason, "dispute_enforcement_waived")
+      const nextEnforcement: WorkflowOpsAlertDisputeEnforcementLedgerRow = {
+        ...currentEnforcement,
+        enforcementStatus: "waived",
+        waivedAt: now,
+        waiverReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asEnforcementFreshnessStatus(currentDispute.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert(nextEnforcement)
+      store.workflowOpsAlertDisputeEnforcementLedgers.set(nextEnforcement.id, nextEnforcement)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_dispute_enforcement_waived",
+        actorId: actor.id,
+        target: nextEnforcement.matterId,
+        classification: nextEnforcement.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        dispute: currentDispute,
+        enforcement: nextEnforcement,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "flag_workflow_ops_alert_closure_reopen_debt") {
+      const reason = normalizeReason(parsed.reason, "closure_reopen_debt_flagged")
+      const nextReconciliation: WorkflowOpsAlertClosureDebtReconciliationDigestRow = {
+        ...currentReconciliation,
+        reconciliationStatus: "debt_open",
+        reopenDebtCount: currentReconciliation.reopenDebtCount + 1,
+        outstandingDebtCount: Math.max(currentReconciliation.outstandingDebtCount + 1, 1),
+        lastReopenedAt: now,
+        lastStatusChangedAt: now,
+        freshnessStatus: asReconciliationFreshnessStatus(currentClosure.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert(nextReconciliation)
+      store.workflowOpsAlertClosureDebtReconciliationDigests.set(nextReconciliation.id, nextReconciliation)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_closure_reopen_debt_flagged",
+        actorId: actor.id,
+        target: nextReconciliation.matterId,
+        classification: nextReconciliation.classification,
+        reason: `${reason}:${nextReconciliation.outstandingDebtCount}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        closure: currentClosure,
+        reconciliation: nextReconciliation,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "start_workflow_ops_alert_closure_debt_reconciliation") {
+      const ownerId = typeof parsed.ownerId === "string" ? parsed.ownerId.trim() : ""
+      if (!ownerId) {
+        return NextResponse.json({ error: "ownerId is required" }, { status: 400 })
+      }
+      const reason = normalizeReason(parsed.reason, "closure_debt_reconciliation_started")
+      const nextReconciliation: WorkflowOpsAlertClosureDebtReconciliationDigestRow = {
+        ...currentReconciliation,
+        reconciliationStatus: "reconciling",
+        reconcilingOwnerId: ownerId,
+        reconciliationCheckpointAt: now,
+        reconciledAt: null,
+        reconciliationReason: null,
+        lastStatusChangedAt: now,
+        freshnessStatus: asReconciliationFreshnessStatus(currentClosure.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert(nextReconciliation)
+      store.workflowOpsAlertClosureDebtReconciliationDigests.set(nextReconciliation.id, nextReconciliation)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_closure_debt_reconciliation_started",
+        actorId: actor.id,
+        target: nextReconciliation.matterId,
+        classification: nextReconciliation.classification,
+        reason: `${reason}:${ownerId}`,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        closure: currentClosure,
+        reconciliation: nextReconciliation,
+      }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "resolve_workflow_ops_alert_closure_debt_reconciliation") {
+      const reason = normalizeReason(parsed.reason, "closure_debt_reconciliation_resolved")
+      const nextReconciliation: WorkflowOpsAlertClosureDebtReconciliationDigestRow = {
+        ...currentReconciliation,
+        reconciliationStatus: "reconciled",
+        outstandingDebtCount: 0,
+        reconciledAt: now,
+        reconciliationReason: reason,
+        lastStatusChangedAt: now,
+        freshnessStatus: asReconciliationFreshnessStatus(currentClosure.recomputedAt, now),
+        updatedAt: now,
+      }
+      await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert(nextReconciliation)
+      store.workflowOpsAlertClosureDebtReconciliationDigests.set(nextReconciliation.id, nextReconciliation)
+
+      const priorAuditCount = store.audit.length
+      store.audit.push({
+        action: "ops_reporting_alert_closure_debt_reconciliation_resolved",
+        actorId: actor.id,
+        target: nextReconciliation.matterId,
+        classification: nextReconciliation.classification,
+        reason,
+      })
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
+      const payload = {
+        action: parsed.action,
+        digest: current,
+        closure: currentClosure,
+        reconciliation: nextReconciliation,
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

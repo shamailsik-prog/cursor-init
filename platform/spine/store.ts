@@ -2112,6 +2112,68 @@ export type WorkflowOpsAlertEscalationClosureRow = {
   updatedAt: number
 }
 
+export type WorkflowOpsAlertDisputeEnforcementStatus =
+  | "not_required"
+  | "pending_enforcement"
+  | "in_progress"
+  | "enforced"
+  | "waived"
+
+export type WorkflowOpsAlertDisputeEnforcementFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertDisputeEnforcementLedgerRow = {
+  id: string
+  firmId: string
+  matterId: string
+  alertAttestationDisputeId: string
+  classification: Classification
+  enforcementStatus: WorkflowOpsAlertDisputeEnforcementStatus
+  requiredOutcome: WorkflowOpsAlertAttestationDisputeResolutionOutcome | null
+  ownerId: string | null
+  checkpointAt: number | null
+  enforcedAt: number | null
+  waivedAt: number | null
+  waiverReason: string | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertDisputeEnforcementFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertClosureDebtReconciliationStatus =
+  | "in_balance"
+  | "debt_open"
+  | "reconciling"
+  | "reconciled"
+
+export type WorkflowOpsAlertClosureDebtReconciliationFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertClosureDebtReconciliationDigestRow = {
+  id: string
+  firmId: string
+  matterId: string
+  alertEscalationClosureId: string
+  classification: Classification
+  reconciliationStatus: WorkflowOpsAlertClosureDebtReconciliationStatus
+  reopenDebtCount: number
+  outstandingDebtCount: number
+  lastReopenedAt: number | null
+  reconcilingOwnerId: string | null
+  reconciliationCheckpointAt: number | null
+  reconciledAt: number | null
+  reconciliationReason: string | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertClosureDebtReconciliationFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2221,6 +2283,10 @@ export class SpineStore {
   workflowOpsAlertEscalationLedgers = new Map<string, WorkflowOpsAlertEscalationLedgerRow>()
   workflowOpsAlertAttestationDisputes = new Map<string, WorkflowOpsAlertAttestationDisputeRow>()
   workflowOpsAlertEscalationClosures = new Map<string, WorkflowOpsAlertEscalationClosureRow>()
+  workflowOpsAlertDisputeEnforcementLedgers =
+    new Map<string, WorkflowOpsAlertDisputeEnforcementLedgerRow>()
+  workflowOpsAlertClosureDebtReconciliationDigests =
+    new Map<string, WorkflowOpsAlertClosureDebtReconciliationDigestRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()
