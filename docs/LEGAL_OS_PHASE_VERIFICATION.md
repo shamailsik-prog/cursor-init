@@ -566,11 +566,17 @@ The gate fails when either condition is true:
 - `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; merge diff excludes `app/ops/**`).
 - `no COMPLETE/product-done overclaim`: PASS semantically; machine gate false-positive on disclaimer wording (see audit F).
 - `focused tests+gates`: PASS (API/route-wiring 78; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
-- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` replay on PR #147 metadata with `abb135a..4f0a44d` exits 1).
+- `process flags`: **FAIL at audit close** (`ci_gates/check_pr_phase_claims.py` replay on PR #147 metadata with `abb135a..4f0a44d` exited 1 on `aca861c`); **remediated on `main` @ `90b0996`** (optional article + markdown-bold negation in `NEGATED_COMPLETE_DISCLAIMER_RE`; PR #147 metadata replay PASS).
 
 ### PR matrix (targeted)
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #147 | workflow alert adjudication SLO debt-remediation + checkpoint expiry-attestation exception reconciliation | `07e5db8` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
+| #147 | workflow alert adjudication SLO debt-remediation + checkpoint expiry-attestation exception reconciliation | `07e5db8` | Yes | true | false | true | PARTIAL (process-flag gate replay failure at audit; gate fix `90b0996`) | medium |
+
+### Merge-confirmation addendum (ledger)
+
+- Date: 2026-09-21
+- Re-fetched `origin/main` merge subject remains `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8`; PR head `4f0a44d` is merge parent-2 and an ancestor of `main`; pre-merge parent-1 `abb135a`.
+- Duplicate auditor PR #149 (`bc-8c695da7`) closed in favor of this ledger (#148); no separate ledger row added.
 

@@ -124,7 +124,24 @@ Status: **FAIL**
 3. No `/ops` call-site evidence failure (correct for `frontend_real=false`).
 4. No scaffold-only/docs-only false positive on this PR wording.
 
-**Remediation hint (metadata only):** rephrase to gate-safe negation, e.g. `no product-done claim` (as used on PR #139/#143), or extend `NEGATED_COMPLETE_DISCLAIMER_RE` to allow optional article before `claim`.
+**Remediation (landed):** `main` @ `90b09962659d51ce0d5cdec904d9dbe7b0ae6cc7` extends `NEGATED_COMPLETE_DISCLAIMER_RE` for optional `a`/`an`/`the` and markdown-bold `**not**`; live replay of PR #147 title/body now **PASS**.
+
+Token probes at audit close (pre-`90b0996`): `not a product-done claim` and `**not** a product-done claim` → `has_complete_claim=True`; `no product-done claim` → `False`.
+
+---
+
+## Merge-confirmation addendum (follow-up)
+
+Date: 2026-09-21  
+Trigger: parallel auditor run `bc-8c695da7` (Origin PR #149) requested SHA lock on `main` @ `07e5db8`.
+
+| Claimed identifier | Observed on `origin/main` | Match |
+|---|---|---|
+| Final merge SHA `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8` | merge subject for PR #147 | PASS |
+| PR head `4f0a44d2530ab1e192e5b8a2662839ec305e9814` | ancestor of `main`; `07e5db8^2` | PASS |
+| Pre-merge main `abb135a07e273f54c835c217ae9b4a0f55612b97` | `07e5db8^1` | PASS |
+
+Verdict remains **PARTIAL (medium)** for product scope (`transport_stub=true`). Process-flag dimension is **PASS** on current `main` after claim-gate hardening `90b0996`.
 
 ---
 
