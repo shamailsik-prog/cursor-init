@@ -550,3 +550,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #143 | workflow adjudication SLO stewardship + remediation-SLA breach resolution-checkpoint expiry attestation | `9fd7dca` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #147 workflow SLO debt-remediation + checkpoint expiry-attestation exception reconciliation
+
+- Audit file: `docs/audits/phase-pr147-workflow-slo-debt-exception-reconciliation.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `07e5db8d6bc88ab68eec0dc5c0e3187a103c47d8` (parent-2 / claimed PR head `4f0a44d`; implementation `a2a50a0`; pre-merge main `abb135a`)
+- Main tip at audit close: `07e5db8`
+- Claim-gate anchor: `aca861c` (PR #141) / `f023e42` (PR #142)
+- Verdict: **PARTIAL** (medium) — backend-real implementation and focused tests/gates are green on the merged SHA, but process-flag replay fails on PR metadata wording (`**not** a product-done claim`).
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `07e5db8`; parent-2 matches claimed head `4f0a44d`).
+- `BACKEND_REAL`: PASS (SLO debt-remediation + checkpoint expiry-attestation exception-reconciliation rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` views + six partner actions, idempotency + audit write-through).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; PR delta excludes `app/ops/**`; no phase-specific `/ops` call sites).
+- `no COMPLETE/product-done overclaim`: PASS semantically (`classification=PARTIAL`, `transport_stub=true`); machine-gate wording hazard documented in audit F).
+- `focused tests+gates`: PASS (API/route-wiring 78; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
+- `process flags`: **FAIL** (`ci_gates/check_pr_phase_claims.py` replay on PR #147 metadata treats `**not** a product-done claim` as an affirmative COMPLETE claim under the post-#141/#142 gate). Process-only outcome; sanitized `no product-done claim` replay passes.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #147 | workflow alert SLO debt-remediation + checkpoint expiry-attestation exception reconciliation | `07e5db8` | Yes | true | false | true | PARTIAL (process-flag gate replay failure) | medium |
+
