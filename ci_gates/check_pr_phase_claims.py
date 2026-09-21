@@ -7,7 +7,8 @@ Rules:
 2) Require action/view -> `/ops` call-site evidence in PR metadata only when
    `frontend_real=true` or `/ops` files are changed.
 3) If PR metadata claims "scaffold-only/docs-only/no runtime change", fail when
-   route handlers or tests changed.
+   route handlers or tests changed. Next-slice mentions such as
+   "docs-only queue update" are not treated as current-PR claims.
 4) If PR metadata claims COMPLETE/product-done, fail while filing transport
    TODO/stub markers remain active.
 5) If PR metadata claims COMPLETE/product-done, fail when
@@ -25,32 +26,27 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCAFFOLD_ONLY_SCOPE_RE = re.compile(
-    r"(?:"
-    r"\bscaffold[-\s]?only\b"
-    r"|(?:^|[\n\r])\s*[-*]?\s*docs[-\s]?only\b(?!\s+queue\s+update)"
-    r"|(?:^|[\n\r])\s*[-*]?\s*documentation[-\s]?only\b"
-    r"|(?:^|[\n\r])\s*[-*]?\s*no runtime changes?\b"
-    r"|classification\s*=\s*[^\n]*\b(?:scaffold[-\s]?only|docs[-\s]?only|documentation[-\s]?only)\b"
-    r")",
-    re.IGNORECASE | re.MULTILINE,
+SCAFFOLD_ONLY_RE = re.compile(
+    r"\b(scaffold[-\s]?only|docs[-\s]?only|documentation[-\s]?only|no runtime changes?)\b",
+    re.IGNORECASE,
+)
+# Roadmap / next-slice mentions such as "docs-only queue update" are not
+# claims that the current PR is docs-only.
+SCAFFOLD_NEXT_SLICE_MENTION_RE = re.compile(
+    r"\b(?:docs|documentation)[-\s]?only\s+queue\s+update\b",
+    re.IGNORECASE,
 )
 
+COMPLETE_TOKEN = r"(?:(?:phase\s+)?complete|complete\s+product|fully\s+done|product[-\s]?done|done\s+product)"
 COMPLETE_CLAIM_RE = re.compile(
-    r"\b(phase complete|complete product|fully done|product[-\s]?done|done product|complete)\b",
+    rf"\b({COMPLETE_TOKEN})\b",
     re.IGNORECASE,
 )
 NEGATED_COMPLETE_DISCLAIMER_RE = re.compile(
-    r"\b(?:no|not|without)\s+"
-    r"(?:(?:phase\s+)?complete|product[-\s]?done)"
-    r"(?:\s*/\s*(?:(?:phase\s+)?complete|product[-\s]?done))*"
-    r"\s+claims?\b",
-    re.IGNORECASE,
-)
-NEVER_COMPLETE_DISCLAIMER_RE = re.compile(
-    r"\bnever\s+"
-    r"(?:(?:phase\s+)?complete|product[-\s]?done)"
-    r"(?:\s+while\b[^\n)]{0,160})?",
+    r"\b(?:no|not(?:\s+yet)?|never|without|do(?:es)?\s+not|don['’]t)\s+"
+    rf"{COMPLETE_TOKEN}"
+    rf"(?:\s*/\s*{COMPLETE_TOKEN})*"
+    r"(?:\s+claims?)?",
     re.IGNORECASE,
 )
 SHAMAIL_SELF_CERTIFY_RE = re.compile(
@@ -71,8 +67,7 @@ CALLSITE_EVIDENCE_RE = re.compile(
     re.IGNORECASE,
 )
 
-SUBSTANTIVE_CHANGE_PREFIXES = ("app/api/", "app/ops/", "platform/", "tests/")
-DOCS_SCAFFOLD_PREFIXES = ("docs/", "scaffold/")
+ROUTE_OR_TEST_PREFIXES = ("app/api/", "tests/")
 OPS_PREFIX = "app/ops/"
 OPS_TEST_PREFIX = "tests/ops"
 
@@ -102,23 +97,8 @@ def list_changed_files(base_sha: str, head_sha: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def substantive_paths_changed(paths: list[str]) -> bool:
-    return any(path.startswith(SUBSTANTIVE_CHANGE_PREFIXES) for path in paths)
-
-
-def docs_scaffold_scoped_diff(paths: list[str]) -> bool:
-    if not paths:
-        return False
-    return all(
-        path.startswith(DOCS_SCAFFOLD_PREFIXES)
-        or path.endswith(".md")
-        or path.endswith(".mdx")
-        for path in paths
-    )
-
-
-def has_scaffold_only_claim(claim_text: str) -> bool:
-    return bool(SCAFFOLD_ONLY_SCOPE_RE.search(claim_text))
+def route_or_test_changed(paths: list[str]) -> bool:
+    return any(path.startswith(ROUTE_OR_TEST_PREFIXES) for path in paths)
 
 
 def ops_changed(paths: list[str]) -> bool:
@@ -148,17 +128,23 @@ def parse_flags(claim_text: str) -> dict[str, bool]:
     return parsed
 
 
-def negated_complete_disclaimer_spans(claim_text: str) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
-    for pattern in (NEGATED_COMPLETE_DISCLAIMER_RE, NEVER_COMPLETE_DISCLAIMER_RE):
-        spans.extend(match.span() for match in pattern.finditer(claim_text))
-    return spans
+def _contained_in_spans(match: re.Match[str], spans: list[tuple[int, int]]) -> bool:
+    return any(start <= match.start() and match.end() <= end for start, end in spans)
 
 
 def has_complete_claim(claim_text: str) -> bool:
-    negated_spans = negated_complete_disclaimer_spans(claim_text)
+    negated_spans = [match.span() for match in NEGATED_COMPLETE_DISCLAIMER_RE.finditer(claim_text)]
     for claim_match in COMPLETE_CLAIM_RE.finditer(claim_text):
-        if any(start <= claim_match.start() and claim_match.end() <= end for start, end in negated_spans):
+        if _contained_in_spans(claim_match, negated_spans):
+            continue
+        return True
+    return False
+
+
+def has_scaffold_only_claim(claim_text: str) -> bool:
+    mention_spans = [match.span() for match in SCAFFOLD_NEXT_SLICE_MENTION_RE.finditer(claim_text)]
+    for claim_match in SCAFFOLD_ONLY_RE.finditer(claim_text):
+        if _contained_in_spans(claim_match, mention_spans):
             continue
         return True
     return False
@@ -198,14 +184,9 @@ def main() -> int:
             "(e.g. `set_backup_owner -> app/ops/operator-audit-console.tsx`)."
         )
 
-    if (
-        changed_paths
-        and has_scaffold_only_claim(claim_text)
-        and substantive_paths_changed(changed_paths)
-        and not docs_scaffold_scoped_diff(changed_paths)
-    ):
+    if changed_paths and route_or_test_changed(changed_paths) and has_scaffold_only_claim(claim_text):
         failures.append(
-            "PR claim says scaffold/docs-only or no runtime changes, but substantive runtime paths changed."
+            "PR claim says scaffold/docs-only or no runtime changes, but route/tests changed."
         )
 
     if SHAMAIL_SELF_CERTIFY_RE.search(claim_text):
