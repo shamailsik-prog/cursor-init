@@ -2600,6 +2600,81 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          settlementAttestationId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          classification: "internal",
+          settlementArbitrationStatus: "panel_confirmation_attested",
+          settlementAttestationStatusSnapshot: "settlement_verified",
+          verificationOverridePetitionedBy: "partner_a",
+          verificationOverridePetitionedAt: Date.now(),
+          panelConfirmationAttestedBy: "partner_a",
+          panelConfirmationAttestedAt: Date.now(),
+          reopenVetoCheckpointedBy: null,
+          reopenVetoCheckpointedAt: null,
+          reopenVetoNote: null,
+          settlementArbitrationLeadTimeHours: 3,
+          arbitrationNote: "repo slo debt burndown settlement arbitration",
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "repo",
+            "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration",
+          ],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 31,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances:
+      {
+        upsert: vi.fn(),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+            firmId: "firmA",
+            matterId: "mat_1",
+            queueDrainReconciliationId:
+              "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+            classification: "internal",
+            complianceStatus: "reentry_exception_attested",
+            reconciliationStatusSnapshot: "timeout_reentry_controlled",
+            reentryExceptionAttestedBy: "partner_a",
+            reentryExceptionAttestedAt: Date.now(),
+            timeoutWaiverCheckpointedBy: null,
+            timeoutWaiverCheckpointedAt: null,
+            timeoutWaiverHours: null,
+            reconciliationResumedBy: null,
+            reconciliationResumedAt: null,
+            queueReentryExceptionDebtCount: 1,
+            complianceNote: "repo checkpoint expiry queue reentry compliance",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: [
+              "repo",
+              "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_reentry_compliance",
+            ],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 32,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -3688,5 +3763,39 @@ describe("Route wiring uses repository adapters", () => {
       "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
     )
     expect(json.items[0]?.reconciliationStatus).toBe("timeout_reentry_controlled")
+  })
+
+  it("ops reporting settlement arbitration view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitrations&actorId=associate_a&settlementArbitrationStatus=panel_confirmation_attested&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ id: string; settlementArbitrationStatus: string }>
+    }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
+    )
+    expect(json.items[0]?.settlementArbitrationStatus).toBe("panel_confirmation_attested")
+  })
+
+  it("ops reporting queue reentry compliance view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliances&actorId=associate_a&queueReentryComplianceStatus=reentry_exception_attested&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{ id: string; complianceStatus: string }>
+    }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
+    )
+    expect(json.items[0]?.complianceStatus).toBe("reentry_exception_attested")
   })
 })

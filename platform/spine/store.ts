@@ -2897,6 +2897,79 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     updatedAt: number
   }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationStatus =
+  | "arbitration_pending"
+  | "verification_override_petitioned"
+  | "panel_confirmation_attested"
+  | "reopen_veto_checkpointed"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow = {
+  id: string
+  firmId: string
+  matterId: string
+  settlementAttestationId: string
+  classification: Classification
+  settlementArbitrationStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationStatus
+  settlementAttestationStatusSnapshot: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationStatus
+  verificationOverridePetitionedBy: string | null
+  verificationOverridePetitionedAt: number | null
+  panelConfirmationAttestedBy: string | null
+  panelConfirmationAttestedAt: number | null
+  reopenVetoCheckpointedBy: string | null
+  reopenVetoCheckpointedAt: number | null
+  reopenVetoNote: string | null
+  settlementArbitrationLeadTimeHours: number
+  arbitrationNote: string | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceStatus =
+  | "compliance_pending"
+  | "reentry_exception_attested"
+  | "timeout_waiver_checkpointed"
+  | "reconciliation_resumed"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow =
+  {
+    id: string
+    firmId: string
+    matterId: string
+    queueDrainReconciliationId: string
+    classification: Classification
+    complianceStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceStatus
+    reconciliationStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationStatus
+    reentryExceptionAttestedBy: string | null
+    reentryExceptionAttestedAt: number | null
+    timeoutWaiverCheckpointedBy: string | null
+    timeoutWaiverCheckpointedAt: number | null
+    timeoutWaiverHours: number | null
+    reconciliationResumedBy: string | null
+    reconciliationResumedAt: number | null
+    queueReentryExceptionDebtCount: number
+    complianceNote: string | null
+    lastStatusChangedAt: number | null
+    freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceFreshnessStatus
+    provenanceTags: string[]
+    recomputedAt: number
+    recomputedBy: string
+    recomputeReason: string
+    updatedAt: number
+  }
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -3064,6 +3137,16 @@ export class SpineStore {
     new Map<
       string,
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow
+    >()
+  workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations =
+    new Map<
+      string,
+      WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow
+    >()
+  workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances =
+    new Map<
+      string,
+      WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow
     >()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()

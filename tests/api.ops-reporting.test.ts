@@ -1759,6 +1759,67 @@ describe("GET /api/d2/ops-reporting", () => {
     )
     expect(queueDrainTimeoutReentry.status).toBe(200)
 
+    const settlementVerificationOverridePetition = await postOpsReport(
+      {
+        action:
+          "petition_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_verification_override",
+        actorId: "partner_a",
+        matterId,
+        overrideReason: "runtime settlement verification override petition",
+        reason: "adjudication SLO settlement verification override petitioned",
+      },
+      "e79d44f0-91ab-4e22-a7f6-0b4c5d8e9a40"
+    )
+    expect(settlementVerificationOverridePetition.status).toBe(200)
+    const settlementVerificationOverridePetitionJson =
+      (await settlementVerificationOverridePetition.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitration: {
+            settlementArbitrationStatus: string
+          }
+        }
+      }
+    expect(
+      settlementVerificationOverridePetitionJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitration.settlementArbitrationStatus
+    ).toBe("verification_override_petitioned")
+
+    const settlementArbitrationPanelConfirmation = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_panel_confirmation",
+        actorId: "partner_a",
+        matterId,
+        reason: "adjudication SLO settlement arbitration panel confirmation attested",
+      },
+      "f89d44f0-91ab-4e22-a7f6-0b4c5d8e9a41"
+    )
+    expect(settlementArbitrationPanelConfirmation.status).toBe(200)
+
+    const queueReentryException = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_exception",
+        actorId: "partner_a",
+        matterId,
+        reason: "checkpoint expiry attestation queue reentry exception attested",
+      },
+      "a99d44f0-91ab-4e22-a7f6-0b4c5d8e9a42"
+    )
+    expect(queueReentryException.status).toBe(200)
+    const queueReentryExceptionJson = (await queueReentryException.json()) as {
+      result: {
+        remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliance: {
+          complianceStatus: string
+        }
+      }
+    }
+    expect(
+      queueReentryExceptionJson.result
+        .remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliance
+        .complianceStatus
+    ).toBe("reentry_exception_attested")
+
     const remediationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_variance_remediation",

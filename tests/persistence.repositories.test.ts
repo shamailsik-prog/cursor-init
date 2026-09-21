@@ -1503,6 +1503,85 @@ describe("Firestore repository adapters", () => {
       expect(checkpointExpiryQueueDrainReconciliation?.reconciliationStatus).toBe(
         "reconciliation_pending"
       )
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.upsert(
+        {
+          id:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          settlementAttestationId:
+            "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
+          classification: "internal",
+          settlementArbitrationStatus: "arbitration_pending",
+          settlementAttestationStatusSnapshot: "verification_pending",
+          verificationOverridePetitionedBy: null,
+          verificationOverridePetitionedAt: null,
+          panelConfirmationAttestedBy: null,
+          panelConfirmationAttestedAt: null,
+          reopenVetoCheckpointedBy: null,
+          reopenVetoCheckpointedAt: null,
+          reopenVetoNote: null,
+          settlementArbitrationLeadTimeHours: 1,
+          arbitrationNote: "ops_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_seed",
+          lastStatusChangedAt: 78,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration",
+          ],
+          recomputedAt: 78,
+          recomputedBy: "partner_a",
+          recomputeReason:
+            "ops_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_seed",
+          updatedAt: 78,
+        }
+      )
+      const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitration =
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.get(
+          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
+        )
+      expect(waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitration?.settlementArbitrationStatus).toBe(
+        "arbitration_pending"
+      )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.upsert(
+        {
+          id:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          queueDrainReconciliationId:
+            "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1",
+          classification: "internal",
+          complianceStatus: "compliance_pending",
+          reconciliationStatusSnapshot: "reconciliation_pending",
+          reentryExceptionAttestedBy: null,
+          reentryExceptionAttestedAt: null,
+          timeoutWaiverCheckpointedBy: null,
+          timeoutWaiverCheckpointedAt: null,
+          timeoutWaiverHours: null,
+          reconciliationResumedBy: null,
+          reconciliationResumedAt: null,
+          queueReentryExceptionDebtCount: 2,
+          complianceNote:
+            "ops_variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_reentry_compliance_seed",
+          lastStatusChangedAt: 79,
+          freshnessStatus: "fresh",
+          provenanceTags: [
+            "workflow",
+            "variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_reentry_compliance",
+          ],
+          recomputedAt: 79,
+          recomputedBy: "partner_a",
+          recomputeReason:
+            "ops_variance_remediation_sla_breach_resolution_checkpoint_expiry_queue_reentry_compliance_seed",
+          updatedAt: 79,
+        }
+      )
+      const checkpointExpiryQueueReentryCompliance =
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.get(
+          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
+        )
+      expect(checkpointExpiryQueueReentryCompliance?.complianceStatus).toBe("compliance_pending")
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
