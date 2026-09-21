@@ -2069,6 +2069,59 @@ describe("GET /api/d2/ops-reporting", () => {
         .partnerHandoffBacklogCount
     ).toBeGreaterThanOrEqual(1)
 
+    const partnerHandoffAttest = await postOpsReport(
+      {
+        action:
+          "attest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff",
+        actorId: "partner_a",
+        matterId,
+        partnerHandoffReference: "partner-handoff-ref-stub",
+        reason: "adjudication SLO external distribution partner handoff attested",
+      },
+      "f5efab3a-91ab-4e22-acf7-0b4c5d8e9a6d"
+    )
+    expect(partnerHandoffAttest.status).toBe(200)
+
+    const outboundRegistryAttestationLedgerCheckpoint = await postOpsReport(
+      {
+        action:
+          "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_outbound_registry_attestation_ledger",
+        actorId: "partner_a",
+        matterId,
+        outboundAttestationLedgerReference: "outbound-attestation-ledger-stub",
+        reason: "adjudication SLO external distribution outbound registry attestation ledger checkpointed",
+      },
+      "f5efab3b-91ab-4e22-acf7-0b4c5d8e9a6e"
+    )
+    expect(outboundRegistryAttestationLedgerCheckpoint.status).toBe(200)
+    const outboundRegistryAttestationLedgerCheckpointJson =
+      (await outboundRegistryAttestationLedgerCheckpoint.json()) as {
+        result: {
+          waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger: {
+            outboundRegistryAttestationLedgerStatus: string
+          }
+        }
+      }
+    expect(
+      outboundRegistryAttestationLedgerCheckpointJson.result
+        .waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedger
+        .outboundRegistryAttestationLedgerStatus
+    ).toBe("outbound_attestation_ledger_checkpointed")
+
+    const outboundRegistryAttestationLedgerView = await getOpsReport(
+      new URLSearchParams({
+        view:
+          "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledgers",
+        actorId: "associate_a",
+        matterId,
+        outboundRegistryAttestationLedgerStatus: "outbound_attestation_ledger_checkpointed",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(outboundRegistryAttestationLedgerView.status).toBe(200)
+
     const queueReentryDebtRetirementDisputeResolve = await postOpsReport(
       {
         action:
@@ -2721,4 +2774,5 @@ describe("GET /api/d2/ops-reporting", () => {
       )
     ).toBe(true)
   })
+
 })
