@@ -612,3 +612,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #150 | workflow alert adjudication SLO debt-burndown + checkpoint expiry-attestation queue orchestration | `0d4e08a` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #154 workflow alert adjudication SLO burndown-settlement + checkpoint expiry-attestation queue-drain
+
+- Audit file: `docs/audits/phase-pr154-workflow-slo-burndown-settlement-queue-drain.md`
+- Date: 2026-09-21
+- Merge SHA on `main`: `155443319ba806cd139d4aa7186f23cbfe65c932` (parent-2 / final PR head `4100922`; feature `322f293`; stacked on PR #150 lane via base `a8d2eec`)
+- Main tip at audit close: `1554433`
+- Claim-gate anchor: `90b0996` (PR #135 negation hardening; preserved on merge)
+- Verdict: **PASS (low)** — backend-real, label-honest, focused tests/gates green, claim-gate replay passes. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (merge `1554433`; parent-2 `4100922`).
+- `BACKEND_REAL`: PASS (burndown-settlement + expiry-attestation queue-drain rows, memory/Firestore repos, Firestore rules, `/api/d2/ops-reporting` two views + six partner actions, idempotency + audit write-through; governance helper `workflowOpsAlertBurndownSettlementQueueDrainGovernance.ts`).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `a8d2eec..4100922` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, `no product-done claim`).
+- `focused tests+gates`: PASS (API/route-wiring 82; Firestore repos/runtime/rules 22; `G-0`; `G-1`).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #154 metadata with `a8d2eec..4100922` exits 0 on merged `main`; branch-only ledger/gate regression did not land).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #154 | workflow alert adjudication SLO burndown-settlement + checkpoint expiry-attestation queue-drain | `1554433` | Yes | true | false | true | PASS (backend-scoped; not COMPLETE) | low |
+
