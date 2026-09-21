@@ -2367,6 +2367,79 @@ export type WorkflowOpsAlertVarianceRemediationSlaLedgerRow = {
   updatedAt: number
 }
 
+export type WorkflowOpsAlertWaiverExpiryDisputeStatus =
+  | "not_contested"
+  | "open"
+  | "review_assigned"
+  | "resolved"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeResolutionOutcome =
+  | "expiry_upheld"
+  | "extension_granted"
+  | "deferred"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeFreshnessStatus = "fresh" | "stale"
+
+export type WorkflowOpsAlertWaiverExpiryDisputeRow = {
+  id: string
+  firmId: string
+  matterId: string
+  waiverExpiryDigestId: string
+  classification: Classification
+  disputeStatus: WorkflowOpsAlertWaiverExpiryDisputeStatus
+  contestedExpiryStatusSnapshot: WorkflowOpsAlertWaiverExpiryDigestStatus
+  waiverExpiresAtSnapshot: number | null
+  openedBy: string | null
+  openedAt: number | null
+  reviewerId: string | null
+  reviewAssignedAt: number | null
+  resolvedBy: string | null
+  resolvedAt: number | null
+  resolutionOutcome: WorkflowOpsAlertWaiverExpiryDisputeResolutionOutcome | null
+  resolutionReason: string | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertWaiverExpiryDisputeFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachEscalationStatus =
+  | "not_required"
+  | "open"
+  | "assigned"
+  | "resolved"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachEscalationFreshnessStatus =
+  | "fresh"
+  | "stale"
+
+export type WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow = {
+  id: string
+  firmId: string
+  matterId: string
+  remediationSlaLedgerId: string
+  classification: Classification
+  escalationStatus: WorkflowOpsAlertVarianceRemediationSlaBreachEscalationStatus
+  slaStatusSnapshot: WorkflowOpsAlertVarianceRemediationSlaLedgerStatus
+  queueStatusSnapshot: WorkflowOpsAlertVarianceRemediationQueueStatus
+  ownerId: string | null
+  openedAt: number | null
+  resolvedAt: number | null
+  resolutionReason: string | null
+  breachDueAtSnapshot: number | null
+  elapsedMsSnapshot: number | null
+  lastStatusChangedAt: number | null
+  freshnessStatus: WorkflowOpsAlertVarianceRemediationSlaBreachEscalationFreshnessStatus
+  provenanceTags: string[]
+  recomputedAt: number
+  recomputedBy: string
+  recomputeReason: string
+  updatedAt: number
+}
+
 export class SpineStore {
   users = new Map<string, User>()
   members = new Map<string, MatterMember>()
@@ -2492,6 +2565,10 @@ export class SpineStore {
     new Map<string, WorkflowOpsAlertWaiverExpiryDigestRow>()
   workflowOpsAlertVarianceRemediationSlaLedgers =
     new Map<string, WorkflowOpsAlertVarianceRemediationSlaLedgerRow>()
+  workflowOpsAlertWaiverExpiryDisputes =
+    new Map<string, WorkflowOpsAlertWaiverExpiryDisputeRow>()
+  workflowOpsAlertVarianceRemediationSlaBreachEscalations =
+    new Map<string, WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow>()
   tenancySessionReferences = new Map<string, TenancySessionReferenceRow>()
   tenancyLineageDisputeAttestations = new Map<string, TenancyLineageDisputeAttestationRow>()
   tenancyLineageReconciliationDigests = new Map<string, TenancyLineageReconciliationDigestRow>()

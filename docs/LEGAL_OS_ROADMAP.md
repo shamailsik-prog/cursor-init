@@ -208,11 +208,21 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
   - transport_stub: true
   - claim: slice landed / backend_real PASS pending Auditor
 
+- Added durable workflow alert waiver-expiry dispute rows and remediation-SLA breach escalation rows to runtime store + memory/Firestore repositories (`workflow_ops_alert_waiver_expiry_disputes`, `workflow_ops_alert_variance_remediation_sla_breach_escalations`) with deny-by-default Firestore write posture.
+- Extended `/api/d2/ops-reporting` with dispute/escalation monitoring views (`view=alert_waiver_expiry_disputes`, `view=alert_variance_remediation_sla_breach_escalations`) and partner-governed lifecycle actions (`open_workflow_ops_alert_waiver_expiry_dispute`, `assign_workflow_ops_alert_waiver_expiry_dispute_reviewer`, `resolve_workflow_ops_alert_waiver_expiry_dispute`, `open_workflow_ops_alert_variance_remediation_sla_breach_escalation`, `assign_workflow_ops_alert_variance_remediation_sla_breach_escalation_owner`, `resolve_workflow_ops_alert_variance_remediation_sla_breach_escalation`) filterable by matter, dispute status, escalation status, and freshness state.
+- Captured waiver-expiry contest intake/reviewer adjudication posture and remediation-SLA breach owner escalation/closure provenance while preserving idempotent replay semantics and audit trails (`ops_reporting_alert_waiver_expiry_dispute_opened`, `ops_reporting_alert_waiver_expiry_dispute_reviewer_assigned`, `ops_reporting_alert_waiver_expiry_dispute_resolved`, `ops_reporting_alert_variance_remediation_sla_breach_escalation_opened`, `ops_reporting_alert_variance_remediation_sla_breach_escalation_owner_assigned`, `ops_reporting_alert_variance_remediation_sla_breach_escalation_resolved`) in internal scaffolding mode.
+- Extended API, route-wiring, repository, and runtime-mode persistence coverage for dispute/escalation lifecycle transitions, idempotent replay behavior, pagination/filtering, Firestore rehydration parity, and persisted trace checks.
+- Phase-auditor release labels for this slice (pending PR + merge SHA assignment):
+  - backend_real: true
+  - frontend_real: false
+  - transport_stub: true
+  - claim: slice landed / backend_real PASS pending Auditor
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert waiver expiry disputes + remediation SLA breach escalation scaffolding**:
+Build **workflow alert waiver-expiry dispute adjudication + remediation SLA breach resolution-governance scaffolding**:
 
-1. Add workflow alert waiver-expiry dispute rows and remediation-SLA breach escalation rows to track contested expiry posture and unresolved SLA breach ownership.
-2. Extend `app/api/d2/ops-reporting/route.ts` with partner-governed dispute/escalation actions and paginated views filterable by matter, dispute status, SLA breach status, and freshness state.
-3. Extend unit/runtime persistence tests for dispute/escalation lifecycle transitions, idempotent replay behavior, pagination/filtering, and audit provenance traceability.
-4. Keep this scoped to internal scaffolding (no external pager/on-call delivery claims) while preserving scaffold-claim gate behavior.
+1. Add waiver-expiry dispute adjudication queue rows plus remediation-SLA breach resolution-checkpoint rows to track panel ownership, due windows, and reopen pressure.
+2. Extend `app/api/d2/ops-reporting/route.ts` with adjudication/checkpoint actions and paginated views filterable by matter, adjudication status, checkpoint status, and freshness state.
+3. Extend focused tests (`api.ops-reporting`, `persistence.repositories`, `persistence.route-wiring`, `persistence.runtime-mode`) for adjudication/checkpoint transitions, idempotent replay, and audit provenance traceability.
+4. Keep this scoped to internal scaffolding only (no external pager/on-call transport claims) while preserving scaffold-claim gate behavior.

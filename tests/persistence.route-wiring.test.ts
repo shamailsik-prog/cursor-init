@@ -99,6 +99,8 @@ const baseStore = {
   workflowOpsAlertVarianceRemediationQueues: new Map(),
   workflowOpsAlertWaiverExpiryDigests: new Map(),
   workflowOpsAlertVarianceRemediationSlaLedgers: new Map(),
+  workflowOpsAlertWaiverExpiryDisputes: new Map(),
+  workflowOpsAlertVarianceRemediationSlaBreachEscalations: new Map(),
   memberKey(matterId: string, userId: string) {
     return `${matterId}_${userId}`
   },
@@ -2096,6 +2098,68 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
       listByMatter: vi.fn().mockResolvedValue([]),
     },
+    workflowOpsAlertWaiverExpiryDisputes: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_waiver_expiry_dispute:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          waiverExpiryDigestId: "workflow_ops_alert_waiver_expiry_digest:mat_1",
+          classification: "internal",
+          disputeStatus: "open",
+          contestedExpiryStatusSnapshot: "expires_lte_24h",
+          waiverExpiresAtSnapshot: Date.now() + 60_000,
+          openedBy: "partner_a",
+          openedAt: Date.now(),
+          reviewerId: null,
+          reviewAssignedAt: null,
+          resolvedBy: null,
+          resolvedAt: null,
+          resolutionOutcome: null,
+          resolutionReason: null,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "waiver_expiry_dispute"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 17,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
+    workflowOpsAlertVarianceRemediationSlaBreachEscalations: {
+      upsert: vi.fn(),
+      get: vi.fn().mockResolvedValue(null),
+      listByFirm: vi.fn().mockResolvedValue([
+        {
+          id: "workflow_ops_alert_variance_remediation_sla_breach_escalation:mat_1",
+          firmId: "firmA",
+          matterId: "mat_1",
+          remediationSlaLedgerId: "workflow_ops_alert_variance_remediation_sla:mat_1",
+          classification: "internal",
+          escalationStatus: "open",
+          slaStatusSnapshot: "breached",
+          queueStatusSnapshot: "assigned",
+          ownerId: "associate_a",
+          openedAt: Date.now(),
+          resolvedAt: null,
+          resolutionReason: null,
+          breachDueAtSnapshot: Date.now() + 2000,
+          elapsedMsSnapshot: 20_000,
+          lastStatusChangedAt: Date.now(),
+          freshnessStatus: "fresh",
+          provenanceTags: ["repo", "variance_sla_breach_escalation"],
+          recomputedAt: Date.now(),
+          recomputedBy: "partner_a",
+          recomputeReason: "repo mock",
+          updatedAt: 18,
+        },
+      ]),
+      listByMatter: vi.fn().mockResolvedValue([]),
+    },
   })),
 }))
 
@@ -2972,5 +3036,33 @@ describe("Route wiring uses repository adapters", () => {
     const json = (await res.json()) as { items: Array<{ id: string; slaStatus: string }> }
     expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_variance_remediation_sla:mat_1")
     expect(json.items[0]?.slaStatus).toBe("warning")
+  })
+
+  it("ops reporting waiver-expiry dispute view uses repository workflowOpsAlertWaiverExpiryDisputes", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_disputes&actorId=associate_a&waiverExpiryDisputeStatus=open&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; disputeStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain("workflow_ops_alert_waiver_expiry_dispute:mat_1")
+    expect(json.items[0]?.disputeStatus).toBe("open")
+  })
+
+  it("ops reporting remediation-SLA breach escalation view uses repository workflowOpsAlertVarianceRemediationSlaBreachEscalations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_escalations&actorId=associate_a&remediationSlaBreachEscalationStatus=open&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { items: Array<{ id: string; escalationStatus: string }> }
+    expect(json.items.map((item) => item.id)).toContain(
+      "workflow_ops_alert_variance_remediation_sla_breach_escalation:mat_1"
+    )
+    expect(json.items[0]?.escalationStatus).toBe("open")
   })
 })

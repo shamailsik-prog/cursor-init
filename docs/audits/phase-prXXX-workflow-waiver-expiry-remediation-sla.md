@@ -1,4 +1,4 @@
-# Auditor packet stub: workflow waiver-expiry + variance-remediation SLA scaffolding
+# Auditor packet stub: workflow waiver-expiry disputes + remediation-SLA breach escalation scaffolding
 
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
@@ -7,8 +7,8 @@ Head SHA: `TBD`
 
 ## Scope stub
 
-- Add waiver-expiry digest persistence + governance scaffolding in `/api/d2/ops-reporting`.
-- Add variance-remediation SLA ledger persistence + governance scaffolding in `/api/d2/ops-reporting`.
+- Add waiver-expiry dispute persistence + governance scaffolding in `/api/d2/ops-reporting`.
+- Add remediation-SLA breach escalation persistence + governance scaffolding in `/api/d2/ops-reporting`.
 - Extend memory + Firestore repositories and `firestore.rules`.
 - Cover focused suites:
   - `tests/api.ops-reporting.test.ts`

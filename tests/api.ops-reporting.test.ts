@@ -848,6 +848,123 @@ describe("GET /api/d2/ops-reporting", () => {
     expect(remediationSlaAcknowledgeJson.result.remediationSlaLedger.slaStatus).toBe("acknowledged")
     expect(remediationSlaAcknowledgeJson.result.remediationSlaLedger.acknowledgedBy).toBe("partner_a")
 
+    const waiverExpiryDisputeOpen = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_waiver_expiry_dispute",
+        actorId: "partner_a",
+        matterId,
+        reason: "waiver expiry disputed",
+      },
+      "95bc8a7d-5ccf-4f0a-b290-05c6e6d57f3e"
+    )
+    expect(waiverExpiryDisputeOpen.status).toBe(200)
+    const waiverExpiryDisputeOpenJson = (await waiverExpiryDisputeOpen.json()) as {
+      result: { waiverExpiryDispute: { disputeStatus: string; openedBy: string | null } }
+    }
+    expect(waiverExpiryDisputeOpenJson.result.waiverExpiryDispute.disputeStatus).toBe("open")
+    expect(waiverExpiryDisputeOpenJson.result.waiverExpiryDispute.openedBy).toBe("partner_a")
+
+    const waiverExpiryDisputeAssign = await postOpsReport(
+      {
+        action: "assign_workflow_ops_alert_waiver_expiry_dispute_reviewer",
+        actorId: "partner_a",
+        matterId,
+        reviewerId: "associate_a",
+        reason: "assign dispute reviewer",
+      },
+      "822df220-d9f7-422a-9f6a-7a8f4ebd226f"
+    )
+    expect(waiverExpiryDisputeAssign.status).toBe(200)
+    const waiverExpiryDisputeAssignJson = (await waiverExpiryDisputeAssign.json()) as {
+      result: { waiverExpiryDispute: { disputeStatus: string; reviewerId: string | null } }
+    }
+    expect(waiverExpiryDisputeAssignJson.result.waiverExpiryDispute.disputeStatus).toBe("review_assigned")
+    expect(waiverExpiryDisputeAssignJson.result.waiverExpiryDispute.reviewerId).toBe("associate_a")
+
+    const waiverExpiryDisputeResolve = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_waiver_expiry_dispute",
+        actorId: "partner_a",
+        matterId,
+        resolutionOutcome: "extension_granted",
+        reason: "waiver expiry dispute resolved",
+      },
+      "62fe7fb5-b4d8-45eb-a7b8-9ff5b6f9f83f"
+    )
+    expect(waiverExpiryDisputeResolve.status).toBe(200)
+    const waiverExpiryDisputeResolveJson = (await waiverExpiryDisputeResolve.json()) as {
+      result: {
+        waiverExpiryDispute: { disputeStatus: string; resolutionOutcome: string | null; resolvedBy: string | null }
+      }
+    }
+    expect(waiverExpiryDisputeResolveJson.result.waiverExpiryDispute.disputeStatus).toBe("resolved")
+    expect(waiverExpiryDisputeResolveJson.result.waiverExpiryDispute.resolutionOutcome).toBe(
+      "extension_granted"
+    )
+    expect(waiverExpiryDisputeResolveJson.result.waiverExpiryDispute.resolvedBy).toBe("partner_a")
+
+    const remediationSlaBreachEscalationOpen = await postOpsReport(
+      {
+        action: "open_workflow_ops_alert_variance_remediation_sla_breach_escalation",
+        actorId: "partner_a",
+        matterId,
+        reason: "sla breach escalation opened",
+      },
+      "1f6f4513-42ca-49b5-b4db-fd73e390f943"
+    )
+    expect(remediationSlaBreachEscalationOpen.status).toBe(200)
+    const remediationSlaBreachEscalationOpenJson = (await remediationSlaBreachEscalationOpen.json()) as {
+      result: { remediationSlaBreachEscalation: { escalationStatus: string } }
+    }
+    expect(remediationSlaBreachEscalationOpenJson.result.remediationSlaBreachEscalation.escalationStatus).toBe(
+      "open"
+    )
+
+    const remediationSlaBreachEscalationAssign = await postOpsReport(
+      {
+        action: "assign_workflow_ops_alert_variance_remediation_sla_breach_escalation_owner",
+        actorId: "partner_a",
+        matterId,
+        ownerId: "associate_a",
+        reason: "assign SLA breach escalation owner",
+      },
+      "0ca0f4dd-b7cb-44c9-a40e-e9f8ad11d9ca"
+    )
+    expect(remediationSlaBreachEscalationAssign.status).toBe(200)
+    const remediationSlaBreachEscalationAssignJson =
+      (await remediationSlaBreachEscalationAssign.json()) as {
+        result: {
+          remediationSlaBreachEscalation: { escalationStatus: string; ownerId: string | null }
+        }
+      }
+    expect(
+      remediationSlaBreachEscalationAssignJson.result.remediationSlaBreachEscalation.escalationStatus
+    ).toBe("assigned")
+    expect(remediationSlaBreachEscalationAssignJson.result.remediationSlaBreachEscalation.ownerId).toBe(
+      "associate_a"
+    )
+
+    const remediationSlaBreachEscalationResolve = await postOpsReport(
+      {
+        action: "resolve_workflow_ops_alert_variance_remediation_sla_breach_escalation",
+        actorId: "partner_a",
+        matterId,
+        reason: "SLA breach escalation resolved",
+      },
+      "ccb46daa-df9b-4102-bf51-2120a3fca0bc"
+    )
+    expect(remediationSlaBreachEscalationResolve.status).toBe(200)
+    const remediationSlaBreachEscalationResolveJson =
+      (await remediationSlaBreachEscalationResolve.json()) as {
+        result: {
+          remediationSlaBreachEscalation: { escalationStatus: string; resolvedAt: number | null }
+        }
+      }
+    expect(
+      remediationSlaBreachEscalationResolveJson.result.remediationSlaBreachEscalation.escalationStatus
+    ).toBe("resolved")
+    expect(remediationSlaBreachEscalationResolveJson.result.remediationSlaBreachEscalation.resolvedAt).not.toBeNull()
+
     const remediationResolve = await postOpsReport(
       {
         action: "resolve_workflow_ops_alert_variance_remediation",
@@ -1153,6 +1270,54 @@ describe("GET /api/d2/ops-reporting", () => {
       remediationSlaViewJson.items.some(
         (row) =>
           row.matterId === matterId && row.slaStatus === "resolved" && row.resolvedBy === "partner_a"
+      )
+    ).toBe(true)
+
+    const waiverExpiryDisputeView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_waiver_expiry_disputes",
+        actorId: "associate_a",
+        matterId,
+        waiverExpiryDisputeStatus: "resolved",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(waiverExpiryDisputeView.status).toBe(200)
+    const waiverExpiryDisputeViewJson = (await waiverExpiryDisputeView.json()) as {
+      items: Array<{ matterId: string; disputeStatus: string; reviewerId: string | null }>
+    }
+    expect(
+      waiverExpiryDisputeViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.disputeStatus === "resolved" &&
+          row.reviewerId === "associate_a"
+      )
+    ).toBe(true)
+
+    const remediationSlaBreachEscalationView = await getOpsReport(
+      new URLSearchParams({
+        view: "alert_variance_remediation_sla_breach_escalations",
+        actorId: "associate_a",
+        matterId,
+        remediationSlaBreachEscalationStatus: "resolved",
+        freshnessStatus: "fresh",
+        limit: "10",
+        cursor: "0",
+      })
+    )
+    expect(remediationSlaBreachEscalationView.status).toBe(200)
+    const remediationSlaBreachEscalationViewJson = (await remediationSlaBreachEscalationView.json()) as {
+      items: Array<{ matterId: string; escalationStatus: string; ownerId: string | null }>
+    }
+    expect(
+      remediationSlaBreachEscalationViewJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.escalationStatus === "resolved" &&
+          row.ownerId === "associate_a"
       )
     ).toBe(true)
   })
