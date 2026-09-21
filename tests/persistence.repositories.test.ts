@@ -2151,12 +2151,12 @@ describe("Firestore repository adapters", () => {
           updatedAt: 93,
         }
       )
-      const closureAttestation =
+      const transportBoundaryReceiptReconciliationClosureAttestation =
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.get(
           closureAttestationId
         )
       expect(
-        closureAttestation?.partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
+        transportBoundaryReceiptReconciliationClosureAttestation?.partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
       ).toBe("transport_boundary_receipt_reconciliation_closure_attestation_pending")
       expect(closureAttestationId.length).toBeLessThanOrEqual(1500)
       await repos.entities.create({
