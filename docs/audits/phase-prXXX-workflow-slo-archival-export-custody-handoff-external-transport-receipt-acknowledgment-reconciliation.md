@@ -7,7 +7,7 @@ Main tip audited: `bf93647` (post PR #180 merge)
 
 ## Verdict (lead)
 
-**PENDING** — builder packet stub awaiting independent forensic replay.
+**SUPERSEDED** — independent forensic audit recorded in `docs/audits/phase-pr182-workflow-slo-transport-receipt-ack-reconciliation.md` (PASS, low). Do not use this stub as evidence.
 
 ## Release labels (expected)
 
