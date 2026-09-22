@@ -376,13 +376,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended focused tests (Firestore chained doc id, repositories, route wiring, runtime-mode, ops-reporting view seed) and builder stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment-reconciliation-external-distribution-audit-ledger-partner-handoff-attestation.md` (superseded by independent audit).
 - Phase-auditor release labels (merge `c04b1e0`; **PASS**, not COMPLETE): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim). Independent audit: `docs/audits/phase-pr184-workflow-slo-ack-recon-audit-ledger-handoff-attestation.md`.
 
-## PR #185 (pending) — acknowledgment reconciliation outbound-registry attestation-ledger (stub)
+## PR #186 (merged) — acknowledgment reconciliation outbound-registry attestation-ledger (stub)
 
 - Added durable **dual-track** child rows parented on PR #184 bridge rows: waiver/custody `..._acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestations` (requires parent ack-recon external distribution audit ledger finalized) and variance/closure `..._acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledgers` (requires parent partner handoff attested or finalized), memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId`.
 - Governance in `platform/persistence/workflowOpsAlertArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerGovernance.ts` with `transport_stub:true` provenance and `blocked_todo_firm` channel.
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync in `ensureWorkflowOpsAlertDigests`, and six partner-governed lifecycle actions (waiver: register outbound registry / attest partner handoff / outbound-registry freeze override checkpoint; variance: checkpoint outbound attestation ledger / partner delivery receipt freeze override digest / control seal).
-- Extended focused tests and auditor stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment-reconciliation-external-distribution-audit-ledger-partner-handoff-attestation-outbound-registry-attestation-ledger.md`.
-- Release labels (expected): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim).
+- Extended focused tests; builder stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment-reconciliation-external-distribution-audit-ledger-partner-handoff-attestation-outbound-registry-attestation-ledger.md` superseded by independent audit.
+- Phase-auditor release labels (merge `e9b91a3` / slice `8483eab`; **PASS**, not COMPLETE): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim). Independent audit: `docs/audits/phase-pr186-workflow-slo-outbound-registry-attestation-ledger.md`.
 
 ## NEXT PHASE (queued for follow-up agent)
 

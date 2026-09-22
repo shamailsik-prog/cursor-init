@@ -2,12 +2,12 @@
 
 Date: 2026-09-21  
 Repo: `shamail-sikander/cursor-init`  
-PR: `#185` (`cursor/ack-recon-outbound-registry-attestation-ledger-67b6` → `main`, open)  
-Main tip audited: post PR #184 merge baseline
+PR: `#186` (`cursor/ack-recon-outbound-registry-attestation-ledger-67b6` → `main`, merged)  
+Main tip audited: `e9b91a3` (post-merge)
 
 ## Verdict (lead)
 
-**PENDING** — builder packet stub awaiting independent forensic replay.
+**SUPERSEDED** — independent forensic audit published at `docs/audits/phase-pr186-workflow-slo-outbound-registry-attestation-ledger.md` (**PASS**, low).
 
 ## Release labels (expected)
 
