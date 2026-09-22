@@ -384,7 +384,7 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended focused tests and auditor stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment-reconciliation-external-distribution-audit-ledger-partner-handoff-attestation-outbound-registry-attestation-ledger.md`.
 - Release labels (expected): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim).
 
-## PR #187 (in progress) — ack-recon partner-delivery-receipt freeze-override seal verification (stub)
+## PR #187 (landed) — ack-recon partner-delivery-receipt freeze-override seal verification (stub)
 
 - Added durable **dual-track** child rows chained from PR #186 ack-recon outbound-registry attestation-ledger / partner-handoff attestation parents (`..._partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications`, `..._outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications`) with `externalTransportChannel: "blocked_todo_firm"` and provenance `transport_stub:true`.
 - Governance in `platform/persistence/workflowOpsAckReconPartnerDeliveryReceiptFreezeOverrideSealVerificationGovernance.ts` (sha256-hashed document IDs via `buildWorkflowOpsChainedDocumentId`).
