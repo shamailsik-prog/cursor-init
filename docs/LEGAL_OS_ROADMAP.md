@@ -419,6 +419,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from PR #195 reconciliation parents, and six partner-governed lifecycle actions (waiver: checkpoint / record entry / control finalization on TB ack-recon audit ledger; variance: register outbound registry / attest / control finalization on TB ack-recon partner handoff).
 - Phase-auditor release labels (merge `184372f`; **PASS**, not COMPLETE): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL`. Independent audit: `docs/audits/phase-pr197-workflow-slo-ack-recon-tb-ack-recon-external-distribution-audit-ledger-partner-handoff-attestation.md` (supersedes builder stub `phase-pr196-…`).
 
+## PR (in flight on `cursor/ack-recon-tb-outbound-registry-attestation-ledger-bebf`) — ack-recon TB external distribution audit ledger partner handoff attestation + outbound registry attestation ledger (stub-honest)
+
+- Added durable **dual-track** child rows parented on PR #197 TB rows: waiver/custody `..._external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestations` (chained from TB external distribution audit ledger) and variance/closure `..._partner_handoff_attestation_outbound_registry_attestation_ledgers` (chained from TB partner handoff attestation), memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId`.
+- Governance in `platform/persistence/workflowOpsAckReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerGovernance.ts` with `transport_stub:true` provenance; waiver gate on finalized TB external distribution audit ledger; variance gate on attested/finalized TB partner handoff attestation.
+- Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from PR #197 parents, and six partner-governed lifecycle actions (mirror PR #186 outbound-registry attestation-ledger pattern on TB parents).
+- Release labels (target): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build the next ack-recon transport-chain slice after TB acknowledgment-reconciliation external distribution audit ledger + partner handoff attestation (placeholder — define when the following chain link is named).
+Build **partner-delivery receipt freeze-override seal verification** on the TB outbound-registry attestation-ledger row (next chain link after outbound-registry attestation ledger, analogous to PR #188 after PR #186 on the archival ack-recon chain).
