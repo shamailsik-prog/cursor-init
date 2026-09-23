@@ -1143,3 +1143,29 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #197 | ack-recon TB external distribution audit ledger + partner handoff attestation (stub-honest) | `184372f` / product base `a7ae742` | Yes | true | false | true | **PASS** (backend-scoped; **PARTIAL** product — not COMPLETE) | low |
 
+## Targeted ledger — PR #199 ack-recon TB outbound-registry attestation-ledger + partner handoff attestation (stub-honest)
+
+- Audit file: `docs/audits/phase-pr199-workflow-slo-ack-recon-tb-outbound-registry-attestation-ledger.md`
+- Date: 2026-09-23
+- Merge SHA on `main`: `e00046ad270f14c4f7561eb4265f0218adcc77bb` (squash parent `7f3b0a3` — PR #198 independent audit docs for product #197)
+- Main tip at audit close: `e00046a`
+- Stack base: `184372f` (PR #197 ack-recon TB external distribution audit ledger + partner handoff attestation)
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **PASS (low)** — dual-track TB external distribution audit ledger → partner handoff attestation + TB partner handoff → outbound registry attestation ledger child rows verified; parent finalized/attested gates; Firestore hashed ids ≤1500 bytes; Firestore deny-write rules L213–214; emulator trio **22/22**; focused Vitest **131/131**; G-0/G-1 green; claim-gate replay green on canonical metadata (`184372f..e00046a`). **Product classification remains PARTIAL** because `transport_stub=true` (stub-honest; not COMPLETE / not product-done).
+
+### DoD summary
+
+- `SHA on main`: PASS (`e00046a` audited tip; stack base `184372f` on lineage).
+- `BACKEND_REAL`: PASS (two child row types, memory/Firestore repos, governance file above, `/api/d2/ops-reporting` two views + six partner actions, digest sync from PR #197 TB parents).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `184372f..e00046a` excludes `app/ops/**`).
+- `TRANSPORT_STUB`: PASS honesty (`transport_stub=true`, `blocked_todo_firm`, `transport_stub:true` provenance, stub partner-handoff registry prefix).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, negated product-done disclaimer in replay metadata).
+- `focused tests+gates`: PASS (API/route-wiring/custody-id **131**; Firestore repos/runtime/rules **22**; `G-0`; `G-1` **10/10**). Non-blocking: six partner POST actions lack dedicated HTTP POST assertions.
+- `process flags`: PASS replay (`ci_gates/check_pr_phase_claims.py` with canonical `PR_BODY` + `184372f..e00046a` exits 0 @ `e00046a`).
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #199 | ack-recon TB outbound-registry attestation-ledger + partner handoff attestation (stub-honest) | `e00046a` / product base `184372f` | Yes | true | false | true | **PASS** (backend-scoped; **PARTIAL** product — not COMPLETE) | low |
+
