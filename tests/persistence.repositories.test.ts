@@ -2516,6 +2516,90 @@ describe("Firestore repository adapters", () => {
       expect(repoClosureAckReconPartnerHandoffOutboundRegistryAttestationLedgerId.length).toBeLessThanOrEqual(
         1500
       )
+      const {
+        workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationId:
+          repoCustodyAckReconPartnerHandoffSealVerificationIdBuilder,
+        workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationId:
+          repoClosureAckReconOutboundRegistrySealVerificationIdBuilder,
+      } = await import(
+        "@/platform/persistence/workflowOpsAckReconPartnerDeliveryReceiptFreezeOverrideSealVerificationGovernance"
+      )
+      const repoCustodyAckReconPartnerHandoffSealVerificationId =
+        repoCustodyAckReconPartnerHandoffSealVerificationIdBuilder(
+          repoCustodyAckReconAuditLedgerPartnerHandoffAttestationId
+        )
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert(
+        {
+          id: repoCustodyAckReconPartnerHandoffSealVerificationId,
+          firmId: "firmA",
+          matterId: "mat_1",
+          archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationId:
+            repoCustodyAckReconAuditLedgerPartnerHandoffAttestationId,
+          classification: "internal",
+          partnerDeliveryReceiptFreezeOverrideSealVerificationStatus:
+            "partner_delivery_receipt_freeze_override_seal_verification_pending",
+          partnerHandoffAttestationStatusSnapshot:
+            "archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_pending",
+          partnerDeliveryReceiptFreezeOverrideSealCheckpointedBy: null,
+          partnerDeliveryReceiptFreezeOverrideSealCheckpointedAt: null,
+          partnerDeliveryReceiptFreezeOverrideSealReference: null,
+          partnerDeliveryReceiptFreezeOverrideSealVerifiedBy: null,
+          partnerDeliveryReceiptFreezeOverrideSealVerifiedAt: null,
+          partnerDeliveryReceiptFreezeOverrideSealVerificationDigest: null,
+          externalTransportChannel: "blocked_todo_firm",
+          partnerDeliverySealBacklogCount: 1,
+          partnerHandoffAttestationBacklogCountSnapshot: 1,
+          crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot: 1,
+          partnerDeliveryReceiptFreezeOverrideSealVerificationNote:
+            "ops_custody_ack_recon_partner_handoff_seal_verification_seed",
+          lastStatusChangedAt: 101,
+          freshnessStatus: "fresh",
+          provenanceTags: ["transport_stub:true", "workflow"],
+          recomputedAt: 101,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_custody_ack_recon_partner_handoff_seal_verification_seed",
+          updatedAt: 101,
+        }
+      )
+      const repoClosureAckReconOutboundRegistrySealVerificationId =
+        repoClosureAckReconOutboundRegistrySealVerificationIdBuilder(
+          repoClosureAckReconPartnerHandoffOutboundRegistryAttestationLedgerId
+        )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert(
+        {
+          id: repoClosureAckReconOutboundRegistrySealVerificationId,
+          firmId: "firmA",
+          matterId: "mat_1",
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerId:
+            repoClosureAckReconPartnerHandoffOutboundRegistryAttestationLedgerId,
+          classification: "internal",
+          partnerDeliveryReceiptFreezeOverrideSealVerificationStatus:
+            "partner_delivery_receipt_freeze_override_seal_verification_pending",
+          outboundRegistryAttestationLedgerStatusSnapshot:
+            "closure_attestation_external_transport_receipt_acknowledgment_reconciliation_outbound_registry_attestation_ledger_pending",
+          partnerDeliveryReceiptFreezeOverrideSealCheckpointedBy: null,
+          partnerDeliveryReceiptFreezeOverrideSealCheckpointedAt: null,
+          partnerDeliveryReceiptFreezeOverrideSealReference: null,
+          partnerDeliveryReceiptFreezeOverrideSealVerifiedBy: null,
+          partnerDeliveryReceiptFreezeOverrideSealVerifiedAt: null,
+          partnerDeliveryReceiptFreezeOverrideSealVerificationDigest: null,
+          externalTransportChannel: "blocked_todo_firm",
+          partnerDeliverySealBacklogCount: 1,
+          partnerDeliveryBacklogCountSnapshot: 1,
+          crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot: 1,
+          partnerDeliveryReceiptFreezeOverrideSealVerificationNote:
+            "ops_closure_ack_recon_outbound_registry_seal_verification_seed",
+          lastStatusChangedAt: 102,
+          freshnessStatus: "fresh",
+          provenanceTags: ["transport_stub:true", "workflow"],
+          recomputedAt: 102,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_closure_ack_recon_outbound_registry_seal_verification_seed",
+          updatedAt: 102,
+        }
+      )
+      expect(repoCustodyAckReconPartnerHandoffSealVerificationId.length).toBeLessThanOrEqual(1500)
+      expect(repoClosureAckReconOutboundRegistrySealVerificationId.length).toBeLessThanOrEqual(1500)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",

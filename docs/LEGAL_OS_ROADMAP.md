@@ -384,6 +384,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended focused tests; builder stub under `docs/audits/phase-prXXX-workflow-slo-archival-export-custody-handoff-external-transport-receipt-acknowledgment-reconciliation-external-distribution-audit-ledger-partner-handoff-attestation-outbound-registry-attestation-ledger.md` superseded by independent audit.
 - Phase-auditor release labels (merge `e9b91a3` / slice `8483eab`; **PASS**, not COMPLETE): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (no product-done claim). Independent audit: `docs/audits/phase-pr186-workflow-slo-outbound-registry-attestation-ledger.md`.
 
+## PR #187 (landed) — ack-recon partner-delivery-receipt freeze-override seal verification (stub)
+
+- Added durable **dual-track** child rows chained from PR #186 ack-recon outbound-registry attestation-ledger / partner-handoff attestation parents (`..._partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications`, `..._outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications`) with `externalTransportChannel: "blocked_todo_firm"` and provenance `transport_stub:true`.
+- Governance in `platform/persistence/workflowOpsAckReconPartnerDeliveryReceiptFreezeOverrideSealVerificationGovernance.ts` (sha256-hashed document IDs via `buildWorkflowOpsChainedDocumentId`).
+- Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync hooks, and partner-governed lifecycle actions on the ack-recon seal-verification chain.
+- Auditor stub: `docs/audits/phase-prXXX-workflow-slo-ack-recon-partner-delivery-receipt-freeze-override-seal-verification.md`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert adjudication SLO archival-export custody handoff external transport receipt acknowledgment reconciliation external distribution audit-ledger partner-handoff attestation outbound-registry attestation-ledger partner-delivery-receipt freeze-override seal verification** (stub-honest seal verification rows chained from outbound-registry attestation ledger posture, partner-governed ops-reporting views/actions, Firestore hashed-id parity, focused tests + gates).
+Build **workflow alert archival-export custody handoff external transport receipt acknowledgment reconciliation transport-boundary receipt reconciliation** on the ack-recon chain (stub-honest reconciliation rows parented on seal-verification posture, partner-governed ops-reporting views/actions, Firestore hashed-id parity, focused tests + gates). Do not implement in the seal-verification slice.
