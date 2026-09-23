@@ -3722,6 +3722,96 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_custody_ack_recon_tb_external_transport_receipt_ack_reconciliation",
+            firmId: "firmA",
+            matterId: "mat_1",
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentId:
+              "repo_custody_ack_recon_tb_external_transport_receipt_ack",
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentId:
+              "repo_closure_ack_recon_tb_external_transport_receipt_ack",
+            classification: "internal",
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+              "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatusSnapshot:
+              "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged",
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatusSnapshot:
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged",
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedBy: null,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedAt: null,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationDigest: null,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationReconciledBy: null,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationReconciledAt: null,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationFinalizedBy: null,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationFinalizedAt: null,
+            externalTransportReceiptReferenceParityDigest: null,
+            externalTransportChannel: "blocked_todo_firm",
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCount: 0,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptBacklogCountSnapshot: 1,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptBacklogCountSnapshot: 1,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationNote:
+              "repo custody ack-recon external transport receipt acknowledgment reconciliation",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 61,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_closure_ack_recon_tb_external_transport_receipt_ack_reconciliation",
+            firmId: "firmA",
+            matterId: "mat_1",
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentId:
+              "repo_closure_ack_recon_tb_external_transport_receipt_ack",
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentId:
+              "repo_custody_ack_recon_tb_external_transport_receipt_ack",
+            classification: "internal",
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatusSnapshot:
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged",
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatusSnapshot:
+              "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged",
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedBy: null,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationDigestCheckpointedAt: null,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationDigest: null,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationReconciledBy: null,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationReconciledAt: null,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationFinalizedBy: null,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationFinalizedAt: null,
+            externalTransportReceiptReferenceParityDigest: null,
+            externalTransportChannel: "blocked_todo_firm",
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCount: 0,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptBacklogCountSnapshot: 1,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptBacklogCountSnapshot: 1,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationNote:
+              "repo closure ack-recon external transport receipt acknowledgment reconciliation",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 62,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -5290,5 +5380,41 @@ describe("Route wiring uses repository adapters", () => {
     expect(
       json.items[0]?.ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus
     ).toBe("ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_pending")
+  })
+
+  it("ops reporting custody ack-recon transport boundary external transport receipt acknowledgment reconciliation view uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations&actorId=associate_a&transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus=transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{
+        transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus: string
+      }>
+    }
+    expect(
+      json.items[0]?.transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus
+    ).toBe("transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending")
+  })
+
+  it("ops reporting closure ack-recon transport boundary external transport receipt acknowledgment reconciliation view uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations&actorId=associate_a&ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus=ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending&freshnessStatus=fresh&limit=10&cursor=0"
+      )
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      items: Array<{
+        ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus: string
+      }>
+    }
+    expect(
+      json.items[0]?.ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus
+    ).toBe("ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending")
   })
 })
