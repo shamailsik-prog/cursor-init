@@ -1015,3 +1015,28 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #186 | acknowledgment reconciliation outbound-registry attestation-ledger (stub-honest) | `e9b91a3` / slice `8483eab` / base `4b7211e` | Yes | true | false | true | **PASS** (backend-scoped; not COMPLETE) | low |
 
+## Targeted ledger — PR #188 ack-recon partner-delivery-receipt freeze-override seal verification (stub-honest)
+
+- Audit file: `docs/audits/phase-pr188-workflow-slo-partner-delivery-receipt-freeze-override-seal.md`
+- Date: 2026-09-23
+- Merge SHA on `main`: `3a88d73c045ea4aa93875567ef7bdef1172754be` (merge parents `208b84d` + slice head `270e191`)
+- Main tip at audit close: `3a88d73`
+- Stack base: `208b84d` (post PR #186 independent audit docs); parent chain PR #186 @ `e9b91a3`
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **PASS (low)** — dual-track ack-recon seal-verification child rows on PR #186 parents verified; Firestore hashed ids ≤1500 bytes; repositories compile (no duplicate test `const` symbols); emulator trio **22/22**; focused Vitest **118/118** (+ trio); G-0/G-1 green; claim-gate replay green. Classification remains PARTIAL because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (`3a88d73` is `origin/main` @ audit close; slice `270e191` on lineage).
+- `BACKEND_REAL`: PASS (two child row types on PR #186 parents, memory/Firestore repos, Firestore deny-write rules, governance `workflowOpsAckReconPartnerDeliveryReceiptFreezeOverrideSealVerificationGovernance.ts` + `buildWorkflowOpsChainedDocumentId`, parent posture gating, `/api/d2/ops-reporting` two views + six partner actions, stub-honest defaults).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `208b84d..270e191` excludes `app/ops/**`).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, `transport_stub=true`, negated product-done disclaimer).
+- `focused tests+gates`: PASS (API/route-wiring/custody-id/chained-id **118**; Firestore repos/runtime/rules **22**; `G-0`; `G-1` **10/10**). Non-blocking: six partner POST actions lack dedicated HTTP POST assertions (route-wiring GET filters for both new views).
+- `process flags`: PASS (`ci_gates/check_pr_phase_claims.py` replay on PR #188 metadata with `208b84d..270e191` exits 0 @ `ede9a9c`). Builder `phase-prXXX-…-ack-recon-partner-delivery-receipt-freeze-override-seal-verification.md` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #188 | ack-recon partner-delivery-receipt freeze-override seal verification (stub-honest) | `3a88d73` / slice `270e191` / base `208b84d` | Yes | true | false | true | **PASS** (backend-scoped; not COMPLETE) | low |
+
