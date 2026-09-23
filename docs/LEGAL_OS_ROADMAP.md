@@ -426,6 +426,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from PR #197 parents, and six partner-governed lifecycle actions (mirror PR #186 outbound-registry attestation-ledger pattern on TB parents).
 - Phase-auditor release labels (merge `e00046a`; **PASS**, not COMPLETE): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL`. Independent audit: `docs/audits/phase-pr199-workflow-slo-ack-recon-tb-outbound-registry-attestation-ledger.md`.
 
+## PR #200 (in flight on branch `cursor/tb-partner-delivery-receipt-freeze-override-seal-62f3`) — ack-recon TB partner-delivery receipt freeze-override seal verification (stub-honest)
+
+- Added durable **dual-track** child rows parented on PR #199 TB outbound-registry attestation-ledger rows: waiver/custody and variance/partner-delivery transport-boundary paths (`..._partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications` collections), memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId`.
+- Governance in `platform/persistence/workflowOpsAckReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationGovernance.ts` (NAME_MAX-safe filename) with `transport_stub:true` / `blocked_todo_firm`; waiver gate on `transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_outbound_registry_freeze_override_checkpointed`; variance gate on `ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_delivery_receipt_freeze_override_digested`.
+- Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from PR #199 parents, and six partner-governed lifecycle actions (Tb-prefixed mirror of PR #188).
+- Builder audit stub: `docs/audits/phase-pr200-workflow-slo-ack-recon-tb-partner-delivery-receipt-freeze-override-seal-verification.md`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **partner-delivery receipt freeze-override seal verification** on the TB outbound-registry attestation-ledger row (next chain link after outbound-registry attestation ledger, analogous to PR #188 after PR #186 on the archival ack-recon chain).
+Build **transport-boundary receipt reconciliation** on the TB partner-delivery receipt freeze-override seal verification row (next chain link after TB seal verification, analogous to PR #191 after PR #188 on the archival ack-recon chain).
