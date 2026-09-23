@@ -398,6 +398,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from seal-verification rows, and six partner-governed lifecycle actions (waiver: reconcile / digest checkpoint / control finalization; variance: closure digest checkpoint / attest closure / control finalization).
 - Independent audit: `docs/audits/phase-pr191-workflow-slo-ack-recon-transport-boundary-receipt-reconciliation.md` (supersedes builder stub `phase-prXXX-…`).
 
+## PR #192 (landed) — ack-recon transport-boundary external transport receipt acknowledgment (stub)
+
+- Added durable **dual-track** child rows chained from PR #189 transport-boundary receipt reconciliation parents (`..._transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments` on waiver custody and variance closure tracks) with `externalTransportChannel: "blocked_todo_firm"` and provenance `transport_stub:true`.
+- Governance in `platform/persistence/workflowOpsAckReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentGovernance.ts` (sha256-hashed document IDs via `buildWorkflowOpsChainedDocumentId`; waiver parent gate `partner_delivery_transport_boundary_receipt_reconciliation_finalized`; variance parent gate `transport_boundary_receipt_reconciliation_closure_attested`).
+- Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from transport-boundary reconciliation rows, and six partner-governed lifecycle actions (waiver: checkpoint / acknowledge / control finalization; variance: digest checkpoint / acknowledge / control finalization).
+- Auditor stub: `docs/audits/phase-prXXX-workflow-slo-ack-recon-transport-boundary-receipt-reconciliation-external-transport-receipt-acknowledgment.md`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert archival-export custody handoff external transport receipt acknowledgment** on the ack-recon chain (stub-honest acknowledgment rows parented on transport-boundary receipt reconciliation posture, partner-governed ops-reporting views/actions, Firestore hashed-id parity, focused tests + gates). Do not implement in the transport-boundary receipt reconciliation slice.
+Build **external transport receipt acknowledgment reconciliation** on the ack-recon chain (stub-honest reconciliation rows parented on transport-boundary external transport receipt acknowledgment rows from PR #192, partner-governed ops-reporting views/actions, Firestore hashed-id parity, focused tests + gates). Do not implement in the transport-boundary external transport receipt acknowledgment slice.
