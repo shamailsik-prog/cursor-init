@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-23 (PR #195 independent audit appended)  
+Last updated: 2026-09-23 (PR #197 independent audit appended)  
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1116,4 +1116,30 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #195 | ack-recon external transport receipt acknowledgment reconciliation (stub-honest) | `a7ae742` / product base `4084826` | Yes | true | false | true | **PASS** (backend-scoped; **PARTIAL** product — not COMPLETE) | low |
+
+## Targeted ledger — PR #197 ack-recon TB external distribution audit ledger + partner handoff attestation (stub-honest)
+
+- Audit file: `docs/audits/phase-pr197-workflow-slo-ack-recon-tb-ack-recon-external-distribution-audit-ledger-partner-handoff-attestation.md`
+- Date: 2026-09-23
+- Merge SHA on `main`: `184372f42bec20cb7f8a9fb3fdc17ccc2fe4b8f4` (squash parent `b02a8f5` — PR #196 independent audit docs)
+- Main tip at audit close: `184372f`
+- Stack base: `a7ae742` (PR #195 ack-recon external transport receipt acknowledgment reconciliation)
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **PASS (low)** — dual-track TB acknowledgment-reconciliation → external distribution audit ledger + partner handoff attestation child rows verified; parent reconciliation-finalized gates; Firestore hashed ids ≤1500 bytes; Firestore deny-write rules L211–212; emulator trio **22/22**; focused Vitest **128/128**; G-0/G-1 green; claim-gate replay green on canonical metadata (`a7ae742..184372f`). **Product classification remains PARTIAL** because `transport_stub=true` (stub-honest; not COMPLETE / not product-done).
+
+### DoD summary
+
+- `SHA on main`: PASS (`184372f` audited tip; stack base `a7ae742` on lineage).
+- `BACKEND_REAL`: PASS (two child row types, memory/Firestore repos, governance file above, `/api/d2/ops-reporting` two views + six partner actions, digest sync from PR #195 reconciliation parents).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `a7ae742..184372f` excludes `app/ops/**`).
+- `TRANSPORT_STUB`: PASS honesty (`transport_stub=true`, `blocked_todo_firm`, `transport_stub:true` provenance, stub partner-handoff registry prefix).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, negated product-done disclaimer in replay metadata).
+- `focused tests+gates`: PASS (API/route-wiring/custody-id **128**; Firestore repos/runtime/rules **22**; `G-0`; `G-1` **10/10**). Non-blocking: six partner POST actions lack dedicated HTTP POST assertions.
+- `process flags`: PASS replay (`ci_gates/check_pr_phase_claims.py` with canonical `PR_BODY` + `a7ae742..184372f` exits 0 @ `184372f`). Roadmap labels slice **PR #196** vs forge **#197** (numbering drift only). Builder `phase-pr196-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #197 | ack-recon TB external distribution audit ledger + partner handoff attestation (stub-honest) | `184372f` / product base `a7ae742` | Yes | true | false | true | **PASS** (backend-scoped; **PARTIAL** product — not COMPLETE) | low |
 
