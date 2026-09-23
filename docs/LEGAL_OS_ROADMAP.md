@@ -391,6 +391,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync hooks, and partner-governed lifecycle actions on the ack-recon seal-verification chain.
 - Auditor stub: `docs/audits/phase-prXXX-workflow-slo-ack-recon-partner-delivery-receipt-freeze-override-seal-verification.md`.
 
+## PR #189 (landed) — ack-recon transport-boundary receipt reconciliation (stub)
+
+- Added durable **dual-track** child rows chained from PR #188 ack-recon seal-verification parents (`..._partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations`, `..._outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations`) with `externalTransportChannel: "blocked_todo_firm"` and provenance `transport_stub:true`.
+- Governance in `platform/persistence/workflowOpsAckReconTransportBoundaryReceiptReconciliationGovernance.ts` (sha256-hashed document IDs via `buildWorkflowOpsChainedDocumentId`; parent gate on `partner_delivery_receipt_freeze_override_seal_verified` and `partnerDeliverySealBacklogCount === 0`).
+- Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from seal-verification rows, and six partner-governed lifecycle actions (waiver: reconcile / digest checkpoint / control finalization; variance: closure digest checkpoint / attest closure / control finalization).
+- Auditor stub: `docs/audits/phase-prXXX-workflow-slo-ack-recon-transport-boundary-receipt-reconciliation.md`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **workflow alert archival-export custody handoff external transport receipt acknowledgment reconciliation transport-boundary receipt reconciliation** on the ack-recon chain (stub-honest reconciliation rows parented on seal-verification posture, partner-governed ops-reporting views/actions, Firestore hashed-id parity, focused tests + gates). Do not implement in the seal-verification slice.
+Build **workflow alert archival-export custody handoff external transport receipt acknowledgment** on the ack-recon chain (stub-honest acknowledgment rows parented on transport-boundary receipt reconciliation posture, partner-governed ops-reporting views/actions, Firestore hashed-id parity, focused tests + gates). Do not implement in the transport-boundary receipt reconciliation slice.
