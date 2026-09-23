@@ -2690,6 +2690,90 @@ describe("Firestore repository adapters", () => {
       expect(repoClosureAckReconSealVerificationTransportBoundaryReconciliationId.length).toBeLessThanOrEqual(
         1500
       )
+      const {
+        workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentId:
+          repoCustodyAckReconTbExternalTransportReceiptAckIdBuilder,
+        workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentId:
+          repoClosureAckReconTbExternalTransportReceiptAckIdBuilder,
+      } = await import(
+        "@/platform/persistence/workflowOpsAckReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentGovernance"
+      )
+      const repoCustodyAckReconTbExternalTransportReceiptAckId =
+        repoCustodyAckReconTbExternalTransportReceiptAckIdBuilder(
+          repoCustodyAckReconSealVerificationTransportBoundaryReconciliationId
+        )
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.upsert(
+        {
+          id: repoCustodyAckReconTbExternalTransportReceiptAckId,
+          firmId: "firmA",
+          matterId: "mat_1",
+          archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationId:
+            repoCustodyAckReconSealVerificationTransportBoundaryReconciliationId,
+          classification: "internal",
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus:
+            "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_pending",
+          partnerDeliveryTransportBoundaryReceiptReconciliationStatusSnapshot:
+            "transport_boundary_receipt_reconciliation_pending",
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentCheckpointedBy: null,
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentCheckpointedAt: null,
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentCheckpointReference: null,
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgedBy: null,
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgedAt: null,
+          externalTransportReceiptReference: null,
+          externalTransportChannel: "blocked_todo_firm",
+          transportBoundaryReceiptReconciliationExternalTransportReceiptBacklogCount: 1,
+          archivalTransportReconciliationLagCountSnapshot: 1,
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentNote:
+            "ops_custody_ack_recon_tb_external_transport_receipt_ack_seed",
+          lastStatusChangedAt: 105,
+          freshnessStatus: "fresh",
+          provenanceTags: ["transport_stub:true", "workflow"],
+          recomputedAt: 105,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_custody_ack_recon_tb_external_transport_receipt_ack_seed",
+          updatedAt: 105,
+        }
+      )
+      const repoClosureAckReconTbExternalTransportReceiptAckId =
+        repoClosureAckReconTbExternalTransportReceiptAckIdBuilder(
+          repoClosureAckReconSealVerificationTransportBoundaryReconciliationId
+        )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.upsert(
+        {
+          id: repoClosureAckReconTbExternalTransportReceiptAckId,
+          firmId: "firmA",
+          matterId: "mat_1",
+          closureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationId:
+            repoClosureAckReconSealVerificationTransportBoundaryReconciliationId,
+          classification: "internal",
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus:
+            "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_pending",
+          partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatusSnapshot:
+            "transport_boundary_receipt_reconciliation_closure_attestation_pending",
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentDigestCheckpointedBy:
+            null,
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentDigestCheckpointedAt:
+            null,
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentDigest: null,
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgedBy: null,
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgedAt: null,
+          externalTransportReceiptReference: null,
+          externalTransportChannel: "blocked_todo_firm",
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptBacklogCount: 1,
+          reconciliationClosureLagCountSnapshot: 1,
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentNote:
+            "ops_closure_ack_recon_tb_external_transport_receipt_ack_seed",
+          lastStatusChangedAt: 106,
+          freshnessStatus: "fresh",
+          provenanceTags: ["transport_stub:true", "workflow"],
+          recomputedAt: 106,
+          recomputedBy: "partner_a",
+          recomputeReason: "ops_closure_ack_recon_tb_external_transport_receipt_ack_seed",
+          updatedAt: 106,
+        }
+      )
+      expect(repoCustodyAckReconTbExternalTransportReceiptAckId.length).toBeLessThanOrEqual(1500)
+      expect(repoClosureAckReconTbExternalTransportReceiptAckId.length).toBeLessThanOrEqual(1500)
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
