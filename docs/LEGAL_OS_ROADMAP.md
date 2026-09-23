@@ -405,12 +405,12 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from transport-boundary reconciliation rows, and six partner-governed lifecycle actions (waiver: checkpoint / acknowledge / control finalization; variance: digest checkpoint / acknowledge / control finalization).
 - Independent audit: `docs/audits/phase-pr193-workflow-slo-ack-recon-transport-boundary-external-transport-receipt-acknowledgment.md` (supersedes builder stub `phase-prXXX-…`).
 
-## PR #194 (landed) — ack-recon transport-boundary external transport receipt acknowledgment reconciliation (stub)
+## PR #195 (merged @ `a7ae742`; roadmap label was PR #194) — ack-recon external transport receipt acknowledgment reconciliation (stub)
 
-- Added durable **dual-track** child rows chained from PR #192 transport-boundary external transport receipt acknowledgment parents (`..._external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations` on waiver custody and variance closure tracks) with `externalTransportChannel: "blocked_todo_firm"` and provenance `transport_stub:true`.
+- Added durable **dual-track** child rows chained from PR #193 external transport receipt acknowledgment parents (`..._external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations` on waiver custody and variance closure tracks) with `externalTransportChannel: "blocked_todo_firm"` and provenance `transport_stub:true`.
 - Governance in `platform/persistence/workflowOpsAckReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationGovernance.ts` (sha256-hashed document IDs via `buildWorkflowOpsChainedDocumentId`; cross-track `externalTransportReceiptReferencesMatch`; parent gates `transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged` and `ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged`).
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from acknowledgment rows, and six partner-governed lifecycle actions (waiver: reconcile / digest checkpoint / control finalization; variance: digest checkpoint / reconcile / control finalization).
-- Auditor stub: `docs/audits/phase-prXXX-workflow-slo-ack-recon-transport-boundary-receipt-reconciliation-external-transport-receipt-acknowledgment-reconciliation.md`.
+- Phase-auditor release labels (merge `a7ae742`; **PASS**, not COMPLETE): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL`. Independent audit: `docs/audits/phase-pr195-workflow-slo-ack-recon-transport-boundary-external-transport-receipt-acknowledgment-reconciliation.md` (supersedes builder stub `phase-prXXX-…`).
 
 ## NEXT PHASE (queued for follow-up agent)
 

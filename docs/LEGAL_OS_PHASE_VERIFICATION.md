@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-23 (PR #193 independent audit appended)  
+Last updated: 2026-09-23 (PR #195 independent audit appended)  
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1090,4 +1090,30 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #193 | ack-recon transport-boundary external transport receipt acknowledgment (stub-honest) | `4084826` / slice `1186635` / base `43c8d56` | Yes | true | false | true | **PASS** (backend-scoped; not COMPLETE) | low |
+
+## Targeted ledger — PR #195 ack-recon external transport receipt acknowledgment reconciliation (stub-honest)
+
+- Audit file: `docs/audits/phase-pr195-workflow-slo-ack-recon-transport-boundary-external-transport-receipt-acknowledgment-reconciliation.md`
+- Date: 2026-09-23
+- Merge SHA on `main`: `a7ae742fdb709a1e0477d969714e2282fcd39c49` (squash parent `807a004` — PR #194 audit docs)
+- Main tip at audit close: `a7ae742`
+- Stack base: `4084826` (PR #193 external transport receipt acknowledgment)
+- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
+- Verdict: **PASS (low)** — dual-track acknowledgment-reconciliation child rows on PR #193 acknowledgment parents verified; cross-track receipt-reference parity gates; Firestore hashed ids ≤1500 bytes; Firestore deny-write rules L209–210; emulator trio **22/22**; focused Vitest **125/125**; G-0/G-1 green; claim-gate replay green on canonical metadata (`4084826..a7ae742`). **Product classification remains PARTIAL** because `transport_stub=true` (stub-honest; not COMPLETE / not product-done).
+
+### DoD summary
+
+- `SHA on main`: PASS (`a7ae742` audited tip; stack base `4084826` on lineage).
+- `BACKEND_REAL`: PASS (two child row types, memory/Firestore repos, governance file above, `/api/d2/ops-reporting` two views + six partner actions, digest sync from acknowledgment parents).
+- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff `4084826..a7ae742` excludes `app/ops/**`).
+- `TRANSPORT_STUB`: PASS honesty (`transport_stub=true`, `blocked_todo_firm`, `transport_stub:true` provenance, stub receipt reference parity digests).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, negated product-done disclaimer in replay metadata).
+- `focused tests+gates`: PASS (API/route-wiring/custody-id **125**; Firestore repos/runtime/rules **22**; `G-0`; `G-1` **10/10**). Non-blocking: six partner POST actions lack dedicated HTTP POST assertions.
+- `process flags`: PASS replay (`ci_gates/check_pr_phase_claims.py` with canonical `PR_BODY` + `4084826..a7ae742` exits 0 @ `a7ae742`). Roadmap labels slice **PR #194** vs forge **#195** (numbering drift only). Builder `phase-prXXX-…` stub not used as evidence.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #195 | ack-recon external transport receipt acknowledgment reconciliation (stub-honest) | `a7ae742` / product base `4084826` | Yes | true | false | true | **PASS** (backend-scoped; **PARTIAL** product — not COMPLETE) | low |
 
