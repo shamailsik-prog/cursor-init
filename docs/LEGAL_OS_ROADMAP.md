@@ -412,6 +412,14 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from acknowledgment rows, and six partner-governed lifecycle actions (waiver: reconcile / digest checkpoint / control finalization; variance: digest checkpoint / reconcile / control finalization).
 - Phase-auditor release labels (merge `a7ae742`; **PASS**, not COMPLETE): `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL`. Independent audit: `docs/audits/phase-pr195-workflow-slo-ack-recon-transport-boundary-external-transport-receipt-acknowledgment-reconciliation.md` (supersedes builder stub `phase-prXXX-…`).
 
+## PR #196 (in flight) — ack-recon TB external transport receipt acknowledgment reconciliation → external distribution audit ledger + partner handoff attestation (stub)
+
+- Added durable **dual-track** child rows parented on PR #195 `..._external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations` (transport-boundary ack-recon chain): waiver/custody `..._external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger` (3-state audit ledger) and variance/closure `..._external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation` (4-state stub partner handoff), memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId`.
+- Governance in `platform/persistence/workflowOpsAckReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationGovernance.ts` with `transport_stub:true` provenance and parent gate on finalized acknowledgment-reconciliation status per track.
+- Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from PR #195 reconciliation parents, and six partner-governed lifecycle actions (waiver: checkpoint / record entry / control finalization on TB ack-recon audit ledger; variance: register outbound registry / attest / control finalization on TB ack-recon partner handoff).
+- Builder stub: `docs/audits/phase-pr196-workflow-slo-ack-recon-tb-ack-recon-external-distribution-audit-ledger-partner-handoff-attestation.md` (independent audit pending).
+- Expected release labels: `backend_real=true`, `frontend_real=false`, `transport_stub=true`, `classification=PARTIAL` (not COMPLETE).
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build the next ack-recon transport-chain slice after external transport receipt acknowledgment reconciliation (placeholder — define in roadmap when the following chain link is named).
+Build the next ack-recon transport-chain slice after TB acknowledgment-reconciliation external distribution audit ledger + partner handoff attestation (placeholder — define when the following chain link is named).
