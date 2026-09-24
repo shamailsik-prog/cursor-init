@@ -3792,6 +3792,89 @@ export function OperatorAuditConsole() {
       },
       [200, 400, 403, 422]
     )
+
+    const custodyTbAckReconOutboundRegistrySealVerificationTransportBoundaryReceiptReconciliationView =
+      "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations"
+    const closureTbAckReconOutboundRegistrySealVerificationTransportBoundaryReceiptReconciliationView =
+      "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations"
+
+    await runApiCall({
+      step: "PR slice view: custody TB ack-recon outbound-registry seal verification transport boundary receipt reconciliations (485)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: custodyTbAckReconOutboundRegistrySealVerificationTransportBoundaryReceiptReconciliationView,
+        actorId: partnerId,
+        matterId,
+        partnerDeliveryTransportBoundaryReceiptReconciliationStatus:
+          "transport_boundary_receipt_reconciliation_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "PR slice view: closure TB ack-recon outbound-registry seal verification transport boundary receipt reconciliations (486)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: closureTbAckReconOutboundRegistrySealVerificationTransportBoundaryReceiptReconciliationView,
+        actorId: partnerId,
+        matterId,
+        partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus:
+          "transport_boundary_receipt_reconciliation_closure_attestation_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: reconcile custody TB ack-recon outbound-registry seal verification transport boundary receipt",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "reconcile_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt",
+          actorId: partnerId,
+          matterId,
+          archivalExportTransportBoundaryReceiptReconciliationDigest:
+            "blocked_todo_firm:transport_stub_tb_outbound_registry_seal_verifications_transport_boundary_receipt_reconciliation:ops_probe",
+          reason: "TB outbound-registry seal verification transport boundary receipt reconciliation operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: checkpoint closure TB ack-recon outbound-registry seal verification transport boundary receipt reconciliation closure attestation digest",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_closure_attestation_digest",
+          actorId: partnerId,
+          matterId,
+          transportBoundaryReceiptReconciliationClosureAttestationDigest:
+            "blocked_todo_firm:transport_stub_tb_outbound_registry_seal_verifications_transport_boundary_closure_digest:ops_probe",
+          reason: "TB outbound-registry seal verification transport boundary receipt reconciliation operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: control closure TB ack-recon outbound-registry seal verification transport boundary receipt reconciliation closure attestation finalization",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_closure_attestation_finalization",
+          actorId: partnerId,
+          matterId,
+          reason: "TB outbound-registry seal verification transport boundary receipt reconciliation operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
   }
 
   return (

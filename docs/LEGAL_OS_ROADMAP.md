@@ -478,6 +478,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx`: GET monitoring views **483–484** (custody + closure TB outbound-registry partner-delivery freeze-override seal verification) after PR #219 outbound-registry register POSTs; POST attest partner handoff, checkpoint outbound-registry freeze override, checkpoint seal verification (custody), digest partner-delivery freeze override (closure), and control outbound-registry attestation ledger seal (closure).
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+## PR slice (branch `cursor/tb-outbound-registry-seal-transport-boundary-reconciliation-9338`) — ack-recon TB outbound-registry seal verification transport-boundary receipt reconciliation on PR #221 parents (stub-honest, frontend_real)
+
+- Parents on PR #221 partner-delivery freeze-override seal verification rows (GET **483–484**); governance anchor `platform/persistence/workflowOpsAckReconTbOutboundRegistrySealVerificationTransportBoundaryReceiptReconciliationGovernance.ts` (PR #191-shaped builders with PR #221 hash prefixes).
+- Extended `/api/d2/ops-reporting` with monitoring views **485–486**, digest-rebuild sync from verified seal-verification parents, and six partner-governed lifecycle actions (`seal_verifications` path on 485/486 collections).
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **485–486** after 483/484 seal POSTs; POST waiver reconcile plus variance closure digest checkpoint / finalization.
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Ship the next ack-recon chain link after TB outbound-registry partner-delivery freeze-override seal verification (for example PR #202-style seal verification transport-boundary receipt reconciliation on TB seal-verification parents).
+Ship PR #206-style TB seal-verifications transport-boundary **external transport receipt acknowledgment** on reconciled 485/486 transport-boundary receipt reconciliation parents (GET **487–488** chain continuation).
