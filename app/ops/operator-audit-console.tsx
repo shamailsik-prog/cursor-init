@@ -3461,6 +3461,55 @@ export function OperatorAuditConsole() {
       },
       [200, 400, 403, 422]
     )
+
+    const custodyTbSealVerificationTransportBoundaryExternalTransportReceiptAcknowledgmentReconciliationView =
+      "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations"
+    const closureTbSealVerificationTransportBoundaryExternalTransportReceiptAcknowledgmentReconciliationView =
+      "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations"
+
+    await runApiCall({
+      step: "PR #213 view: custody TB seal-verifications transport boundary external transport receipt acknowledgment reconciliation (477)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: custodyTbSealVerificationTransportBoundaryExternalTransportReceiptAcknowledgmentReconciliationView,
+        actorId: partnerId,
+        matterId,
+        transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+          "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "PR #213 view: closure TB seal-verifications transport boundary external transport receipt acknowledgment reconciliation (478)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: closureTbSealVerificationTransportBoundaryExternalTransportReceiptAcknowledgmentReconciliationView,
+        actorId: partnerId,
+        matterId,
+        ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+          "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR #213 action: reconcile custody TB seal-verifications transport boundary external transport receipt acknowledgment reconciliation",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "reconcile_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation",
+          actorId: partnerId,
+          matterId,
+          reason: "PR #213 operator audit console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
   }
 
   return (

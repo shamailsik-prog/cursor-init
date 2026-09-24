@@ -452,6 +452,14 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx` (GET **475–476** after PR #205 reconcile, POST custody checkpoint).
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+## PR #213 (branch `cursor/tb-seal-verifications-external-transport-receipt-ack-reconciliation-213f`) — ack-recon TB seal-verifications transport-boundary external transport receipt acknowledgment reconciliation (stub-honest)
+
+- Added durable **dual-track** child rows parented on PR #206 `..._seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments` (`workflowOpsAckReconTbSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationGovernance.ts`), memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId` (`seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation` chain prefixes).
+- Governance mirrors PR #195 cross-track parity with `transport_stub:true` / `blocked_todo_firm`; parent gates require acknowledged external transport receipt status on both tracks before reconcile.
+- Extended `/api/d2/ops-reporting` with monitoring views **477–478**, digest-rebuild sync from PR #206 acknowledgment parents, and six partner-governed lifecycle actions (waiver: reconcile / digest checkpoint / control finalization; variance: digest checkpoint / reconcile / control finalization).
+- Operator console wiring in `app/ops/operator-audit-console.tsx` (GET **477–478** after PR #206 checkpoint POST, POST waiver reconcile).
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Ship the next ack-recon chain link after PR #206 TB seal-verifications transport-boundary **external transport receipt acknowledgment** (for example nested reconciliation or partner lifecycle surfaces that continue the PR #205 reconciled boundary parent chain).
+Ship the next ack-recon chain link after PR #213 TB seal-verifications transport-boundary external transport receipt **acknowledgment reconciliation** (for example PR #197-style external distribution audit ledger on this parent chain, continuing the reconciled acknowledgment parent surfaces).
