@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-24 (PR #201 independent audit appended)  
+Last updated: 2026-09-24 (PR #209 Firestore-adapter remediation re-audit appended)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1253,4 +1253,22 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|
 | #209 | TB external transport receipt acknowledgment | `f81e466` / base `f999c5b` | **FAIL** (Firestore adapter runtime gap) | PASS (focused `/ops`) | true | **FAIL phase audit; PARTIAL product** | major |
+
+## Re-audit closure — PR #209 Firestore closure adapter remediation (PR #211)
+
+- Audit file: `docs/audits/phase-pr209-reaudit-after-211.md`
+- Date: 2026-09-24
+- Audited tip: `2835a00647aebdf0aeaf812994bd4bedb073f5e2`.
+- Integrity: direct parent `61dc85005edb84330a87850c5b2446fbdedecac5` is the remediation commit; `f81e466b4cf7a899c2686b8c485697c9f18a7fed` is its grandparent. Both are ancestors of the audited tip. Do not describe both commits as direct parents.
+- Remediation: the Firestore closure-track repository gains the exact long-key `upsert`/`get` adapter and the `SpineStore` map is renamed to the matching closure-track key/type.
+- `BACKEND_REAL`: **PASS** — required Firestore rules/repositories/runtime-mode emulator trio passes **22/22**.
+- `FRONTEND_REAL`: **PASS** — `/ops` GET views 475/476 and the checkpoint POST remain covered by the PR #209 focused test; together with the PR #205 regression, focused tests pass **6/6**.
+- Claim gate: **PASS** for the canonical PR #209 flags plus `/ops` → `/api/d2/ops-reporting` evidence over `f999c5b..f81e466`.
+- Gates: G-0 PASS; G-1 **10/10**.
+- Classification: **PARTIAL**, never COMPLETE. `transport_stub=true` remains factual because `TODO(firm)` and `blocked_todo_firm` remain in `platform/persistence/filingDispatchQueue.ts`.
+
+| Layer | Result |
+|---|---|
+| Phase audit | **PASS** |
+| Product | **PARTIAL** |
 
