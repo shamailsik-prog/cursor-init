@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-24 (PR #209 Firestore-adapter remediation re-audit appended)
+Last updated: 2026-09-24 (PR #213 claim-gate remediation re-audit appended)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1286,4 +1286,18 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|
 | #213 | TB seal-verifications external transport receipt acknowledgment reconciliation | `955bf5e` / base `0b52925` | PASS | PASS | true | **FAIL phase audit; PARTIAL product** | major |
+
+## Re-audit closure — PR #213 claim-gate remediation (PR #215)
+
+- Audit file: `docs/audits/phase-pr213-reaudit-after-215.md`
+- Date: 2026-09-24
+- Audited tip and lineage: `d43bd709d9ff1000426293f93cf0822a70ae22ef` → `394eeb5d389f1aae503966845d9810bb3390c677` → product merge `955bf5e8a01656172670789c6eb8a6a0bb8b3166` → base `0b52925cfd8cf198316ebc7891a66f0d74f8af26`. All three named commits are ancestors of the audited tip.
+- Claim-gate remediation: canonical #213 metadata now includes explicit `backend_real=true`, `frontend_real=true`, and `transport_stub=true`; action/view-to-`app/ops/operator-audit-console.tsx` mappings; and concrete GET/POST `/api/d2/ops-reporting` evidence. Replaying the exact published canonical command for `0b52925..955bf5e` exits `0` with `PASS: PR phase-claim gate.`
+- Product surface re-check: `/ops` performs actual `fetch` calls for GET views **477/478** and the reconcile POST; the lattice is reached through the Batch D UI workflow. The D2 route admits the action, enforces its parent acknowledgment gate, persists the reconciliation, and records an audit event. This is not an API-only or missing-FE-call-site scaffold.
+- Verification: focused `/ops` Vitest **2/2**; Firestore emulator trio **22/22**; G-0 PASS; G-1 **10/10**.
+- Verdict: **PASS (no blockers/majors/minors)**. The prior major was process-metadata completeness and is closed. Product remains **PARTIAL**, never COMPLETE, because `transport_stub=true` remains factual (`TODO(firm)`, `blocked_todo_firm`, and `_stub` markers persist); no live court transport credentials were used.
+
+| PR | Re-audit scope | Audited tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #213 after #215 | canonical claim-gate metadata + product-surface re-check | `d43bd70` | PASS | PASS | true | **PASS phase audit; PARTIAL product** | none |
 
