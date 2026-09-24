@@ -485,6 +485,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **485–486** after 483/484 seal POSTs; POST waiver reconcile plus variance closure digest checkpoint / finalization.
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+## PR slice (branch `cursor/tb-seal-verifications-tb-external-transport-ack-472b`) — ack-recon TB outbound-registry seal_verifications transport-boundary external transport receipt acknowledgment on PR #223/#225 parents (stub-honest, frontend_real)
+
+- Parents on PR #223/#225 reconciled `..._seal_verifications_transport_boundary_receipt_reconciliations` rows (operator GET **485–486**); governance anchor `platform/persistence/workflowOpsAckReconTbOutboundRegistrySealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentGovernance.ts` (re-exports PR #206-shaped builders).
+- Extended `/api/d2/ops-reporting` with monitoring views **487–488** (digest-rebuild sync from reconciled TB receipt-reconciliation parents) and six partner-governed lifecycle POST actions (`seal_verifications` path on 485/486 collections).
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **487–488** after 485/486 reconciliation POSTs; POST checkpoint / acknowledge / finalization (waiver + variance).
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Ship PR #206-style TB seal-verifications transport-boundary **external transport receipt acknowledgment** on reconciled 485/486 transport-boundary receipt reconciliation parents (GET **487–488** chain continuation).
+Ship PR #213-style TB seal-verifications transport-boundary **external transport receipt acknowledgment reconciliation** on acknowledged 487/488 external transport receipt acknowledgment parents (GET **489–490** chain continuation).

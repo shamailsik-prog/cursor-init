@@ -3924,6 +3924,134 @@ export function OperatorAuditConsole() {
       },
       [200, 400, 403, 422]
     )
+
+    const custodyTbAckReconOutboundRegistrySealVerificationsTransportBoundaryExternalTransportReceiptAcknowledgmentView =
+      "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments"
+    const closureTbAckReconOutboundRegistrySealVerificationsTransportBoundaryExternalTransportReceiptAcknowledgmentView =
+      "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments"
+
+    await runApiCall({
+      step: "PR slice view: custody TB ack-recon outbound-registry seal_verifications transport boundary external transport receipt acknowledgments (487)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: custodyTbAckReconOutboundRegistrySealVerificationsTransportBoundaryExternalTransportReceiptAcknowledgmentView,
+        actorId: partnerId,
+        matterId,
+        transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus:
+          "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "PR slice view: closure TB ack-recon outbound-registry seal_verifications transport boundary external transport receipt acknowledgments (488)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: closureTbAckReconOutboundRegistrySealVerificationsTransportBoundaryExternalTransportReceiptAcknowledgmentView,
+        actorId: partnerId,
+        matterId,
+        ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus:
+          "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: checkpoint custody TB ack-recon outbound-registry seal_verifications transport boundary external transport receipt acknowledgment",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment",
+          actorId: partnerId,
+          matterId,
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentCheckpointReference:
+            "blocked_todo_firm:transport_stub_tb_outbound_registry_seal_verifications_transport_boundary_external_transport_receipt_acknowledgment:ops_probe",
+          reason: "TB outbound-registry seal_verifications transport boundary external transport receipt acknowledgment operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: acknowledge custody TB ack-recon outbound-registry seal_verifications transport boundary external transport receipt",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt",
+          actorId: partnerId,
+          matterId,
+          reason: "TB outbound-registry seal_verifications transport boundary external transport receipt acknowledgment operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: control custody TB ack-recon outbound-registry seal_verifications transport boundary external transport receipt acknowledgment finalization",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "control_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_finalization",
+          actorId: partnerId,
+          matterId,
+          reason: "TB outbound-registry seal_verifications transport boundary external transport receipt acknowledgment operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: checkpoint closure TB ack-recon outbound-registry seal_verifications transport boundary external transport receipt acknowledgment digest",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_digest",
+          actorId: partnerId,
+          matterId,
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentDigest:
+            "blocked_todo_firm:transport_stub_tb_outbound_registry_seal_verifications_transport_boundary_external_transport_receipt_acknowledgment_digest:ops_probe",
+          reason: "TB outbound-registry seal_verifications transport boundary external transport receipt acknowledgment operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: acknowledge closure TB ack-recon outbound-registry seal_verifications transport boundary external transport receipt",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "acknowledge_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt",
+          actorId: partnerId,
+          matterId,
+          reason: "TB outbound-registry seal_verifications transport boundary external transport receipt acknowledgment operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: control closure TB ack-recon outbound-registry seal_verifications transport boundary external transport receipt acknowledgment finalization",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action:
+            "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_finalization",
+          actorId: partnerId,
+          matterId,
+          reason: "TB outbound-registry seal_verifications transport boundary external transport receipt acknowledgment operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
   }
 
   return (
