@@ -3100,6 +3100,74 @@ describe("GET /api/d2/ops-reporting", () => {
       )
     ).toBe(true)
 
+    const custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationRes =
+      await getOpsReport(
+        new URLSearchParams({
+          view:
+            "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations",
+          actorId: "associate_a",
+          matterId,
+          limit: "10",
+          cursor: "0",
+        })
+      )
+    expect(custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationRes.status).toBe(
+      200
+    )
+    const custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationJson =
+      (await custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationRes.json()) as {
+        items: Array<{
+          matterId: string
+          transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus: string
+          externalTransportChannel: string
+          provenanceTags: string[]
+        }>
+      }
+    expect(
+      custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus ===
+            "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending" &&
+          row.externalTransportChannel === "blocked_todo_firm" &&
+          row.provenanceTags.includes("transport_stub:true")
+      )
+    ).toBe(true)
+
+    const closureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationRes =
+      await getOpsReport(
+        new URLSearchParams({
+          view:
+            "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations",
+          actorId: "associate_a",
+          matterId,
+          limit: "10",
+          cursor: "0",
+        })
+      )
+    expect(closureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationRes.status).toBe(
+      200
+    )
+    const closureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationJson =
+      (await closureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationRes.json()) as {
+        items: Array<{
+          matterId: string
+          ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus: string
+          externalTransportChannel: string
+          provenanceTags: string[]
+        }>
+      }
+    expect(
+      closureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus ===
+            "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending" &&
+          row.externalTransportChannel === "blocked_todo_firm" &&
+          row.provenanceTags.includes("transport_stub:true")
+      )
+    ).toBe(true)
+
     const custodyAckReconTbSealVerificationTransportBoundaryReconciliationRes = await getOpsReport(
       new URLSearchParams({
         view:
