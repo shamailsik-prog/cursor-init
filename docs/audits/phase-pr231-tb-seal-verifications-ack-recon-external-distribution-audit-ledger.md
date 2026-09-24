@@ -110,3 +110,79 @@ operator-console lattice; truncation is **not** the defect. The blocking major
 is the new undefined Firestore repository helper. Keep the product PARTIAL:
 `transport_stub=true` is accepted as the terminal transport boundary and must
 not be converted into a COMPLETE claim or a request for live credentials.
+
+## Re-audit — remediation PR #233 at `a075adb` (2026-09-24)
+
+> **Verdict: PASS — 0 blockers, 0 new majors, 1 inherited minor. Product: PARTIAL.**
+
+Audited remediation tip: `a075adb04b87406571ef3fdb1688d703c1fe7fad`
+Remediation commit: `a075adb fix(persistence): wire deny-by-default Firestore repos for ops 491–492 (#233)`
+Prior product failure: `15088d49ef273379f13d66e5ddc1043dd57ef01c` (#231)
+Prior audit-doc commit: `95b0a4bd135eefbca26e22ac4953d4c0fb0e33ba` (#232)
+
+### A. Prior-FAIL closure — PASS
+
+- The #231 regression is closed, not suppressed: the remediation adds
+  `platform/persistence/denyByDefaultWorkflowOpsRepository.ts`, whose explicit
+  collection map covers both 491/492 spine keys and whose binder implements
+  `upsert`, `get`, `listByFirm`, and `listByMatter`.
+- `createFirestoreRepositories()` imports and instantiates that binder before
+  assigning the two 491/492 repositories. This removes the prior unbound-name
+  `ReferenceError` at factory construction.
+- The required real emulator rerun is green: `npm run test:rules` reports
+  **3 files, 22/22 tests passed** (rules 7, repositories 1, runtime mode 14).
+
+### B. Architecture and `backend_real` — PASS
+
+- The mapped binder is fail-closed for unknown property keys and binds only the
+  two explicit deny-by-default Firestore collection paths. Its repositories
+  use server-side Firestore access for persistence and query rows by firm or
+  matter after loading the mapped collection.
+- The route and repository-wiring suites execute the 491 persistence route
+  path; the runtime-mode emulator suite passes after the in-memory reset.
+  `backend_real=true` is now substantiated by functioning repository
+  construction and the full persistence suite.
+
+### C. `frontend_real` and lattice integrity — PASS
+
+- `app/ops/operator-audit-console.tsx` retains the end-to-end 485–492 lattice:
+  489/490 direct parent views precede 491/492, and the latter pair is followed
+  by **6/6** lifecycle POSTs to `/api/d2/ops-reporting`.
+- The focused frontend tests cover the 489/490 parent regression and the
+  491/492 continuation; the full focused FE/API/route-wiring run is **4 files,
+  133/133 tests passed**. This is a concrete operator-console call site, not
+  API-only scaffolding or a missing FE call site.
+
+### D. Data, Firestore, and security — PASS
+
+- Firestore rules preserve same-firm, classification-cleared, role-gated reads
+  with client writes denied for the workflow-ops collections. The rules suite
+  passes **7/7**, including expected denied writes.
+- Stub posture is unchanged and honest: the governance module retains
+  `transport_stub:true` and `blocked_todo_firm`. No court or external
+  transport credentials were added or exercised.
+
+### E. Tests and release gates — PASS
+
+| Command | Independent result |
+|---|---|
+| Focused FE/API/route wiring (4 files) | PASS — **133/133** |
+| `npm run test:rules` | PASS — **22/22** |
+| `npm run gate:g0` | PASS |
+| `npm run gate:g1` | PASS — **10/10** |
+| Exact closed-PR #231 metadata replay through `check_pr_phase_claims.py` | PASS |
+
+### F. Labels and regressions — PASS
+
+- The closed #231 metadata's `backend_real=true`, `frontend_real=true`, and
+  `transport_stub=true` labels are now consistent with the audited target.
+  The claim-gate replay validates its `classification=PARTIAL` posture.
+- Product classification remains **PARTIAL**, never COMPLETE, because
+  `transport_stub=true` is accepted as a product boundary but precludes a
+  COMPLETE claim.
+- The pre-existing #205 `persistence.repositories` minor is not newly
+  regressed by this remediation and is non-blocking here; its repository suite
+  passes in the mandated 22/22 emulator run.
+
+**Re-audit classification: Phase audit PASS (0 blockers, 0 new majors, 1
+inherited minor); Product PARTIAL.**

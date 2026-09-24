@@ -1487,3 +1487,31 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #231 | TB seal-verifications ack-recon external-distribution audit ledger on #229 489/490 parents | `15088d4` / parent `c987491` | **FAIL** | **PASS** | true | **FAIL phase audit; PARTIAL product** | major |
 
+## Re-audit closure — PR #231 Firestore deny-by-default binder remediation (PR #233)
+
+- Audit file: `docs/audits/phase-pr231-tb-seal-verifications-ack-recon-external-distribution-audit-ledger.md`
+- Date: 2026-09-24
+- Audited remediation tip: `a075adb04b87406571ef3fdb1688d703c1fe7fad`.
+- Closure evidence: PR #233 adds the explicit
+  `createDenyByDefaultWorkflowOpsRepositoryBinder`, maps both 491/492 spine
+  repository keys to their Firestore collection names, and binds it inside
+  `createFirestoreRepositories()`. The original undefined-helper
+  `ReferenceError` is eliminated.
+- `BACKEND_REAL`: **PASS** — real Firestore emulator
+  `npm run test:rules` is **22/22** (rules 7, repositories 1, runtime mode 14).
+- `FRONTEND_REAL`: **PASS** — `app/ops/operator-audit-console.tsx` retains GET
+  **485–492**, including 489/490 parents before GET 491/492, followed by the
+  continuation's **6/6** lifecycle POSTs. Focused FE/API/route wiring is
+  **133/133** across four files.
+- `TRANSPORT_STUB`: **PASS honesty** — `transport_stub:true` and
+  `blocked_todo_firm` remain; the correct product classification is
+  **PARTIAL**, never COMPLETE. No live court-transport credentials were used.
+- Release verification: exact closed-PR #231 metadata replay, G-0, and G-1
+  pass; G-1 is **10/10**.
+- The inherited #205 `persistence.repositories` minor is non-blocking and not
+  newly regressed; its suite passes in the mandatory emulator run.
+
+| PR | Re-audited tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|
+| #231 + #233 remediation | `a075adb` | **PASS** | **PASS** | true | **PASS phase audit; PARTIAL product** | 1 inherited minor |
+
