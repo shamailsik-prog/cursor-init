@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-24 (PR #219 independent phase audit appended)
+Last updated: 2026-09-24 (PR #221 independent phase audit appended)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1333,4 +1333,21 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|
 | #219 | outbound registry attestation ledger on #217 audit-ledger / partner-handoff parents | `2d7473b` / parent `62480b2` | PASS | PASS | true | **PASS phase audit; PARTIAL product** | none |
+
+## Targeted ledger — PR #221 partner-delivery freeze-override seal verification on #219 parents
+
+- Audit file: `docs/audits/phase-pr221-partner-delivery-freeze-override-seal-verification.md`
+- Date: 2026-09-24
+- Audited landed tip and direct parent: `a5f09e800906144ab95746691e697586e6b470c9` → `8bbcd263dc8b9e8f067c94235167bccbee22e216`.
+- `BACKEND_REAL`: **PASS** — inherited custody and closure GET views 483/484 use firm-scoped repositories with clearance, matter, lifecycle, freshness, and permission filtering. The chained governance builders retain parent-status gates, repository persistence, audit entries, idempotency, and explicit stub provenance. The landed route syntax repairs compile and the full route-wiring suite passes.
+- `FRONTEND_REAL`: **PASS** — the visible `/ops` lattice executes concrete GET views **483/484** and all five claimed POST actions against `/api/d2/ops-reporting`. The focused test verifies the endpoint, methods, action identifiers, and ordering after #219 registration.
+- `TRANSPORT_STUB`: **PASS honesty** — governance and UI preserve `blocked_todo_firm` plus `transport_stub:true`; that is an accepted terminal transport boundary and requires **PARTIAL**, not COMPLETE. No live court or external credentials were requested.
+- Claim gate: **PASS** — the exact closed PR #221 title/body replay with `BASE_SHA=8bbcd26..` and `HEAD_SHA=a5f09e8..` validates the three labels, machine-readable `/ops` action/view evidence, focused test, and `/api/...` evidence.
+- Rules: unchanged by PR #221. Inherited collections remain cleared same-firm read and deny-write; an emulator rerun is not required by the rules-touched criterion.
+- Gates: focused PR #221 frontend **2/2**, parent-focused frontend **2/2**, complete route-wiring **124/124**, G-0 PASS, G-1 **10/10**.
+- Verdict: **PASS (no blockers/majors/minors); PARTIAL product**.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #221 | partner-delivery freeze-override seal verification on #219 outbound-registry / partner-handoff parents | `a5f09e8` / parent `8bbcd26` | PASS | PASS | true | **PASS phase audit; PARTIAL product** | none |
 
