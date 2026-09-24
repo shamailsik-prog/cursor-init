@@ -1451,3 +1451,39 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #229 | TB seal-verifications external transport receipt acknowledgment reconciliation on #227 487/488 parents | `2e9196f` / base `42de9b7` | **PASS** | **PASS** | true | **PASS phase audit; PARTIAL product** | inherited minor |
 
+## Targeted ledger — PR #231 TB seal-verifications acknowledgment-reconciliation external-distribution audit ledger
+
+- Audit file: `docs/audits/phase-pr231-tb-seal-verifications-ack-recon-external-distribution-audit-ledger.md`
+- Date: 2026-09-24
+- Audited landed tip and direct parent: `15088d49ef273379f13d66e5ddc1043dd57ef01c` →
+  `c987491df65e1389883a8f278fecbf22b557bb20`.
+- **LATTICE INTEGRITY: PASS.** The squash-land resolution retained the full
+  `ops-reporting` lattice: landed `route.ts` is 33,182 lines versus the truncated
+  original PR head's 15,887, restoring 17,295 lines. `/ops` retains GET
+  **485–492**, including parent 489/490 and new 491/492, plus both parent and
+  new six-action POST lifecycles.
+- `FRONTEND_REAL`: **PASS** — GET **491/492** and all **6/6** claimed lifecycle
+  POSTs concretely call `/api/d2/ops-reporting` after the intact 489/490 block.
+  Focused frontend/API/route-wiring validation passes **133/133**.
+- `BACKEND_REAL`: **FAIL (major)** — this landing adds two references to
+  undefined `createDenyByDefaultWorkflowOpsRepository` in
+  `firestoreSpineRepositories.ts`. `createFirestoreRepositories()` consequently
+  throws before Firestore-backed routes can run. The direct parent lacks those
+  references, so this is a new #231 regression rather than the inherited
+  `cee14af` (#205) minor.
+- `TRANSPORT_STUB`: honest (`transport_stub:true` and `blocked_todo_firm`);
+  product classification remains **PARTIAL**, never COMPLETE, and no live
+  court-transport credential escalation is required.
+- Claim gate: **PASS** — exact closed #231 title/body replay with
+  `BASE_SHA=c987491...` and `HEAD_SHA=15088d4...` passes.
+- Gates: G-0 PASS; G-1 **10/10**. `npm run test:rules` **FAILS 15/22**
+  (Firestore rules 7/7 pass; repository plus 14 runtime-mode tests all fail with
+  the new undefined-helper `ReferenceError`).
+- Verdict: **FAIL phase audit (1 major; no blockers/minors); PARTIAL product**.
+  Replace the two placeholder helper calls with concrete Firestore repository
+  adapters and rerun the full persistence suite before re-audit.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #231 | TB seal-verifications ack-recon external-distribution audit ledger on #229 489/490 parents | `15088d4` / parent `c987491` | **FAIL** | **PASS** | true | **FAIL phase audit; PARTIAL product** | major |
+
