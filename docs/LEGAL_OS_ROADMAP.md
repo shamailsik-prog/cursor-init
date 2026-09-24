@@ -472,6 +472,12 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx`: GET monitoring views **481–482** (custody partner handoff attestation on TB audit ledger + closure outbound registry attestation ledger) after PR #217 ledger record POST; POST finalize external distribution audit ledger, register outbound-registry partner handoff (waiver), and register outbound registry attestation ledger (variance).
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+## PR slice (branch `cursor/tb-partner-delivery-freeze-override-seal-fe9d`) — ack-recon TB partner-delivery receipt freeze-override seal verification on PR #219 parents (stub-honest, frontend_real)
+
+- Parents on PR #219 outbound-registry attestation-ledger / partner-handoff attestation rows; governance anchor `platform/persistence/workflowOpsAckReconTbOutboundRegistrySealVerificationGovernance.ts` (re-exports PR #201-shaped builders).
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET monitoring views **483–484** (custody + closure TB outbound-registry partner-delivery freeze-override seal verification) after PR #219 outbound-registry register POSTs; POST attest partner handoff, checkpoint outbound-registry freeze override, checkpoint seal verification (custody), digest partner-delivery freeze override (closure), and control outbound-registry attestation ledger seal (closure).
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Ship the next ack-recon chain link after outbound registry attestation ledger on TB audit-ledger / partner-handoff parents (for example PR #200-style partner-delivery receipt freeze-override seal verification on TB outbound-registry attestation-ledger rows).
+Ship the next ack-recon chain link after TB outbound-registry partner-delivery freeze-override seal verification (for example PR #202-style seal verification transport-boundary receipt reconciliation on TB seal-verification parents).
