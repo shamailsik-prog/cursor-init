@@ -466,6 +466,12 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx`: GET monitoring views **479–480** (custody external distribution audit ledger + closure partner handoff attestation on reconciled ack chain) after PR #213 reconcile POST; POST digest checkpoint, reconciliation finalization, and external distribution audit ledger entry record.
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+## PR slice (branch `cursor/tb-outbound-registry-attestation-ledger-fc92`) — ack-recon TB outbound registry attestation ledger on PR #217 parents (stub-honest, frontend_real)
+
+- Parents on PR #217 reconciled `..._external_transport_receipt_acknowledgment_reconciliations` external distribution audit ledger + partner handoff attestation rows; governance anchor `workflowOpsAckReconTbSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerGovernance.ts` (re-exports PR #199-shaped builders).
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET monitoring views **481–482** (custody partner handoff attestation on TB audit ledger + closure outbound registry attestation ledger) after PR #217 ledger record POST; POST finalize external distribution audit ledger, register outbound-registry partner handoff (waiver), and register outbound registry attestation ledger (variance).
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Ship the next ack-recon chain link after PR #217 external distribution audit ledger on reconciled TB seal-verifications acknowledgment reconciliation (for example PR #199-style outbound registry attestation ledger on TB audit-ledger / partner-handoff parents).
+Ship the next ack-recon chain link after outbound registry attestation ledger on TB audit-ledger / partner-handoff parents (for example PR #200-style partner-delivery receipt freeze-override seal verification on TB outbound-registry attestation-ledger rows).
