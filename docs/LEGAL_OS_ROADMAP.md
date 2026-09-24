@@ -445,6 +445,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx` (GET **463–464** + **469–470**, POST waiver reconcile).
 - Builder audit stub: `docs/audits/phase-pr202-workflow-slo-ack-recon-tb-seal-verification-transport-boundary-receipt-reconciliation.md`.
 
+## PR #206 (branch `cursor/tb-external-transport-receipt-ack-ccc1`) — ack-recon TB seal-verifications transport-boundary external transport receipt acknowledgment (stub-honest)
+
+- Added durable **dual-track** child rows parented on PR #205 `..._seal_verifications_transport_boundary_receipt_reconciliations` (`workflowOpsAckReconTbSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentGovernance.ts`), memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId`.
+- Extended `/api/d2/ops-reporting` with monitoring views **475–476**, digest-rebuild sync from reconciled boundary parents, and six partner-governed lifecycle actions (checkpoint / acknowledge / finalization per track).
+- Operator console wiring in `app/ops/operator-audit-console.tsx` (GET **475–476** after PR #205 reconcile, POST custody checkpoint).
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **external transport receipt acknowledgment** on the PR #202 TB seal-verification transport-boundary receipt reconciliation row (next chain link after TB transport-boundary reconciliation, analogous to PR #193 after PR #191).
+Ship the next ack-recon chain link after PR #206 TB seal-verifications transport-boundary **external transport receipt acknowledgment** (for example nested reconciliation or partner lifecycle surfaces that continue the PR #205 reconciled boundary parent chain).
