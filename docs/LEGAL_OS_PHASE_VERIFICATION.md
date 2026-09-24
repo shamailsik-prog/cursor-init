@@ -1423,3 +1423,31 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #227 | TB seal-verifications external transport receipt acknowledgment on #223/#225 485/486 parents | `8547426` / parent `fd3bf60` | **PASS** | **PASS** | true | **PASS phase audit; PARTIAL product** | inherited minor |
 
+## Targeted ledger — PR #229 TB seal-verifications external transport acknowledgment reconciliation
+
+- Audit file: `docs/audits/phase-pr229-tb-seal-verifications-external-transport-ack-reconciliation.md`
+- Date: 2026-09-24
+- Audited landed tip and base: `2e9196fbb90c50fb6454c5a633219b9e322a147c` over
+  `42de9b78d070f7ca40d7ff22a02d3b779a4c0b7c`.
+- `BACKEND_REAL`: **PASS** — `/api/d2/ops-reporting` imports the outbound-registry
+  PR #213-shaped reconciliation governance re-export, lists the 489/490 dual-track
+  rows, and exposes all six repository-backed lifecycle handlers.
+- `FRONTEND_REAL`: **PASS** — the executable `/ops` lattice performs concrete GET
+  **489–490** calls after 487/488 acknowledgment and all **6/6** lifecycle POSTs.
+  The focused four-file suite passes **10/10**.
+- `TRANSPORT_STUB`: **PASS honesty** — `transport_stub:true` and
+  `blocked_todo_firm` remain explicit. Product classification is **PARTIAL**, never
+  COMPLETE, and requires no live external-transport credential escalation.
+- Claim gate: **PASS** — replaying the exact closed Origin #229 title/body with
+  `BASE_SHA=42de9b7` and `HEAD_SHA=2e9196f` passes.
+- Gates: G-0 PASS; G-1 **10/10**. `npm run test:rules` remains **21/22**:
+  Firestore rules **7/7** and runtime-mode **14/14** pass; the undefined builder at
+  `tests/persistence.repositories.test.ts:3017` is the inherited `cee14af` (#205)
+  minor and is not newly regressed by #229.
+- Verdict: **PASS phase audit (0 blockers, 0 majors, 1 inherited minor); PARTIAL
+  product**.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #229 | TB seal-verifications external transport receipt acknowledgment reconciliation on #227 487/488 parents | `2e9196f` / base `42de9b7` | **PASS** | **PASS** | true | **PASS phase audit; PARTIAL product** | inherited minor |
+
