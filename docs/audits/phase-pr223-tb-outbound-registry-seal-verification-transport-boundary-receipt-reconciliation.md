@@ -168,3 +168,83 @@ that evidence is “in audit doc,” but has no machine-readable action/view
 **Phase audit: FAIL (major). Product: PARTIAL.** There are no blockers or minors.
 The PARTIAL classification is solely the accepted `transport_stub=true` terminal; it
 does not excuse the frontend and verification failures above.
+
+---
+
+## Independent remediation re-audit — `ef7fe998556b469373ffeb7f13f4853d5b905a17` (`ef7fe99`)
+
+> **Re-audit verdict (2026-09-24): PASS — no blockers or majors; one inherited minor. Product remains PARTIAL.**
+
+Scope: remediation PR #225 against the prior FAIL audit on `539f200`, independently
+re-run at the supplied landed tip. This section supersedes the failure findings above
+only for the three remediation claims. It does not promote the transport boundary to
+live transport.
+
+### A. Prior FAIL closure — PASS
+
+| Prior major | Independent result |
+|---|---|
+| Three omitted lifecycle call sites | Fixed: `/ops` has six ordered POST call sites after views 485/486. |
+| `ensureWorkflowOpsAlertGovernanceRows` missing in-memory repository `.get` | Fixed: the variance repository is present in `createMemoryRepositories()` and the route suite passes. |
+| Closed #223 metadata lacks claim-gate evidence | Fixed by #225's canonical metadata and its closed PR body; gate replay passes. |
+
+### B. Architecture and `backend_real` — PASS
+
+- The governance builders retain parent-status gates, chained IDs, explicit
+  `transport_stub:true` provenance, and `blocked_todo_firm`; they do not represent
+  live external or court transport.
+- `spineRepositories.ts` now supplies the missing variance
+  `...SealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations`
+  in-memory `upsert`, `get`, `listByFirm`, and `listByMatter` implementation.
+- The previously crashing lookup in `ensureWorkflowOpsAlertGovernanceRows` reaches
+  that repository. `tests/api.ops-reporting.test.ts` executes its two 485/486 GET
+  assertions successfully: **4/4** tests pass.
+
+### C. `frontend_real` — PASS
+
+- `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice()` has
+  concrete GET calls for custody view **485** and closure view **486**, both to
+  `/api/d2/ops-reporting`.
+- It then makes all **6/6** lifecycle POSTs to the same path: waiver reconcile,
+  digest checkpoint, and finalization; variance digest checkpoint, attestation, and
+  finalization.
+- The focused frontend test asserts both GET views, every action identifier, POST
+  method/path, and sequencing. It passes **2/2**.
+
+### D. Data, Firestore, security, and governance honesty — PASS
+
+- Both governance builders preserve the parent firm, matter, classification, status
+  snapshots, and stub provenance. The read rules for the relevant inherited
+  collections enforce same-firm cleared-data reads and deny direct client writes.
+- Firestore rules were not changed by #225. The emulator rules suite passes **7/7**.
+- No live court or external transport credential was requested, configured, or
+  implied. `transport_stub=true` remains an honest terminal boundary.
+
+### E. Tests and gates — PASS, inherited minor recorded
+
+| Command | Result |
+|---|---|
+| `npx vitest run tests/ops.pr-tb-outbound-registry-seal-transport-boundary-reconciliation-frontend-real.test.ts tests/api.ops-reporting.test.ts` | PASS — **6/6** (focused frontend 2/2; API 4/4) |
+| canonical `PR_TITLE`/`PR_BODY`, `BASE_SHA=1e8a460`, `HEAD_SHA=ef7fe99` `python3 ci_gates/check_pr_phase_claims.py` | PASS |
+| `npm run gate:g0` | PASS |
+| `npm run gate:g1` | PASS — **10/10** |
+| `npm run test:rules` | **21/22**: rules 7/7 and runtime mode 14/14 pass; `persistence.repositories` has one ReferenceError |
+
+The lone emulator failure is an inherited, unrelated test defect: the undefined
+`buildWorkflowOpsAlert...TransportBoundaryReceiptReconciliationRow` reference at
+`tests/persistence.repositories.test.ts:3017` is already present at `539f200` and
+is outside #225's four-file diff. It is a **minor** follow-up, not evidence against
+the remediated 485/486 GET or six lifecycle call sites.
+
+### F. Docs, labels, and regressions — PASS
+
+- Closed remediation PR #225 declares `backend_real=true`, `frontend_real=true`,
+  `transport_stub=true`, and `classification=PARTIAL`; its body maps both views and
+  all six actions to `app/ops/operator-audit-console.tsx` and names the concrete API
+  path.
+- The replayed claim gate accepts that metadata. The product stays **PARTIAL** while
+  the accepted `transport_stub` remains; it is not eligible for COMPLETE.
+
+## Re-audit final classification
+
+**Phase audit: PASS (0 blockers, 0 majors, 1 inherited minor). Product: PARTIAL.**

@@ -1367,3 +1367,29 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #223 | TB outbound-registry seal-verification transport-boundary receipt reconciliation on #221 parents | `1e8a460` / parent `a95d33c` | source PASS; runtime unproven | **FAIL** | true | **FAIL phase audit; PARTIAL product** | major |
 
+### PR #223 remediation re-audit — landed `ef7fe99` (#225)
+
+- Audit file: `docs/audits/phase-pr223-tb-outbound-registry-seal-verification-transport-boundary-receipt-reconciliation.md`
+- Date: 2026-09-24
+- Re-audited remediation tip: `ef7fe998556b469373ffeb7f13f4853d5b905a17` from failed-audit
+  tip `539f200cc719`.
+- `BACKEND_REAL`: **PASS** — the variance in-memory repository now implements the
+  lookup called by `ensureWorkflowOpsAlertGovernanceRows`; `api.ops-reporting`
+  executes GET **485/486** successfully (**4/4**).
+- `FRONTEND_REAL`: **PASS** — `/ops` calls GET **485/486** and all **6/6** waiver
+  and variance lifecycle POSTs to `/api/d2/ops-reporting`; the focused test passes
+  **2/2** and verifies identifiers, endpoint, methods, and ordering.
+- Claim gate: **PASS** — canonical #225 title/body replay with
+  `BASE_SHA=1e8a460` and `HEAD_SHA=ef7fe99` passes. Its labels are
+  `backend_real=true`, `frontend_real=true`, `transport_stub=true`.
+- Gates: G-0 PASS; G-1 **10/10**. Firestore rules **7/7** and runtime-mode
+  **14/14** pass. One inherited, unrelated `persistence.repositories` ReferenceError
+  remains (**21/22** combined emulator suite), already present at `539f200`.
+- Verdict: **PASS phase audit (no blockers/majors; one inherited minor); PARTIAL
+  product**. `transport_stub=true` is accepted but precludes COMPLETE; no live court
+  transport credential escalation is required.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #223 re-audit | remediation of #223 transport-boundary receipt reconciliation | `ef7fe99` / audit base `539f200` | **PASS** | **PASS** | true | **PASS phase audit; PARTIAL product** | inherited minor |
+
