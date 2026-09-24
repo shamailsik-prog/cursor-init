@@ -1272,3 +1272,18 @@ The gate fails when either condition is true:
 | Phase audit | **PASS** |
 | Product | **PARTIAL** |
 
+## Targeted ledger — PR #213 TB seal-verifications external transport receipt acknowledgment reconciliation
+
+- Audit file: `docs/audits/phase-pr213-tb-seal-verifications-external-transport-receipt-ack-reconciliation.md`
+- Date: 2026-09-24
+- Audited landed tip / parent: `955bf5e8a01656172670789c6eb8a6a0bb8b3166` / `0b52925cfd8cf198316ebc7891a66f0d74f8af26`.
+- `BACKEND_REAL`: **PASS** — dual-track memory and Firestore adapters, parent acknowledgment gate, receipt-parity handling, and deny-write rules are present; the Firestore emulator rules/repositories/runtime trio passes **22/22**.
+- `FRONTEND_REAL`: **PASS** — the `/ops` lattice has GET views **477/478** and the custody reconcile POST; the focused `tests/ops.pr-213-…` suite passes **2/2**.
+- `TRANSPORT_STUB`: **PASS honesty** — `blocked_todo_firm`, `transport_stub:true`, and stub parity provenance require the product to remain **PARTIAL**, not COMPLETE.
+- Claim gate: **FAIL (major)** — replaying `ci_gates/check_pr_phase_claims.py` with the actual Origin PR #213 description and `BASE_SHA=0b52925..`, `HEAD_SHA=955bf5e..` exits 1. The description lacks required machine-readable action-name → `app/ops/operator-audit-console.tsx` and concrete `/api/...` fetch-path evidence for its `app/ops/**` change. A canonicalized replay that adds omitted evidence passes, but does not validate the landed metadata.
+- Gates: G-0 PASS; G-1 **10/10**.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #213 | TB seal-verifications external transport receipt acknowledgment reconciliation | `955bf5e` / base `0b52925` | PASS | PASS | true | **FAIL phase audit; PARTIAL product** | major |
+
