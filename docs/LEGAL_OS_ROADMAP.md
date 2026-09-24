@@ -433,6 +433,18 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Extended `/api/d2/ops-reporting` with monitoring views, digest-rebuild sync from PR #199 parents, and six partner-governed lifecycle actions (Tb-prefixed mirror of PR #188).
 - Builder audit stub: `docs/audits/phase-pr200-workflow-slo-ack-recon-tb-partner-delivery-receipt-freeze-override-seal-verification.md`.
 
+## PR #201 (landed @ `8bb1f1c`) — ack-recon TB partner-delivery receipt freeze-override seal verification collections (stub-honest)
+
+- Landed dual-track TB seal verification rows parented on PR #199 outbound-registry attestation-ledger rows (`..._partner_delivery_receipt_freeze_override_seal_verifications` before PR #202 `_transport_boundary_receipt_reconciliations` suffix), with ops-reporting views **463–464**, digest sync, and six partner lifecycle actions on the deep TB chain.
+
+## PR #202 (in flight on branch `cursor/tb-seal-verification-transport-boundary-receipt-reconciliation-3504`) — ack-recon TB seal verification transport-boundary receipt reconciliation (stub-honest)
+
+- Added durable **dual-track** child rows parented on PR #201 TB seal verification rows (`..._partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations`), memory + Firestore repositories, deny-write Firestore rules, and **sha256-hashed document IDs** via `buildWorkflowOpsChainedDocumentId` (`seal_verifications` + `transport_boundary_receipt_reconciliation` hash prefixes).
+- Governance in `platform/persistence/workflowOpsAckReconTbSealVerificationTransportBoundaryReceiptReconciliationGovernance.ts` with `transport_stub:true` / `blocked_todo_firm`; parent gates on finalized TB seal verification per track (mirror PR #191 on archival ack-recon seal verification).
+- Extended `/api/d2/ops-reporting` with monitoring views **469–470**, digest-rebuild sync from TB seal verification parents, and six partner-governed lifecycle actions (waiver: reconcile / digest checkpoint / control finalization; variance: digest checkpoint / reconcile / control finalization) wired to **PR #202** repos (fixes mistaken upserts to PR #191 collections).
+- Operator console wiring in `app/ops/operator-audit-console.tsx` (GET **463–464** + **469–470**, POST waiver reconcile).
+- Builder audit stub: `docs/audits/phase-pr202-workflow-slo-ack-recon-tb-seal-verification-transport-boundary-receipt-reconciliation.md`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Build **transport-boundary receipt reconciliation** on the TB partner-delivery receipt freeze-override seal verification row (next chain link after TB seal verification, analogous to PR #191 after PR #188 on the archival ack-recon chain).
+Build **external transport receipt acknowledgment** on the PR #202 TB seal-verification transport-boundary receipt reconciliation row (next chain link after TB transport-boundary reconciliation, analogous to PR #193 after PR #191).

@@ -3007,6 +3007,42 @@ describe("Firestore repository adapters", () => {
       )
       expect(repoCustodyAckReconTbOutboundRegistrySealVerification.id.length).toBeLessThanOrEqual(1500)
       expect(repoClosureAckReconTbOutboundRegistrySealVerification.id.length).toBeLessThanOrEqual(1500)
+      const {
+        buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow,
+        buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow,
+      } = await import(
+        "@/platform/persistence/workflowOpsAckReconTbSealVerificationTransportBoundaryReceiptReconciliationGovernance"
+      )
+      const repoCustodyAckReconTbSealVerificationTransportBoundaryReconciliation =
+        buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow(
+          {
+            partnerDeliveryReceiptFreezeOverrideSealVerification: repoCustodyAckReconTbOutboundRegistrySealVerification,
+            actorId: "partner_a",
+            reason: "ops_custody_ack_recon_tb_seal_verification_transport_boundary_reconciliation_seed",
+            now: 115,
+          }
+        )
+      await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.upsert(
+        repoCustodyAckReconTbSealVerificationTransportBoundaryReconciliation
+      )
+      const repoClosureAckReconTbSealVerificationTransportBoundaryReconciliation =
+        buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow(
+          {
+            partnerDeliveryReceiptFreezeOverrideSealVerification: repoClosureAckReconTbOutboundRegistrySealVerification,
+            actorId: "partner_a",
+            reason: "ops_closure_ack_recon_tb_seal_verification_transport_boundary_reconciliation_seed",
+            now: 116,
+          }
+        )
+      await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.upsert(
+        repoClosureAckReconTbSealVerificationTransportBoundaryReconciliation
+      )
+      expect(repoCustodyAckReconTbSealVerificationTransportBoundaryReconciliation.id.length).toBeLessThanOrEqual(
+        1500
+      )
+      expect(repoClosureAckReconTbSealVerificationTransportBoundaryReconciliation.id.length).toBeLessThanOrEqual(
+        1500
+      )
       await repos.entities.create({
         id: "ent_1",
         firmId: "firmA",
