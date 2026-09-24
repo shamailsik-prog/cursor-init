@@ -506,6 +506,14 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **491–492** and lifecycle POSTs after 489/490 reconciliation POST block in `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice`.
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+
+
+## PR slice (branch `cursor/tb-ack-recon-outbound-registry-attestation-ledger-493-494-7a25`) — outbound registry attestation ledger on TB ack-recon seal_verifications 491/492 parents
+
+- `/api/d2/ops-reporting` monitoring views **493–494** (digest-rebuild sync after 491/492 refresh) and six lifecycle POST actions (custody checkpoint/digest/control + closure checkpoint/digest/control).
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **493–494** and lifecycle POSTs after 491/492 block in `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice`.
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Continue outbound-registry attestation ledger chain continuation parented on finalized 491/492 external distribution audit ledger / partner handoff attestation rows (next GET pair + lifecycle POSTs).
+Continue outbound-registry attestation ledger chain continuation parented on finalized 493/494 external distribution audit ledger / partner handoff attestation outbound registry attestation ledger rows (next GET pair + lifecycle POSTs).
