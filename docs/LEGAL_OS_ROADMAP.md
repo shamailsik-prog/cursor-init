@@ -499,6 +499,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **489–490** after 487/488 acknowledgment POSTs; all six lifecycle POSTs wired in `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice`.
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+## PR slice (branch `cursor/tb-ack-recon-external-distribution-audit-ledger-90e1`) — ack-recon TB outbound-registry seal_verifications transport-boundary external transport receipt acknowledgment reconciliation external distribution audit ledger on PR #229 parents (stub-honest, frontend_real)
+
+- Parents on PR #229 finalized `..._seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations` rows (operator GET **489–490**); governance anchors `workflowOpsAckReconTbOutboundRegistrySealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationGovernance.ts` + re-export ledger governance module (PR #217/#196-shaped builders with `seal_verifications` hash prefixes).
+- `/api/d2/ops-reporting` monitoring views **491–492** (digest-rebuild sync after 489/490 reconciliation refresh) and six partner-governed lifecycle POST actions (custody external distribution audit ledger checkpoint/record/control + variance partner-handoff register/attest/control).
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **491–492** and lifecycle POSTs after 489/490 reconciliation POST block in `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice`.
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Ship PR #217-style TB seal-verifications transport-boundary external transport receipt acknowledgment reconciliation **external distribution audit ledger** on finalized 489/490 acknowledgment reconciliation parents (GET **491–492** chain continuation).
+Continue outbound-registry attestation ledger chain continuation parented on finalized 491/492 external distribution audit ledger / partner handoff attestation rows (next GET pair + lifecycle POSTs).

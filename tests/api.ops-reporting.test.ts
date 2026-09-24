@@ -3134,6 +3134,40 @@ describe("GET /api/d2/ops-reporting", () => {
       )
     ).toBe(true)
 
+    const custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationExternalDistributionAuditLedgerRes =
+      await getOpsReport(
+        new URLSearchParams({
+          view:
+            "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledgers",
+          actorId: "associate_a",
+          matterId,
+          limit: "10",
+          cursor: "0",
+        })
+      )
+    expect(
+      custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationExternalDistributionAuditLedgerRes.status
+    ).toBe(200)
+    const custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationExternalDistributionAuditLedgerJson =
+      (await custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationExternalDistributionAuditLedgerRes.json()) as {
+        items: Array<{
+          matterId: string
+          externalDistributionAuditLedgerStatus: string
+          externalTransportChannel: string
+          provenanceTags: string[]
+        }>
+      }
+    expect(
+      custodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationExternalDistributionAuditLedgerJson.items.some(
+        (row) =>
+          row.matterId === matterId &&
+          row.externalDistributionAuditLedgerStatus ===
+            "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_pending" &&
+          row.externalTransportChannel === "blocked_todo_firm" &&
+          row.provenanceTags.includes("transport_stub:true")
+      )
+    ).toBe(true)
+
     const closureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationRes =
       await getOpsReport(
         new URLSearchParams({
