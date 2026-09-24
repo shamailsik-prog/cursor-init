@@ -1219,3 +1219,17 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #205 | ack-recon TB seal verification × transport-boundary receipt reconciliation | `cee14af` / base `57508c8` | Yes | true | true (real UI, untested under required `tests/ops*`) | true | **FAIL phase audit; PARTIAL product** | major |
 
+## Re-audit closure — PR #205 claim-gate remediation (PR #207)
+
+- Audit file: `docs/audits/phase-pr205-reaudit-after-207.md`
+- Date: 2026-09-24
+- Audited tip and exact parents: `1288c0a` → `34ab13d` → `cee14af` → `57508c8`.
+- Remediation: PR #207 adds `tests/ops.pr-205-tb-transport-boundary-receipt-reconciliation-frontend-real.test.ts` with explicit lattice/button, GET 463/464/469/470, reconcile POST, and ordering coverage.
+- Claim gate: **PASS** when replayed with PR #205 labels/call-site metadata over the combined product-plus-remediation delta `57508c8..34ab13d`. This closes the previous major finding that the `app/ops/**` change had no focused `tests/ops*.test.ts` change.
+- Tests: focused `/ops` **4/4**; route/API/ID **137/137**; Firestore rules/repositories/runtime-mode **22/22**; G-0 PASS; G-1 **10/10**.
+- Classification remains **PARTIAL**, not COMPLETE: `transport_stub=true`, `blocked_todo_firm`, `_stub`, and `TODO(firm)` persist.
+
+| PR | Claimed phase | Audited tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #205 + #207 remediation | ack-recon TB seal verification × transport-boundary receipt reconciliation | `1288c0a` / `34ab13d` / `cee14af` | PASS | PASS (focused `/ops` test added) | true | **PASS phase audit; PARTIAL product** | low |
+
