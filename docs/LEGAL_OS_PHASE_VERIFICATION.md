@@ -1351,3 +1351,19 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #221 | partner-delivery freeze-override seal verification on #219 outbound-registry / partner-handoff parents | `a5f09e8` / parent `8bbcd26` | PASS | PASS | true | **PASS phase audit; PARTIAL product** | none |
 
+## Targeted ledger — PR #223 TB outbound-registry seal verification transport-boundary receipt reconciliation
+
+- Audit file: `docs/audits/phase-pr223-tb-outbound-registry-seal-verification-transport-boundary-receipt-reconciliation.md`
+- Date: 2026-09-24
+- Audited landed tip and direct parent: `1e8a46058836707efe83b00f3663acce869ede9e` → `a95d33cee27b`.
+- `BACKEND_REAL`: source wiring is present (governance builders, repositories, GET 485/486 parser branches, and six POST handlers), but runtime verification is blocked: `tests/api.ops-reporting.test.ts` fails **2/4** in the shared seeding path at `app/api/d2/ops-reporting/route.ts:4432`. A base checkout at `a95d33c` reproduces the same two failures, so this is inherited; it still prevents proof that GET 485/486 run.
+- `FRONTEND_REAL`: **FAIL** — `/ops` reads GET **485/486** but wires only three of six route lifecycle POST actions. The missing call sites are waiver checkpoint, waiver finalization, and variance attestation. The focused tests pass **4/4** but assert only a subset and are insufficient evidence.
+- `TRANSPORT_STUB`: honest (`transport_stub:true` and `blocked_todo_firm` remain); product classification is **PARTIAL**, not COMPLETE. No external credential request is required.
+- Claim gate: **FAIL** — replay against the actual closed PR #223 title/body fails because it lacks required machine-readable action/view-to-`app/ops/operator-audit-console.tsx` evidence.
+- Gates: G-0 PASS; G-1 **10/10**. Rules were unchanged, so no emulator rerun was required.
+- Verdict: **FAIL (major; no blockers/minors); PARTIAL product**. Re-audit after repairing the shared GET seeding regression, adding the three operator call sites plus full focused assertions, and correcting the PR metadata evidence.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #223 | TB outbound-registry seal-verification transport-boundary receipt reconciliation on #221 parents | `1e8a460` / parent `a95d33c` | source PASS; runtime unproven | **FAIL** | true | **FAIL phase audit; PARTIAL product** | major |
+
