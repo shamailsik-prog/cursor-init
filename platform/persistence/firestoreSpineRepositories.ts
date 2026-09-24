@@ -154,6 +154,7 @@ import type {
   User,
 } from "@/platform/spine/store"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
+import { createDenyByDefaultWorkflowOpsRepositoryBinder } from "@/platform/persistence/denyByDefaultWorkflowOpsRepository"
 
 async function setById<T extends { id: string }>(db: Firestore, collectionName: string, row: T) {
   await setDoc(doc(db, collectionName, row.id), row)
@@ -191,6 +192,8 @@ async function listByFirm<T extends { firmId: string }>(
 }
 
 export function createFirestoreRepositories(db: Firestore): SpineRepositories {
+  const createDenyByDefaultWorkflowOpsRepository =
+    createDenyByDefaultWorkflowOpsRepositoryBinder(db)
   return {
     matters: {
       async create(row) {

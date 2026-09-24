@@ -1,0 +1,69 @@
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  type Firestore,
+} from "firebase/firestore"
+
+/**
+ * Firestore collection paths for workflow-ops spine repositories that use
+ * deny-by-default security rules (`allow write: if false`). Property keys use
+ * camelCase with irregular `SealVerification` / `SealVerifications` segments;
+ * map explicitly rather than deriving from the key alone.
+ */
+export const WORKFLOW_OPS_DENY_BY_DEFAULT_FIRESTORE_COLLECTION_BY_SPINE_KEY: Record<string, string> =
+  {
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers:
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers",
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations:
+      "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations",
+  }
+
+function resolveCollectionName(spineRepositoryPropertyKey: string): string {
+  const collectionName =
+    WORKFLOW_OPS_DENY_BY_DEFAULT_FIRESTORE_COLLECTION_BY_SPINE_KEY[spineRepositoryPropertyKey]
+  if (!collectionName) {
+    throw new Error(
+      `Unknown deny-by-default workflow-ops spine repository key: ${spineRepositoryPropertyKey}`
+    )
+  }
+  return collectionName
+}
+
+export type DenyByDefaultWorkflowOpsRow = {
+  id: string
+  firmId: string
+  matterId: string
+}
+
+export function createDenyByDefaultWorkflowOpsRepositoryBinder(db: Firestore) {
+  return function createDenyByDefaultWorkflowOpsRepository<
+    TRow extends DenyByDefaultWorkflowOpsRow,
+  >(spineRepositoryPropertyKey: string) {
+    const collectionName = resolveCollectionName(spineRepositoryPropertyKey)
+    return {
+      async upsert(row: TRow) {
+        await setDoc(doc(db, collectionName, row.id), row)
+      },
+      async get(id: string): Promise<TRow | null> {
+        const snap = await getDoc(doc(db, collectionName, id))
+        if (!snap.exists()) return null
+        return snap.data() as TRow
+      },
+      async listByFirm(firmId: string): Promise<TRow[]> {
+        const snap = await getDocs(collection(db, collectionName))
+        return snap.docs
+          .map((entry) => entry.data() as TRow)
+          .filter((row) => row.firmId === firmId)
+      },
+      async listByMatter(matterId: string): Promise<TRow[]> {
+        const snap = await getDocs(collection(db, collectionName))
+        return snap.docs
+          .map((entry) => entry.data() as TRow)
+          .filter((row) => row.matterId === matterId)
+      },
+    }
+  }
+}
