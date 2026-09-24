@@ -1196,3 +1196,26 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|---|
 | #201 | ack-recon TB partner-delivery receipt freeze-override seal verification (stub-honest) | `8bb1f1c` / product `2128486` / base `23839a67` | Yes | true | false | true | **PASS** (backend-scoped; **PARTIAL** product — not COMPLETE) | low |
 
+## Targeted ledger — PR #205 ack-recon TB seal verification × transport-boundary receipt reconciliation
+
+- Audit file: `docs/audits/phase-pr205-ack-recon-tb-seal-transport-boundary-receipt-reconciliation.md`
+- Date: 2026-09-24
+- Landed tip on `main`: `cee14af03c4d7bfd72bd92e2006eebb7c6e23a8b` (squash parent/base `57508c8348c8751a5e389a5ca1b777b1765753d1`)
+- Verdict: **FAIL (major)** — backend-real and `frontend_real=true` UI/API wiring are substantively verified; focused Vitest **137/137**, Firestore emulator suite **22/22**, G-0 and G-1 are green. The mandatory phase-claim gate fails because this PR changes `app/ops/operator-audit-console.tsx` but does not change a focused `tests/ops*.test.ts` file. Under the raised completeness bar, hold the next merge pending that follow-up and a green replay. The product remains **PARTIAL**, not COMPLETE, because `transport_stub=true`.
+
+### DoD summary
+
+- `SHA on main`: PASS (`origin/main` resolved to the exact claimed `cee14af` after fetch; subject and parent match).
+- `BACKEND_REAL`: PASS (dual durable tracks, memory/Firestore adapters, deny-write rules, chained IDs bounded by tests, D2 views/actions).
+- `FRONTEND_REAL`: PASS for actual code (`app/ops/operator-audit-console.tsx` lattice sends GET 463/464/469/470 and POST reconcile; button wired).
+- `TRANSPORT_STUB`: PASS honesty (`blocked_todo_firm` plus `transport_stub:true`; classification PARTIAL).
+- `no COMPLETE/product-done overclaim`: PASS.
+- `focused tests+gates`: **FAIL overall** (functional suites and G-0/G-1 pass; phase-claim gate exits 1 for the missing focused `/ops` test).
+- `minor`: a duplicate Firestore adapter object-key warning predates this slice; its cleanup is outside this docs-only PR.
+
+### PR matrix (targeted)
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #205 | ack-recon TB seal verification × transport-boundary receipt reconciliation | `cee14af` / base `57508c8` | Yes | true | true (real UI, untested under required `tests/ops*`) | true | **FAIL phase audit; PARTIAL product** | major |
+
