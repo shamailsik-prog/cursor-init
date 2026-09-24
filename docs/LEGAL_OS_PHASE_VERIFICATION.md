@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-24 (PR #213 claim-gate remediation re-audit appended)
+Last updated: 2026-09-24 (PR #217 independent phase audit appended)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1300,4 +1300,20 @@ The gate fails when either condition is true:
 | PR | Re-audit scope | Audited tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|
 | #213 after #215 | canonical claim-gate metadata + product-surface re-check | `d43bd70` | PASS | PASS | true | **PASS phase audit; PARTIAL product** | none |
+
+## Targeted ledger — PR #217 external distribution audit ledger on reconciled acknowledgment chain
+
+- Audit file: `docs/audits/phase-pr217-external-distribution-audit-ledger-on-reconciled-ack-chain.md`
+- Date: 2026-09-24
+- Audited landed tip and lineage: `d8245d3c4731dd506bac2c3e1f9349dafae813e6` → `51fbe073109fbf880cc5ed2f583bf1c69fb7d457` (PR #216 / #213 claim-gate re-audit); product source `763fddded373ba0d462c9bcf7681f6b936e2d7d9` is replayed for verbatim PR metadata.
+- `BACKEND_REAL`: **PASS** — the inherited route action requires a finalized #213 reconciliation and digest checkpoint, then builds, repository-upserts, and audit-logs the ledger entry. The governance module truthfully re-exports the established parent-chain builders.
+- `FRONTEND_REAL`: **PASS** — the `/ops` lattice sends concrete GET view **479**, GET view **480**, and record-ledger POST requests to `/api/d2/ops-reporting`; focused call-site tests pass **4/4** and the targeted route-wiring GET passes **1/1**.
+- `TRANSPORT_STUB`: **PASS honesty** — inherited `TODO(firm)`, `blocked_todo_firm`, and `transport_stub:true` markers remain. They require **PARTIAL**, not COMPLETE, and are not a request for live credentials.
+- Claim gate: **PASS** — exact closed PR #217 title/body replay against `51fbe07..763fddd` passes; metadata contains required flags, `/ops` action/view mappings, focused ops-test coverage, and concrete API evidence.
+- Gates: G-0 PASS; G-1 **10/10**; complete route-wiring suite **124/124**.
+- Verdict: **PASS (no blockers/majors/minors); PARTIAL product**.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #217 | external distribution audit ledger on reconciled acknowledgment chain | `d8245d3` / parent `51fbe07` | PASS | PASS | true | **PASS phase audit; PARTIAL product** | none |
 
