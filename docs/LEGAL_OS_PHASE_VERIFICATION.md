@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-24 (PR #201 independent audit appended)  
+Last updated: 2026-09-23 (PR #197 independent audit appended)  
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1168,31 +1168,4 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #199 | ack-recon TB outbound-registry attestation-ledger + partner handoff attestation (stub-honest) | `e00046a` / product base `184372f` | Yes | true | false | true | **PASS** (backend-scoped; **PARTIAL** product — not COMPLETE) | low |
-
-## Targeted ledger — PR #201 ack-recon TB partner-delivery receipt freeze-override seal verification (stub-honest)
-
-- Audit file: `docs/audits/phase-pr201-tb-partner-delivery-receipt-freeze-override-seal.md`
-- Date: 2026-09-24
-- Merge SHA on `main`: `8bb1f1c8720bffe6eba074a45a8dbc6961d92eb1` (squash parent; implementation head `21284861895232aa4ddc6f575a073d2cb7173390`)
-- Main tip at audit close: `8bb1f1c`
-- Stack base: `23839a67bce6` (PR #200 audit docs on `main`)
-- Product parent: PR #199 @ `e00046a` (TB outbound-registry attestation-ledger chain)
-- Claim-gate anchor: `ede9a9c` (markdown-table + `key=value` parsing; on `main`)
-- Verdict: **PASS (low)** — dual-track TB seal-verification child rows on PR #199 parents (PR #188 analogue on TB chain); hashed Firestore ids ≤1500 bytes; Firestore deny-write rules for two new collections; `/api/d2/ops-reporting` two views + six partner POST lifecycle actions + digest sync; focused Vitest **130/130**; emulator trio **22/22**; G-0/G-1 green; claim-gate replay green (`23839a67..2128486`). **Product classification remains PARTIAL** (`transport_stub=true`; not COMPLETE / not product-done). FE honesty: `frontend_real=false`; `rg` over `app/ops/**` and `app/ops/operator-audit-console.tsx` shows **no** TB seal-verification call sites @ `8bb1f1c` (honest gap, not a FAIL). Builder `phase-pr200-…` superseded — not evidence.
-
-### DoD summary
-
-- `SHA on main`: PASS (`8bb1f1c` audited tip; `2128486` on lineage; PR #199 ancestor).
-- `BACKEND_REAL`: PASS (two child row types, memory/Firestore repos, governance module, ops-reporting views/actions, digest sync).
-- `FRONTEND_REAL`: PASS as honesty check (`frontend_real=false`; diff excludes `app/ops/**`).
-- `TRANSPORT_STUB`: PASS honesty (`transport_stub=true`, `blocked_todo_firm`, `transport_stub:true` provenance).
-- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`, negated product-done disclaimer in replay metadata).
-- `focused tests+gates`: PASS (route-wiring/custody-id **130**; Firestore repos/runtime/rules **22**; `G-0`; `G-1` **10/10**). Non-blocking: six partner POST actions lack dedicated HTTP POST assertions.
-- `process flags`: PASS replay (`ci_gates/check_pr_phase_claims.py` with canonical PR #201 body + `23839a67..2128486` exits 0 @ `8bb1f1c`). Roadmap labels slice **PR #200** vs forge **#201** (numbering drift only). Builder `phase-pr200-…` stub not used as evidence.
-
-### PR matrix (targeted)
-
-| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
-|---|---|---|---|---|---|---|---|---|
-| #201 | ack-recon TB partner-delivery receipt freeze-override seal verification (stub-honest) | `8bb1f1c` / product `2128486` / base `23839a67` | Yes | true | false | true | **PASS** (backend-scoped; **PARTIAL** product — not COMPLETE) | low |
 
