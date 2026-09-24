@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-24 (PR #217 independent phase audit appended)
+Last updated: 2026-09-24 (PR #219 independent phase audit appended)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1316,4 +1316,21 @@ The gate fails when either condition is true:
 | PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|
 | #217 | external distribution audit ledger on reconciled acknowledgment chain | `d8245d3` / parent `51fbe07` | PASS | PASS | true | **PASS phase audit; PARTIAL product** | none |
+
+## Targeted ledger — PR #219 outbound registry attestation ledger on PR #217 parents
+
+- Audit file: `docs/audits/phase-pr219-outbound-registry-attestation-ledger.md`
+- Date: 2026-09-24
+- Audited landed tip and direct parent: `2d7473bac4832058eb412274bbab277acc9eb7b4` → `62480b2a106bd5ab0356eaf726f86aaa93538df8`.
+- `BACKEND_REAL`: **PASS** — inherited #199-shaped custody and closure route actions enforce their finalized parent gates, use chained governance builders, repository upserts, audit entries, and idempotency.
+- `FRONTEND_REAL`: **PASS** — `/ops` adds concrete GET views **481/482** and POST finalize/register call sites to `/api/d2/ops-reporting`; focused test **2/2** and full route-wiring suite **124/124** pass.
+- `TRANSPORT_STUB`: **PASS honesty** — the builder provenance and global filing boundary retain `transport_stub:true`, `TODO(firm)`, and `blocked_todo_firm`. Product is **PARTIAL**, not COMPLETE.
+- Claim gate: **PASS** — replaying the exact Origin PR #219 title/body with source `BASE_SHA=62480b2..`, `HEAD_SHA=1d3f53f..` exits 0 and validates required machine-readable labels, `/ops` evidence, focused test, and `/api/...` evidence.
+- Rules: unchanged by PR #219; inherited collections remain read-cleared/same-firm and deny-write. Emulator rerun is not required by the rules-touched criterion.
+- Gates: G-0 PASS; G-1 **10/10**.
+- Verdict: **PASS (no blockers/majors/minors); PARTIAL product**.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #219 | outbound registry attestation ledger on #217 audit-ledger / partner-handoff parents | `2d7473b` / parent `62480b2` | PASS | PASS | true | **PASS phase audit; PARTIAL product** | none |
 
