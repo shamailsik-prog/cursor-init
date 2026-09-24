@@ -460,6 +460,12 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx` (GET **477–478** after PR #206 checkpoint POST, POST waiver reconcile).
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+## PR #217 (branch `cursor/external-distribution-audit-ledger-3dab`) — ack-recon TB seal-verifications acknowledgment reconciliation → external distribution audit ledger (stub-honest, frontend_real)
+
+- Parents on PR #213 reconciled `..._seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations` rows; governance anchor `workflowOpsAckReconTbSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerGovernance.ts` (re-exports PR #197-shaped builders).
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET monitoring views **479–480** (custody external distribution audit ledger + closure partner handoff attestation on reconciled ack chain) after PR #213 reconcile POST; POST digest checkpoint, reconciliation finalization, and external distribution audit ledger entry record.
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Ship the next ack-recon chain link after PR #213 TB seal-verifications transport-boundary external transport receipt **acknowledgment reconciliation** (for example PR #197-style external distribution audit ledger on this parent chain, continuing the reconciled acknowledgment parent surfaces).
+Ship the next ack-recon chain link after PR #217 external distribution audit ledger on reconciled TB seal-verifications acknowledgment reconciliation (for example PR #199-style outbound registry attestation ledger on TB audit-ledger / partner-handoff parents).
