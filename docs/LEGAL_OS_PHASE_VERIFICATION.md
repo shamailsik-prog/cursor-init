@@ -1233,3 +1233,24 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #205 + #207 remediation | ack-recon TB seal verification × transport-boundary receipt reconciliation | `1288c0a` / `34ab13d` / `cee14af` | PASS | PASS (focused `/ops` test added) | true | **PASS phase audit; PARTIAL product** | low |
 
+## Targeted ledger — PR #209 TB external transport receipt acknowledgment
+
+- Audit file: `docs/audits/phase-pr209-tb-external-transport-receipt-acknowledgment.md`
+- Date: 2026-09-24
+- Forge PR: #209; builder-internal label: #206 (provenance only).
+- Landed `origin/main` tip: `f81e466b4cf7a899c2686b8c485697c9f18a7fed`; parent/base `f999c5be649a126f1756899d868db7e1ba3e19b9`.
+- Verdict: **FAIL (major)** — PR labels, claim-gate replay, `/ops` lattice test (GET 475/476 + custody checkpoint POST), route-wiring suite, G-0, and G-1 pass. The required Firestore emulator trio fails **2/22** because the closure-track Firestore repository member is undefined at the `upsert` and route `get` call sites. The resulting runtime failure rejects `backend_real=true` under the raised bar.
+
+### DoD summary
+
+- `SHA on main`: PASS (`git fetch origin main` resolves exactly to `f81e466`; prior local `main` was stale).
+- `BACKEND_REAL`: **FAIL** (governance/repos/rules/actions exist, IDs are ≤1500, but Firestore persistence is runtime-broken).
+- `FRONTEND_REAL`: PASS (`tests/ops.pr-206-tb-external-transport-receipt-ack-frontend-real.test.ts` and #205 regression pass, **6/6**).
+- `TRANSPORT_STUB`: PASS honesty (`transport_stub=true`, `TODO(firm)`, `_stub`, and `blocked_todo_firm`; product stays PARTIAL).
+- `no COMPLETE/product-done overclaim`: PASS (`classification=PARTIAL`; claim-gate replay passes).
+- `focused tests+gates`: **FAIL overall** (emulator suite **2 failed / 20 passed**; route-wiring **122/122**, G-0, and G-1 **10/10** pass).
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #209 | TB external transport receipt acknowledgment | `f81e466` / base `f999c5b` | **FAIL** (Firestore adapter runtime gap) | PASS (focused `/ops`) | true | **FAIL phase audit; PARTIAL product** | major |
+
