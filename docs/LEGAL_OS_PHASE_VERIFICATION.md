@@ -1393,3 +1393,33 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #223 re-audit | remediation of #223 transport-boundary receipt reconciliation | `ef7fe99` / audit base `539f200` | **PASS** | **PASS** | true | **PASS phase audit; PARTIAL product** | inherited minor |
 
+## Targeted ledger — PR #227 TB seal-verifications external transport receipt acknowledgment
+
+- Audit file: `docs/audits/phase-pr227-tb-seal-verifications-external-transport-receipt-acknowledgment.md`
+- Date: 2026-09-24
+- Audited landed tip and direct parent: `8547426fb89b3999b3f3f30610d88a48db5eece6` → `fd3bf60c9b92d63b55a3c80afb6ef3c49e9efb6f`.
+- `BACKEND_REAL`: **PASS** — the route imports the outbound-registry governance
+  re-export, syncs both 487/488 child collections through memory and Firestore
+  repositories, and the targeted API suite executes GET **487/488** successfully.
+- `FRONTEND_REAL`: **PASS** — `/ops` performs concrete GET **487/488** calls and
+  all **6/6** checkpoint/acknowledge/finalization POST call sites to
+  `/api/d2/ops-reporting`, after the 485/486 reconciliation lifecycle. The focused
+  slice and parent focused tests pass **2/2** each.
+- `TRANSPORT_STUB`: **PASS honesty** — `blocked_todo_firm` and
+  `transport_stub=true` remain explicit. This is an accepted terminal boundary:
+  product classification is **PARTIAL**, never COMPLETE, and requires no live
+  external-transport credential escalation.
+- Claim gate: **PASS** — replaying the exact closed Origin #227 title/body with
+  `BASE_SHA=fd3bf60` and `HEAD_SHA=8547426` passes, including the machine-readable
+  `/ops` action/view mapping and concrete `/api/d2/ops-reporting` evidence.
+- Gates: targeted frontend + API suite **8/8**; G-0 PASS; G-1 **10/10**.
+  Firestore rules were unchanged. The emulator wrapper reports **21/22** because
+  `tests/persistence.repositories.test.ts:3017` has an inherited undefined builder
+  reference from `cee14af` (#205); rules **7/7** and runtime-mode **14/14** pass.
+- Verdict: **PASS phase audit (0 blockers, 0 majors, 1 inherited minor); PARTIAL
+  product**.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #227 | TB seal-verifications external transport receipt acknowledgment on #223/#225 485/486 parents | `8547426` / parent `fd3bf60` | **PASS** | **PASS** | true | **PASS phase audit; PARTIAL product** | inherited minor |
+
