@@ -1600,6 +1600,27 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|
 | #235 + #237 + #240 | `6b487a3` | **PASS** (scoped) | **PASS** | true | **PASS phase audit; PARTIAL product** | — |
 
+## Targeted ledger — PR #239 TB ack-recon PD freeze-override seal verification GET 495–496
+
+Independent Phase Auditor pass (2026-09-26). Full write-up:
+`docs/audits/phase-pr239-tb-ack-recon-pd-freeze-seal-495-496.md`. Evidence:
+`/opt/cursor/artifacts/pr239_verification.log`.
+
+- **Landed tip:** `9265559c3d9f9debf9fdb6a0fac399995443fa19` (squash of PR #239 on `main`).
+- **Parent:** `a66f6e6b6f6ffe2570e52cb14e669962d754532c` (#241 docs).
+- **Lattice:** `route.ts` **33,795 → 34,395** (+600); `operator-audit-console.tsx` **4,755 → 4,887**
+  (+132); GET **485–496** identity `it.each` (12 slices); **495/496** + **6/6** POSTs after 493/494.
+- **`parseView`:** identity-only for **491–496**; **491/492** parent chain intact post-#237/#240.
+- **Persistence:** deny-by-default Firestore binder + rules for both new 495/496 repositories.
+- **Tests (auditor full focused, no `-t` skip):** **155/155**; rules **22/22**; G-0 PASS; G-1 **10/10**;
+  `pr-phase-claim-gate.test.ts` **20/20**; `check_pr_phase_claims.py` PASS (`BASE=a66f6e6`, `HEAD=9265559`).
+- **Minors:** PR body HEAD SHA drift vs squash tip; CM focused vitest used `-t` (128 skipped).
+- **Product:** **PARTIAL** only (`transport_stub=true`).
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #239 | TB ack-recon PD freeze seal GET 495–496 on 493/494 parents | `9265559` / parent `a66f6e6` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata / test filter) |
+
 ## PR slice 497–498 (TB ack-recon partner-delivery freeze-override seal verification → transport-boundary receipt reconciliation, base `9265559`)
 
 - **Scope:** GET views `${view495}_transport_boundary_receipt_reconciliations` / `${view496}_transport_boundary_receipt_reconciliations`; six POST lifecycle actions (497 custody reconcile/digest/finalize + 498 closure digest/attest/finalize) parented on finalized **495/496** rows; `transport_stub:true` on new rows.
