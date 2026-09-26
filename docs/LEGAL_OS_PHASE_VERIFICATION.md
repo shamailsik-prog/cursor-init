@@ -1574,3 +1574,29 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|
 | #235 + #237 | `f22c9d5` | PARTIAL | **FAIL** | true | **FAIL phase audit; PARTIAL product** | major (491→493) |
 
+## Targeted ledger — PR #235 + remediation PR #237 + PR #240 (`parseView` 491 identity)
+
+- Audit file:
+  `docs/audits/phase-pr235-tb-ack-recon-outbound-registry-attestation-ledger.md`
+  (re-audit #2 after #240, 2026-09-26)
+- Audited product tip: `6b487a3e3d6a07a2edef06bda9867aad0bd861d1` (#240 on `main`);
+  #240 parent `f22c9d5c0250bf0d64a27d5c582af942814f4a5e`; original #235
+  `93cb5c0d10ad0028e0f7aa31e3029bbc28619cd0`.
+- **LATTICE INTEGRITY: PASS.** Full `parseView` body read (lines 525–792): all
+  console-wired GET **485–494** resolve with identity `return value`; no
+  parent→child `return "alert_…"` remaps after #240. `route.ts` **33,795** lines;
+  GET **485–494** ordering and **6/6** POST lifecycle actions for **493/494**
+  preserved.
+- **`BACKEND_REAL`:** PASS (backend-scoped; transport stubs remain).
+- **`FRONTEND_REAL`:** **PASS** — `/ops` **491–494** concrete GET + POST call
+  sites; `it.each` **485–494** asserts `json.view` on real `GET` handler calls;
+  `/ops` test asserts GET **491** parent `…_external_distribution_audit_ledgers`
+  string.
+- **`TRANSPORT_STUB`:** honest; product **PARTIAL** only.
+- Tests: focused **148/148** (narrow **144/144**), rules **22/22**, G-0 PASS, G-1
+  **10/10**, #240 claim-gate replay PASS, `pr-phase-claim-gate.test.ts` **20/20**.
+
+| PR | Re-audited tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|
+| #235 + #237 + #240 | `6b487a3` | **PASS** (scoped) | **PASS** | true | **PASS phase audit; PARTIAL product** | — |
+

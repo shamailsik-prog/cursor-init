@@ -227,3 +227,124 @@ identity; **491→493** remap source is unchanged aside from shadowing.
 (introduced by #235; not present at `a0f73c2`). #237 closed the **492→494**
 major only. Required fix: **491** `return value`, remove **491→493** remap, add
 `json.view` regression tests for GET **491** (and keep **492** coverage).
+
+---
+
+## Independent re-audit after remediation PR #240 (2026-09-26, Phase Auditor re-audit #2)
+
+> **Verdict: PASS phase audit — 0 blockers, 0 majors, 0 new minors. Product: PARTIAL.**
+
+Repository: `shamail-sikander/cursor-init`  
+Remediation PR: #240 (squash-landed)  
+Audited product tip (`origin/main` after #240): `6b487a3e3d6a07a2edef06bda9867aad0bd861d1`  
+#240 parent (pre-fix tip): `f22c9d5c0250bf0d64a27d5c582af942814f4a5e`  
+Original #235 landed tip: `93cb5c0d10ad0028e0f7aa31e3029bbc28619cd0`  
+Pre-#235 parent: `a0f73c286f3f180f3af380696273b8fd8c55b2ab`  
+Docs audit anchor (this re-audit PR): `0f27bc1403095bd84e4d7bfca811e790a5cc7c93`
+
+Full SHAs verified with `git rev-parse` and `git cat-file -t`.
+
+### 1. `parseView` — full function body read (not grep-only)
+
+Independent read of `app/api/d2/ops-reporting/route.ts` **lines 525–792** at tip
+`6b487a3` (post-#240). The function contains **only**:
+
+- Null/`"activity"` coalescence → literal `"activity"` (identity for activity).
+- **75** exact-string `if (value === "alert_…")` branches, each **`return value`**.
+- Final **`return undefined`** (unrecognized view).
+
+There are **no** ternaries, `.replace`, suffix concatenation, map lookups, or
+`return "alert_…"` literals that differ from the matched `value`. Grep for
+`return "alert_` inside `parseView` finds **zero** non-identity alert remaps
+after #240 (only the `"activity"` literal on the null/activity line).
+
+**Other view normalization:** `GET` uses `parseView(url.searchParams.get("view"))`
+at ~8503 only. No `normalizeView`, alias table, or secondary remap runs before
+the `if (view === "alert_…")` dispatch ladder.
+
+#### `parseView` table — console-wired GET 485–494 at `6b487a3`
+
+| GET | Requested view (suffix tail) | `parseView` outcome | Class |
+|---:|---|---|---|
+| 485 | `…_transport_boundary_receipt_reconciliations` (custody TB) | Identity `return value` | OK |
+| 486 | `…_transport_boundary_receipt_reconciliations` (closure TB) | Identity | OK |
+| 487 | `…_external_transport_receipt_acknowledgments` (custody) | Identity | OK |
+| 488 | `…_external_transport_receipt_acknowledgments` (closure) | Identity | OK |
+| 489 | `…_external_transport_receipt_acknowledgment_reconciliations` (custody) | Identity | OK |
+| 490 | `…_external_transport_receipt_acknowledgment_reconciliations` (closure) | Identity | OK |
+| 491 | `…_external_distribution_audit_ledgers` (custody parent) | Identity | OK |
+| 492 | `…_partner_handoff_attestations` (closure parent) | Identity | OK |
+| 493 | `…_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers` | Identity | OK |
+| 494 | `…_partner_handoff_attestations_outbound_registry_attestation_ledgers` | Identity | OK |
+
+#### Defect history (forensic, not rubber-stamped)
+
+| Defect | Introduced (`93cb5c0`) | Runtime at `93cb5c0` | Source at `f22c9d5` | After #240 (`6b487a3`) |
+|---|---|---|---|---|
+| **492→494** `parseView` remap | Yes (live `return` child string) | **Broken** — child view returned | **Closed** (#237) | Closed |
+| **491→493** `parseView` remap | Yes (duplicate `if` after identity `return value`) | **Not broken** — shadowed by earlier identity branch | **Open (major)** — dead remap block remained in source | **Closed** — remap block deleted |
+
+The prior re-audit correctly failed **source-level** parent→child remap presence at
+`f22c9d5`. Forensic correction: at **`93cb5c0`**, GET **491** was already
+shadowed; only GET **492** was runtime-broken before #237.
+
+### 2. Lattice integrity (physical)
+
+- `route.ts`: **33,795** lines at `6b487a3` (**33,798 → 33,795** in #240; remap
+  deletion only).
+- `/ops` `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice`
+  retains GET steps **485–494** in order (see `operator-audit-console.tsx` step
+  strings at lines ~3802–4335).
+- GET **493/494** block followed by **6/6** lifecycle POSTs to
+  `/api/d2/ops-reporting` (three custody + three closure; steps ~4350–4428).
+- No truncation of the 491/492 parent chain in source.
+
+### 3. Tests and regression proof
+
+- **`it.each`** `TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS` covers slices
+  **485–494** (`tests/persistence.route-wiring.test.ts` ~6266–6330): imports real
+  `GET` from `@/app/api/d2/ops-reporting/route`, asserts `json.view ===`
+  `searchParams.get("view")`.
+- **`/ops` GET 491** parent string asserted in
+  `tests/ops.pr-tb-ack-recon-external-distribution-audit-ledger-frontend-real.test.ts`
+  (~76–86): `GET_VIEW_491_PARENT` ends with
+  `…_external_distribution_audit_ledgers`, not the **493** child suffix.
+- **Would fail on old `parseView`:** with tip tests and `route.ts` checked out to
+  **`93cb5c0`**, slice **492** fails (`json.view` child suffix); slice **491**
+  passes (shadowing). With **`f22c9d5`** `route.ts`, slice **491** still passes
+  (shadowing); #240’s value is **removing** the dead remap so the suite would
+  catch a reintroduced live **491→493** mapping.
+
+### 4. Gates (independent replay at audit anchor `0f27bc1` / product `6b487a3`)
+
+| Command | Result |
+|---|---|
+| Focused FE/API/route (4 files incl. `/ops` slice tests) | **148/148** |
+| Narrow trio (493–494 FE + route-wiring + api.ops-reporting) | **144/144** |
+| `npm run test:rules` | **22/22** |
+| `npm run gate:g0` | PASS |
+| `npm run gate:g1` | **10/10** |
+| `check_pr_phase_claims.py` (#240, `BASE_SHA=f22c9d5`, `HEAD_SHA=6b487a3`, PR #240 body) | PASS |
+| `tests/pr-phase-claim-gate.test.ts` | **20/20** (Vitest worker timeout warning only) |
+
+Evidence log: `/opt/cursor/artifacts/pr235_reaudit2_verification.log`.
+
+### 5. `frontend_real` / `backend_real` / transport / #205
+
+- **`frontend_real`:** **PASS** — `/ops` GET **491–494** use concrete
+  `runApiCall` → `/api/d2/ops-reporting` with parent/child view constants; six
+  POST call sites for **493/494**; `blocked_todo_firm` transport probes (no live
+  credentials).
+- **`backend_real`:** **PASS** (backend-scoped) — handlers, repos, rules, and
+  identity `parseView` contract at tip; not COMPLETE while transport stubs remain.
+- **`transport_stub=true`:** honest → **Product: PARTIAL** cap enforced.
+- Inherited **#205** `persistence.repositories` minor: non-blocking; **22/22**
+  emulator suite green; not newly regressed.
+
+### Re-audit classification (final)
+
+**Phase audit: PASS (0 blockers, 0 majors, 0 new minors). Product: PARTIAL.**
+
+#240 closes the last **parseView** parent→child remap defect class for PR #235.
+PR #235 lattice (**485–494** + six POSTs) is physically and semantically intact at
+`6b487a3`. COMPLETE/product-done remains invalid while `transport_stub=true`.
