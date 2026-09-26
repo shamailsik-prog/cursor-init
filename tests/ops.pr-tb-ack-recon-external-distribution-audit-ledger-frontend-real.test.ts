@@ -11,9 +11,13 @@ const REQUIRED_VIEW_STEPS = [
   "PR slice view: closure TB ack-recon outbound-registry seal_verifications ack reconciliation partner handoff attestation (492)",
 ] as const
 
+const GET_VIEW_491_PARENT =
+  "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledgers"
+
 const GET_VIEW_492_PARENT =
   "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations"
 
+const GET_VIEW_493_CHILD_SUFFIX = "_outbound_registry_attestation_ledgers"
 const GET_VIEW_494_CHILD_SUFFIX = "_outbound_registry_attestation_ledgers"
 
 function latticeSourceSlice(source: string): string {
@@ -67,6 +71,18 @@ describe("PR slice TB ack-recon external distribution audit ledger on seal_verif
     expect(view491).toBeGreaterThan(finalizeClosure)
     expect(view492).toBeGreaterThan(view491)
     expect(recordEntry).toBeGreaterThan(view492)
+  })
+
+  it("GET 491 /ops call site wires the parent external_distribution_audit_ledgers view (not the 493 child suffix)", () => {
+    const lattice = latticeSourceSlice(source)
+    expect(lattice).toContain(
+      "custodyTbAckReconOutboundRegistrySealVerificationsAckReconciliationExternalDistributionAuditLedgerView"
+    )
+    expect(lattice).toContain(GET_VIEW_491_PARENT)
+    expect(GET_VIEW_491_PARENT.endsWith(GET_VIEW_493_CHILD_SUFFIX)).toBe(false)
+    expect(lattice).toContain(
+      "transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerStatus"
+    )
   })
 
   it("GET 492 /ops call site wires the parent partner_handoff_attestations view (not the 494 child suffix)", () => {
