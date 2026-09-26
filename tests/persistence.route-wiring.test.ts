@@ -6526,6 +6526,16 @@ describe("Route wiring uses repository adapters", () => {
       url:
         "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments&actorId=associate_a&ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus=ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_pending&freshnessStatus=fresh&limit=10&cursor=0",
     },
+    {
+      slice: 501,
+      url:
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations&actorId=associate_a&transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus=transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending&freshnessStatus=fresh&limit=10&cursor=0",
+    },
+    {
+      slice: 502,
+      url:
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations&actorId=associate_a&ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus=ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending&freshnessStatus=fresh&limit=10&cursor=0",
+    },
   ]
 
   it.each(TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS)(
@@ -6573,7 +6583,7 @@ describe("Route wiring uses repository adapters", () => {
     )
   })
 
-  it("ops reporting parseView identity: GET 492/493/494/495/496/497/498/499/500 each resolve to its own view (no parent shadowing)", async () => {
+  it("ops reporting parseView identity: GET 492/493/494/495/496/497/498/499/500/501/502 each resolve to its own view (no parent shadowing)", async () => {
     const view492 =
       "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations"
     const view493 =
@@ -6585,6 +6595,8 @@ describe("Route wiring uses repository adapters", () => {
     const view498 = `${view496}_transport_boundary_receipt_reconciliations`
     const view499 = `${view497}_external_transport_receipt_acknowledgments`
     const view500 = `${view498}_external_transport_receipt_acknowledgments`
+    const view501 = `${view499}_external_transport_receipt_acknowledgment_reconciliations`
+    const view502 = `${view500}_external_transport_receipt_acknowledgment_reconciliations`
 
     const cases: Array<{ view: string; query: string }> = [
       {
@@ -6631,6 +6643,16 @@ describe("Route wiring uses repository adapters", () => {
         view: view500,
         query:
           "ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus=ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_pending",
+      },
+      {
+        view: view501,
+        query:
+          "transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus=transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+      },
+      {
+        view: view502,
+        query:
+          "ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus=ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
       },
     ]
 
