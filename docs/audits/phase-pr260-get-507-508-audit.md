@@ -1,6 +1,6 @@
 # Independent Phase Auditor A–F audit: PR #260 TB ack-recon PD freeze seal partner-delivery receipt freeze-override seal verification GET 507–508
 
-> **Verdict (2026-09-26): PASS — 0 blockers, 0 majors, 5 minors. Product: PARTIAL.**
+> **Verdict (2026-09-26, amended): FAIL phase audit — 1 major (cross-view data mixing), 5 minors. Product: PARTIAL.**
 
 Repository: `shamail-sikander/cursor-init`  
 Origin PR: [#260](https://cursor.com/codebase/shamail-sikander/cursor-init/pull/260) (squash-landed)  
@@ -8,11 +8,11 @@ Audited landed tip: `567d2450963a90994c8bcf4d446d977e8e07fe6e`
 Squash first parent: `60287c050b3fc1f8c55413b5c8fa5e4ad7b98776` (`docs(audit): independent PR #258 phase audit GET 505-506` — docs landing before product)  
 Forge PR branch tip: `677734709370239e999359b1ad6027d9d5e04fb8` (fetched; tree identical to squash `567d245`).
 
-Evidence log: `/opt/cursor/artifacts/pr260_verification.log`
+Evidence logs: `/opt/cursor/artifacts/pr260_verification.log`, `/opt/cursor/artifacts/pr260_collection_scoping.log`
 
 ## Executive finding
 
-Squash `567d245` is **code-only** (5 files, +873 / −1), extends the TB ack-recon lattice with GET **507–508** on **505/506** parents (same step pattern as **495–496** after **493–494**), six lifecycle POSTs parented on **505/506** rows, governance re-exports (+8 lines), and `/ops` call sites after the **505/506** block. `parseView` remains identity-only for TB views (automated scan: one inherited `activity` default at `route.ts` L573). Lattice `it.each` covers all **24** slices **485–508** (506 entry appears after 508 in the array — see PR260-M2). Dedicated repository wiring `it()` for **507** and **508** assert `partnerDeliveryReceiptFreezeOverrideSealVerificationStatus` (not status-only HTTP). Focused vitest replay (full lattice file set, no `-t` filter): **20 files, 209 passed, 0 skipped**. `transport_stub=true` caps product at **PARTIAL**. `check_pr_phase_claims.py` replay on PR #260 body with `BASE=60287c0`, `HEAD=567d245` and `HEAD=6777347` both **PASS**.
+Squash `567d245` is **code-only** (5 files, +873 / −1), extends the TB ack-recon lattice with GET **507–508** on **505/506** parents (same step pattern as **495–496** after **493–494**), six lifecycle POSTs parented on **505/506** rows, governance re-exports (+8 lines), and `/ops` call sites after the **505/506** block. `parseView` remains identity-only for TB views (automated scan: one inherited `activity` default at `route.ts` L573). Lattice `it.each` covers all **24** slices **485–508** (506 entry appears after 508 in the array — see PR260-M2). Dedicated repository wiring `it()` for **507** and **508** assert `partnerDeliveryReceiptFreezeOverrideSealVerificationStatus` (not status-only HTTP). Focused vitest replay (full lattice file set, no `-t` filter): **20 files, 209 passed, 0 skipped**. `transport_stub=true` caps product at **PARTIAL**. `check_pr_phase_claims.py` replay on PR #260 body with `BASE=60287c0`, `HEAD=567d245` and `HEAD=6777347` both **PASS**. **Collection-scoping follow-up** overturns the initial persistence PASS: shared `listByFirm` + no parent-key GET filter → **PR260-MAJOR-1** (phase audit **FAIL**); same defect class on **#258** pairs **493/505** and **494/506**.
 
 ## A. Landing order and squash scope — PASS
 
@@ -44,21 +44,26 @@ Squash `567d245` is **code-only** (5 files, +873 / −1), extends the TB ack-rec
 - `it.each` lattice asserts `json.view === requestedView` for every slice (`tests/persistence.route-wiring.test.ts` **L6571–L6581**).
 - Dedicated wiring: view **(507)** **L6798–L6810**; view **(508)** **L6812–L6824** (`partnerDeliveryReceiptFreezeOverrideSealVerificationStatus`).
 
-## D. Persistence — PASS
+## D. Persistence and collection scoping — **FAIL** (major)
 
-**GET 507 (custody on 505 parent)** reads and writes via  
-`repos.workflowOpsAlertWaiverExpiry…OutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications`  
-(`firestoreSpineRepositories.ts` **L4091–L4094**, `createDenyByDefaultWorkflowOpsRepository`).  
-Firestore collection (deny-write):  
-`workflow_ops_alert_waiver_expiry_…_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications` — **`firestore.rules` L220** (`allow write: if false`).
+Deny-write rules and binder wiring are present, but **view isolation is not**: each lattice pair below calls the **same** `repos.*.listByFirm` property and resolves to the **same** Firestore collection string. GET handlers then apply only shared filters (clearance, optional `matterId`, lifecycle **status** query param, `freshnessStatus`, permission) — **no** filter on parent ledger / lineage foreign keys. Distinct document IDs do not prevent both lineages from appearing in both views.
 
-**GET 508 (closure on 506 parent)** reads and writes via  
-`repos.workflowOpsAlertVariance…PartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications`  
-(`firestoreSpineRepositories.ts` **L4157–L4160**, deny-by-default binder).  
-Firestore collection:  
-`workflow_ops_alert_variance_…_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications` — **`firestore.rules` L223** (`allow write: if false`).
+| Pair | GET `listByFirm` (`route.ts`) | Binder (`firestoreSpineRepositories.ts`) | Same collection string? |
+|---|---|---|---|
+| **493 / 505** | **L12424** / **L12934** — `…ExternalDistributionAuditLedgersOutboundRegistryAttestationLedgers` | **L4070–L4073** — spine key `…OutboundRegistryAttestationLedgers` | **Yes** — `denyByDefaultWorkflowOpsRepository.ts` **L22–L23** |
+| **494 / 506** | **L12459** / **L12971** — `…PartnerHandoffAttestationsOutboundRegistryAttestationLedgers` | **L4153–L4155** | **Yes** — map **L24–L25** |
+| **495 / 507** | **L12495** / **L12862** — `…OutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications` | **L4091–L4094** | **Yes** — map **L26–L27** |
+| **496 / 508** | **L12530** / **L12899** — `…PartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications` | **L4157–L4160** | **Yes** — map **L28–L29** |
 
-**Reuse verdict:** **Correct.** This mirrors **495→493** and **496→494**: **507/508** reuse the same deny-by-default collections introduced for **495/496** (partner-delivery receipt freeze-override seal verification rows keyed off outbound-registry attestation ledger parents), not the **505/506** outbound-registry ledger collections. No new `firestore.rules` lines in squash (`git diff 60287c0..567d245 -- firestore.rules` → 0). POST handlers call the same `repos.*PartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert` paths (e.g. **L37693**, **L37764**). Shared collection between **495** and **507** is the established intentional pattern (view-suffix extension, distinct document IDs via parent **505** vs **493** ledger keys). No new `ReferenceError` in rules/runtime replay (retry **22/22**).
+**GET scoping (example 493):** after `listByFirm`, filters are **L12433–L12442** (`outboundRegistryAttestationLedgerStatus` query param only when set; no `transportBoundaryReceiptReconciliation…OutboundRegistryAttestationLedgerId` or view discriminator). **495** uses the same pattern at **L12504–L12513** (`partnerDeliveryReceiptFreezeOverrideSealVerificationStatus` only). **507** at **L12871–L12880** reuses the same status field filter — not parent-key scoping.
+
+**POST / upsert:** lifecycle rows are built from parent ledger context (e.g. **507** checkpoint **L37680–L37693** passes `outboundRegistryAttestationLedger: currentTbAckReconPdFreezeSeal505…` into the row builder and `upsert`s to the shared seal-verification repo). Rows carry parent FK fields on the document, but **GET does not filter on them**, so **495** and **507** both return the full firm-wide collection contents (subject only to optional status/freshness filters).
+
+**Empirical check (throwaway vitest, not committed):** seeded two rows per shared in-memory `listByFirm` (older + newer lineage IDs) for each pair; GET without status filter returned **both** IDs for **493** and **505**, **494** and **506**, **495** and **507**, **496** and **508** (`total: 2` each). Log: `pr260_collection_scoping.log` (vitest pass **2026-09-26**).
+
+**Impact:** **PR #260** (**507/508**) and **PR #258** (**505/506**, plus the same pattern for **493–496**) — cross-view data mixing; newer views are not scoped to their parent lattice step.
+
+**Fix recommendation (product, out of scope for docs PR):** either (a) a **distinct Firestore collection per view suffix** with matching deny-binder + rules, or (b) keep shared collection but add **parent-key / view-lineage filter** in each GET after `listByFirm` plus a **regression test** that seeds two parent lineages and asserts each view returns only its rows.
 
 ## E. Tests and gates — PASS (with minors)
 
@@ -106,13 +111,14 @@ Static ordering test: `tests/ops.pr-tb-ack-recon-pd-freeze-seal-partner-delivery
 | PR260-M2 | **minor** | `TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS` lists slice **506** after **508** (all 485–508 present; not strictly ascending in source array). |
 | PR260-M3 | **minor** | `pr-phase-claim-gate.test.ts` logs unhandled Vitest worker timeout; all 20 tests passed. |
 | PR260-M4 | **minor** | First `npm run test:rules` run timed out one runtime-mode case (**21/22**); immediate retry **22/22** green (environment flake). |
-| PR260-M5 | **minor** | No new `firestore.rules` / deny-binder diff in squash — intentional reuse of **495/496** seal-verification collections. |
+| PR260-M5 | **minor** | No new `firestore.rules` / deny-binder diff in squash — reuse of **495/496** collections (see major below). |
+| PR260-MAJOR-1 | **major** | **Cross-view data mixing:** lattice pairs **493/505**, **494/506**, **495/507**, **496/508** share one `listByFirm` repo + Firestore collection per pair; GET has no parent-key scoping (empirical vitest confirms both lineages returned). Affects **#258** and **#260**. Fix: distinct collection per view or parent-key filter in GET + test. |
 
 ## Final classification
 
 | Dimension | Verdict |
 |---|---|
-| **Phase audit** | **PASS** (0 blockers, 0 majors, 5 minors) |
+| **Phase audit** | **FAIL** (1 major, 5 minors) |
 | **Product** | **PARTIAL** (`transport_stub=true`; COMPLETE invalid) |
 | `backend_real` | **PASS** (scoped) |
 | `frontend_real` | **PASS** |
