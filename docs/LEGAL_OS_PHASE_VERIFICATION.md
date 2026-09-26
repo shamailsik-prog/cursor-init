@@ -1682,3 +1682,23 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 |---|---|---|---|---|---|---|---|---|
 | #252 | TB ack-recon PD freeze seal external transport receipt ack reconciliation GET 501–502 on 499/500 parents | squash `0c1634c` / parent `8edc890` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (parent/metadata) |
 
+## Targeted ledger — PR #255 TB ack-recon PD freeze seal external distribution audit ledger + partner handoff attestation GET 503–504
+
+Independent Phase Auditor pass (2026-09-26). Full write-up:
+`docs/audits/phase-pr255-get-503-504-audit.md`. Evidence:
+`/opt/cursor/artifacts/pr255_verification.log`.
+
+- **Landed tip:** `7c9a47f567031f082fac477b8cced4f29037b9a1` (squash of PR #255; after audit docs `959cb21` / PR #253).
+- **Squash parent:** `959cb21619facb686be52209947191a8bf938916` (#253 docs — matches builder; not an unrelated intermediate).
+- **Lattice:** `route.ts` **36,391 → 37,134** (+743); `operator-audit-console.tsx` **5,275 → 5,406** (+131); GET **485–504** identity `it.each` (20 slices); **503/504** + **6/6** POSTs after 501/502.
+- **`parseView`:** identity-only through **504**; dedicated wiring `it()` for **503/504** status fields.
+- **Persistence:** deny-by-default binder **L4066–L4069** / **L4149–L4152**; `firestore.rules` **+2** deny-write lines.
+- **Tests (auditor full focused, no `-t` skip):** **197/197** (18 files); rules **22/22**; G-0 PASS; G-1 **10/10**;
+  `pr-phase-claim-gate.test.ts` **20/20**; `check_pr_phase_claims.py` **PASS** on PR #255 body (`BASE=959cb21`, `HEAD=7c9a47f`).
+- **Minors:** forge branch tip `2f3c797` not in clone; local `main` ref stale vs `HEAD`; Vitest worker timeout noise; `transport_stub=true`.
+- **Product:** **PARTIAL** only (`transport_stub=true`).
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #255 | TB ack-recon PD freeze seal external distribution audit ledger + partner handoff attestation GET 503–504 on 501/502 parents | squash `7c9a47f` / parent `959cb21` | Yes (tip `7c9a47f`) | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata/clone) |
+
