@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-26 (PR #258 independent phase audit GET 505–506 appended)
+Last updated: 2026-09-26 (PR #260 independent phase audit GET 507–508 appended)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1721,4 +1721,24 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #258 | TB ack-recon PD freeze seal outbound registry attestation ledger GET 505–506 on 503/504 parents | squash `dce3a58` / parent `5296b89` | Yes (tip `dce3a58`) | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata/clone) |
+
+## Targeted ledger — PR #260 TB ack-recon PD freeze seal partner-delivery receipt freeze-override seal verification GET 507–508
+
+Independent Phase Auditor pass (2026-09-26). Full write-up:
+`docs/audits/phase-pr260-get-507-508-audit.md`. Evidence:
+`/opt/cursor/artifacts/pr260_verification.log`.
+
+- **Landed tip:** `567d2450963a90994c8bcf4d446d977e8e07fe6e` (squash of PR #260; after audit docs `60287c0`).
+- **Squash parent:** `60287c050b3fc1f8c55413b5c8fa5e4ad7b98776` (#258 audit docs landing — matches builder first-parent claim).
+- **Lattice:** `route.ts` **37,873 → 38,508** (+635); `operator-audit-console.tsx` **5,533 → 5,665** (+132); GET **485–508** identity `it.each` (24 slices); **507/508** + **6/6** POSTs on **505/506** parents.
+- **`parseView`:** identity-only for TB views; dedicated wiring `it()` for **507/508** seal-verification status fields.
+- **Persistence:** reuses **495/496** deny-by-default seal-verification collections (`firestore.rules` **L220** / **L223** deny-write); governance re-export +8 lines; no new rules diff in squash.
+- **Tests (auditor full focused, no `-t` skip):** **209/209** (20 files); rules **22/22** (retry); G-0 PASS; G-1 **10/10**;
+  `pr-phase-claim-gate.test.ts` **20/20**; `check_pr_phase_claims.py` **PASS** on PR #260 body (`BASE=60287c0`, `HEAD=567d245` / `6777347`).
+- **Minors:** `it.each` array order (506 after 508); Vitest worker timeout noise; rules first-run flake; `transport_stub=true`; no new deny-binder/rules delta (reuse).
+- **Product:** **PARTIAL** only (`transport_stub=true`).
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #260 | TB ack-recon PD freeze seal partner-delivery receipt freeze-override seal verification GET 507–508 on 505/506 parents | squash `567d245` / parent `60287c0` | Yes (tip `567d245`) | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata/clone) |
 
