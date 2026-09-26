@@ -1621,11 +1621,24 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 |---|---|---|---|---|---|---|---|---|
 | #239 | TB ack-recon PD freeze seal GET 495–496 on 493/494 parents | `9265559` / parent `a66f6e6` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata / test filter) |
 
-## PR slice 497–498 (TB ack-recon partner-delivery freeze-override seal verification → transport-boundary receipt reconciliation, base `9265559`)
+## Targeted ledger — PR #244 TB ack-recon PD freeze seal TB receipt recon GET 497–498
 
-- **Scope:** GET views `${view495}_transport_boundary_receipt_reconciliations` / `${view496}_transport_boundary_receipt_reconciliations`; six POST lifecycle actions (497 custody reconcile/digest/finalize + 498 closure digest/attest/finalize) parented on finalized **495/496** rows; `transport_stub:true` on new rows.
-- **`BACKEND_REAL`:** PASS (memory + Firestore deny-write repos, digest-rebuild sync, route wiring tests).
-- **`FRONTEND_REAL`:** PASS (`/ops` GET **497–498** + six POST call sites after **495/496** block; dedicated frontend_real test).
-- **`TRANSPORT_STUB`:** true (`WORKFLOW_OPS_EXTERNAL_TRANSPORT_CHANNEL_BLOCKED_TODO_FIRM` + probe strings).
-- **Final classification:** PASS phase wiring audit; **PARTIAL** product (transport stub).
+Independent Phase Auditor pass (2026-09-26). Full write-up:
+`docs/audits/phase-pr244-tb-ack-recon-pd-freeze-seal-tb-recon-497-498.md`. Evidence:
+`/opt/cursor/artifacts/pr244_verification.log`.
+
+- **Landed tip:** `3c7c6073c73f68ccad860e07b7fe967dd1e5dab8` (squash of PR #244 on `main`).
+- **Parent:** `9265559c3d9f9debf9fdb6a0fac399995443fa19` (PR #239).
+- **Lattice:** `route.ts` **34,395 → 35,047** (+652); `operator-audit-console.tsx` **4,887 → 5,019**
+  (+132); GET **485–498** identity `it.each` (14 slices); **497/498** + **6/6** POSTs after 495/496.
+- **`parseView`:** identity-only through **498**; **491–496** preserved.
+- **Persistence:** deny-by-default Firestore binder + rules for both new 497/498 repositories.
+- **Tests (auditor full focused, no `-t` skip):** **181/181** (15 files); rules **22/22**; G-0 PASS; G-1 **10/10**;
+  `pr-phase-claim-gate.test.ts` **20/20**; `check_pr_phase_claims.py` **FAIL** on PR #244 body metadata (landed code OK).
+- **Minors:** PR body HEAD SHA drift vs squash tip; claim-gate metadata format; Vitest worker timeout noise.
+- **Product:** **PARTIAL** only (`transport_stub=true`).
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #244 | TB ack-recon PD freeze seal TB receipt recon GET 497–498 on 495/496 parents | squash `3c7c607` / parent `9265559` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata / claim-gate body) |
 
