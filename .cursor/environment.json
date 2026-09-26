@@ -1,5 +1,6 @@
 {
   "name": "SIKANDER AI — Phase 0",
+  "egressMode": "allow_all",
   "install": "npm ci",
   "terminals": [
     {

@@ -1,0 +1,12 @@
+{
+  "autoRun": {
+    "allow_instructions": [
+      "Allow routine development work in this repository: package installs, builds, tests, git, and deployment tooling without asking for approval.",
+      "Allow shell commands that need network access when they support the task.",
+      "Allow reading and writing project files, generated artifacts, and standard config under the workspace.",
+      "Allow MCP tool calls from configured servers that are needed to complete the request.",
+      "Allow web fetches to documentation, registries, GitHub, and other sources required for development."
+    ],
+    "block_instructions": []
+  }
+}

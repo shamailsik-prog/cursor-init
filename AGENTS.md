@@ -7,3 +7,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Local IDE: maximum agent autonomy (one-time on your machine)
+
+Repo policy for agents lives under `.cursor/` (`cli.json`, `permissions.json`, `sandbox.json`). Cloud Agents already auto-run tools; `environment.json` sets `egressMode` to `allow_all` when team policy allows.
+
+To remove most **desktop IDE** approval prompts, set **Settings → Agents → Approvals & Execution → Run Everything**. Optional: copy the same three JSON files to `~/.cursor/` so every repo on your machine inherits them. Team dashboard Run Mode / network locks override project files.
