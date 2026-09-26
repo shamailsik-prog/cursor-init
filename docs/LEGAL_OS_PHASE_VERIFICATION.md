@@ -1515,3 +1515,35 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|
 | #231 + #233 remediation | `a075adb` | **PASS** | **PASS** | true | **PASS phase audit; PARTIAL product** | 1 inherited minor |
 
+## Targeted ledger — PR #235 TB ack-recon outbound-registry attestation ledger on 491/492 parents
+
+- Audit file:
+  `docs/audits/phase-pr235-tb-ack-recon-outbound-registry-attestation-ledger.md`
+- Date: 2026-09-26
+- Audited landed tip and direct parent: `93cb5c0d10ad0028e0f7aa31e3029bbc28619cd0` →
+  `a0f73c286f3f180f3af380696273b8fd8c55b2ab`.
+- **LATTICE INTEGRITY: FAIL (major).** The squash is physically intact:
+  `ops-reporting/route.ts` grew from 33,182 to 33,798 lines and `/ops` source
+  retains GET **485–494**, including new 493/494 after 491/492 and six new
+  lifecycle POSTs. But `parseView` maps the existing GET **492** parent view
+  string to the GET **494** child view; no earlier identity return accepts the
+  492 value. The parent query therefore lists child data and does not preserve
+  the required 491/492 chain end-to-end.
+- `BACKEND_REAL`: PARTIAL — 493/494 governance, memory/Firestore repositories,
+  deny-by-default collection mapping, and route handlers are present, but the
+  public 492 parent contract is broken.
+- `FRONTEND_REAL`: **FAIL** — `/ops` has concrete 491–494 GET and six POST
+  call sites, yet the 492 call resolves to 494. This is a functional
+  call-site defect, not a missing source string.
+- `TRANSPORT_STUB`: honest (`transport_stub:true` / `blocked_todo_firm`);
+  Product remains **PARTIAL**, never COMPLETE, and no live transport credential
+  escalation is needed.
+- Tests: focused FE/API/route suite **133/133**, real Firestore emulator suite
+  **22/22**, G-0 PASS, G-1 **10/10**, and exact closed-PR claim-gate replay
+  PASS. Those tests omit a returned-row/status assertion for GET 492, so they
+  do not detect the remap.
+
+| PR | Claimed phase | Landed SHA | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|
+| #235 | TB ack-recon outbound-registry attestation ledger GET 493/494 on 491/492 parents | `93cb5c0` / parent `a0f73c2` | PARTIAL | **FAIL** | true | **FAIL phase audit; PARTIAL product** | major |
+
