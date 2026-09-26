@@ -1642,3 +1642,11 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 |---|---|---|---|---|---|---|---|---|
 | #244 | TB ack-recon PD freeze seal TB receipt recon GET 497–498 on 495/496 parents | squash `3c7c607` / parent `9265559` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata / claim-gate body) |
 
+## PR slice 499–500 (TB ack-recon PD freeze seal transport-boundary receipt reconciliation → external transport receipt acknowledgment, parents 497/498)
+
+- **Scope:** GET views `${view497}_external_transport_receipt_acknowledgments` / `${view498}_external_transport_receipt_acknowledgments`; six POST lifecycle actions (checkpoint / acknowledge / control on waiver + variance tracks) parented on finalized **497/498** transport-boundary receipt reconciliation rows; `transport_stub:true` on new rows.
+- **`BACKEND_REAL`:** PASS (deny-by-default Firestore binder, digest-rebuild sync, `it.each` GET identity **485–500**, repository id ≤1500 bytes).
+- **`FRONTEND_REAL`:** PASS (`/ops` GET **499–500** + six POST call sites after **497/498** block; `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-499-500-frontend-real.test.ts`).
+- **`TRANSPORT_STUB`:** true (blocked external transport channel + `blocked_todo_firm:…:ops_probe` only).
+- **Final classification:** PASS phase wiring audit; **PARTIAL** product (transport stub).
+
