@@ -1662,3 +1662,23 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 |---|---|---|---|---|---|---|---|---|
 | #249 | TB ack-recon PD freeze seal external transport receipt ack GET 499–500 on 497/498 parents | squash `5625596` / parent `72be3ce` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata / builder docs) |
 
+## Targeted ledger — PR #252 TB ack-recon PD freeze seal external transport receipt ack reconciliation GET 501–502
+
+Independent Phase Auditor pass (2026-09-26). Full write-up:
+`docs/audits/phase-pr252-get-501-502-audit.md`. Evidence:
+`/opt/cursor/artifacts/pr252_verification.log`.
+
+- **Landed tip:** `0c1634ce9ec73c828cfe53eb1ef7c9a7593c526c` (squash of PR #252 on `main`; after chore `8edc890` and audit docs `0ad8db0`).
+- **Squash parent:** `8edc890d69a54cb4816e8dff9a145bd9b68c1854` (#248 — not #251 audit).
+- **Lattice:** `route.ts` **35,704 → 36,391** (+687); `operator-audit-console.tsx` **5,147 → 5,275** (+128); GET **485–502** identity `it.each` (18 slices); **501/502** + **6/6** POSTs after 499/500.
+- **`parseView`:** identity-only through **502**; **492–500** preserved in dedicated regression test.
+- **Persistence:** deny-by-default binder + spine refactor for both reconciliation repository keys; rules pre-landed.
+- **Tests (auditor full focused, no `-t` skip):** **191/191** (17 files); rules **22/22**; G-0 PASS; G-1 **10/10**;
+  `pr-phase-claim-gate.test.ts` **20/20**; `check_pr_phase_claims.py` **PASS** on PR #252 body (`BASE=8edc890`, `HEAD=0c1634c`).
+- **Minors:** squash parent is #248 not #251; forge `headSha` `a999a3920…` not in clone vs merge `0c1634c`; Vitest worker timeout noise; no new dedicated repo wiring `it()` beyond lattice; `firestore.rules` untouched in squash.
+- **Product:** **PARTIAL** only (`transport_stub=true`).
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #252 | TB ack-recon PD freeze seal external transport receipt ack reconciliation GET 501–502 on 499/500 parents | squash `0c1634c` / parent `8edc890` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (parent/metadata) |
+
