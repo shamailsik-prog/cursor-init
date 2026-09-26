@@ -1547,3 +1547,30 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|---|
 | #235 | TB ack-recon outbound-registry attestation ledger GET 493/494 on 491/492 parents | `93cb5c0` / parent `a0f73c2` | PARTIAL | **FAIL** | true | **FAIL phase audit; PARTIAL product** | major |
 
+## Targeted ledger — PR #235 + remediation PR #237 (GET 492 `parseView` identity)
+
+- Audit file:
+  `docs/audits/phase-pr235-tb-ack-recon-outbound-registry-attestation-ledger.md`
+  (re-audit section, 2026-09-26; corrected after Phase Auditor ruling)
+- Audited tip: `f22c9d5c0250bf0d64a27d5c582af942814f4a5e` (#237 on `main`); pre-#235
+  parent `a0f73c286f3f180f3af380696273b8fd8c55b2ab`.
+- **Pre-#235 evidence (`a0f73c2`):** GET **493** child view string absent;
+  `parseView` has **zero** parent→child remaps; GET **491** parent is identity.
+- **LATTICE INTEGRITY: FAIL (major).** GET **492→494** remap **closed** by #237.
+  GET **491→493** remap **open** — introduced by #235 (`93cb5c0`); sole non-identity
+  `return "alert_…"` in `parseView` at tip (`route.ts` ~784–785). #237 fixed
+  only one of the pair. CM claim that **491→493** is “dead behind identity” is
+  **inaccurate** for audit purposes (remap block remains; tests did not require
+  `json.view ===` parent for **491** at ~6214–6227).
+- `BACKEND_REAL`: PARTIAL — **492** contract restored; **491** parent GET still
+  ships a **491→493** remap in source.
+- `FRONTEND_REAL`: **FAIL** — `/ops` GET **491** declares parent surface; route
+  retains parent→child remap (same class as original **492** major).
+- `TRANSPORT_STUB`: honest; product **PARTIAL**.
+- Tests at tip: focused **137/137**, rules **22/22**, G-0/G-1 pass — do not
+  detect the **491** major.
+
+| PR | Re-audited tip | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|
+| #235 + #237 | `f22c9d5` | PARTIAL | **FAIL** | true | **FAIL phase audit; PARTIAL product** | major (491→493) |
+
