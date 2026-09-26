@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-26 (PR #249 independent phase audit GET 499–500 appended)
+Last updated: 2026-09-26 (PR #258 independent phase audit GET 505–506 appended)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1701,4 +1701,24 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
 | #255 | TB ack-recon PD freeze seal external distribution audit ledger + partner handoff attestation GET 503–504 on 501/502 parents | squash `7c9a47f` / parent `959cb21` | Yes (tip `7c9a47f`) | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata/clone) |
+
+## Targeted ledger — PR #258 TB ack-recon PD freeze seal outbound registry attestation ledger GET 505–506
+
+Independent Phase Auditor pass (2026-09-26). Full write-up:
+`docs/audits/phase-pr258-get-505-506-audit.md`. Evidence:
+`/opt/cursor/artifacts/pr258_verification.log`.
+
+- **Landed tip:** `dce3a5861081e4606ec3f0a2a72a22f0f7c1d35a` (squash of PR #258; after audit docs `5296b89` / PR #256).
+- **Squash parent:** `5296b8932045f72cbcfb9272baf96db321c8aa1f` (#256 docs — matches builder; not an unrelated intermediate).
+- **Lattice:** `route.ts` **37,134 → 37,873** (+739); `operator-audit-console.tsx` **5,406 → 5,533** (+127); GET **485–506** identity `it.each` (22 slices); **505/506** + **6/6** POSTs after 503/504.
+- **`parseView`:** identity-only through **506**; dedicated wiring `it()` for **505/506** outbound-registry attestation status fields.
+- **Persistence:** reuses **493–494** ledger collections (`firestore.rules` L189/L202 deny-write); governance re-export +8 lines; no new rules diff in squash.
+- **Tests (auditor full focused, no `-t` skip):** **203/203** (19 files); rules **22/22**; G-0 PASS; G-1 **10/10**;
+  `pr-phase-claim-gate.test.ts` **20/20**; `check_pr_phase_claims.py` **PASS** on PR #258 body (`BASE=5296b89`, `HEAD=dce3a58` / `29ac75e`).
+- **Minors:** clone `main` ref briefly stale pre-fetch; Vitest worker timeout noise; `transport_stub=true`; no new deny-binder/rules delta (reuse).
+- **Product:** **PARTIAL** only (`transport_stub=true`).
+
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #258 | TB ack-recon PD freeze seal outbound registry attestation ledger GET 505–506 on 503/504 parents | squash `dce3a58` / parent `5296b89` | Yes (tip `dce3a58`) | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata/clone) |
 
