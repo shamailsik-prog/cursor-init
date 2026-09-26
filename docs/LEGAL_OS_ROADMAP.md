@@ -514,6 +514,13 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 - Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **493–494** and lifecycle POSTs after 491/492 block in `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice`.
 - Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
 
+## PR slice (branch `cursor/tb-ack-recon-pd-freeze-seal-495-496-820e`) — partner-delivery receipt freeze-override seal verification on TB ack-recon seal_verifications outbound registry attestation ledger 493/494 parents
+
+- `/api/d2/ops-reporting` monitoring views **495–496** (digest-rebuild sync after 493/494 refresh) and six partner-governed lifecycle POST actions (custody checkpoint/attest/finalize seal verification + closure checkpoint/attest/finalize seal verification).
+- Governance: `workflowOpsAckReconTbSealVerificationsOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationGovernance.ts` (NAME_MAX-safe), parents finalized 493/494 outbound registry attestation ledger rows, `transport_stub:true`.
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **495–496** and lifecycle POSTs after 493/494 control POSTs in `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice`.
+- Phase labels: `backend_real=true`, `frontend_real=true`, `transport_stub=true`, `classification=PARTIAL`.
+
 ## NEXT PHASE (queued for follow-up agent)
 
-Continue outbound-registry attestation ledger chain continuation parented on finalized 493/494 external distribution audit ledger / partner handoff attestation outbound registry attestation ledger rows (next GET pair + lifecycle POSTs).
+Continue outbound-registry attestation ledger / partner-delivery receipt freeze-override seal verification chain parented on finalized 495/496 rows (next GET pair + lifecycle POSTs).
