@@ -1600,3 +1600,11 @@ The gate fails when either condition is true:
 |---|---|---|---|---|---|---|
 | #235 + #237 + #240 | `6b487a3` | **PASS** (scoped) | **PASS** | true | **PASS phase audit; PARTIAL product** | — |
 
+## PR slice 497–498 (TB ack-recon partner-delivery freeze-override seal verification → transport-boundary receipt reconciliation, base `9265559`)
+
+- **Scope:** GET views `${view495}_transport_boundary_receipt_reconciliations` / `${view496}_transport_boundary_receipt_reconciliations`; six POST lifecycle actions (497 custody reconcile/digest/finalize + 498 closure digest/attest/finalize) parented on finalized **495/496** rows; `transport_stub:true` on new rows.
+- **`BACKEND_REAL`:** PASS (memory + Firestore deny-write repos, digest-rebuild sync, route wiring tests).
+- **`FRONTEND_REAL`:** PASS (`/ops` GET **497–498** + six POST call sites after **495/496** block; dedicated frontend_real test).
+- **`TRANSPORT_STUB`:** true (`WORKFLOW_OPS_EXTERNAL_TRANSPORT_CHANNEL_BLOCKED_TODO_FIRM` + probe strings).
+- **Final classification:** PASS phase wiring audit; **PARTIAL** product (transport stub).
+

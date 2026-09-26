@@ -524,3 +524,10 @@ Hard rule: if `transport_stub=true`, any `COMPLETE`/`product-done` claim must be
 ## NEXT PHASE (queued for follow-up agent)
 
 Continue outbound-registry attestation ledger / partner-delivery receipt freeze-override seal verification chain parented on finalized 495/496 rows (next GET pair + lifecycle POSTs).
+
+## PR slice (branch `cursor/tb-ack-recon-pd-freeze-seal-tb-recon-497-498-872c`) — transport-boundary receipt reconciliation on TB ack-recon partner-delivery freeze-override seal verification 495/496 parents
+
+- `/api/d2/ops-reporting` monitoring views **497–498** (`${view495}_transport_boundary_receipt_reconciliations` / `${view496}_transport_boundary_receipt_reconciliations`; digest-rebuild sync after 495/496 refresh) and six partner-governed lifecycle POST actions mirroring PR #223 **485–486** with `outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt` path segments (`transport_stub:true` provenance).
+- Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **497–498** and lifecycle POSTs after 495/496 control POSTs in `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice` (`blocked_todo_firm` transport_stub probe strings).
+
+Next: continue TB ack-recon lattice parented on finalized 497/498 transport-boundary receipt reconciliation rows.
