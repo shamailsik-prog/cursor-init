@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-24 (PR #221 independent phase audit appended)
+Last updated: 2026-09-26 (PR #249 independent phase audit GET 499–500 appended)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1642,19 +1642,23 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 |---|---|---|---|---|---|---|---|---|
 | #244 | TB ack-recon PD freeze seal TB receipt recon GET 497–498 on 495/496 parents | squash `3c7c607` / parent `9265559` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata / claim-gate body) |
 
-## PR slice 499–500 (TB ack-recon PD freeze seal transport-boundary receipt reconciliation → external transport receipt acknowledgment, parents 497/498)
+## Targeted ledger — PR #249 TB ack-recon PD freeze seal external transport receipt ack GET 499–500
 
-- **Scope:** GET views `${view497}_external_transport_receipt_acknowledgments` / `${view498}_external_transport_receipt_acknowledgments`; six POST lifecycle actions (checkpoint / acknowledge / control on waiver + variance tracks) parented on finalized **497/498** transport-boundary receipt reconciliation rows; `transport_stub:true` on new rows.
-- **`BACKEND_REAL`:** PASS (deny-by-default Firestore binder, digest-rebuild sync, `it.each` GET identity **485–500**, repository id ≤1500 bytes).
-- **`FRONTEND_REAL`:** PASS (`/ops` GET **499–500** + six POST call sites after **497/498** block; `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-499-500-frontend-real.test.ts`).
-- **`TRANSPORT_STUB`:** true (blocked external transport channel + `blocked_todo_firm:…:ops_probe` only).
-- **Final classification:** PASS phase wiring audit; **PARTIAL** product (transport stub).
+Independent Phase Auditor pass (2026-09-26). Full write-up:
+`docs/audits/phase-pr249-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-499-500.md`. Evidence:
+`/opt/cursor/artifacts/pr249_verification.log`.
 
-## PR slice 499–500 (TB ack-recon PD freeze seal transport-boundary receipt reconciliation → external transport receipt acknowledgment, parents 497/498)
+- **Landed tip:** `5625596358d945b8f1760dfb2975c775c7afd3f2` (squash of PR #249 on `main`; after audit docs `72be3ce`).
+- **Squash parent:** `72be3ce2462ed3f3eb0049f68e290a5f9dd4a797` (PR #244 audit #246).
+- **Lattice:** `route.ts` **35,047 → 35,704** (+657); `operator-audit-console.tsx` **5,019 → 5,147** (+128); GET **485–500** identity `it.each` (16 slices); **499/500** + **6/6** POSTs after 497/498.
+- **`parseView`:** identity-only through **500**; **492–498** preserved.
+- **Persistence:** deny-by-default Firestore binder + rules for both new 499/500 repositories.
+- **Tests (auditor full focused, no `-t` skip):** **187/187** (16 files); rules **22/22**; G-0 PASS; G-1 **10/10**;
+  `pr-phase-claim-gate.test.ts` **20/20**; `check_pr_phase_claims.py` **PASS** on PR #249 body (`BASE=72be3ce`, `HEAD=5625596`).
+- **Minors:** forge branch HEAD vs squash tip; squash parent is audit commit not `3c7c607`; builder docs in product squash + duplicate verification note `903cc9d`; Vitest worker timeout noise.
+- **Product:** **PARTIAL** only (`transport_stub=true`).
 
-- **Scope:** GET views `${view497}_external_transport_receipt_acknowledgments` / `${view498}_external_transport_receipt_acknowledgments`; six POST lifecycle actions (checkpoint / acknowledge / control on waiver + variance tracks) parented on finalized **497/498** transport-boundary receipt reconciliation rows; `transport_stub:true` on new rows.
-- **`BACKEND_REAL`:** PASS (deny-by-default Firestore binder, digest-rebuild sync, `it.each` GET identity **485–500**, repository id ≤1500 bytes).
-- **`FRONTEND_REAL`:** PASS (`/ops` GET **499–500** + six POST call sites after **497/498** block; `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-499-500-frontend-real.test.ts`).
-- **`TRANSPORT_STUB`:** true (blocked external transport channel + `blocked_todo_firm:…:ops_probe` only).
-- **Final classification:** PASS phase wiring audit; **PARTIAL** product (transport stub).
+| PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
+|---|---|---|---|---|---|---|---|---|
+| #249 | TB ack-recon PD freeze seal external transport receipt ack GET 499–500 on 497/498 parents | squash `5625596` / parent `72be3ce` | Yes | PASS | PASS | true | **PASS phase audit; PARTIAL product** | minor (metadata / builder docs) |
 
