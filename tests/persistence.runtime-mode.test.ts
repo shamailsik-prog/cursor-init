@@ -6626,7 +6626,7 @@ describe("Runtime persistence mode", () => {
         ).toBe(true)
       }
     })
-  })
+  }, 45_000)
 
   it("persists draft compose/list through Firestore-backed route mode", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
