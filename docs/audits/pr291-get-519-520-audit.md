@@ -48,3 +48,32 @@ PR #291 declares `frontend_real=true` and changes `app/ops/operator-audit-consol
 
 - Job E dedicated-array diff replaces duplicate **517/518** variant entries with **519/520** (not a denyWrite shrink for **517/518**).
 - **485–487** dedicated `_viewNNN` deny tests still absent (pre-existing).
+
+---
+
+## Re-audit addendum — PR291-MAJOR-1 body fix (2026-09-29)
+
+**Ledger on `main`:** `070dbb18f989fbe71181a09bd82ebf969583d279` (#292 docs FAIL row; parent `026a2ac`). **No code commits** after product squash `026a2ac`.
+
+**Metadata fix (body only):** PR #291 amended with:
+
+- `view-name→call-site: PR slice GET view 519 -> app/ops/operator-audit-console.tsx`
+- `view-name→call-site: PR slice GET view 520 -> app/ops/operator-audit-console.tsx`
+
+Flags unchanged (`backend_real=true`, `frontend_real=true`, `transport_stub=true`).
+
+| Check | Result |
+|---|---|
+| `check_pr_phase_claims.py` @ `BASE=05128f3`, `HEAD=026a2ac` | **PASS** exit **0** |
+| Same @ `HEAD=05d7d3b` | **PASS** exit **0** |
+| Gates @ `main` tip (`070dbb1`) | focused **264/264**; rules **76/76**; isolation **17/17**; G-0; G-1 **10/10**; claim vitest **20/20** |
+| Job E array `c21e1e8`→`026a2ac` | **0** unique paths lost; **517/518** deduped 2→1 each; **+519/520** |
+
+**Re-audit evidence:** `/opt/cursor/artifacts/pr291_reaudit.log`
+
+### Executive verdict (re-audit)
+
+| Scope | Verdict |
+|---|---|
+| **PR #291 @ `026a2ac`** | **SEALED PASS** |
+| **Product** | **PARTIAL** (`transport_stub=true`) |
