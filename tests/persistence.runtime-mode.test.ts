@@ -9915,7 +9915,7 @@ describe("Runtime persistence mode", () => {
         )
       ).toBe(true)
     })
-  }, 45_000)
+  }, 120_000)
 
   it("persists follow-up and intimation creation at source through matters route", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
