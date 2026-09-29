@@ -6864,6 +6864,38 @@ export function OperatorAuditConsole() {
         cursor: 0,
       },
     })
+    const custodyTbAckReconPdFreezeSeal549ReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationView =
+      `${custodyTbAckReconPdFreezeSeal547ReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationView}_ledger_reconciliation_closure_seal_verifications`
+    const closureTbAckReconPdFreezeSeal550PartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementView =
+      `${closureTbAckReconPdFreezeSeal548PartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementView}_partner_handoff_attestation_acknowledgement_seal_verifications`
+    await runApiCall({
+      step: "PR slice view: custody TB ack-recon partner-delivery receipt freeze-override seal verification transport boundary receipt reconciliation external transport receipt acknowledgment reconciliation external distribution audit ledger external distribution audit ledger reconciliation closure seal verification on outbound registry attestation ledger external distribution audit ledger reconciliation outbound registry attestation ledgers external distribution audit ledger reconciliations ledger reconciliation closure seal verifications (549)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: custodyTbAckReconPdFreezeSeal549ReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationView,
+        actorId: partnerId,
+        matterId,
+        externalDistributionAuditLedgerReconciliationStatus:
+          "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "PR slice view: closure TB ack-recon partner-delivery receipt freeze-override seal verification transport boundary receipt reconciliation external transport receipt acknowledgment reconciliation partner handoff attestation acknowledgement seal verification on outbound registry attestation ledger partner handoff attestation acknowledgements partner handoff attestation acknowledgement seal verifications (550)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: closureTbAckReconPdFreezeSeal550PartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementView,
+        actorId: partnerId,
+        matterId,
+        partnerHandoffAttestationAcknowledgementStatus:
+          "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
     await runApiCallAllowingStatuses(
       {
         step: "PR slice action: checkpoint custody TB ack-recon partner-delivery receipt freeze-override seal verification transport boundary receipt reconciliation external transport receipt acknowledgment reconciliation external distribution audit ledger digest on outbound registry attestation ledger",

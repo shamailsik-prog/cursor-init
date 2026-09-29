@@ -5,7 +5,7 @@ const RULES = readFileSync("firestore.rules", "utf8")
 const RULES_TEST_SOURCE = readFileSync("tests/firestore.rules.test.ts", "utf8")
 
 const DEDICATED_VIEW_MIN = 485
-const DEDICATED_VIEW_MAX = 548
+const DEDICATED_VIEW_MAX = 550
 
 function extractQuotedArray(source: string, marker: string): readonly string[] {
   const start = source.indexOf(marker)
@@ -40,7 +40,7 @@ const LATTICE_DEDICATED_VIEW_ARRAY_WITHOUT_RULES_MATCH_WHITELIST = new Set([
   504,
 ])
 
-describe("lattice dedicated _view collections — static invariants (485–548)", () => {
+describe("lattice dedicated _view collections — static invariants (485–550)", () => {
   it("Job E list is strictly ascending by view number", () => {
     const views = jobE.map((p) => viewNumberFromPath(p))
     expect(views.every((v) => v !== null)).toBe(true)
@@ -181,6 +181,19 @@ describe("lattice dedicated _view545/_view546 rules break guard (fail if match r
 
 describe("lattice dedicated _view547/_view548 rules break guard (fail if match removed)", () => {
   it.each([547, 548])("view %i has no rules match after synthetic removal", (view) => {
+    const canonical = jobE.find((p) => p.endsWith(`_view${view}`))
+    expect(canonical).toBeDefined()
+    const stripped = RULES
+      .split("\n")
+      .filter((line) => !line.includes(`match /${canonical}/{id}`))
+      .join("\n")
+    expect(dedicatedRulePathsByView(stripped, view)).toHaveLength(0)
+    expect(dedicatedRulePathsByView(RULES, view)).toHaveLength(1)
+  })
+})
+
+describe("lattice dedicated _view549/_view550 rules break guard (fail if match removed)", () => {
+  it.each([549, 550])("view %i has no rules match after synthetic removal", (view) => {
     const canonical = jobE.find((p) => p.endsWith(`_view${view}`))
     expect(canonical).toBeDefined()
     const stripped = RULES
