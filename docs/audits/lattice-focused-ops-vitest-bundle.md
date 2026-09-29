@@ -1,6 +1,6 @@
-# Canonical focused ops vitest bundle (TB ack-recon lattice 485–530)
+# Canonical focused ops vitest bundle (TB ack-recon lattice 485–534)
 
-**Baseline:** **32 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **34 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
@@ -65,3 +65,11 @@ Dedicated `_view527` / `_view528` collections mirror `_view515` / `_view516` pla
 32. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-529-530-frontend-real.test.ts` (PR slice **529–530**; parents 527/528)
 
 Dedicated `_view529` / `_view530` collections mirror `_view527` / `_view528` placement (append **529**/**530** in Job E + denyWritePaths after **528**).
+
+33. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-531-532-frontend-real.test.ts` (PR slice **531–532**; parents 529/530)
+
+Dedicated `_view531` / `_view532` collections mirror `_view529` / `_view530` placement (append **531**/**532** in Job E + denyWritePaths after **530**).
+
+34. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-533-534-frontend-real.test.ts` (PR slice **533–534**; parents 531/532 outbound registry attestation ledgers)
+
+Dedicated `_view533` / `_view534` collections mirror `_view505` / `_view506` on deeper parents (append **533**/**534** in Job E + denyWritePaths after **532**).
