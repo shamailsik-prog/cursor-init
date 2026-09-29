@@ -537,3 +537,5 @@ Continue outbound-registry attestation ledger / partner-delivery receipt freeze-
 - Operator console wiring in `app/ops/operator-audit-console.tsx`: GET **499–500** and lifecycle POSTs after 497/498 control POSTs in `readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice` (`blocked_todo_firm` transport_stub probe strings).
 
 Next: continue TB ack-recon lattice parented on finalized 499/500 external transport receipt acknowledgment rows.
+
+- **PR slice 513–514 (TB ack-recon PD freeze seal):** dedicated GET views for external transport receipt acknowledgment **reconciliation** on 511/512 parents (`_view513` / `_view514` collections); mirrors 501–502 on 499–500.

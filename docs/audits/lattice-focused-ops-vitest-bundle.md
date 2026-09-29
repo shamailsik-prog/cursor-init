@@ -1,6 +1,6 @@
 # Canonical focused ops vitest bundle (TB ack-recon lattice 485–512)
 
-**Baseline:** **23 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **24 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
@@ -39,3 +39,5 @@
 | 21 | +`tests/ops.pr-tb-ack-recon-lattice-dedicated-collection-lineage-isolation.test.ts` (PR #266) |
 | 22 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts` (PR #271) |
 | 23 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-511-512-frontend-real.test.ts` (PR #277) |
+
+- `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-513-514-frontend-real.test.ts` — PR slice 513–514 external transport receipt acknowledgment reconciliation (511/512 parents).
