@@ -1,10 +1,10 @@
-# Canonical focused ops vitest bundle (TB ack-recon lattice 485–522)
+# Canonical focused ops vitest bundle (TB ack-recon lattice 485–524)
 
-**Baseline:** **28 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **29 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (28)
+## File list (29)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -34,6 +34,7 @@
 26. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-outbound-registry-attestation-ledger-517-518-frontend-real.test.ts` (PR slice **517–518**; parents 515/516)
 27. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-partner-delivery-519-520-frontend-real.test.ts` (PR slice **519–520**; parents 517/518)
 28. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-521-522-frontend-real.test.ts` (PR slice **521–522**; parents 519/520)
+29. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-523-524-frontend-real.test.ts` (PR slice **523–524**; parents 521/522)
 
 ## History
 

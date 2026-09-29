@@ -69,8 +69,12 @@ describe("TB ack-recon PD freeze seal external transport receipt acknowledgment 
 
   it("orders 513-514 views and lifecycle POSTs after 512 closure acknowledgment finalization", () => {
     const lattice = latticeSourceSlice(source)
-    const closure512Finalization = lattice.lastIndexOf(
-      "PR slice action: control closure TB ack-recon partner-delivery receipt freeze-override seal verification transport boundary receipt reconciliation external transport receipt acknowledgment finalization on partner handoff attestation outbound registry attestation ledger"
+    const view512 = lattice.indexOf(
+      "PR slice view: closure TB ack-recon PD freeze seal partner-delivery receipt freeze-override seal verification transport boundary receipt reconciliation external transport receipt acknowledgments on partner handoff attestation outbound registry attestation ledger (512)"
+    )
+    const closure512Finalization = lattice.indexOf(
+      "PR slice action: control closure TB ack-recon partner-delivery receipt freeze-override seal verification transport boundary receipt reconciliation external transport receipt acknowledgment finalization on partner handoff attestation outbound registry attestation ledger",
+      view512
     )
     const view513 = lattice.indexOf(REQUIRED_VIEW_STEPS[0])
     const view514 = lattice.indexOf(REQUIRED_VIEW_STEPS[1])
