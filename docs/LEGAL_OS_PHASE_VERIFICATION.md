@@ -1762,3 +1762,13 @@ Independent re-audit (2026-09-29). Full write-up: `docs/audits/phase-pr252-reaud
 - **Tests:** focused ops **212/215** (21 files) — **3 FAIL** `persistence.route-wiring` missing `View501`/`View502` mock repos; rules **28/28** (+6 deny-write cases); G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20**; `check_pr_phase_claims.py` PASS (`BASE=39aecaf`, `HEAD=25767df`, PR #269 body).
 - **Verdict:** **#252 re-audit FAIL** (1 major: route-wiring mock regression); **product PARTIAL** (`transport_stub=true`). Original #252 @ `0c1634c` ledger entry unchanged for historical pass; persistence leak class remediated on `main` @ `25767df`.
 
+## Re-audit pass 2 closure — PR #272 route-wiring mocks (PR252-REAUDIT-MAJOR-1) for #252
+
+Independent re-audit (2026-09-29). Full write-up: `docs/audits/phase-pr252-reaudit2-fix272.md`. Evidence: `/opt/cursor/artifacts/pr252_reaudit2_verification.log`.
+
+- **Landed fix SHA:** `ded553a5b0a9479e5d8c0c1b4392e8d2044e90c1` (squash of PR #272; parent `0dcdf80` interim GET **509–510**; docs #270 @ `110d170` between failed re-audit and fix).
+- **Remediation:** `tests/persistence.route-wiring.test.ts` mock repos for `View501`/`View502` + dedicated wiring `it()` (505–508 pattern); **test-only** diff `0dcdf80..ded553a`.
+- **Lattice 485–510 isolation:** **CLEAN** @ `ded553a` (builder isolation **8/8** including **497/509** and **498/510**; dedicated `view509`/`view510` collections).
+- **Tests:** focused ops **223/223** (21 files, no `-t`); vs `25767df` **212/215** (3 FAIL before fix); `test:rules` **34/34**; G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20**; `check_pr_phase_claims.py` PASS (`BASE=0dcdf80`, `HEAD=ded553a`, PR #272 body).
+- **Verdict:** **#252 re-audit PASS** @ `ded553a`; **product PARTIAL** (`transport_stub=true`).
+
