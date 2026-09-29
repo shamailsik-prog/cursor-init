@@ -67,6 +67,9 @@ python3 ci_gates/check_pagination.py || fail=1
 echo "[14] /ops helper-resolution guard"
 python3 ci_gates/check_ops_helper_resolution.py || fail=1
 
+echo "[15] product + phase-audit-doc mixing guard"
+bash ci_gates/check_no_product_phase_audit_docs.sh || fail=1
+
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
 if [ $fail -ne 0 ]; then echo "=== Gate G-0 FAILED ==="; exit 1; fi

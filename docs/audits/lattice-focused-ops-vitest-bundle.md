@@ -1,6 +1,6 @@
-# Canonical focused ops vitest bundle (TB ack-recon lattice 485–528)
+# Canonical focused ops vitest bundle (TB ack-recon lattice 485–530)
 
-**Baseline:** **31 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **32 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
@@ -53,7 +53,7 @@
 | 28 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-521-522-frontend-real.test.ts` (PR slice **521–522**) |
 | 29 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-523-524-frontend-real.test.ts` (PR slice **523–524**) |
 | 30 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-525-526-frontend-real.test.ts` (PR slice **525–526**) |
-| 31 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-527-528-frontend-real.test.ts` (PR slice **527–528**) |
+| 32 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-527-528-frontend-real.test.ts` (PR slice **527–528**) |
 
 ## Job E — `tests/firestore.rules.test.ts` per-view path variants
 
@@ -61,3 +61,7 @@ Dedicated `_view527` / `_view528` collections mirror `_view515` / `_view516` pla
 
 - `TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS`: append **527** and **528** full collection paths (duplicate entries per view, same pattern as **515** / **516**).
 - `denyWritePaths`: insert **527** and **528** immediately after the **526** dedicated view path (same pattern as PR #298 **525** / **526** fix).
+
+32. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-529-530-frontend-real.test.ts` (PR slice **529–530**; parents 527/528)
+
+Dedicated `_view529` / `_view530` collections mirror `_view527` / `_view528` placement (append **529**/**530** in Job E + denyWritePaths after **528**).
