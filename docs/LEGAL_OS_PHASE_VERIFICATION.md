@@ -1826,3 +1826,14 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr281-get-513-514
 - **Claim replay:** #281 **PASS** (`BASE=dafdf19`, `HEAD=ec83b72`); #279 amended **PASS** (`BASE=e8e1114`, `HEAD=ce2ddd6`).
 - **Verdict:** **#281 SEALED PASS** @ `ec83b72`; **product PARTIAL** (`transport_stub=true`).
 
+## Phase audit — PR #285 GET 515–516 (**SEALED PASS** @ `4f1f8cc`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr285-get-515-516-audit.md`. Evidence: `/opt/cursor/artifacts/pr285_audit.log`; collection trace: `/opt/cursor/artifacts/pr285_collection_table.md`; env/policy: `/opt/cursor/artifacts/commit_002c1cf_review.md`.
+
+- **Parent chain:** `4f1f8cc^` = `002c1cf` (#189); `77b5d42^` = `ec83b72`; builder tip `63f93a7` patch-equivalent to squash on product paths.
+- **Slice:** GET **515–516** on **513/514**; `_view515` / `_view516`; `route.ts` **+455**; focused bundle **25 files, 249/249**.
+- **`test:rules`:** **66/66** (51/1/14); **+10** vs `77b5d42` **56/56** without shrinking prior blocks; **485–487** shared denyWrite paths added.
+- **Isolation:** **14/14** (includes **513/515**, **514/516**).
+- **Claim replay:** #285 **PASS** (`BASE=002c1cf`, `HEAD=4f1f8cc`; also builder `BASE=77b5d42`, `HEAD=63f93a7`).
+- **Verdict:** **#285 SEALED PASS** @ `4f1f8cc`; **product PARTIAL** (`transport_stub=true`).
+
