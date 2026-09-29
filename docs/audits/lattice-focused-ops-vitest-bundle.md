@@ -1,10 +1,10 @@
-# Canonical focused ops vitest bundle (TB ack-recon lattice 485–542)
+# Canonical focused ops vitest bundle (TB ack-recon lattice 485–544)
 
-**Baseline:** **38 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **39 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (38)
+## File list (39)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -44,6 +44,7 @@
 36. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-537-538-frontend-real.test.ts` (PR slice **537–538**; parents 535/536 reconciliation / acknowledgement rows)
 37. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-539-540-frontend-real.test.ts` (GET **539–540**; parents **537**/**538**)
 38. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-541-542-frontend-real.test.ts` (GET **541–542**; parents **539**/**540**)
+39. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-543-544-frontend-real.test.ts` (GET **543–544**; parents **541**/**542**)
 
 ## History
 
@@ -66,7 +67,8 @@
 | 35 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-533-534-frontend-real.test.ts` (PR #309 GET **533–534**) — restored to bundle after PR #311 slot swap (PR311-MAJOR-1) |
 | 36 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-537-538-frontend-real.test.ts` (GET **537–538**; parents **535**/**536**) |
 | 37 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-539-540-frontend-real.test.ts` (GET **539–540**; parents **537**/**538**) |
-| 38 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-541-542-frontend-real.test.ts` (GET **541–542**; parents **539**/**540**) |
+| 38 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-541-542-frontend-real.test.ts`
+- `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-543-544-frontend-real.test.ts` (GET **541–542**; parents **539**/**540**) |
 
 ## Job E — `tests/firestore.rules.test.ts` per-view path variants
 
@@ -88,3 +90,5 @@ Dedicated `_view537` / `_view538` collections mirror `_view535` / `_view536` on 
 Dedicated `_view539` / `_view540` collections mirror `_view537` / `_view538` on parents **537**/**538** (append **539**/**540** in Job E + denyWritePaths after **538**).
 
 Dedicated `_view541` / `_view542` collections mirror `_view539` / `_view540` on parents **539**/**540** (append **541**/**542** in Job E + denyWritePaths after **540**).
+
+Dedicated `_view543` / `_view544` collections mirror `_view541` / `_view542` on parents **541**/**542** (append **543**/**544** in Job E + denyWritePaths after **542**).
