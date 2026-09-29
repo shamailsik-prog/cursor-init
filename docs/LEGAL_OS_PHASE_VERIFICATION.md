@@ -1986,3 +1986,12 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr323-get-543-544
 - **Claim replay:** **PASS** @ `BASE=fcbb0df`, `HEAD=48476b9` and **`HEAD=a851072`** (live PR #323 body with **`GET /api/d2/ops-reporting`** L6773–6800).
 - **Verdict:** **#323 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
 
+## Phase audit — PR #325 GET 545–546 (**SEALED PASS** @ `3f8a0b3`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr325-get-545-546-audit.md`. Evidence: `/opt/cursor/artifacts/pr325_audit.log`; collection: `/opt/cursor/artifacts/pr325_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr325.log`; replay: `/opt/cursor/artifacts/replay_pr325.log`.
+
+- **Slice:** GET **545–546** on **543/544**; `route.ts` **47512** (+217); console **7247** (+33); focused **40/361**; isolation **43/43**; invariants **77/77**; `test:rules` **213** (**3×**; run 1 repositories timeout flake **PR325-M1**).
+- **485–544:** Product paths **additions-only**; **−16** is CI/guard/test metadata only; **PR323-M1/M3** folded (MAX **546**, ledger history fix).
+- **Claim replay:** **PASS** @ `BASE=9ab7a25`, `HEAD=3f8a0b3` and **`HEAD=7474214`** (live PR #325 body; **`GET /api/d2/ops-reporting`** L6806–6833).
+- **Verdict:** **#325 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
+
