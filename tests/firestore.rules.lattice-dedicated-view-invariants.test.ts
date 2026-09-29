@@ -5,7 +5,7 @@ const RULES = readFileSync("firestore.rules", "utf8")
 const RULES_TEST_SOURCE = readFileSync("tests/firestore.rules.test.ts", "utf8")
 
 const DEDICATED_VIEW_MIN = 485
-const DEDICATED_VIEW_MAX = 530
+const DEDICATED_VIEW_MAX = 532
 
 function extractQuotedArray(source: string, marker: string): readonly string[] {
   const start = source.indexOf(marker)
@@ -33,7 +33,7 @@ const jobE = extractQuotedArray(
 )
 const denyWritePaths = extractQuotedArray(RULES_TEST_SOURCE, "const denyWritePaths = [")
 
-describe("lattice dedicated _view collections — static invariants (485–530)", () => {
+describe("lattice dedicated _view collections — static invariants (485–532)", () => {
   it("Job E list is strictly ascending by view number", () => {
     const views = jobE.map((p) => viewNumberFromPath(p))
     expect(views.every((v) => v !== null)).toBe(true)

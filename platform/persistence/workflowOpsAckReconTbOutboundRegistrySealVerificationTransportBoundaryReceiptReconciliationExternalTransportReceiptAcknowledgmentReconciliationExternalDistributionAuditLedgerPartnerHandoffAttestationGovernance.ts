@@ -600,3 +600,272 @@ export function buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheck
     updatedAt: now,
   }
 }
+
+
+export function workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationId(
+  externalDistributionAuditLedgerReconciliationId: string
+): string {
+  return buildWorkflowOpsChainedDocumentId(
+    `workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_closure_seal_verification`,
+    externalDistributionAuditLedgerReconciliationId
+  )
+}
+
+export function isWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationStatus(
+  value: string | null
+): value is import("@/platform/spine/store").WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationStatus {
+  return (
+    value ===
+      "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_verification_pending" ||
+    value ===
+      "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_checkpointed" ||
+    value ===
+      "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_verified"
+  )
+}
+
+export function buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationRow(
+  input: {
+    externalDistributionAuditLedgerReconciliation: import("@/platform/spine/store").WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationRow
+    existing?: import("@/platform/spine/store").WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationRow | null
+    externalDistributionAuditLedgerReconciliationClosureSealCheckpointedBy?: string | null
+    externalDistributionAuditLedgerReconciliationClosureSealReference?: string | null
+    externalDistributionAuditLedgerReconciliationClosureSealVerifiedBy?: string | null
+    externalDistributionAuditLedgerReconciliationClosureSealVerificationDigestCheckpointedBy?: string | null
+    actorId: string
+    reason: string
+    now?: number
+    note?: string | null
+  }
+) {
+  const now = input.now ?? Date.now()
+  const existing = input.existing ?? null
+  const parentFinalized =
+    input.externalDistributionAuditLedgerReconciliation.externalDistributionAuditLedgerReconciliationStatus ===
+    "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_finalized"
+
+  const digestCheckpointedBy =
+    input.externalDistributionAuditLedgerReconciliationClosureSealCheckpointedBy ??
+    existing?.externalDistributionAuditLedgerReconciliationClosureSealCheckpointedBy ??
+    null
+  const digestCheckpointedAt = digestCheckpointedBy ? now : (existing?.externalDistributionAuditLedgerReconciliationClosureSealCheckpointedAt ?? null)
+  const digest = digestCheckpointedBy
+    ? input.externalDistributionAuditLedgerReconciliationClosureSealReference?.trim() ??
+      input.externalDistributionAuditLedgerReconciliation.externalDistributionAuditLedgerReconciliationDigest?.trim() ??
+      input.note?.trim() ??
+      "external distribution audit ledger reconciliation closure seal checkpointed"
+    : (existing?.externalDistributionAuditLedgerReconciliationDigest ?? null)
+
+  const reconciledBy =
+    input.externalDistributionAuditLedgerReconciliationClosureSealVerifiedBy ??
+    existing?.externalDistributionAuditLedgerReconciliationClosureSealVerifiedBy ??
+    null
+  const reconciledAt = reconciledBy ? now : (existing?.externalDistributionAuditLedgerReconciliationClosureSealVerifiedAt ?? null)
+  const finalizedBy =
+    input.externalDistributionAuditLedgerReconciliationClosureSealVerificationDigestCheckpointedBy ??
+    existing?.externalDistributionAuditLedgerReconciliationClosureSealVerificationDigestCheckpointedBy ??
+    null
+  const finalizedAt = finalizedBy ? now : (existing?.externalDistributionAuditLedgerReconciliationClosureSealVerificationDigestCheckpointedAt ?? null)
+
+  let backlog = 0
+  if (!parentFinalized) backlog += 1
+  if (parentFinalized && !digestCheckpointedBy) backlog += 1
+  if (digestCheckpointedBy && !reconciledBy) backlog += 1
+  if (reconciledBy && !finalizedBy) backlog += 1
+  if (finalizedBy) backlog = Math.max(0, backlog - 1)
+
+  let status:
+    | "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_verification_pending"
+    | "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_checkpointed"
+    | "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_verified" =
+    "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_verification_pending"
+  if (finalizedBy) {
+    status =
+      "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_verified"
+  } else if (reconciledBy) {
+    status =
+      "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_checkpointed"
+  } else if (digestCheckpointedBy) {
+    status =
+      "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_reconciliation_closure_seal_checkpointed"
+  }
+
+  const noteActor = finalizedBy ?? reconciledBy ?? digestCheckpointedBy ?? input.actorId
+  const note = input.note?.trim()
+  const reconciliationNote = note
+    ? `${new Date(now).toISOString()} ${noteActor}: ${note}`
+    : (existing?.externalDistributionAuditLedgerReconciliationClosureSealVerificationNote ?? null)
+
+  return {
+    id: workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationId(
+      input.externalDistributionAuditLedgerReconciliation.id
+    ),
+    firmId: input.externalDistributionAuditLedgerReconciliation.firmId,
+    matterId: input.externalDistributionAuditLedgerReconciliation.matterId,
+    externalDistributionAuditLedgerReconciliationId:
+      input.externalDistributionAuditLedgerReconciliation.id,
+    classification: input.externalDistributionAuditLedgerReconciliation.classification,
+    externalDistributionAuditLedgerReconciliationClosureSealVerificationStatus: status,
+    externalDistributionAuditLedgerReconciliationStatusSnapshot:
+      input.externalDistributionAuditLedgerReconciliation.externalDistributionAuditLedgerReconciliationStatus,
+    externalDistributionAuditLedgerReconciliationClosureSealCheckpointedBy: digestCheckpointedBy,
+    externalDistributionAuditLedgerReconciliationClosureSealCheckpointedAt: digestCheckpointedAt,
+    externalDistributionAuditLedgerReconciliationDigest: digest,
+    externalDistributionAuditLedgerReconciliationClosureSealVerifiedBy: reconciledBy,
+    externalDistributionAuditLedgerReconciliationClosureSealVerifiedAt: reconciledAt,
+    externalDistributionAuditLedgerReconciliationClosureSealVerificationDigestCheckpointedBy: finalizedBy,
+    externalDistributionAuditLedgerReconciliationClosureSealVerificationDigestCheckpointedAt: finalizedAt,
+    externalTransportReceiptReferenceParityDigest:
+      existing?.externalTransportReceiptReferenceParityDigest ??
+      input.externalDistributionAuditLedgerReconciliation.externalDistributionAuditLedgerReconciliationDigest,
+    externalTransportChannel: WORKFLOW_OPS_EXTERNAL_TRANSPORT_CHANNEL_BLOCKED_TODO_FIRM,
+    crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot:
+      input.externalDistributionAuditLedgerReconciliation.crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot,
+    externalDistributionAuditLedgerBacklogCountSnapshot:
+      input.externalDistributionAuditLedgerReconciliation.externalDistributionAuditLedgerReconciliationBacklogCount,
+    externalDistributionAuditLedgerReconciliationClosureSealBacklogCount: backlog,
+    externalDistributionAuditLedgerReconciliationClosureSealVerificationNote: reconciliationNote,
+    lastStatusChangedAt: digestCheckpointedBy || reconciledBy || finalizedBy ? now : (existing?.lastStatusChangedAt ?? null),
+    freshnessStatus: existing?.freshnessStatus ?? "fresh",
+    provenanceTags: [
+      TRANSPORT_STUB_PROVENANCE_TAG,
+      `reason:${input.reason}`,
+      `parent_reconciliation_finalized:${parentFinalized}`,
+      ...(existing?.provenanceTags ??
+        input.externalDistributionAuditLedgerReconciliation.provenanceTags.map((tag: string) => `external_distribution_audit_ledger_reconciliation_${tag}`)),
+    ],
+    recomputedAt: now,
+    recomputedBy: input.actorId,
+    recomputeReason: input.reason,
+    updatedAt: now,
+  }
+}
+
+
+
+export function workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementSealVerificationId(
+  partnerHandoffAttestationAcknowledgementId: string
+): string {
+  return buildWorkflowOpsChainedDocumentId(
+    `workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_seal_verification`,
+    partnerHandoffAttestationAcknowledgementId
+  )
+}
+
+export function isWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementSealVerificationStatus(
+  value: string | null
+): value is import("@/platform/spine/store").WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementSealVerificationStatus {
+  return (
+    value ===
+      "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_verification_pending" ||
+    value ===
+      "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_checkpointed" ||
+    value ===
+      "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_verified"
+  )
+}
+
+export function buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementSealVerificationRow(
+  input: {
+    partnerHandoffAttestationAcknowledgement: import("@/platform/spine/store").WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementRow
+    existing?: import("@/platform/spine/store").WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementSealVerificationRow | null
+    partnerHandoffAttestationAcknowledgementSealCheckpointedBy?: string | null
+    partnerHandoffAttestationAcknowledgementSealReference?: string | null
+    partnerHandoffAttestationAcknowledgementSealVerifiedBy?: string | null
+    partnerHandoffAttestationAcknowledgementSealVerificationDigest?: string | null
+    actorId: string
+    reason: string
+    now?: number
+    note?: string | null
+  }
+) {
+  const now = input.now ?? Date.now()
+  const existing = input.existing ?? null
+  const parentFinalized =
+    input.partnerHandoffAttestationAcknowledgement.partnerHandoffAttestationAcknowledgementStatus ===
+    "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledged"
+
+  const digestCheckpointedBy =
+    input.partnerHandoffAttestationAcknowledgementSealCheckpointedBy ??
+    existing?.partnerHandoffAttestationAcknowledgementSealCheckpointedBy ??
+    null
+  const digestCheckpointedAt = digestCheckpointedBy ? now : (existing?.partnerHandoffAttestationAcknowledgementSealCheckpointedAt ?? null)
+  const digest = digestCheckpointedBy
+    ? input.partnerHandoffAttestationAcknowledgementSealReference?.trim() ??
+      input.partnerHandoffAttestationAcknowledgement.partnerHandoffAttestationAcknowledgementDigest?.trim() ??
+      input.note?.trim() ??
+      "partner handoff attestation acknowledgement seal checkpointed"
+    : (existing?.partnerHandoffAttestationAcknowledgementSealReference ?? null)
+
+  const acknowledgedBy = input.partnerHandoffAttestationAcknowledgementSealVerifiedBy ?? existing?.partnerHandoffAttestationAcknowledgementSealVerifiedBy ?? null
+  const acknowledgedAt = acknowledgedBy ? now : (existing?.partnerHandoffAttestationAcknowledgementSealVerifiedAt ?? null)
+  const acknowledgementReference = acknowledgedBy
+    ? input.partnerHandoffAttestationAcknowledgementSealVerificationDigest?.trim() ??
+      input.note?.trim() ??
+      `${STUB_PARTNER_HANDOFF_REGISTRY_PREFIX}:acknowledged`
+    : (existing?.partnerHandoffAttestationAcknowledgementSealVerificationDigest ?? null)
+
+  let backlog = 0
+  if (!parentFinalized) backlog += 1
+  if (parentFinalized && !digestCheckpointedBy) backlog += 1
+  if (digestCheckpointedBy && !acknowledgedBy) backlog += 1
+  if (acknowledgedBy) backlog = Math.max(0, backlog - 1)
+
+  let status:
+    | "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_verification_pending"
+    | "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_checkpointed"
+    | "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_verified" =
+    "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_verification_pending"
+  if (acknowledgedBy) {
+    status =
+      "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_verified"
+  } else if (digestCheckpointedBy) {
+    status =
+      "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_acknowledgement_seal_checkpointed"
+  }
+
+  const noteActor = acknowledgedBy ?? digestCheckpointedBy ?? input.actorId
+  const note = input.note?.trim()
+  const acknowledgementNote = note
+    ? `${new Date(now).toISOString()} ${noteActor}: ${note}`
+    : (existing?.partnerHandoffAttestationAcknowledgementSealVerificationNote ?? null)
+
+  return {
+    id: workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementSealVerificationId(
+      input.partnerHandoffAttestationAcknowledgement.id
+    ),
+    firmId: input.partnerHandoffAttestationAcknowledgement.firmId,
+    matterId: input.partnerHandoffAttestationAcknowledgement.matterId,
+    partnerHandoffAttestationAcknowledgementId:
+      input.partnerHandoffAttestationAcknowledgement.id,
+    classification: input.partnerHandoffAttestationAcknowledgement.classification,
+    partnerHandoffAttestationAcknowledgementSealVerificationStatus: status,
+    partnerHandoffAttestationAcknowledgementStatusSnapshot:
+      input.partnerHandoffAttestationAcknowledgement.partnerHandoffAttestationAcknowledgementStatus,
+    partnerHandoffAttestationAcknowledgementSealCheckpointedBy: digestCheckpointedBy,
+    partnerHandoffAttestationAcknowledgementSealCheckpointedAt: digestCheckpointedAt,
+    partnerHandoffAttestationAcknowledgementSealReference: digest,
+    partnerHandoffAttestationAcknowledgementSealVerifiedBy: acknowledgedBy,
+    partnerHandoffAttestationAcknowledgementSealVerifiedAt: acknowledgedAt,
+    partnerHandoffAttestationAcknowledgementSealVerificationDigest: acknowledgementReference,
+    externalTransportChannel: WORKFLOW_OPS_EXTERNAL_TRANSPORT_CHANNEL_BLOCKED_TODO_FIRM,
+    partnerHandoffAttestationAcknowledgementBacklogCountSnapshot: input.partnerHandoffAttestationAcknowledgement.partnerHandoffAttestationAcknowledgementBacklogCount,
+    partnerHandoffAttestationAcknowledgementSealBacklogCount: backlog,
+    crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot:
+      input.partnerHandoffAttestationAcknowledgement.crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot,
+    partnerHandoffAttestationAcknowledgementSealVerificationNote: acknowledgementNote,
+    lastStatusChangedAt: digestCheckpointedBy || acknowledgedBy ? now : (existing?.lastStatusChangedAt ?? null),
+    freshnessStatus: existing?.freshnessStatus ?? "fresh",
+    provenanceTags: [
+      TRANSPORT_STUB_PROVENANCE_TAG,
+      `reason:${input.reason}`,
+      `parent_acknowledgement_finalized:${parentFinalized}`,
+      ...(existing?.provenanceTags ??
+        input.partnerHandoffAttestationAcknowledgement.provenanceTags.map((tag: string) => `partner_handoff_attestation_acknowledgement_${tag}`)),
+    ],
+    recomputedAt: now,
+    recomputedBy: input.actorId,
+    recomputeReason: input.reason,
+    updatedAt: now,
+  }
+}
