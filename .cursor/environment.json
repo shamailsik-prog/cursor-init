@@ -1,11 +1,11 @@
 {
   "name": "SIKANDER AI — Phase 0",
   "egressMode": "allow_all",
-  "install": "npm ci",
+  "install": "cd /agent/repos/cursor-init && npm ci",
   "terminals": [
     {
       "name": "dev",
-      "command": "npm run dev",
+      "command": "cd /agent/repos/cursor-init && npm run dev",
       "description": "Next.js dev server for the Phase 0 Foundation Console on http://localhost:43127 (case-number normaliser API + G-0 artefact viewer)."
     }
   ],
