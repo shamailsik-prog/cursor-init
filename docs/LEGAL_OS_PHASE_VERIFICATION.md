@@ -1802,3 +1802,15 @@ Independent Phase Auditor (2026-09-29). Full write-up: `docs/audits/pr277-get-51
 - **Claim replay:** `check_pr_phase_claims.py` **PASS** (`BASE=e8bbcf4`, `HEAD=fc13995`, PR #277 body).
 - **Verdict:** **#277 phase audit FAIL** @ `fc13995`; product would remain **PARTIAL** (`transport_stub=true`) after rules fix.
 
+## Phase audit — PR #277 re-audit (**SEALED PASS** @ `ce2ddd6`)
+
+Independent Phase Auditor re-audit (2026-09-29) after PR **#279** (PR277-MAJOR-1). Evidence: `/opt/cursor/artifacts/pr277_reaudit_verification.log`; write-up: `docs/audits/pr277-get-511-512-audit.md` (re-audit section).
+
+- **Docs FAIL ledger:** `e8e1114ef5d88c6070719b70938ad424c95acfa1` (#278 docs on `main`).
+- **Fix squash:** `ce2ddd63d1eccbf89d5acf13077c4f86a8dc48c1` (#279; parent `e8e1114`; `9392f8c` tip diff empty).
+- **Remediation:** restore `tests/firestore.rules.test.ts` deny blocks from `e8bbcf4` + **view511/view512**; `lattice-focused-ops-vitest-bundle.md` **23 files**.
+- **`test:rules` @ `ce2ddd6`:** **38/38** (`firestore.rules.test.ts` **23**, repositories **1**, runtime-mode **14**); up from **34/34** @ `e8bbcf4`.
+- **Focused ops @ `ce2ddd6`:** **23 files, 233/233**; lineage **10/10**; G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20**.
+- **Claim replay:** #277 (`BASE=e8bbcf4`, `HEAD=fc13995`) **PASS**; #279 body missing phase flags → replay **FAIL** (minor; test-only PR).
+- **Verdict:** **#277 SEALED PASS** @ integration tip `ce2ddd6`; **product PARTIAL** (`transport_stub=true`).
+

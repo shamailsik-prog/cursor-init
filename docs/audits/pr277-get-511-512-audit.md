@@ -84,3 +84,29 @@
 4. Update `docs/audits/lattice-focused-ops-vitest-bundle.md` to **23 files** (ledger drift).
 
 Until then: **do not seal** PR #277 as phase-audit PASS.
+
+---
+
+## Re-audit after PR #279 (PR277-MAJOR-1) @ `ce2ddd6`
+
+**Date:** 2026-09-29  
+**Fix squash:** `ce2ddd63d1eccbf89d5acf13077c4f86a8dc48c1` (parent `e8e1114ef5d88c6070719b70938ad424c95acfa1` — docs FAIL ledger #278)  
+**Evidence:** `/opt/cursor/artifacts/pr277_reaudit_verification.log`
+
+### Result
+
+| Scope | Verdict |
+|---|---|
+| **PR277-MAJOR-1 (#279)** | **PASS** — restores deny-write rules tests + 23-file ledger |
+| **#277 sealed @ `ce2ddd6` (integration tip on `main`)** | **SEALED PASS** |
+| **Product** | **PARTIAL** (`transport_stub=true`) |
+
+### Checks (summary)
+
+1. **Chain:** `ce2ddd6^` = `e8e1114`; `e8e1114^` = `fc13995`; `git diff 9392f8c ce2ddd6` empty; fix touches **2 files only** (tests + bundle doc).
+2. **`tests/firestore.rules.test.ts`:** identical to `e8bbcf4` except **view511/view512** additions (both arrays).
+3. **`test:rules`:** **38/38** (23/1/14); break test weakening **view511** deny → **2** view511 tests **FAIL** (reverted).
+4. **Dedicated `_view501`–`_view512`:** all have deny rules + emulator tests; **485–500** still use shared paths (pre-existing minor).
+5. **Focused ops:** **23 files, 233/233**; bundle doc matches runner.
+6. **Gates:** G-0 PASS; G-1 **10/10**; claim-gate vitest **20/20**; #277 replay **PASS**; #279 replay **FAIL** missing phase flags (minor on #279 body only).
+7. **Lineage isolation:** **10/10** @ `ce2ddd6`.
