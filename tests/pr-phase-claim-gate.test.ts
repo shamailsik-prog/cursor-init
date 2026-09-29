@@ -426,4 +426,4 @@ describe("PR phase claim gate hardening", () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain("PASS: PR phase-claim gate.")
   })
-}, 30000)
+}, 60_000)

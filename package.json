@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:all": "npm run test:unit && npm run test:rules",
-    "test:rules": "firebase emulators:exec --only firestore --project demo-sikander \"npx vitest run tests/firestore.rules.test.ts tests/persistence.repositories.test.ts tests/persistence.runtime-mode.test.ts\"",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-sikander \"npx vitest run tests/firestore.rules.lattice-dedicated-view-invariants.test.ts tests/firestore.rules.test.ts tests/persistence.repositories.test.ts tests/persistence.runtime-mode.test.ts\"",
     "gate:g0": "bash ci_gates/gate_g0.sh",
     "gate:g1": "python3 ci_gates/gate_g1.py",
     "eve:dev": "eve dev",

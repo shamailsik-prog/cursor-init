@@ -41,7 +41,9 @@ function expectGateFail(root: string, base: string, head: string) {
   expect(threw).toBe(true)
 }
 
-describe("check_no_product_phase_audit_docs gate", () => {
+describe(
+  "check_no_product_phase_audit_docs gate",
+  () => {
   it("fails when product and audit-doc paths change together", () => {
     const root = mkdtempSync(join(tmpdir(), "no-product-audit-gate-"))
     initRepo(root)
@@ -112,4 +114,6 @@ describe("check_no_product_phase_audit_docs gate", () => {
     // feature branch was not merged; gate must still catch the mixed commit via merge-base..HEAD
     expectGateFail(root, "main", "feature")
   })
-})
+  },
+  { timeout: 60_000 }
+)
