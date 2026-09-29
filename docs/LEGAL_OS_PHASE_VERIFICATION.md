@@ -1,6 +1,6 @@
 # Legal OS phase verification status (audited sample: PR #34-#73 selected batches)
 
-Last updated: 2026-09-26 (PR #260 audit amended — collection scoping FAIL / PR260-MAJOR-1)
+Last updated: 2026-09-29 (PR #258/#260 re-audit after fix PR #266 @ `d7b9741`)
 Primary source: `docs/audits/phase-reaudit-after-helper-99.md`, `docs/audits/phase-reaudit-48-59-after-stream2.md`, and `docs/audits/phase-pr111-tenancy-lineage-adjudication-debt.md`.
 
 Requested re-audit anchor commit: `8ba7dbaa804f3cab12fb6eb874b7c6c29a367932` (PR #99 merge tip state).
@@ -1720,7 +1720,7 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #258 | TB ack-recon PD freeze seal outbound registry attestation ledger GET 505–506 on 503/504 parents | squash `dce3a58` / parent `5296b89` | Yes (tip `dce3a58`) | PASS | PASS | true | **PASS phase audit; PARTIAL product** (collection scoping: **same MAJOR as #260** on pairs 493/505, 494/506 — see `pr260_collection_scoping.log`) | minor + **major (scoping)** |
+| #258 | TB ack-recon PD freeze seal outbound registry attestation ledger GET 505–506 on 503/504 parents | squash `dce3a58` / parent `5296b89`; **fix** `d7b9741` (#266) | Yes | PASS | PASS | true | **PASS phase audit @ `d7b9741`**; **PARTIAL product** (`transport_stub=true`) | minor (see re-audit) |
 
 ## Targeted ledger — PR #260 TB ack-recon PD freeze seal partner-delivery receipt freeze-override seal verification GET 507–508
 
@@ -1740,5 +1740,15 @@ Independent Phase Auditor pass (2026-09-26). Full write-up:
 
 | PR | Claimed phase | Claimed merge SHA | Landed on `main` | backend_real | frontend_real | transport_stub | Final classification | Severity |
 |---|---|---|---|---|---|---|---|---|
-| #260 | TB ack-recon PD freeze seal partner-delivery receipt freeze-override seal verification GET 507–508 on 505/506 parents | squash `567d245` / parent `60287c0` | Yes (tip `567d245`) | PASS | PASS | true | **FAIL phase audit** (PR260-MAJOR-1 cross-view mixing); **PARTIAL product** | **major** (scoping) + minor |
+| #260 | TB ack-recon PD freeze seal partner-delivery receipt freeze-override seal verification GET 507–508 on 505/506 parents | squash `567d245` / parent `60287c0`; **fix** `d7b9741` (#266) | Yes | PASS | PASS | true | **PASS phase audit @ `d7b9741`**; **PARTIAL product** (`transport_stub=true`) | minor (see re-audit) |
+
+## Re-audit closure — PR #266 dedicated collections (PR260-MAJOR-1) for #258 + #260
+
+Independent re-audit (2026-09-29). Full write-up: `docs/audits/phase-pr258-pr260-reaudit-fix266.md`. Evidence: `/opt/cursor/artifacts/pr258_260_reaudit_verification.log`.
+
+- **Landed fix SHA:** `d7b97414c441beb3b5f392ee14ec2a222fc156f3` (squash of PR #266; parent `e9e0acc` #265 chore).
+- **Remediation:** dedicated deny-by-default Firestore collections + spine repos for views **505–508**; GET/POST aligned; `firestore.rules` + binder map entries; lineage isolation vitest.
+- **Empirical:** builder lineage test **4/4**; auditor scratch **4/4** @ `d7b9741`; leak repro @ `567d245` shows pre-fix cross-lineage visibility for **493/505**.
+- **Tests:** focused ops **213/213** (21 files); rules **22/22**; G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20**; `check_pr_phase_claims.py` PASS (`BASE=e9e0acc`, `HEAD=d7b9741`, PR #266 body).
+- **Verdict:** **#258 PASS** + **#260 PASS** phase audits @ `d7b9741`; product remains **PARTIAL** (`transport_stub=true`).
 
