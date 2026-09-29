@@ -1,10 +1,10 @@
-# Canonical focused ops vitest bundle (TB ack-recon lattice 485–526)
+# Canonical focused ops vitest bundle (TB ack-recon lattice 485–528)
 
-**Baseline:** **30 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **31 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (30)
+## File list (31)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -36,6 +36,7 @@
 28. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-521-522-frontend-real.test.ts` (PR slice **521–522**; parents 519/520)
 29. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-523-524-frontend-real.test.ts` (PR slice **523–524**; parents 521/522)
 30. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-525-526-frontend-real.test.ts` (PR slice **525–526**; parents 523/524)
+31. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-527-528-frontend-real.test.ts` (PR slice **527–528**; parents 525/526)
 
 ## History
 
@@ -52,12 +53,11 @@
 | 28 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-521-522-frontend-real.test.ts` (PR slice **521–522**) |
 | 29 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-523-524-frontend-real.test.ts` (PR slice **523–524**) |
 | 30 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-525-526-frontend-real.test.ts` (PR slice **525–526**) |
-
-- `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-513-514-frontend-real.test.ts` — PR slice 513–514 external transport receipt acknowledgment reconciliation (511/512 parents).
+| 31 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-527-528-frontend-real.test.ts` (PR slice **527–528**) |
 
 ## Job E — `tests/firestore.rules.test.ts` per-view path variants
 
-Dedicated `_view519` / `_view520` collections mirror `_view517` / `_view518` placement:
+Dedicated `_view527` / `_view528` collections mirror `_view515` / `_view516` placement:
 
-- `TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS`: append **519** and **520** full collection paths (duplicate entries per view, same pattern as **517** / **518**).
-- `denyWritePaths`: insert **519** and **520** immediately after the **518** dedicated view path (same pattern as PR #289 **517** / **518** fix).
+- `TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS`: append **527** and **528** full collection paths (duplicate entries per view, same pattern as **515** / **516**).
+- `denyWritePaths`: insert **527** and **528** immediately after the **526** dedicated view path (same pattern as PR #298 **525** / **526** fix).

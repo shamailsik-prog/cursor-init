@@ -1885,3 +1885,12 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr298-get-525-526
 - **Claim replay:** **PASS** @ `BASE=c9b3094`, `HEAD=a0c3722` / `d466a2d`.
 - **Verdict:** **#298 SEALED PASS** @ `d466a2d`; **product PARTIAL** (`transport_stub=true`).
 
+## Phase audit — PR GET 527–528 external distribution audit ledger (**SEALED PASS** pre-merge)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr527-528-get-external-distribution-audit-ledger-audit.md`. Evidence: `/opt/cursor/artifacts/lattice_focused_ops_vitest_527528.log`; rules: `/opt/cursor/artifacts/firestore_rules_527528.log`.
+
+- **Slice:** GET **527–528** on **525/526**; `_view527` / `_view528`; `route.ts` **44430→45028** (+598); focused **31/296**.
+- **Rules:** **527/528** in **both** Job E + `denyWritePaths`; `test:rules` **102/102**; lineage **+2** pairs (**525/527**, **526/528**).
+- **G-0 / G-1:** PASS @ branch tip.
+- **Verdict:** **SEALED PASS** (pre-merge); **product PARTIAL** (`transport_stub=true`).
+
