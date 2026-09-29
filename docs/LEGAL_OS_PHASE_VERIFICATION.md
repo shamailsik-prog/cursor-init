@@ -1950,12 +1950,12 @@ Independent Phase Auditor re-audit (2026-09-29) closing **PR311-MAJOR-1**. Write
 - **PR311-MAJOR-1:** **CLOSED**.
 - **Verdict:** **#313 SEALED PASS [product PARTIAL]**; **#311 SEALED PASS [product PARTIAL]** at integration tip **`9e80f05`** (product squash **`8f7cffa`** unchanged).
 
-## Phase audit — PR #315 GET 537–538 (**FAIL** @ `7a23ca2`)
+## Phase audit — PR #315 GET 537–538 (**SEALED PASS** @ `7a23ca2`)
 
-Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr315-get-537-538-audit.md`. Evidence: `/opt/cursor/artifacts/pr315_audit.log`; collection: `/opt/cursor/artifacts/pr315_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr315.log`.
+Independent Phase Auditor (2026-09-29). Initial FAIL: `docs/audits/pr315-get-537-538-audit.md` + `/opt/cursor/artifacts/pr315_audit.log` (**PR315-MAJOR-1**). Re-seal: same audit doc (re-seal section) + `/opt/cursor/artifacts/pr315_reseal_audit.log`; collection: `/opt/cursor/artifacts/pr315_collection_table.md`.
 
-- **Slice:** GET **537–538** on **535/536**; `route.ts` **+460** (46019→46479); console **+32** (7085→7117); focused **36/337**; isolation **35/35**; invariants **60/60**; `test:rules` **180** (172→180 additions only).
-- **FAIL PR315-MAJOR-1:** `check_pr_phase_claims.py` replay on live PR #315 body @ `BASE=70c46fd`, `HEAD=7a23ca2` (and tip **`725a11c`**) **exit 1** — missing `/api/...` fetch-path evidence despite `app/ops/**` change.
-- **Product:** **PARTIAL** (`transport_stub=true`); implementation and gates otherwise **PASS** on replay.
-- **Verdict:** **#315 FAIL** until claim metadata amended; then re-audit for **SEALED PASS [PARTIAL]**.
+- **Slice:** GET **537–538** on **535/536**; `route.ts` **46479**; focused **36/337**; isolation **35/35**; `test:rules` **180**; invariants **60/60**.
+- **PR315-MAJOR-1 (CLOSED):** Amended live PR #315 body adds **`GET /api/d2/ops-reporting`** fetch-path evidence; `check_pr_phase_claims.py` **PASS** @ `BASE=70c46fd`, `HEAD=7a23ca2` and **`HEAD=725a11c`**.
+- **Docs #317 @ `f5415e2`:** FAIL ledger only; `f5415e2^` = **`7a23ca2`**; no product drift on `main`.
+- **Verdict:** **#315 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
 

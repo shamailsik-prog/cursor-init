@@ -13,20 +13,32 @@
 
 | Scope | Verdict |
 |---|---|
-| **PR #315 @ `7a23ca2`** | **FAIL — PR315-MAJOR-1** |
-| **Product slice (537/538 wiring)** | **PARTIAL-accepted** if metadata fixed (`transport_stub=true`) |
+| **PR #315 @ `7a23ca2` (initial)** | **FAIL — PR315-MAJOR-1** |
+| **PR #315 @ `7a23ca2` (re-seal)** | **SEALED PASS [PARTIAL]** |
 
 ---
 
-## PR315-MAJOR-1
+## PR315-MAJOR-1 (initial — closed)
 
-Live replay of `ci_gates/check_pr_phase_claims.py` on the **closed PR #315 body** (`origin pr view 315`) with `BASE_SHA=70c46fd` and `HEAD_SHA=7a23ca2` (and evidence tip `725a11c`) **exits 1**:
+Live replay of `ci_gates/check_pr_phase_claims.py` on the **original** closed PR #315 body with `BASE_SHA=70c46fd` and `HEAD_SHA=7a23ca2` **exited 1** (missing `/api/...` fetch-path evidence). See `/opt/cursor/artifacts/pr315_audit.log`.
 
-> PR touches `app/ops`; include at least one concrete `/api/...` fetch-path evidence entry.
+---
 
-The body includes `backend_real` / `frontend_real` / `transport_stub` and coarse `-> app/ops/operator-audit-console.tsx` call-site lines, but **no** `/api/d2/ops-reporting` (or other `/api/...`) path. Under the raised bar, phase audit **FAIL** until metadata is amended and replay is green (same class as PR291-MAJOR-1).
+## Re-seal @ `7a23ca2` (2026-09-29)
 
-**Fix:** Add machine-readable GET **537/538** fetch-path evidence (e.g. `/api/d2/ops-reporting?view=…`) to PR metadata; re-run claim replay.
+**PR315-MAJOR-1 closed:** Origin PR **#315** body amended with **Fetch-path evidence (GET 537/538)** (`GET /api/d2/ops-reporting` @ `app/ops/operator-audit-console.tsx` with line ranges). Auditor replay:
+
+| Check | Result |
+|---|---|
+| `check_pr_phase_claims.py` @ `BASE=70c46fd`, `HEAD=7a23ca2` | **PASS** |
+| Same @ `HEAD=725a11c` | **PASS** |
+| Line verify vs `7a23ca2` | **537** L6676–6689 (const L6672–6673); **538** L6690–6703 (const L6674–6675); parents **535/536** L6644–6671 |
+| G-0 **[15][16]**; focused **36/337**; claim-gate **20/20**; gate-[15] **5/5**; bundle **2/2** | **PASS** |
+| `test:rules` | **180/180** (auditor rerun after PR315-M2 timeout) |
+
+Evidence: `/opt/cursor/artifacts/pr315_reseal_audit.log`. FAIL ledger docs **#317** @ `f5415e2` on `main`; **no product change** after `7a23ca2`.
+
+**Verdict:** **#315 SEALED PASS [product PARTIAL]** @ `7a23ca2` (`transport_stub=true`).
 
 ---
 
@@ -42,8 +54,8 @@ The body includes `backend_real` / `frontend_real` / `transport_stub` and coarse
 ## Minors
 
 - **PR315-M2:** First `npm run test:rules` run hit a **45s timeout** on one `persistence.runtime-mode` mega test; immediate rerun **180/180** green (environment load).
-- **PR315-M3:** PR body call-site bullets omit concrete line numbers (implementation at L6672–6695).
+- **PR315-M3:** ~~PR body call-site bullets omit concrete line numbers~~ — **closed** in amended body (L6676–6703).
 
 ## After fix
 
-Re-audit for **SEALED PASS [PARTIAL]** @ `7a23ca2` (product code need not change if only metadata is corrected).
+~~Re-audit for **SEALED PASS [PARTIAL]** @ `7a23ca2`~~ — **done** (re-seal section above).
