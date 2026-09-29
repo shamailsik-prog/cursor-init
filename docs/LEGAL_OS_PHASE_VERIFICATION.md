@@ -1774,8 +1774,18 @@ Independent re-audit (2026-09-29). Full write-up: `docs/audits/phase-pr252-reaud
 
 ## Phase Auditor process — canonical focused lattice ops bundle (22 files)
 
-Independent Phase Auditor remediation (2026-09-29). Ledger: `docs/audits/lattice-focused-ops-vitest-bundle.md`. Runner: `ci_gates/run_focused_lattice_ops_vitest.sh`.
+Independent Phase Auditor remediation (2026-09-29). Ledger: `docs/audits/lattice-focused-ops-vitest-bundle.md`. Runner: `ci_gates/run_focused_lattice_ops_vitest.sh`. Landed **#275** @ `aafe257` (parent `93e96a2` #273 docs).
 
-- **Change:** extend pre-#271 **21-file** bundle to **22 files** by including `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts` (PR #271 GET **509–510**); route-wiring dedicated **509/510** `it()` assert `json.view` (501/502 pattern).
-- **Baseline @ integration tip:** **22 files**, full unfiltered vitest (no `-t`).
+- **Change:** extend pre-#271 **21-file** bundle to **22 files** by including `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts`; route-wiring dedicated **509/510** `it()` assert `json.view`.
+- **Baseline @ `aafe257`:** `bash ci_gates/run_focused_lattice_ops_vitest.sh` → **22 files, 225/225 PASS** (no `-t`).
+
+## Phase audit — PR #271 GET 509–510 (**SEALED** @ `aafe257`)
+
+Initial audit (2026-09-29): `docs/audits/phase-pr271-get-509-510-audit.md` (pre-seal **PARTIAL** — M1 bundle + M2 PR body). Seal verification: `/opt/cursor/artifacts/pr252_reaudit2_verification.log` (`#271 SEAL @ aafe257`).
+
+- **Product squash:** `0dcdf803b4780e199d207146f9d334bdae2add48` (`0dcdf80^` = `110d170`); dedicated `view509`/`view510`; isolation **8/8**; `route.ts` **38,508 → 39,235**.
+- **M1 remediated (#275 @ `aafe257`):** canonical **22-file** runner; no product paths in `ded553a..aafe257` diff except `tests/persistence.route-wiring.test.ts` (+6 `json.view` lines).
+- **M2 remediated:** amended PR #271 body; `check_pr_phase_claims.py` **PASS** (`BASE=110d170`, `HEAD=0dcdf80`, PR #271 body).
+- **Gates @ `aafe257`:** focused **225/225**; `test:rules` **34/34**; G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20** (worker timeout noise).
+- **Verdict:** **#271 SEALED PASS** @ integration tip `aafe257`; **product PARTIAL** (`transport_stub=true`).
 
