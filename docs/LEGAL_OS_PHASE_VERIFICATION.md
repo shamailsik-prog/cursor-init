@@ -1866,3 +1866,13 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr294-get-521-522
 - **Claim replay:** **PASS** @ `BASE=5c0a469`, `HEAD=d3c4452` / `7b76ba`.
 - **Verdict:** **#294 SEALED PASS** @ `d3c4452`; **product PARTIAL** (`transport_stub=true`).
 
+## Phase audit — PR #296 GET 523–524 (**SEALED PASS** @ `53cad4a`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr296-get-523-524-audit.md`. Evidence: `/opt/cursor/artifacts/pr296_audit.log`; collection: `/opt/cursor/artifacts/pr296_collection_table.md`.
+
+- **Slice:** GET **523–524** on **521/522**; `_view523` / `_view524` (+ alternate rules **L249–L250**); `route.ts` **+622**; focused **29/280**.
+- **Squash @ `691b211`:** **FAIL PR296-MAJOR-1** — **523/524** missing from `denyWritePaths` (Job E only); remediated on **`main`** by `53cad4a` (+2 lines, no PR).
+- **Rules @ seal:** Job E **+2** vs #294 tip; denyWrite **38→40**; `test:rules` **91/91**; isolation **21/21**.
+- **Claim replay:** **PASS** @ `BASE=0356805`, heads `ac41360` / `691b211` / `53cad4a`.
+- **Verdict:** **#296 SEALED PASS** @ `53cad4a`; **product PARTIAL** (`transport_stub=true`).
+
