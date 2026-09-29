@@ -5864,6 +5864,133 @@ export function OperatorAuditConsole() {
       [200, 400, 403, 422]
     )
 
+    const custodyTbAckReconPdFreezeSeal517OutboundRegistryAttestationLedgerView =
+      `${custodyTbAckReconPdFreezeSeal515ExternalDistributionAuditLedgerView}_outbound_registry_attestation_ledgers`
+    const closureTbAckReconPdFreezeSeal518PartnerHandoffAttestationOutboundRegistryAttestationLedgerView =
+      `${closureTbAckReconPdFreezeSeal516PartnerHandoffAttestationView}_partner_handoff_attestations_outbound_registry_attestation_ledgers`
+
+    await runApiCall({
+      step: "PR slice view: custody TB ack-recon PD freeze seal outbound registry attestation ledger on external distribution audit ledger (517)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: custodyTbAckReconPdFreezeSeal517OutboundRegistryAttestationLedgerView,
+        actorId: partnerId,
+        matterId,
+        waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus:
+          "outbound_registry_attestation_ledger_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCall({
+      step: "PR slice view: closure TB ack-recon PD freeze seal partner handoff attestation outbound registry attestation ledger (518)",
+      method: "GET",
+      path: "/api/d2/ops-reporting",
+      query: {
+        view: closureTbAckReconPdFreezeSeal518PartnerHandoffAttestationOutboundRegistryAttestationLedgerView,
+        actorId: partnerId,
+        matterId,
+        ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus:
+          "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_outbound_registry_attestation_ledger_pending",
+        limit: 10,
+        cursor: 0,
+      },
+    })
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: checkpoint custody TB ack-recon PD freeze seal outbound registry attestation ledger",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action: "checkpoint_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger",
+          actorId: partnerId,
+          matterId,
+          outboundAttestationLedgerReference:
+            "blocked_todo_firm:transport_stub_tb_ack_recon_pd_freeze_seal_outbound_registry_attestation_ledger:ops_probe",
+          reason: "TB ack-recon PD freeze seal outbound registry attestation ledger operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: digest custody TB ack-recon PD freeze seal outbound registry attestation ledger partner delivery receipt freeze override",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action: "digest_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override",
+          actorId: partnerId,
+          matterId,
+          partnerDeliveryReceiptFreezeOverrideDigest:
+            "blocked_todo_firm:transport_stub_tb_ack_recon_pd_freeze_seal_outbound_registry_attestation_ledger_freeze_override:ops_probe",
+          reason: "TB ack-recon PD freeze seal outbound registry attestation ledger operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: control custody TB ack-recon PD freeze seal outbound registry attestation ledger seal",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action: "control_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_seal",
+          actorId: partnerId,
+          matterId,
+          reason: "TB ack-recon PD freeze seal outbound registry attestation ledger operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: checkpoint closure TB ack-recon PD freeze seal partner handoff attestation outbound registry attestation ledger",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action: "checkpoint_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledger",
+          actorId: partnerId,
+          matterId,
+          outboundAttestationLedgerReference:
+            "blocked_todo_firm:transport_stub_tb_ack_recon_pd_freeze_seal_partner_handoff_outbound_registry_attestation_ledger:ops_probe",
+          reason: "TB ack-recon PD freeze seal partner handoff outbound registry attestation ledger operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: digest closure TB ack-recon PD freeze seal partner handoff attestation outbound registry attestation ledger partner delivery receipt freeze override",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action: "digest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override",
+          actorId: partnerId,
+          matterId,
+          partnerDeliveryReceiptFreezeOverrideDigest:
+            "blocked_todo_firm:transport_stub_tb_ack_recon_pd_freeze_seal_partner_handoff_outbound_registry_attestation_ledger_freeze_override:ops_probe",
+          reason: "TB ack-recon PD freeze seal partner handoff outbound registry attestation ledger operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+    await runApiCallAllowingStatuses(
+      {
+        step: "PR slice action: control closure TB ack-recon PD freeze seal partner handoff attestation outbound registry attestation ledger seal",
+        method: "POST",
+        path: "/api/d2/ops-reporting",
+        body: {
+          action: "control_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledger_seal",
+          actorId: partnerId,
+          matterId,
+          reason: "TB ack-recon PD freeze seal partner handoff outbound registry attestation ledger operator console wiring",
+        },
+      },
+      [200, 400, 403, 422]
+    )
+
+
   }
 
   return (

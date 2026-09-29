@@ -45,3 +45,5 @@
 - `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-513-514-frontend-real.test.ts` — PR slice 513–514 external transport receipt acknowledgment reconciliation (511/512 parents).
 
 | 25 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-515-516-frontend-real.test.ts` (PR slice **515–516**) |
+
+- tests/ops.pr-tb-ack-recon-pd-freeze-seal-outbound-registry-attestation-ledger-517-518-frontend-real.test.ts
