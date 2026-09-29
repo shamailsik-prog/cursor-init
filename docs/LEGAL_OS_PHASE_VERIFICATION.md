@@ -1931,3 +1931,12 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr309-get-533-534
 - **`test:rules`:** **163** (51+97+1+14); claim replay **PASS** @ `BASE=e406855`, `HEAD=792a7ed`.
 - **Verdict:** **#309 SEALED PASS [PARTIAL]** (`transport_stub=true`).
 
+## Phase audit — PR #311 GET 535–536 + PR309-M1 (**FAIL** @ `8f7cffa`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr311-get-535-536-audit.md`. Evidence: `/opt/cursor/artifacts/pr311_audit.log`; break: `/opt/cursor/artifacts/break_test_pr311.log`; table: `/opt/cursor/artifacts/pr311_collection_table.md`.
+
+- **Slice:** GET **535–536**; rules/arrays/wiring/`/ops`/isolation/`test:rules` **172** replay **PASS** for new views.
+- **FAIL PR311-MAJOR-1:** Focused runner **swapped** **533–534** frontend-real out of **34-file** bundle for **535–536** (533–534 test orphaned from CI lane).
+- **Claim replay:** **PASS** @ `BASE=4144c85`, `HEAD=8f7cffa`; evidence tip **`0f68c3e`** empty-diff vs squash.
+- **Verdict:** **#311 FAIL** until bundle **35 files** restores **533–534** + **535–536**; then re-audit for **SEALED PASS [PARTIAL]**.
+
