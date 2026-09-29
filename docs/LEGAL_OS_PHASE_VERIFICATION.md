@@ -1895,3 +1895,13 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr527-528-get-ext
 - **Claim replay:** **PASS** @ `BASE=33acecd`, `HEAD=b19d5a9` / `cdbf6b0`.
 - **Verdict:** **#300 SEALED PASS [PARTIAL]** @ `cdbf6b0` once this row replaces the void pre-merge block.
 
+## Phase audit — PR #302 GET 529–530 + gate + dedupe (**FAIL** @ `8f008ce`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr529-530-get-external-distribution-audit-ledger-partner-handoff-audit.md`. Evidence: `/opt/cursor/artifacts/pr302_audit.log`; collection: `/opt/cursor/artifacts/pr302_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr302.log`.
+
+- **Slice:** GET **529–530** on **527/528**; `route.ts` **+174** (45028→45202); focused **32/304**; isolation **27/27**; G-0 **[15]** product/audit-doc gate + **4/4** vitest fixtures.
+- **Process:** Product squash touched **only** `docs/audits/lattice-focused-ops-vitest-bundle.md` under `docs/` — **no** builder audit self-cert.
+- **Rules:** **FAIL PR302-MAJOR-1** — **529/530** in Job E + `denyWritePaths` but **no** dedicated `_view529` / `_view530` in `firestore.rules` (squash **+2** duplicate **527/528** lines only); `test:rules` **106/106** vacuous for new views.
+- **Claim replay:** **PASS** @ `BASE=d4ca186`, `HEAD=8f008ce`.
+- **Verdict:** **#302 FAIL** @ `8f008ce` until dedicated rules + non-vacuous break test; **product PARTIAL** (`transport_stub=true`) if remediated.
+
