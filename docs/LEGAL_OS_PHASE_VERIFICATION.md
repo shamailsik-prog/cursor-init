@@ -1905,3 +1905,20 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr529-530-get-ext
 - **Tests @ seal:** `test:rules` **106/106**; G-0 PASS; G-1 **10/10**; claim-gate **20/20**; claim replay **PASS** @ `BASE=19bf980`, `HEAD=e557df1`.
 - **Verdict:** **#302/#304 SEALED PASS [PARTIAL]** @ `e557df1`; **product PARTIAL** (`transport_stub=true`).
 
+## Phase audit — PR #306 lattice rules hardening (**SEALED PASS** @ `e6d237a`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr306-307-rules-hardening-get-531-532-audit.md`. Evidence: `/opt/cursor/artifacts/pr306_307_audit.log`; break: `/opt/cursor/artifacts/break_test_pr306.log`.
+
+- **Scope:** Job E **501/502**; denyWrite **509/510**; reconcile **506–508**, **517–520**; dedupe Job E + `_view521–526` rules; invariant vitest; `test:rules` **151** (47+89+1+14).
+- **Claim replay:** **PASS** @ `BASE=14822d8`, `HEAD=e6d237a`.
+- **Verdict:** **#306 SEALED PASS [PARTIAL]** (`transport_stub=true`).
+
+## Phase audit — PR #307 GET 531–532 (**SEALED PASS** @ `b9f2bfb`)
+
+Independent Phase Auditor (2026-09-29). Same write-up. Break: `/opt/cursor/artifacts/break_test_pr307.log`; collection: `/opt/cursor/artifacts/pr306_307_collection_table.md`.
+
+- **Slice:** GET **531–532** on **529/530**; `route.ts` **45379**; focused **33/313**; isolation **29/29**; `/ops` L6577–6600.
+- **Rules:** **531/532** 1× dedicated match + both arrays (byte-identical); break tests non-vacuous.
+- **`test:rules`:** **157** (49+93+1+14); G-0/G-1/claim replay **PASS**.
+- **Verdict:** **#307 SEALED PASS [PARTIAL]** (`transport_stub=true`; `frontend_real=true` for slice).
+
