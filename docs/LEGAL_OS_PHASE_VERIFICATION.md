@@ -1752,3 +1752,13 @@ Independent re-audit (2026-09-29). Full write-up: `docs/audits/phase-pr258-pr260
 - **Tests:** focused ops **213/213** (21 files); rules **22/22**; G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20**; `check_pr_phase_claims.py` PASS (`BASE=e9e0acc`, `HEAD=d7b9741`, PR #266 body).
 - **Verdict:** **#258 PASS** + **#260 PASS** phase audits @ `d7b9741`; product remains **PARTIAL** (`transport_stub=true`).
 
+## Re-audit closure — PR #269 dedicated collections (LATTICE-MAJOR-2) for #252 + lattice 485–508
+
+Independent re-audit (2026-09-29). Full write-up: `docs/audits/phase-pr252-reaudit-fix269-lattice.md`. Evidence: `/opt/cursor/artifacts/pr252_reaudit_lattice_verification.log`.
+
+- **Landed fix SHA:** `25767dfb78351ec0e1831fe496500ec6e9cd87e0` (squash of PR #269; parent `39aecaf` #268 lattice sweep docs).
+- **Remediation:** dedicated deny-by-default collections + spine repos for views **501–502** (mirrors #266 pattern for **505–508**); GET/POST/`store.set` aligned; `firestore.rules` + binder map; isolation vitest **489/501** and **490/502** added (**6/6**).
+- **Lattice 485–508 isolation status:** **CLEAN** @ `25767df` (auditor empirical **6/6** same-family pairs; no shared-collection leaks).
+- **Tests:** focused ops **212/215** (21 files) — **3 FAIL** `persistence.route-wiring` missing `View501`/`View502` mock repos; rules **28/28** (+6 deny-write cases); G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20**; `check_pr_phase_claims.py` PASS (`BASE=39aecaf`, `HEAD=25767df`, PR #269 body).
+- **Verdict:** **#252 re-audit FAIL** (1 major: route-wiring mock regression); **product PARTIAL** (`transport_stub=true`). Original #252 @ `0c1634c` ledger entry unchanged for historical pass; persistence leak class remediated on `main` @ `25767df`.
+
