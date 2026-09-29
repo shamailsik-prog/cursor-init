@@ -17,7 +17,8 @@ if ! git rev-parse --verify "${HEAD}^{commit}" >/dev/null 2>&1; then
   exit 1
 fi
 
-mapfile -t changed < <(git diff --name-only "${BASE}..${HEAD}")
+DIFF_BASE="$(git merge-base "${BASE}" "${HEAD}")"
+mapfile -t changed < <(git diff --name-only "${DIFF_BASE}..${HEAD}")
 
 touches_product=0
 touches_blocked_doc=0
@@ -50,5 +51,5 @@ if [[ $touches_product -eq 1 && $touches_blocked_doc -eq 1 ]]; then
   exit 1
 fi
 
-echo "PASS: no product + phase-audit-doc mixing (${BASE}..${HEAD})"
+echo "PASS: no product + phase-audit-doc mixing (${DIFF_BASE}..${HEAD})"
 exit 0

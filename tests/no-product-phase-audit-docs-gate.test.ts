@@ -93,4 +93,23 @@ describe("check_no_product_phase_audit_docs gate", () => {
     const out = runGate(root, "HEAD~1", "HEAD")
     expect(out).toContain("PASS")
   })
+
+  it("uses merge-base between BASE and HEAD (not only tip-to-tip)", () => {
+    const root = mkdtempSync(join(tmpdir(), "no-product-audit-gate-"))
+    initRepo(root)
+    writeFile(root, "README.md", "seed\n")
+    commitAll(root, "seed")
+
+    execSync("git checkout -b feature", { cwd: root, stdio: "pipe" })
+    writeFile(root, "app/on-branch.ts", "export const z = 3\n")
+    writeFile(root, "docs/audits/pr-merge-base-audit.md", "# audit\n")
+    commitAll(root, "mixed on feature branch")
+
+    execSync("git checkout main", { cwd: root, stdio: "pipe" })
+    writeFile(root, "docs/ROADMAP.md", "main moved\n")
+    commitAll(root, "main-only doc")
+
+    // feature branch was not merged; gate must still catch the mixed commit via merge-base..HEAD
+    expectGateFail(root, "main", "feature")
+  })
 })
