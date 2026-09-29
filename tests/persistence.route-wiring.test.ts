@@ -7299,6 +7299,86 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView547:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_pd_freeze_seal_543_waiver_reconciliation_closure_seal_verification_outbound_registry_attestation_ledgers_external_distribution_audit_ledger_reconciliation",
+            firmId: "firmA",
+            matterId: "mat_1",
+            externalDistributionAuditLedgerReconciliationClosureSealVerificationOutboundRegistryAttestationLedgerId:
+              "repo_pd_freeze_seal_543_waiver_reconciliation_closure_seal_verification_outbound_registry_attestation_ledger",
+            classification: "internal",
+            externalDistributionAuditLedgerReconciliationStatus:
+              "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_pending",
+            outboundRegistryAttestationLedgerStatusSnapshot:
+              "outbound_registry_attestation_ledger_pending",
+            externalDistributionAuditLedgerReconciliationDigestCheckpointedBy: null,
+            externalDistributionAuditLedgerReconciliationDigestCheckpointedAt: null,
+            externalDistributionAuditLedgerReconciliationDigest: null,
+            externalDistributionAuditLedgerReconciliationReconciledBy: null,
+            externalDistributionAuditLedgerReconciliationReconciledAt: null,
+            externalDistributionAuditLedgerReconciliationFinalizedBy: null,
+            externalDistributionAuditLedgerReconciliationFinalizedAt: null,
+            externalTransportReceiptReferenceParityDigest: null,
+            externalTransportChannel: "blocked_todo_firm",
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot: 0,
+            partnerDeliveryBacklogCountSnapshot: 1,
+            externalDistributionAuditLedgerReconciliationBacklogCount: 1,
+            externalDistributionAuditLedgerReconciliationNote:
+              "repo pd freeze seal 543 waiver reconciliation closure seal verification outbound registry attestation ledgers external distribution audit ledger reconciliation",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true", "tb_ack_recon_lattice:547"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 92,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView548:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_pd_freeze_seal_544_variance_partner_handoff_attestation_acknowledgement_seal_verification_outbound_registry_attestation_ledgers_partner_handoff_attestation_acknowledgement",
+            firmId: "firmA",
+            matterId: "mat_1",
+            partnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgerId:
+              "repo_pd_freeze_seal_540_variance_partner_handoff_attestation_acknowledgement_seal_verification_outbound_registry_attestation_ledger",
+            classification: "internal",
+            partnerHandoffAttestationAcknowledgementStatus:
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_pending",
+            outboundRegistryAttestationLedgerStatusSnapshot:
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_outbound_registry_attestation_ledger_pending",
+            partnerHandoffAttestationAcknowledgementDigestCheckpointedBy: null,
+            partnerHandoffAttestationAcknowledgementDigestCheckpointedAt: null,
+            partnerHandoffAttestationAcknowledgementDigest: null,
+            partnerHandoffAttestationAcknowledgedBy: null,
+            partnerHandoffAttestationAcknowledgedAt: null,
+            partnerHandoffAttestationAcknowledgementReference: null,
+            externalTransportChannel: "blocked_todo_firm",
+            partnerDeliveryBacklogCountSnapshot: 1,
+            partnerHandoffAttestationAcknowledgementBacklogCount: 1,
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot: 0,
+            partnerHandoffAttestationAcknowledgementNote:
+              "repo pd freeze seal 544 variance partner handoff attestation acknowledgement seal verification outbound registry attestation ledgers partner handoff attestation acknowledgement",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true", "tb_ack_recon_lattice:548"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 93,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
   })),
 }))
 
@@ -9502,7 +9582,7 @@ describe("Route wiring uses repository adapters", () => {
     )
   })
 
-  it("ops reporting parseView identity: GET 492/493/494/495/496/497/498/499/500/501/502/503/504/505/506/507/508/509/510/511/512/513/514/515/516/517/518/519/520/521/522/523/524/525/526/527/528/529/530/531/532/533/534/535/536/537/538/539/540/541/542/543/544/545/546 each resolve to its own view (no parent shadowing)", async () => {
+  it("ops reporting parseView identity: GET 492/493/494/495/496/497/498/499/500/501/502/503/504/505/506/507/508/509/510/511/512/513/514/515/516/517/518/519/520/521/522/523/524/525/526/527/528/529/530/531/532/533/534/535/536/537/538/539/540/541/542/543/544/545/546/547/548 each resolve to its own view (no parent shadowing)", async () => {
     const view492 =
       "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations"
     const view493 =
@@ -10519,6 +10599,32 @@ describe("Route wiring uses repository adapters", () => {
   it("ops reporting closure ack-recon TB PD freeze seal partner handoff attestation acknowledgement seal verification outbound registry attestation ledger view (546) uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView546", async () => {
     const { GET } = await import("@/app/api/d2/ops-reporting/route")
     const res = await GET(new Request(LATTICE_U["546"]))
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      view: string
+      items: Array<{ partnerHandoffAttestationAcknowledgementStatus: string }>
+    }
+    expect(json.items[0]?.partnerHandoffAttestationAcknowledgementStatus).toBe(
+      "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_acknowledgement_pending"
+    )
+  })
+  it("ops reporting custody ack-recon TB PD freeze seal external distribution audit ledger reconciliation closure seal verification outbound registry attestation ledger view (547) uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView547", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(new Request(LATTICE_U["547"]))
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      view: string
+      total: number
+      items: Array<{ externalDistributionAuditLedgerReconciliationStatus: string }>
+    }
+    expect(json.total).toBe(1)
+    expect(json.items[0]?.externalDistributionAuditLedgerReconciliationStatus).toBe(
+      "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_reconciliation_pending"
+    )
+  })
+  it("ops reporting closure ack-recon TB PD freeze seal partner handoff attestation acknowledgement seal verification outbound registry attestation ledger view (548) uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView548", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(new Request(LATTICE_U["548"]))
     expect(res.status).toBe(200)
     const json = (await res.json()) as {
       view: string

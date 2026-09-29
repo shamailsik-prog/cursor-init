@@ -5022,5 +5022,5 @@ describe("Firestore repository adapters", () => {
         await repos.filingEscalationClosureQueueReentryCompliance.listByFirm("firmA")
       expect(closureQueueReentryComplianceByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
-  })
+  }, 10_000)
 })

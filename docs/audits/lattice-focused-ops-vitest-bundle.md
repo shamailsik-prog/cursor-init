@@ -4,7 +4,7 @@
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (40)
+## File list (41)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -46,6 +46,7 @@
 38. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-541-542-frontend-real.test.ts` (GET **541–542**; parents **539**/**540**)
 39. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-543-544-frontend-real.test.ts` (GET **543–544**; parents **541**/**542**)
 40. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-545-546-frontend-real.test.ts` (GET **545–546**; parents **543**/**544**)
+41. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-547-548-frontend-real.test.ts` (GET **547–548**; parents **545**/**546**)
 
 ## History
 
@@ -97,3 +98,7 @@ Dedicated `_view543` / `_view544` collections mirror `_view541` / `_view542` on 
 | 40 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-545-546-frontend-real.test.ts` (GET **545–546**; parents **543**/**544**) |
 
 Dedicated `_view545` / `_view546` collections mirror `_view543` / `_view544` on parents **543**/**544** (append **545**/**546** in Job E + denyWritePaths after **544**).
+
+| 41 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-547-548-frontend-real.test.ts` (GET **547–548**; parents **545**/**546**) |
+
+Dedicated `_view547` / `_view548` collections mirror `_view545` / `_view546` on parents **545**/**546** (append **547**/**548** in Job E + denyWritePaths after **546**).
