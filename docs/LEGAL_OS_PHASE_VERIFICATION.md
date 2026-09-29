@@ -1847,3 +1847,13 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr287-get-517-518
 - **Claim replay:** #289 process body **PASS** (`BASE=18c8caf`, `HEAD=c21e1e8`); #287 product body **PASS** @ `d5ca261`.
 - **Verdict:** **#287 SEALED PASS** @ integration tip `c21e1e8`; **product PARTIAL** (`transport_stub=true`).
 
+## Phase audit — PR #291 GET 519–520 (**FAIL** @ `026a2ac`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr291-get-519-520-audit.md`. Evidence: `/opt/cursor/artifacts/pr291_audit.log`; collection trace: `/opt/cursor/artifacts/pr291_collection_table.md`.
+
+- **Slice:** GET **519–520** on **517/518**; `_view519` / `_view520`; `route.ts` **+677**; focused bundle **27 files, 264/264**.
+- **Rules:** **519/520** in **both** Job E dedicated array and `denyWritePaths`; `test:rules` **76/76** (72→76 additions only).
+- **Implementation gates:** G-0/G-1; claim-gate vitest **20/20**; isolation **17/17** — green.
+- **Claim replay:** PR #291 body **FAIL** exit **1** @ `BASE=05128f3`, `HEAD=026a2ac` — **PR291-MAJOR-1** (missing `-> app/ops/operator-audit-console.tsx` metadata while `frontend_real=true`).
+- **Verdict:** **#291 FAIL** @ `026a2ac` until metadata amended; product scope would remain **PARTIAL** (`transport_stub=true`).
+
