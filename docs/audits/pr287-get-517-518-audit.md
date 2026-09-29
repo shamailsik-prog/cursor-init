@@ -1,10 +1,11 @@
 # Independent phase auditor A–F audit: PR #287 GET 517–518
 
 **Auditor:** independent phase auditor (docs-only)  
-**Landed squash SHA:** `d5ca261efdc8d01ce124646e3cc838dae69b399e` (PR #287 on `main`)  
-**Parent SHA:** `cd09ad168e565a4c14cf88bf66b1717d5652656c` (#286 docs)  
-**Evidence tip:** `a5392b85a7e97205b80e113b5f7f1125368e3f8a`  
-**Evidence:** `/opt/cursor/artifacts/pr287_audit.log`  
+**Product squash SHA:** `d5ca261efdc8d01ce124646e3cc838dae69b399e` (PR #287)  
+**Integration / seal SHA:** `c21e1e8635d85f9f22cb3b56c124926e058a1d57` (PR #287 + PR #289 PR287-MAJOR-1)  
+**Parent SHA (product):** `cd09ad168e565a4c14cf88bf66b1717d5652656c` (#286 docs)  
+**Fix:** `18c8cafd19e8073020bbb64b97b0ba4e0763ec0c` (#288 FAIL ledger) → PR **#289**  
+**Evidence:** `/opt/cursor/artifacts/pr287_audit.log` (initial FAIL), `/opt/cursor/artifacts/pr287_reaudit.log` (re-audit)  
 **Collection table:** `/opt/cursor/artifacts/pr287_collection_table.md`  
 **Date:** 2026-09-29
 
@@ -12,20 +13,23 @@
 
 | Scope | Verdict |
 |---|---|
-| **PR #287 @ `d5ca261`** | **FAIL** |
-| **Product (if remediated)** | **PARTIAL** (`transport_stub=true`) |
+| **PR #287 @ `d5ca261` (initial)** | **FAIL** (PR287-MAJOR-1) |
+| **Re-audit @ `c21e1e8`** | **SEALED PASS** |
+| **Product** | **PARTIAL** (`transport_stub=true`) |
 
-## Summary
+## Initial audit summary (@ `d5ca261`)
 
-- **Slice:** GET **517–518** outbound registry attestation ledger on **515/516** (analogue of **505/506** on **503/504**); dedicated `_view517` / `_view518`.
-- **Landing:** tip patch empty; **15-file** squash; no ROADMAP / agent policy drift in squash.
-- **Lattice / FE / isolation / gates:** green (26/257 focused ops, 14→**16/16** isolation, G-0/G-1, claim replay PASS).
-- **Blocker class major:** `denyWritePaths` in `tests/firestore.rules.test.ts` omits **517/518** while Job E dedicated array includes them — breaks checklist D and **515/516** parity.
+- **Slice:** GET **517–518** outbound registry attestation ledger on **515/516**; dedicated `_view517` / `_view518`.
+- **FAIL — PR287-MAJOR-1:** `denyWritePaths` omitted **517/518** while Job E TB array included them.
 
-## PR287-MAJOR-1 fix
+## Re-audit after PR #289 (@ `c21e1e8`)
 
-Add `…_tb_ack_recon_pd_freeze_seal_view517` and `…_view518` collection paths to the `denyWritePaths` array (same pattern as **515/516**), re-run `npm run test:rules`.
+- **Fix:** `tests/firestore.rules.test.ts` **+2** `denyWritePaths` entries; paths match `firestore.rules` **L213–L214**.
+- **`test:rules`:** **72/72** (57/1/14); break test on `_view518` → **3** failures (reverted).
+- **Focused ops:** **26/257**; G-0/G-1; claim-gate **20/20**; #289 process replay **PASS** (flags false, truthful); #287 product replay still **PASS** @ `d5ca261`.
+- **Regression:** wiring **517/518** `it()` and `/ops` **5867–5891** unchanged.
 
 ## Folded minor
 
-- **506** identity-array reorder: same slice set, **506** placed after **505** (not dropped).
+- **506** identity-array reorder (same slice set).
+- Bundle doc header still says **25 files** while runner and file list include **26** (file 517–518 FE test) — cosmetic doc drift only.

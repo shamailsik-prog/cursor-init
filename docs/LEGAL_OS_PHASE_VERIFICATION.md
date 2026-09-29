@@ -1837,14 +1837,13 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr285-get-515-516
 - **Claim replay:** #285 **PASS** (`BASE=002c1cf`, `HEAD=4f1f8cc`; also builder `BASE=77b5d42`, `HEAD=63f93a7`).
 - **Verdict:** **#285 SEALED PASS** @ `4f1f8cc`; **product PARTIAL** (`transport_stub=true`).
 
-## Phase audit — PR #287 GET 517–518 (**FAIL** @ `d5ca261`)
+## Phase audit — PR #287 GET 517–518 (**SEALED PASS** @ `c21e1e8`)
 
-Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr287-get-517-518-audit.md`. Evidence: `/opt/cursor/artifacts/pr287_audit.log`; collection trace: `/opt/cursor/artifacts/pr287_collection_table.md`.
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr287-get-517-518-audit.md`. Initial FAIL evidence: `/opt/cursor/artifacts/pr287_audit.log`; re-audit: `/opt/cursor/artifacts/pr287_reaudit.log`.
 
-- **Parent chain:** `d5ca261^` = `cd09ad1` (#286 docs); `cd09ad1^` = `4f1f8cc` (#285).
-- **Slice:** GET **517–518** on **515/516**; `_view517` / `_view518`; `route.ts` **+757**; focused bundle **26 files, 257/257**.
-- **`test:rules`:** **70/70** (55/1/14) but **`denyWritePaths` lacks 517/518** → **PR287-MAJOR-1 FAIL**.
-- **506 reorder:** identity array set **+517/+518** only; **506** ordered after **505**.
-- **Claim replay:** #287 **PASS** (`BASE=cd09ad1`, `HEAD=d5ca261`).
-- **Verdict:** **#287 phase audit FAIL** @ `d5ca261`; remediate rules `denyWritePaths`; product **PARTIAL** (`transport_stub=true`).
+- **Initial FAIL @ `d5ca261`:** PR287-MAJOR-1 — `denyWritePaths` missing **517/518** (ledger #288).
+- **Fix @ `c21e1e8`:** PR **#289** adds **+2** denyWrite paths matching rules **L213–L214**; additions only.
+- **`test:rules`:** **72/72** (57/1/14); focused **26/257**; G-0/G-1; claim-gate **20/20**.
+- **Claim replay:** #289 process body **PASS** (`BASE=18c8caf`, `HEAD=c21e1e8`); #287 product body **PASS** @ `d5ca261`.
+- **Verdict:** **#287 SEALED PASS** @ integration tip `c21e1e8`; **product PARTIAL** (`transport_stub=true`).
 
