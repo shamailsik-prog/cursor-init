@@ -3,7 +3,8 @@ import { TB_ACK_RECON_LINEAGE_ISOLATION_GET_URL as U } from "./ops.pr-tb-ack-rec
 
 /**
  * PR260-MAJOR-1 regression: lattice pairs 493/505, 494/506, 495/507, 496/508 must use
- * separate backing stores. Seed one row per lineage; each GET must return only its row.
+ * separate backing stores. PR LATTICE-MAJOR-2: pairs 489/501 and 490/502 likewise.
+ * Seed one row per lineage; each GET must return only its row.
  */
 const spineState = vi.hoisted(() => ({ store: null as import("@/platform/spine/store").SpineStore | null }))
 
@@ -38,7 +39,7 @@ vi.mock("@/platform/spine/runtimeStore", async () => {
   }
 })
 
-describe("tb ack-recon lattice dedicated collection lineage isolation (493–496 vs 505–508)", () => {
+describe("tb ack-recon lattice dedicated collection lineage isolation (489–496 vs 501–508)", () => {
   async function seedAndGet(
     seed: (repos: Awaited<ReturnType<typeof import("@/platform/persistence/runtimeRepositories").getRuntimeRepositories>>) => Promise<void>,
     url493ish: string,
@@ -94,6 +95,62 @@ describe("tb ack-recon lattice dedicated collection lineage isolation (493–496
     recomputedAt: Date.now(),
     updatedAt: 1,
   }
+
+  it("489/501 GET returns only its lineage row", async () => {
+    await seedAndGet(
+      async (repos) => {
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.upsert(
+          {
+            ...baseRow,
+            id: "lineage-row-489-only",
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+              "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+          } as never
+        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView501.upsert(
+          {
+            ...baseRow,
+            id: "lineage-row-501-only",
+            updatedAt: 2,
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+              "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+          } as never
+        )
+      },
+      U["489"],
+      U["501"],
+      "lineage-row-489-only",
+      "lineage-row-501-only"
+    )
+  })
+
+  it("490/502 GET returns only its lineage row", async () => {
+    await seedAndGet(
+      async (repos) => {
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.upsert(
+          {
+            ...baseRow,
+            id: "lineage-row-490-only",
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+          } as never
+        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView502.upsert(
+          {
+            ...baseRow,
+            id: "lineage-row-502-only",
+            updatedAt: 2,
+            ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_pending",
+          } as never
+        )
+      },
+      U["490"],
+      U["502"],
+      "lineage-row-490-only",
+      "lineage-row-502-only"
+    )
+  })
 
   it("493/505 GET returns only its lineage row", async () => {
     await seedAndGet(
