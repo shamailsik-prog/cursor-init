@@ -1968,3 +1968,12 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr319-get-539-540
 - **Post-land `9e90670`:** Single-line mega-test timeout **45s→120s** only (`2b05465..9e90670` diff); not gate weakening (**PR319-M1**).
 - **Verdict:** **#319 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
 
+## Phase audit — PR #321 GET 541–542 (**SEALED PASS** @ `85bdaa0`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr321-get-541-542-audit.md`. Evidence: `/opt/cursor/artifacts/pr321_audit.log`; collection: `/opt/cursor/artifacts/pr321_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr321.log`; replay: `/opt/cursor/artifacts/replay_pr321.log`.
+
+- **Slice:** GET **541–542** on **539/540**; `route.ts` **47118** (+174); console **7182** (+33); focused **38/349**; isolation **39/39**; invariants **68/68**; `test:rules` **196** (**3×** green).
+- **537–540:** `/ops` **537–540** unchanged vs #319 product @ `f574552`; #321 adds **additive** parseView/governance for **539/540** only (**PR319-FOLD-1** minor).
+- **Claim replay:** **PASS** @ `BASE=f574552`, `HEAD=85bdaa0` and **`HEAD=3a36391`** (live PR #321 body with **`GET /api/d2/ops-reporting`**).
+- **Verdict:** **#321 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
+
