@@ -41,10 +41,11 @@ FILES=(
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-531-532-frontend-real.test.ts
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-533-534-frontend-real.test.ts
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-535-536-frontend-real.test.ts
+  tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-537-538-frontend-real.test.ts
 )
 
-if [[ "${#FILES[@]}" -ne 35 ]]; then
-  echo "focused lattice ops bundle: expected 35 files, got ${#FILES[@]}" >&2
+if [[ "${#FILES[@]}" -ne 36 ]]; then
+  echo "focused lattice ops bundle: expected 36 files, got ${#FILES[@]}" >&2
   exit 1
 fi
 
