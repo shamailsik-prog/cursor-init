@@ -1959,3 +1959,12 @@ Independent Phase Auditor (2026-09-29). Initial FAIL: `docs/audits/pr315-get-537
 - **Docs #317 @ `f5415e2`:** FAIL ledger only; `f5415e2^` = **`7a23ca2`**; no product drift on `main`.
 - **Verdict:** **#315 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
 
+## Phase audit — PR #319 GET 539–540 (**SEALED PASS** @ `2b05465`, tip `9e90670`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr319-get-539-540-audit.md`. Evidence: `/opt/cursor/artifacts/pr319_audit.log`; collection: `/opt/cursor/artifacts/pr319_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr319.log`.
+
+- **Slice:** GET **539–540** on **537/538**; `route.ts` **46944** (+465 vs #318 tip); console **7149** (+32); focused **37/343**; isolation **37/37**; invariants **64/64**; `test:rules` **188** (**3×** green @ `9e90670`).
+- **Claim replay:** **PASS** @ `BASE=1d9013e`, `HEAD=2b05465` and **`HEAD=9e90670`** (live PR #319 body with **`GET /api/d2/ops-reporting`** evidence).
+- **Post-land `9e90670`:** Single-line mega-test timeout **45s→120s** only (`2b05465..9e90670` diff); not gate weakening (**PR319-M1**).
+- **Verdict:** **#319 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
+
