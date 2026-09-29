@@ -7246,9 +7246,12 @@ describe("Route wiring uses repository adapters", () => {
     const url = TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS.find((r) => r.slice === 509)!.url
     const res = await GET(new Request(url))
     expect(res.status).toBe(200)
+    const requestedView = new URL(url).searchParams.get("view")!
     const json = (await res.json()) as {
+      view: string
       items: Array<{ partnerDeliveryTransportBoundaryReceiptReconciliationStatus: string }>
     }
+    expect(json.view).toBe(requestedView)
     expect(json.items[0]?.partnerDeliveryTransportBoundaryReceiptReconciliationStatus).toBe(
       "transport_boundary_receipt_reconciliation_pending"
     )
@@ -7259,9 +7262,12 @@ describe("Route wiring uses repository adapters", () => {
     const url = TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS.find((r) => r.slice === 510)!.url
     const res = await GET(new Request(url))
     expect(res.status).toBe(200)
+    const requestedView = new URL(url).searchParams.get("view")!
     const json = (await res.json()) as {
+      view: string
       items: Array<{ partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus: string }>
     }
+    expect(json.view).toBe(requestedView)
     expect(json.items[0]?.partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus).toBe(
       "transport_boundary_receipt_reconciliation_closure_attestation_pending"
     )

@@ -1772,3 +1772,10 @@ Independent re-audit (2026-09-29). Full write-up: `docs/audits/phase-pr252-reaud
 - **Tests:** focused ops **223/223** (21 files, no `-t`); vs `25767df` **212/215** (3 FAIL before fix); `test:rules` **34/34**; G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20**; `check_pr_phase_claims.py` PASS (`BASE=0dcdf80`, `HEAD=ded553a`, PR #272 body).
 - **Verdict:** **#252 re-audit PASS** @ `ded553a`; **product PARTIAL** (`transport_stub=true`).
 
+## Phase Auditor process — canonical focused lattice ops bundle (22 files)
+
+Independent Phase Auditor remediation (2026-09-29). Ledger: `docs/audits/lattice-focused-ops-vitest-bundle.md`. Runner: `ci_gates/run_focused_lattice_ops_vitest.sh`.
+
+- **Change:** extend pre-#271 **21-file** bundle to **22 files** by including `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts` (PR #271 GET **509–510**); route-wiring dedicated **509/510** `it()` assert `json.view` (501/502 pattern).
+- **Baseline @ integration tip:** **22 files**, full unfiltered vitest (no `-t`).
+
