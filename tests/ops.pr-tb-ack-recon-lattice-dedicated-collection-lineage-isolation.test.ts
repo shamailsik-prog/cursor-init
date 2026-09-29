@@ -512,31 +512,58 @@ describe("tb ack-recon lattice dedicated collection lineage isolation (493–496
     )
   })
 
-  it("516/518 GET returns only its lineage row", async () => {
+  it("517/519 GET returns only its lineage row", async () => {
     await seedAndGet(
       async (repos) => {
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView516.upsert(
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView517.upsert(
           {
             ...baseRow,
-            id: "lineage-row-516-only",
-            partnerHandoffAttestationStatus:
-              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_pending",
+            id: "lineage-row-517-only",
+            outboundRegistryAttestationLedgerStatus: "outbound_registry_attestation_ledger_pending",
           } as never
         )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519.upsert(
+          {
+            ...baseRow,
+            id: "lineage-row-519-only",
+            updatedAt: 2,
+            partnerDeliveryReceiptFreezeOverrideSealVerificationStatus:
+              "partner_delivery_receipt_freeze_override_seal_verification_pending",
+          } as never
+        )
+      },
+      U["517"],
+      U["519"],
+      "lineage-row-517-only",
+      "lineage-row-519-only"
+    )
+  })
+
+  it("518/520 GET returns only its lineage row", async () => {
+    await seedAndGet(
+      async (repos) => {
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView518.upsert(
           {
             ...baseRow,
             id: "lineage-row-518-only",
-            updatedAt: 2,
             outboundRegistryAttestationLedgerStatus:
-              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_outbound_attestation_ledger_checkpointed",
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_outbound_registry_attestation_ledger_pending",
+          } as never
+        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520.upsert(
+          {
+            ...baseRow,
+            id: "lineage-row-520-only",
+            updatedAt: 2,
+            partnerDeliveryReceiptFreezeOverrideSealVerificationStatus:
+              "partner_delivery_receipt_freeze_override_seal_verification_pending",
           } as never
         )
       },
-      U["516"],
       U["518"],
-      "lineage-row-516-only",
-      "lineage-row-518-only"
+      U["520"],
+      "lineage-row-518-only",
+      "lineage-row-520-only"
     )
   })
 

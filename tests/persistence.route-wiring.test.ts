@@ -4619,6 +4619,45 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         ]),
         listByMatter: vi.fn().mockResolvedValue([]),
       },
+    workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_pd_freeze_seal_519_partner_delivery_receipt_freeze_override_seal_verification_custody_ack_recon_tb_seal_verifications_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification",
+            firmId: "firmA",
+            matterId: "mat_1",
+            transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerId:
+              "repo_custody_ack_recon_tb_seal_verifications_ack_reconciliation_external_distribution_audit_ledger_outbound_registry_attestation_ledger",
+            classification: "internal",
+            partnerDeliveryReceiptFreezeOverrideSealVerificationStatus:
+              "partner_delivery_receipt_freeze_override_seal_verification_pending",
+            outboundRegistryAttestationLedgerStatusSnapshot:
+              "partner_delivery_receipt_freeze_override_digested",
+            partnerDeliveryReceiptFreezeOverrideSealCheckpointedBy: null,
+            partnerDeliveryReceiptFreezeOverrideSealCheckpointedAt: null,
+            partnerDeliveryReceiptFreezeOverrideSealReference: null,
+            partnerDeliveryReceiptFreezeOverrideSealVerifiedBy: null,
+            partnerDeliveryReceiptFreezeOverrideSealVerifiedAt: null,
+            partnerDeliveryReceiptFreezeOverrideSealVerificationDigest: null,
+            externalTransportChannel: "blocked_todo_firm",
+            partnerDeliverySealBacklogCount: 1,
+            partnerDeliveryBacklogCountSnapshot: 1,
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot: 0,
+            partnerDeliveryReceiptFreezeOverrideSealVerificationNote:
+              "repo custody ack-recon TB seal-verifications outbound registry attestation ledger partner-delivery receipt freeze-override seal verification",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 77,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508:
       {
         upsert: vi.fn().mockResolvedValue(undefined),
@@ -4626,6 +4665,45 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         listByFirm: vi.fn().mockResolvedValue([
           {
             id: "repo_pd_freeze_seal_508_partner_delivery_receipt_freeze_override_seal_verification_closure_ack_recon_tb_seal_verifications_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification",
+            firmId: "firmA",
+            matterId: "mat_1",
+            ackReconPartnerHandoffAttestationOutboundRegistryAttestationLedgerId:
+              "repo_closure_ack_recon_tb_partner_handoff_attestation_outbound_registry_attestation_ledger",
+            classification: "internal",
+            partnerDeliveryReceiptFreezeOverrideSealVerificationStatus:
+              "partner_delivery_receipt_freeze_override_seal_verification_pending",
+            outboundRegistryAttestationLedgerStatusSnapshot:
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_delivery_receipt_freeze_override_digested",
+            partnerDeliveryReceiptFreezeOverrideSealCheckpointedBy: null,
+            partnerDeliveryReceiptFreezeOverrideSealCheckpointedAt: null,
+            partnerDeliveryReceiptFreezeOverrideSealReference: null,
+            partnerDeliveryReceiptFreezeOverrideSealVerifiedBy: null,
+            partnerDeliveryReceiptFreezeOverrideSealVerifiedAt: null,
+            partnerDeliveryReceiptFreezeOverrideSealVerificationDigest: null,
+            externalTransportChannel: "blocked_todo_firm",
+            partnerDeliverySealBacklogCount: 1,
+            partnerHandoffAttestationBacklogCountSnapshot: 1,
+            crossTrackExternalTransportReceiptAcknowledgmentMismatchCountSnapshot: 0,
+            partnerDeliveryReceiptFreezeOverrideSealVerificationNote:
+              "repo closure ack-recon TB seal-verifications partner handoff attestation outbound registry attestation ledger partner-delivery receipt freeze-override seal verification",
+            lastStatusChangedAt: Date.now(),
+            freshnessStatus: "fresh",
+            provenanceTags: ["repo", "transport_stub:true"],
+            recomputedAt: Date.now(),
+            recomputedBy: "partner_a",
+            recomputeReason: "repo mock",
+            updatedAt: 78,
+          },
+        ]),
+        listByMatter: vi.fn().mockResolvedValue([]),
+      },
+    workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520:
+      {
+        upsert: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockResolvedValue(null),
+        listByFirm: vi.fn().mockResolvedValue([
+          {
+            id: "repo_pd_freeze_seal_520_partner_delivery_receipt_freeze_override_seal_verification_closure_ack_recon_tb_seal_verifications_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification",
             firmId: "firmA",
             matterId: "mat_1",
             ackReconPartnerHandoffAttestationOutboundRegistryAttestationLedgerId:
@@ -7229,6 +7307,16 @@ describe("Route wiring uses repository adapters", () => {
       url:
         "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers&actorId=associate_a&ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus=ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_outbound_registry_attestation_ledger_pending&freshnessStatus=fresh&limit=10&cursor=0",
     },
+{
+      slice: 519,
+      url:
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications&actorId=associate_a&limit=10&cursor=0&actorId=associate_a&partnerDeliveryReceiptFreezeOverrideSealVerificationStatus=partner_delivery_receipt_freeze_override_seal_verification_pending&freshnessStatus=fresh&limit=10&cursor=0",
+    },
+{
+      slice: 520,
+      url:
+        "http://127.0.0.1/api/d2/ops-reporting?view=alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications&actorId=associate_a&limit=10&cursor=0&actorId=associate_a&partnerDeliveryReceiptFreezeOverrideSealVerificationStatus=partner_delivery_receipt_freeze_override_seal_verification_pending&freshnessStatus=fresh&limit=10&cursor=0",
+    },
   ]
 
   it.each(TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS)(
@@ -7276,7 +7364,7 @@ describe("Route wiring uses repository adapters", () => {
     )
   })
 
-  it("ops reporting parseView identity: GET 492/493/494/495/496/497/498/499/500/501/502/503/504/505/506/507/508/509/510/511/512/513/514/515/516/517/518 each resolve to its own view (no parent shadowing)", async () => {
+  it("ops reporting parseView identity: GET 492/493/494/495/496/497/498/499/500/501/502/503/504/505/506/507/508/509/510/511/512/513/514/515/516/517/518/519/520 each resolve to its own view (no parent shadowing)", async () => {
     const view492 =
       "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations"
     const view493 =
@@ -7306,6 +7394,8 @@ describe("Route wiring uses repository adapters", () => {
     const view516 = `${view514}_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations`
     const view517 = `${view515}_outbound_registry_attestation_ledgers`
     const view518 = `${view516}_partner_handoff_attestations_outbound_registry_attestation_ledgers`
+    const view519 = `${view517}_partner_delivery_receipt_freeze_override_seal_verifications`
+    const view520 = `${view518}_partner_delivery_receipt_freeze_override_seal_verifications`
 
     const cases: Array<{ view: string; query: string }> = [
       {
@@ -7440,6 +7530,12 @@ describe("Route wiring uses repository adapters", () => {
       },
       {
         view: view518,
+      },
+      {
+        view: view519,
+      },
+      {
+        view: view520,
         query:
           "ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus=ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_outbound_registry_attestation_ledger_pending",
       },
@@ -7480,6 +7576,8 @@ describe("Route wiring uses repository adapters", () => {
     expect(view516.startsWith(view514)).toBe(true)
     expect(view517.startsWith(view515)).toBe(true)
     expect(view518.startsWith(view516)).toBe(true)
+    expect(view519.startsWith(view517)).toBe(true)
+    expect(view520.startsWith(view518)).toBe(true)
     expect(view515).not.toBe(view513)
     expect(view516).not.toBe(view514)
   })
@@ -7553,6 +7651,7 @@ describe("Route wiring uses repository adapters", () => {
       "partner_delivery_receipt_freeze_override_seal_verification_pending"
     )
   })
+
 
   it("ops reporting custody ack-recon TB PD freeze seal external transport receipt acknowledgment reconciliation view (501) uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView501", async () => {
     const { GET } = await import("@/app/api/d2/ops-reporting/route")
@@ -7815,6 +7914,46 @@ describe("Route wiring uses repository adapters", () => {
     expect(json.view).toBe(new URL(TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS.find((r) => r.slice === 518)!.url).searchParams.get("view"))
     expect(json.items[0]?.outboundRegistryAttestationLedgerStatus).toBe(
       "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_outbound_registry_attestation_ledger_pending"
+    )
+  })
+
+  it("ops reporting custody ack-recon TB PD freeze seal partner-delivery receipt freeze-override seal verification on outbound registry attestation ledger view (519) uses repository workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS.find((r) => r.slice === 519)!.url)
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      view: string
+      items: Array<{ partnerDeliveryReceiptFreezeOverrideSealVerificationStatus: string }>
+    }
+    expect(json.view).toBe(
+      new URL(TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS.find((r) => r.slice === 519)!.url).searchParams.get(
+        "view"
+      )
+    )
+    expect(json.items[0]?.partnerDeliveryReceiptFreezeOverrideSealVerificationStatus).toBe(
+      "partner_delivery_receipt_freeze_override_seal_verification_pending"
+    )
+  })
+
+  it("ops reporting closure ack-recon TB PD freeze seal partner-delivery receipt freeze-override seal verification on partner handoff attestation outbound registry attestation ledger view (520) uses repository workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520", async () => {
+    const { GET } = await import("@/app/api/d2/ops-reporting/route")
+    const res = await GET(
+      new Request(TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS.find((r) => r.slice === 520)!.url)
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as {
+      view: string
+      items: Array<{ partnerDeliveryReceiptFreezeOverrideSealVerificationStatus: string }>
+    }
+    expect(json.view).toBe(
+      new URL(TB_ACK_RECON_LATTICE_GET_VIEW_IDENTITY_REQUESTS.find((r) => r.slice === 520)!.url).searchParams.get(
+        "view"
+      )
+    )
+    expect(json.items[0]?.partnerDeliveryReceiptFreezeOverrideSealVerificationStatus).toBe(
+      "partner_delivery_receipt_freeze_override_seal_verification_pending"
     )
   })
 

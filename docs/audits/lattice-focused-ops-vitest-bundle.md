@@ -1,10 +1,10 @@
-# Canonical focused ops vitest bundle (TB ack-recon lattice 485–512)
+# Canonical focused ops vitest bundle (TB ack-recon lattice 485–520)
 
-**Baseline:** **25 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **27 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (25)
+## File list (27)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -31,6 +31,8 @@
 23. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-511-512-frontend-real.test.ts` (added with PR #277 GET **511–512**)
 24. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-513-514-frontend-real.test.ts` (added with PR slice 513–514)
 25. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-515-516-frontend-real.test.ts` (added with PR slice 515–516; parents 513/514)
+26. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-outbound-registry-attestation-ledger-517-518-frontend-real.test.ts` (PR slice **517–518**; parents 515/516)
+27. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-partner-delivery-519-520-frontend-real.test.ts` (PR slice **519–520**; parents 517/518)
 
 ## History
 
@@ -41,9 +43,15 @@
 | 21 | +`tests/ops.pr-tb-ack-recon-lattice-dedicated-collection-lineage-isolation.test.ts` (PR #266) |
 | 22 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts` (PR #271) |
 | 23 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-511-512-frontend-real.test.ts` (PR #277) |
+| 25 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-515-516-frontend-real.test.ts` (PR slice **515–516**) |
+| 26 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-outbound-registry-attestation-ledger-517-518-frontend-real.test.ts` (PR slice **517–518**) |
+| 27 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-partner-delivery-519-520-frontend-real.test.ts` (PR slice **519–520**) |
 
 - `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-513-514-frontend-real.test.ts` — PR slice 513–514 external transport receipt acknowledgment reconciliation (511/512 parents).
 
-| 25 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-515-516-frontend-real.test.ts` (PR slice **515–516**) |
+## Job E — `tests/firestore.rules.test.ts` per-view path variants
 
-- tests/ops.pr-tb-ack-recon-pd-freeze-seal-outbound-registry-attestation-ledger-517-518-frontend-real.test.ts
+Dedicated `_view519` / `_view520` collections mirror `_view517` / `_view518` placement:
+
+- `TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS`: append **519** and **520** full collection paths (duplicate entries per view, same pattern as **517** / **518**).
+- `denyWritePaths`: insert **519** and **520** immediately after the **518** dedicated view path (same pattern as PR #289 **517** / **518** fix).
