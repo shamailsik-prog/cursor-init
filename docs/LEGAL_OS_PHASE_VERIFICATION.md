@@ -1857,3 +1857,12 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr291-get-519-520
 - **Rules / gates:** **519/520** in both Job E array + `denyWritePaths`; `test:rules` **76/76**; isolation **17/17**; G-0/G-1; claim vitest **20/20** @ `main` (`070dbb1`, no code after `026a2ac`).
 - **Verdict:** **#291 SEALED PASS** @ `026a2ac`; **product PARTIAL** (`transport_stub=true`).
 
+## Phase audit — PR #294 GET 521–522 (**SEALED PASS** @ `d3c4452`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr294-get-521-522-audit.md`. Evidence: `/opt/cursor/artifacts/pr294_audit.log`; collection: `/opt/cursor/artifacts/pr294_collection_table.md`.
+
+- **Slice:** GET **521–522** on **519/520**; `_view521` / `_view522`; `route.ts` **+736**; focused **28/272**.
+- **Rules:** Job E **18→24** (two-variant **517–522**); +485/486/487 deny tests; `test:rules` **87/87**.
+- **Claim replay:** **PASS** @ `BASE=5c0a469`, `HEAD=d3c4452` / `7b76ba`.
+- **Verdict:** **#294 SEALED PASS** @ `d3c4452`; **product PARTIAL** (`transport_stub=true`).
+
