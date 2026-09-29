@@ -1,10 +1,10 @@
 # Canonical focused ops vitest bundle (TB ack-recon lattice 485–536)
 
-**Baseline:** **34 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **35 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (31)
+## File list (35)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -37,6 +37,10 @@
 29. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-523-524-frontend-real.test.ts` (PR slice **523–524**; parents 521/522)
 30. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-525-526-frontend-real.test.ts` (PR slice **525–526**; parents 523/524)
 31. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-527-528-frontend-real.test.ts` (PR slice **527–528**; parents 525/526)
+32. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-529-530-frontend-real.test.ts` (PR slice **529–530**; parents 527/528)
+33. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-531-532-frontend-real.test.ts` (PR slice **531–532**; parents 529/530)
+34. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-533-534-frontend-real.test.ts` (PR slice **533–534**; parents 531/532 seal verification views)
+35. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-535-536-frontend-real.test.ts` (PR slice **535–536**; parents 533/534 outbound registry attestation ledgers)
 
 ## History
 
@@ -54,6 +58,9 @@
 | 29 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-523-524-frontend-real.test.ts` (PR slice **523–524**) |
 | 30 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-525-526-frontend-real.test.ts` (PR slice **525–526**) |
 | 32 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-527-528-frontend-real.test.ts` (PR slice **527–528**) |
+| 33 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-529-530-frontend-real.test.ts` (PR slice **529–530**) |
+| 34 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-531-532-frontend-real.test.ts` (PR slice **531–532**) |
+| 35 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-533-534-frontend-real.test.ts` (PR #309 GET **533–534**) — restored to bundle after PR #311 slot swap (PR311-MAJOR-1) |
 
 ## Job E — `tests/firestore.rules.test.ts` per-view path variants
 
@@ -62,14 +69,10 @@ Dedicated `_view527` / `_view528` collections mirror `_view515` / `_view516` pla
 - `TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS`: append **527** and **528** full collection paths (duplicate entries per view, same pattern as **515** / **516**).
 - `denyWritePaths`: insert **527** and **528** immediately after the **526** dedicated view path (same pattern as PR #298 **525** / **526** fix).
 
-32. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-529-530-frontend-real.test.ts` (PR slice **529–530**; parents 527/528)
-
 Dedicated `_view529` / `_view530` collections mirror `_view527` / `_view528` placement (append **529**/**530** in Job E + denyWritePaths after **528**).
-
-33. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-531-532-frontend-real.test.ts` (PR slice **531–532**; parents 529/530)
 
 Dedicated `_view531` / `_view532` collections mirror `_view529` / `_view530` placement (append **531**/**532** in Job E + denyWritePaths after **530**).
 
-34. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-535-536-frontend-real.test.ts` (PR slice **535–536**; parents 533/534 outbound registry attestation ledgers)
+Dedicated `_view533` / `_view534` collections mirror `_view531` / `_view532` placement (append **533**/**534** in Job E + denyWritePaths after **532**).
 
-Dedicated `_view535` / `_view536` collections mirror `_view505` / `_view506` on deeper parents (append **535**/**536** in Job E + denyWritePaths after **532**).
+Dedicated `_view535` / `_view536` collections mirror `_view505` / `_view506` on deeper parents (append **535**/**536** in Job E + denyWritePaths after **534**).
