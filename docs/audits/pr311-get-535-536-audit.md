@@ -11,8 +11,8 @@
 
 | Scope | Verdict |
 |---|---|
-| **PR #311 @ `8f7cffa`** | **FAIL — PR311-MAJOR-1** |
-| **After fix** | **SEALED PASS [PARTIAL]** expected |
+| **PR #311 @ `8f7cffa` (initial)** | **FAIL — PR311-MAJOR-1** |
+| **PR #311 @ `8f7cffa` (re-seal @ `9e80f05`)** | **SEALED PASS [PARTIAL]** — see `docs/audits/pr313-fix-pr311-focused-bundle-audit.md` |
 
 ---
 

@@ -1931,12 +1931,22 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr309-get-533-534
 - **`test:rules`:** **163** (51+97+1+14); claim replay **PASS** @ `BASE=e406855`, `HEAD=792a7ed`.
 - **Verdict:** **#309 SEALED PASS [PARTIAL]** (`transport_stub=true`).
 
-## Phase audit — PR #311 GET 535–536 + PR309-M1 (**FAIL** @ `8f7cffa`)
+## Phase audit — PR #311 GET 535–536 + PR309-M1 (**SEALED PASS** @ `8f7cffa`, bundle fix `9e80f05`)
 
 Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr311-get-535-536-audit.md`. Evidence: `/opt/cursor/artifacts/pr311_audit.log`; break: `/opt/cursor/artifacts/break_test_pr311.log`; table: `/opt/cursor/artifacts/pr311_collection_table.md`.
 
 - **Slice:** GET **535–536**; rules/arrays/wiring/`/ops`/isolation/`test:rules` **172** replay **PASS** for new views.
-- **FAIL PR311-MAJOR-1:** Focused runner **swapped** **533–534** frontend-real out of **34-file** bundle for **535–536** (533–534 test orphaned from CI lane).
+- **FAIL PR311-MAJOR-1 (CLOSED by #313):** Focused runner **swapped** **533–534** frontend-real out of **34-file** bundle for **535–536** (533–534 test orphaned from CI lane until #313).
 - **Claim replay:** **PASS** @ `BASE=4144c85`, `HEAD=8f7cffa`; evidence tip **`0f68c3e`** empty-diff vs squash.
-- **Verdict:** **#311 FAIL** until bundle **35 files** restores **533–534** + **535–536**; then re-audit for **SEALED PASS [PARTIAL]**.
+- **Verdict:** **#311 SEALED PASS [PARTIAL]** @ integration tip **`9e80f05`** (product @ **`8f7cffa`**); re-audit `docs/audits/pr313-fix-pr311-focused-bundle-audit.md`.
+
+## Phase audit — PR #313 focused bundle fix (**SEALED PASS** @ `9e80f05`)
+
+Independent Phase Auditor re-audit (2026-09-29) closing **PR311-MAJOR-1**. Write-up: `docs/audits/pr313-fix-pr311-focused-bundle-audit.md`. Evidence: `/opt/cursor/artifacts/pr313_audit.log`; break: `/opt/cursor/artifacts/break_test_pr313.log`.
+
+- **Process:** `backend_real=false`, `frontend_real=false`, `transport_stub=true`; **5 files** (+220/−11); no product or auditor-verdict docs in squash.
+- **Fix:** Restore **533–534** frontend-real in focused runner + ledger; **35** files / **329** tests; G-0 **[16]** bundle parity guard + vitest break tests.
+- **Claim replay:** **PASS** @ `BASE=b5bd463`, `HEAD=9e80f05` (live PR #313 body); tip **`c54da11`** empty-diff vs `main`.
+- **PR311-MAJOR-1:** **CLOSED**.
+- **Verdict:** **#313 SEALED PASS [product PARTIAL]**; **#311 SEALED PASS [product PARTIAL]** at integration tip **`9e80f05`** (product squash **`8f7cffa`** unchanged).
 
