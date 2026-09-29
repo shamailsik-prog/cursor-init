@@ -1811,6 +1811,18 @@ Independent Phase Auditor re-audit (2026-09-29) after PR **#279** (PR277-MAJOR-1
 - **Remediation:** restore `tests/firestore.rules.test.ts` deny blocks from `e8bbcf4` + **view511/view512**; `lattice-focused-ops-vitest-bundle.md` **23 files**.
 - **`test:rules` @ `ce2ddd6`:** **38/38** (`firestore.rules.test.ts` **23**, repositories **1**, runtime-mode **14**); up from **34/34** @ `e8bbcf4`.
 - **Focused ops @ `ce2ddd6`:** **23 files, 233/233**; lineage **10/10**; G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20**.
-- **Claim replay:** #277 (`BASE=e8bbcf4`, `HEAD=fc13995`) **PASS**; #279 body missing phase flags → replay **FAIL** (minor; test-only PR).
+- **Claim replay:** #277 (`BASE=e8bbcf4`, `HEAD=fc13995`) **PASS**; #279 amended process body replays **PASS** @ `HEAD=ce2ddd6` (see `/opt/cursor/artifacts/replay279_amended.log`).
 - **Verdict:** **#277 SEALED PASS** @ integration tip `ce2ddd6`; **product PARTIAL** (`transport_stub=true`).
+
+## Phase audit — PR #281 GET 513–514 (**SEALED PASS** @ `ec83b72`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr281-get-513-514-audit.md`. Evidence: `/opt/cursor/artifacts/pr281_audit.log`; collection trace: `/opt/cursor/artifacts/pr281_collection_table.md`.
+
+- **Parent chain:** `ec83b72^` = `dafdf19` (#280 docs); `dafdf19^` = `ce2ddd6` (#277 sealed + #279 rules fix).
+- **Slice:** GET **513–514** on **511/512**; `_view513` / `_view514`; `route.ts` **+699**; focused bundle **24 files, 241/241**.
+- **`test:rules`:** **56/56** (41/1/14); **+18** vs `ce2ddd6` **38/38** without shrinking prior deny blocks.
+- **485–500 deny coverage:** +4 `firestore.rules` lines + 14 `denyWritePaths` entries (PA minor folded).
+- **Collection sharing 485–500:** **497≠493** repos; isolation **12/12** — no MAJOR.
+- **Claim replay:** #281 **PASS** (`BASE=dafdf19`, `HEAD=ec83b72`); #279 amended **PASS** (`BASE=e8e1114`, `HEAD=ce2ddd6`).
+- **Verdict:** **#281 SEALED PASS** @ `ec83b72`; **product PARTIAL** (`transport_stub=true`).
 

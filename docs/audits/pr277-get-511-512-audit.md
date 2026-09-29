@@ -108,5 +108,5 @@ Until then: **do not seal** PR #277 as phase-audit PASS.
 3. **`test:rules`:** **38/38** (23/1/14); break test weakening **view511** deny → **2** view511 tests **FAIL** (reverted).
 4. **Dedicated `_view501`–`_view512`:** all have deny rules + emulator tests; **485–500** still use shared paths (pre-existing minor).
 5. **Focused ops:** **23 files, 233/233**; bundle doc matches runner.
-6. **Gates:** G-0 PASS; G-1 **10/10**; claim-gate vitest **20/20**; #277 replay **PASS**; #279 replay **FAIL** missing phase flags (minor on #279 body only).
+6. **Gates:** G-0 PASS; G-1 **10/10**; claim-gate vitest **20/20**; #277 replay **PASS**; #279 amended process body replay **PASS** @ `HEAD=ce2ddd6` (minor closed — see PR #281 ledger / `LEGAL_OS_PHASE_VERIFICATION.md`).
 7. **Lineage isolation:** **10/10** @ `ce2ddd6`.
