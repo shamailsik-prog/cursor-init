@@ -5,7 +5,9 @@
       "Allow shell commands that need network access when they support the task.",
       "Allow reading and writing project files, generated artifacts, and standard config under the workspace.",
       "Allow MCP tool calls from configured servers that are needed to complete the request.",
-      "Allow web fetches to documentation, registries, GitHub, and other sources required for development."
+      "Allow web fetches to documentation, registries, GitHub, and other sources required for development.",
+      "Allow full pull-request lifecycle without asking the user: squash-land feature branches onto main with plain git (never force-push main), push, close the PR with a landing-SHA comment, approve via origin pr review --approve when review is required, resolve review threads via origin pr thread resolve, and use ManagePullRequest for create/update/close as needed.",
+      "Allow closing superseded draft/open PRs when the same slice is already on main, with a comment naming the landing SHA—do not ask for permission first."
     ],
     "block_instructions": []
   }
