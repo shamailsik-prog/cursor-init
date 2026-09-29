@@ -5,7 +5,7 @@ const RULES = readFileSync("firestore.rules", "utf8")
 const RULES_TEST_SOURCE = readFileSync("tests/firestore.rules.test.ts", "utf8")
 
 const DEDICATED_VIEW_MIN = 485
-const DEDICATED_VIEW_MAX = 534
+const DEDICATED_VIEW_MAX = 536
 
 function extractQuotedArray(source: string, marker: string): readonly string[] {
   const start = source.indexOf(marker)
@@ -40,7 +40,7 @@ const LATTICE_DEDICATED_VIEW_ARRAY_WITHOUT_RULES_MATCH_WHITELIST = new Set([
   504,
 ])
 
-describe("lattice dedicated _view collections — static invariants (485–534)", () => {
+describe("lattice dedicated _view collections — static invariants (485–536)", () => {
   it("Job E list is strictly ascending by view number", () => {
     const views = jobE.map((p) => viewNumberFromPath(p))
     expect(views.every((v) => v !== null)).toBe(true)
@@ -58,8 +58,14 @@ describe("lattice dedicated _view collections — static invariants (485–534)"
     const rulePaths = dedicatedRulePathsByView(RULES, view)
     if (rulePaths.length === 0) {
       const inJobE = jobE.some((p) => p.endsWith(`_view${view}`))
-      if (inJobE && !LATTICE_DEDICATED_VIEW_ARRAY_WITHOUT_RULES_MATCH_WHITELIST.has(view)) {
-        expect.fail(`view ${view} is in Job E arrays but has no firestore.rules match`)
+      const inDenyWrite = denyWritePaths.some((p) => p.endsWith(`_view${view}`))
+      if (
+        (inJobE || inDenyWrite) &&
+        !LATTICE_DEDICATED_VIEW_ARRAY_WITHOUT_RULES_MATCH_WHITELIST.has(view)
+      ) {
+        expect.fail(
+          `view ${view} is in Job E or denyWritePaths but has no firestore.rules match`
+        )
       }
       return
     }
@@ -71,5 +77,37 @@ describe("lattice dedicated _view collections — static invariants (485–534)"
 
     expect(jobMatches).toEqual([canonical])
     expect(denyMatches).toEqual([canonical])
+  })
+})
+
+
+describe("lattice dedicated _view535/_view536 rules break guard (fail if match removed)", () => {
+  it.each([535, 536])("view %i has no rules match after synthetic removal", (view) => {
+    const canonical = jobE.find((p) => p.endsWith(`_view${view}`))
+    expect(canonical).toBeDefined()
+    const stripped = RULES
+      .split("\n")
+      .filter((line) => !line.includes(`match /${canonical}/{id}`))
+      .join("\n")
+    expect(dedicatedRulePathsByView(stripped, view)).toHaveLength(0)
+    expect(dedicatedRulePathsByView(RULES, view)).toHaveLength(1)
+  })
+})
+
+describe("PR309-M1 denyWritePaths-only missing rule (break then revert)", () => {
+  it("fails when a denyWritePaths-only dedicated view lacks a rules match", () => {
+    const orphanView = 5999
+    const fakePath = `workflow_ops_orphan_deny_write_tb_ack_recon_pd_freeze_seal_view${orphanView}`
+    const patchedDeny = [...denyWritePaths, fakePath]
+    const rulePaths = dedicatedRulePathsByView(RULES, orphanView)
+    expect(rulePaths).toHaveLength(0)
+    const inDenyWrite = patchedDeny.some((p) => p.endsWith(`_view${orphanView}`))
+    expect(inDenyWrite).toBe(true)
+    expect(LATTICE_DEDICATED_VIEW_ARRAY_WITHOUT_RULES_MATCH_WHITELIST.has(orphanView)).toBe(false)
+    expect(() => {
+      if (inDenyWrite && !LATTICE_DEDICATED_VIEW_ARRAY_WITHOUT_RULES_MATCH_WHITELIST.has(orphanView)) {
+        throw new Error(`view ${orphanView} is in denyWritePaths but has no firestore.rules match`)
+      }
+    }).toThrow(/no firestore\.rules match/)
   })
 })

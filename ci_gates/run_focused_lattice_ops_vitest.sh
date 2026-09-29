@@ -39,7 +39,7 @@ FILES=(
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-527-528-frontend-real.test.ts
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-529-530-frontend-real.test.ts
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-531-532-frontend-real.test.ts
-  tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-533-534-frontend-real.test.ts
+  tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-535-536-frontend-real.test.ts
 )
 
 if [[ "${#FILES[@]}" -ne 34 ]]; then
