@@ -1895,13 +1895,13 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr527-528-get-ext
 - **Claim replay:** **PASS** @ `BASE=33acecd`, `HEAD=b19d5a9` / `cdbf6b0`.
 - **Verdict:** **#300 SEALED PASS [PARTIAL]** @ `cdbf6b0` once this row replaces the void pre-merge block.
 
-## Phase audit — PR #302 GET 529–530 + gate + dedupe (**FAIL** @ `8f008ce`)
+## Phase audit — PR #302 GET 529–530 + gate + dedupe (**SEALED PASS** @ `e557df1` after PR #304)
 
-Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr529-530-get-external-distribution-audit-ledger-partner-handoff-audit.md`. Evidence: `/opt/cursor/artifacts/pr302_audit.log`; collection: `/opt/cursor/artifacts/pr302_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr302.log`.
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr529-530-get-external-distribution-audit-ledger-partner-handoff-audit.md`. Initial FAIL: `/opt/cursor/artifacts/pr302_audit.log` @ `8f008ce` (**PR302-MAJOR-1**). Seal: `/opt/cursor/artifacts/pr304_seal.log`; break: `/opt/cursor/artifacts/break_test_pr304.log`; rules table: `/opt/cursor/artifacts/pr304_rules_table.md`.
 
-- **Slice:** GET **529–530** on **527/528**; `route.ts` **+174** (45028→45202); focused **32/304**; isolation **27/27**; G-0 **[15]** product/audit-doc gate + **4/4** vitest fixtures.
-- **Process:** Product squash touched **only** `docs/audits/lattice-focused-ops-vitest-bundle.md` under `docs/` — **no** builder audit self-cert.
-- **Rules:** **FAIL PR302-MAJOR-1** — **529/530** in Job E + `denyWritePaths` but **no** dedicated `_view529` / `_view530` in `firestore.rules` (squash **+2** duplicate **527/528** lines only); `test:rules` **106/106** vacuous for new views.
-- **Claim replay:** **PASS** @ `BASE=d4ca186`, `HEAD=8f008ce`.
-- **Verdict:** **#302 FAIL** @ `8f008ce` until dedicated rules + non-vacuous break test; **product PARTIAL** (`transport_stub=true`) if remediated.
+- **Slice (#302 @ `8f008ce`):** GET **529–530** on **527/528**; `route.ts` **45202** (+174); focused **32/304**; isolation **27/27**; `/ops` L6545–6568; process-clean docs (**only** lattice bundle in product squash).
+- **Remediation (#304 @ `e557df1`, parent `19bf980` docs #303):** **3 files** — dedicated `_view529`/`_view530` rules; dedupe duplicate **527/528** matches; G-0 **[15]** merge-base diff + gate vitest **5/5**.
+- **Rules @ seal:** **527–530** each **1/1/1** rule + Job E + denyWrite with matching strings; break test **4/4** views fail `test:rules` when weakened.
+- **Tests @ seal:** `test:rules` **106/106**; G-0 PASS; G-1 **10/10**; claim-gate **20/20**; claim replay **PASS** @ `BASE=19bf980`, `HEAD=e557df1`.
+- **Verdict:** **#302/#304 SEALED PASS [PARTIAL]** @ `e557df1`; **product PARTIAL** (`transport_stub=true`).
 
