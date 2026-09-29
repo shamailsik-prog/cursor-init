@@ -1,10 +1,10 @@
-# Canonical focused ops vitest bundle (TB ack-recon lattice 485–510)
+# Canonical focused ops vitest bundle (TB ack-recon lattice 485–512)
 
-**Baseline:** **22 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **23 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (22)
+## File list (23)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -28,6 +28,7 @@
 20. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-partner-delivery-507-508-frontend-real.test.ts`
 21. `tests/ops.pr-tb-ack-recon-lattice-dedicated-collection-lineage-isolation.test.ts`
 22. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts` (added with PR #271 GET **509–510**)
+23. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-511-512-frontend-real.test.ts` (added with PR #277 GET **511–512**)
 
 ## History
 
@@ -37,3 +38,4 @@
 | 20 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-partner-delivery-507-508-frontend-real.test.ts` (PR #260) |
 | 21 | +`tests/ops.pr-tb-ack-recon-lattice-dedicated-collection-lineage-isolation.test.ts` (PR #266) |
 | 22 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts` (PR #271) |
+| 23 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-511-512-frontend-real.test.ts` (PR #277) |
