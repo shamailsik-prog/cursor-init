@@ -1789,3 +1789,16 @@ Initial audit (2026-09-29): `docs/audits/phase-pr271-get-509-510-audit.md` (pre-
 - **Gates @ `aafe257`:** focused **225/225**; `test:rules` **34/34**; G-0 PASS; G-1 **10/10**; pr-phase-claim-gate **20/20** (worker timeout noise).
 - **Verdict:** **#271 SEALED PASS** @ integration tip `aafe257`; **product PARTIAL** (`transport_stub=true`).
 
+## Phase audit — PR #277 GET 511–512 (**FAIL** @ `fc13995`)
+
+Independent Phase Auditor (2026-09-29). Full write-up: `docs/audits/pr277-get-511-512-audit.md`. Evidence: `/opt/cursor/artifacts/pr277_audit.log`.
+
+- **Landed squash SHA:** `fc13995f48c11059b7fd56055c05fbb4f56146f1` (parent `e8bbcf42711b740e4f36f7734add87db4843ec2a` #276).
+- **Slice:** GET **511–512** external transport receipt acknowledgments on **509/510**; dedicated `…_view511` / `…_view512` collections; `route.ts` **39235 → 39850**; focused ops bundle **23 files, 233/233 PASS**.
+- **frontend_real:** `/ops` GET+POST for **511–512** @ `app/ops/operator-audit-console.tsx` L5486+ → `/api/d2/ops-reporting`.
+- **BLOCKER — `test:rules` regression:** **34/34** @ `e8bbcf4` → **22/22** @ `fc13995`; `tests/firestore.rules.test.ts` **19 → 7** (deleted **12** TB ack-recon client-write deny tests for **501/502/505–510**; **no** **511/512** deny tests despite new `firestore.rules` L232–L233).
+- **Fix:** restore deny-write blocks from `e8bbcf4:tests/firestore.rules.test.ts` and extend arrays for **view511/view512**; re-run `npm run test:rules` (target **≥36/36**).
+- **MINOR:** squash excluded PR-tip update to `docs/audits/lattice-focused-ops-vitest-bundle.md` (doc still **22** files vs runner **23**).
+- **Claim replay:** `check_pr_phase_claims.py` **PASS** (`BASE=e8bbcf4`, `HEAD=fc13995`, PR #277 body).
+- **Verdict:** **#277 phase audit FAIL** @ `fc13995`; product would remain **PARTIAL** (`transport_stub=true`) after rules fix.
+
