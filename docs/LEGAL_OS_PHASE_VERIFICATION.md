@@ -2004,3 +2004,12 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr327-get-547-548
 - **Claim replay:** **PASS** @ `BASE=4c19033`, `HEAD=9a236cb` and **`HEAD=b74c285`** (live PR #327 body; **`GET /api/d2/ops-reporting`** L6839–6865).
 - **Verdict:** **#327 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
 
+## Phase audit — PR #329 GET 549–550 (**FAIL PR329-MAJOR-1** @ `134a0a1`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr329-get-549-550-audit.md`. Evidence: `/opt/cursor/artifacts/pr329_audit.log`; collection: `/opt/cursor/artifacts/pr329_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr329.log`; replay: `/opt/cursor/artifacts/replay_pr329.log`.
+
+- **Parent:** `a81b40f` (#328 docs-only). **Evidence tip:** `evidence/get-549-550` empty vs squash.
+- **Replay:** **PASS** @ `BASE=a81b40f`, `HEAD=134a0a1` (live PR #329 body; **GET /api/d2/ops-reporting** L6871–6898).
+- **Gates replay:** focused **42/371**; `test:rules` **229 ×3**; invariants **85**; isolation **45** (expected **47** — **not met**); G-0 **16/16**; G-1 **10/10**; claim-gate **20/20**; gate **[15] 5/5**; bundle-gate **2/2**.
+- **Verdict:** **#329 FAIL — PR329-MAJOR-1** (549/550 lineage isolation tests dead inside `vi.mock`; product slice otherwise lands). Product scope remains **PARTIAL** (`transport_stub=true`).
+
