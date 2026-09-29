@@ -1922,3 +1922,12 @@ Independent Phase Auditor (2026-09-29). Same write-up. Break: `/opt/cursor/artif
 - **`test:rules`:** **157** (49+93+1+14); G-0/G-1/claim replay **PASS**.
 - **Verdict:** **#307 SEALED PASS [PARTIAL]** (`transport_stub=true`; `frontend_real=true` for slice).
 
+## Phase audit — PR #309 GET 533–534 + fold-ins (**SEALED PASS** @ `792a7ed`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr309-get-533-534-audit.md`. Evidence: `/opt/cursor/artifacts/pr309_audit.log`; collection: `/opt/cursor/artifacts/pr309_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr309.log`.
+
+- **Slice:** GET **533–534**; `route.ts` **+180** (45379→45559); focused **34/321**; isolation **31/31**; `/ops` L6609–6631.
+- **Fold-ins:** PR306-M1 whitelist **485–500/503/504**; PR307-M2 rule line split **530–532**; **533/534** dedicated rules + arrays.
+- **`test:rules`:** **163** (51+97+1+14); claim replay **PASS** @ `BASE=e406855`, `HEAD=792a7ed`.
+- **Verdict:** **#309 SEALED PASS [PARTIAL]** (`transport_stub=true`).
+
