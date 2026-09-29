@@ -1,10 +1,10 @@
 # Canonical focused ops vitest bundle (TB ack-recon lattice 485–512)
 
-**Baseline:** **24 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **25 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (23)
+## File list (25)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -29,6 +29,8 @@
 21. `tests/ops.pr-tb-ack-recon-lattice-dedicated-collection-lineage-isolation.test.ts`
 22. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts` (added with PR #271 GET **509–510**)
 23. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-511-512-frontend-real.test.ts` (added with PR #277 GET **511–512**)
+24. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-513-514-frontend-real.test.ts` (added with PR slice 513–514)
+25. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-515-516-frontend-real.test.ts` (added with PR slice 515–516; parents 513/514)
 
 ## History
 
@@ -41,3 +43,5 @@
 | 23 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-511-512-frontend-real.test.ts` (PR #277) |
 
 - `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-513-514-frontend-real.test.ts` — PR slice 513–514 external transport receipt acknowledgment reconciliation (511/512 parents).
+
+| 25 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-515-516-frontend-real.test.ts` (PR slice **515–516**) |

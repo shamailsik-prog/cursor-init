@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical TB ack-recon lattice focused ops vitest bundle (24 files, no -t filter).
+# Canonical TB ack-recon lattice focused ops vitest bundle (25 files, no -t filter).
 # Ledger: docs/audits/lattice-focused-ops-vitest-bundle.md
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,10 +30,11 @@ FILES=(
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-recon-509-510-frontend-real.test.ts
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-tb-external-transport-ack-511-512-frontend-real.test.ts
   tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-transport-ack-recon-513-514-frontend-real.test.ts
+  tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-515-516-frontend-real.test.ts
 )
 
-if [[ "${#FILES[@]}" -ne 24 ]]; then
-  echo "focused lattice ops bundle: expected 24 files, got ${#FILES[@]}" >&2
+if [[ "${#FILES[@]}" -ne 25 ]]; then
+  echo "focused lattice ops bundle: expected 25 files, got ${#FILES[@]}" >&2
   exit 1
 fi
 
