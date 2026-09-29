@@ -1995,3 +1995,12 @@ Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr325-get-545-546
 - **Claim replay:** **PASS** @ `BASE=9ab7a25`, `HEAD=3f8a0b3` and **`HEAD=7474214`** (live PR #325 body; **`GET /api/d2/ops-reporting`** L6806–6833).
 - **Verdict:** **#325 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
 
+## Phase audit — PR #327 GET 547–548 (**SEALED PASS** @ `9a236cb`)
+
+Independent Phase Auditor (2026-09-29). Write-up: `docs/audits/pr327-get-547-548-audit.md`. Evidence: `/opt/cursor/artifacts/pr327_audit.log`; collection: `/opt/cursor/artifacts/pr327_collection_table.md`; break: `/opt/cursor/artifacts/break_test_pr327.log`; replay: `/opt/cursor/artifacts/replay_pr327.log`.
+
+- **Slice:** GET **547–548** on **545/546**; `route.ts` **47734** (+222); console **7280** (+33); focused **41/367**; isolation **45/45**; invariants **81/81**; `test:rules` **221** (**3×** green; **PR325-M1 closed**).
+- **485–546:** Product paths additive-only; **−10** guard/timeout/metadata only; `DEDICATED_VIEW_MAX` **548**.
+- **Claim replay:** **PASS** @ `BASE=4c19033`, `HEAD=9a236cb` and **`HEAD=b74c285`** (live PR #327 body; **`GET /api/d2/ops-reporting`** L6839–6865).
+- **Verdict:** **#327 SEALED PASS [product PARTIAL]** (`transport_stub=true`).
+
