@@ -1,10 +1,10 @@
-# Canonical focused ops vitest bundle (TB ack-recon lattice 485–538)
+# Canonical focused ops vitest bundle (TB ack-recon lattice 485–540)
 
-**Baseline:** **36 files** (independent phase auditor replay; no `-t` filter).
+**Baseline:** **37 files** (independent phase auditor replay; no `-t` filter).
 
 **Runner:** `bash ci_gates/run_focused_lattice_ops_vitest.sh`
 
-## File list (36)
+## File list (37)
 
 1. `tests/persistence.route-wiring.test.ts`
 2. `tests/api.ops-reporting.test.ts`
@@ -42,6 +42,7 @@
 34. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-533-534-frontend-real.test.ts` (PR slice **533–534**; parents 531/532 seal verification views)
 35. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-535-536-frontend-real.test.ts` (PR slice **535–536**; parents 533/534 outbound registry attestation ledgers)
 36. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-537-538-frontend-real.test.ts` (PR slice **537–538**; parents 535/536 reconciliation / acknowledgement rows)
+37. `tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-539-540-frontend-real.test.ts` (GET **539–540**; parents **537**/**538**)
 
 ## History
 
@@ -63,6 +64,7 @@
 | 34 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-531-532-frontend-real.test.ts` (PR slice **531–532**) |
 | 35 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-533-534-frontend-real.test.ts` (PR #309 GET **533–534**) — restored to bundle after PR #311 slot swap (PR311-MAJOR-1) |
 | 36 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-537-538-frontend-real.test.ts` (GET **537–538**; parents **535**/**536**) |
+| 37 | +`tests/ops.pr-tb-ack-recon-pd-freeze-seal-external-distribution-audit-ledger-539-540-frontend-real.test.ts` (GET **539–540**; parents **537**/**538**) |
 
 ## Job E — `tests/firestore.rules.test.ts` per-view path variants
 
@@ -80,3 +82,5 @@ Dedicated `_view533` / `_view534` collections mirror `_view531` / `_view532` pla
 Dedicated `_view535` / `_view536` collections mirror `_view505` / `_view506` on deeper parents (append **535**/**536** in Job E + denyWritePaths after **534**).
 
 Dedicated `_view537` / `_view538` collections mirror `_view535` / `_view536` on parents **535**/**536** (append **537**/**538** in Job E + denyWritePaths after **536**).
+
+Dedicated `_view539` / `_view540` collections mirror `_view537` / `_view538` on parents **537**/**538** (append **539**/**540** in Job E + denyWritePaths after **538**).

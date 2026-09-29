@@ -66,7 +66,7 @@ def lattice_frontend_real_paths() -> list[str]:
         view_match = VIEW_RANGE_RE.search(path.name)
         if view_match:
             lo, hi = int(view_match.group(1)), int(view_match.group(2))
-            if lo < 485 or hi > 538:
+            if lo < 485 or hi > 540:
                 continue
         paths.append(rel)
     return paths
@@ -125,7 +125,7 @@ def main() -> int:
             print(f"  - {path}")
         fail = True
     else:
-        print(f"PASS: all {len(required_fe)} lattice frontend-real files (485–538) in FILES")
+        print(f"PASS: all {len(required_fe)} lattice frontend-real files (485–540) in FILES")
 
     if extra_fe:
         print("FAIL: runner includes unexpected ops frontend-real files:")
