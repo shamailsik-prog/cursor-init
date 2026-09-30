@@ -462,8 +462,8 @@ describe("M2 — role, clearance and membership on core collections", () => {
     it("partner cannot grant a clearance above their own", async () => {
       await assertFails(updateDoc(doc(authed("partner1", PARTNER), "users", "u2"), { clearanceLevel: "privileged-restricted" }))
     })
-    it("partner can grant a clearance up to their own", async () => {
-      await assertSucceeds(updateDoc(doc(authed("partner1", PARTNER), "users", "u2"), { clearanceLevel: "privileged" }))
+    it("partner cannot change clearance even within their own ceiling (round 3: Functions-only)", async () => {
+      await assertFails(updateDoc(doc(authed("partner1", PARTNER), "users", "u2"), { clearanceLevel: "privileged" }))
     })
     it("partner cannot modify a user cleared above them", async () => {
       await assertFails(updateDoc(doc(authed("partner1", PARTNER), "users", "top1"), { role: "associate" }))
@@ -589,9 +589,10 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
   })
 
   describe("partner field whitelist on users (#7)", () => {
-    it("partner may update role, clearanceLevel, displayName, active", async () => {
-      await assertSucceeds(
-        updateDoc(doc(authed("partner1", PARTNER), "users", "rvU"), { displayName: "New", active: false, role: "clerk", clearanceLevel: "confidential" })
+    it("partner may update displayName only (round 3: role/clearanceLevel/active are Functions-only)", async () => {
+      await assertSucceeds(updateDoc(doc(authed("partner1", PARTNER), "users", "rvU"), { displayName: "New" }))
+      await assertFails(
+        updateDoc(doc(authed("partner1", PARTNER), "users", "rvU"), { displayName: "New2", active: false, role: "clerk", clearanceLevel: "confidential" })
       )
     })
     it("partner may not touch mfaEnabled or other keys", async () => {
@@ -657,5 +658,75 @@ describe.each(["drafts", "evidence_items"])("Review round 2 — %s update (N3)",
   })
   it("cleared author member can monotonically update", async () => {
     await assertSucceeds(updateDoc(doc(authed("n3-high", ASSOC_HIGH), coll, "n3Row"), { classification: "confidential" }))
+  })
+})
+
+describe("Round 3 — users/{uid} is the authoritative identity record", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "internal" }
+  const OTHER_FIRM_PARTNER = { firmId: "firmB", role: "partner", clearanceLevel: "privileged-restricted" }
+  const seed = (role: string) => ({
+    firmId: "firmA",
+    role,
+    clearanceLevel: "internal",
+    active: true,
+    mfaEnabled: true,
+    claimsVersion: 1,
+    deactivatedAt: null,
+    updatedAt: 1,
+    createdAt: 1,
+    displayName: "Seed",
+  })
+  const PROTECTED: [string, unknown][] = [
+    ["role", "clerk"],
+    ["clearanceLevel", "public"],
+    ["active", false],
+    ["firmId", "firmB"],
+    ["mfaEnabled", false],
+    ["claimsVersion", 2],
+    ["deactivatedAt", 123],
+    ["updatedAt", 2],
+    ["createdAt", 2],
+  ]
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "users", "r3-partner"), { ...seed("partner"), clearanceLevel: "privileged-restricted" })
+      await setDoc(doc(db, "users", "r3-assoc"), seed("associate"))
+      await setDoc(doc(db, "users", "r3-client"), seed("client"))
+      await setDoc(doc(db, "users", "r3-target"), seed("associate"))
+    })
+  })
+
+  it.each(PROTECTED)("partner cannot change %s on another user", async (field, value) => {
+    await assertFails(updateDoc(doc(authed("r3-partner", PARTNER), "users", "r3-target"), { [field]: value }))
+  })
+
+  it.each(PROTECTED)("user cannot change own %s", async (field, value) => {
+    await assertFails(updateDoc(doc(authed("r3-assoc", ASSOC), "users", "r3-assoc"), { [field]: value }))
+    await assertFails(updateDoc(doc(authed("r3-partner", PARTNER), "users", "r3-partner"), { [field]: value }))
+  })
+
+  it("self may update own displayName (any role)", async () => {
+    await assertSucceeds(updateDoc(doc(authed("r3-assoc", ASSOC), "users", "r3-assoc"), { displayName: "Me" }))
+    await assertSucceeds(updateDoc(doc(authed("r3-client", CLIENT), "users", "r3-client"), { displayName: "Me" }))
+  })
+
+  it("self displayName edit cannot smuggle other keys", async () => {
+    await assertFails(updateDoc(doc(authed("r3-assoc", ASSOC), "users", "r3-assoc"), { displayName: "Me", notes: "x" }))
+  })
+
+  it("partner may update displayName of a same-firm user; non-partners and other firms may not", async () => {
+    await assertSucceeds(updateDoc(doc(authed("r3-partner", PARTNER), "users", "r3-target"), { displayName: "Renamed" }))
+    await assertFails(updateDoc(doc(authed("r3-assoc", ASSOC), "users", "r3-target"), { displayName: "Nope" }))
+    await assertFails(updateDoc(doc(authed("r3-client", CLIENT), "users", "r3-target"), { displayName: "Nope" }))
+    await assertFails(updateDoc(doc(authed("r3-otherfirm", OTHER_FIRM_PARTNER), "users", "r3-target"), { displayName: "Nope" }))
+  })
+
+  it("client SDK cannot create users docs (self or partner)", async () => {
+    await assertFails(setDoc(doc(authed("r3-new", ASSOC), "users", "r3-new"), seed("associate")))
+    await assertFails(setDoc(doc(authed("r3-partner", PARTNER), "users", "r3-created"), seed("associate")))
   })
 })
