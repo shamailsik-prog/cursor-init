@@ -3238,7 +3238,7 @@ describe("Firestore repository adapters", () => {
               )
             )!,
             ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
-              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_finalized",
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_finalized",
           },
           actorId: "partner_a",
           reason: "ops_closure_ack_recon_tb_partner_handoff_attestation_492_seed",
