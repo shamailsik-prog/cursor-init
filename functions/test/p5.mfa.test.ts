@@ -641,7 +641,7 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
     const call = async (recoveryCode: string) =>
       httpsErrorOf(disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode, approvalId })))
     for (let i = 0; i < 5; i++) expectHttps(await call("0000-0000-0000-0000"), "permission-denied", "invalid_code")
-    expect((await adminDb().collection("mfa_disable_approvals").doc(approvalId).get()).data()?.failedAttempts).toBe(5)
+    expect((await adminDb().collection("mfa_disable_approvals").doc(approvalId).get()).data()?.codeAttempts).toBe(5)
     expectHttps(await call(codes[0]), "permission-denied", "approval_voided")
     expect(await enrolledUids(subject.uid)).toHaveLength(1)
     // A fresh approval works.
@@ -650,6 +650,29 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
         await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId: await approve() })
       )
     ).resolves.toMatchObject({ mfaEnabled: false })
+  })
+
+  it("the attempt cap holds under concurrency: 30 parallel wrong codes → at most 5 invalid_code, the rest approval_voided", async () => {
+    const { firmId, subject, approve } = await setup()
+    const approvalId = await approve()
+    const auth = await callableAuth(subject.firstFactorToken)
+    const results = await Promise.allSettled(
+      Array.from({ length: 30 }, () =>
+        disableMfaHandler({
+          auth,
+          data: { firmId, uid: subject.uid, recoveryCode: "0000-0000-0000-0000", approvalId },
+        } as never)
+      )
+    )
+    const codes = results.map((r) => {
+      expect(r.status).toBe("rejected")
+      return ((r as PromiseRejectedResult).reason as HttpsError).details as { code: string }
+    })
+    const invalid = codes.filter((c) => c.code === "invalid_code").length
+    const voided = codes.filter((c) => c.code === "approval_voided").length
+    expect(invalid).toBeLessThanOrEqual(5)
+    expect(invalid + voided).toBe(30)
+    expect((await adminDb().collection("mfa_disable_approvals").doc(approvalId).get()).data()?.codeAttempts).toBe(5)
   })
 
   it("an approver demoted below the subject's clearance after approving → second_partner_required", async () => {

@@ -139,6 +139,7 @@ resumes idempotently and returns the same `firmId` (audited as
   This invalidates all remaining codes. It removes only the factors recorded
   on the approval at commit. If a step after commit fails, the same caller
   can retry with the same approval and no code until it expires or
-  completes. Five wrong codes void an approval (`approval_voided`).
+  completes. An approval allows five code attempts, then it is void
+  (`approval_voided`), even when calls run in parallel.
 - In the emulator tests, `mintMfaIdToken` (test/emu.ts) signs in through the
   Auth emulator's phone MFA flow to get a real second-factor token.

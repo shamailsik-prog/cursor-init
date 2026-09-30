@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { onCall, type CallableRequest } from "firebase-functions/v2/https"
 import type { UpdateMultiFactorInfoRequest } from "firebase-admin/auth"
-import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import { adminAuth, adminDb } from "../admin"
 import { REGION } from "../health"
 import { HttpError } from "../http/errors"
@@ -215,12 +215,18 @@ async function enrolledFactorUids(uid: string): Promise<string[]> {
   }
 }
 
-const MAX_FAILED_CODE_ATTEMPTS = 5
+const MAX_CODE_ATTEMPTS = 5
 
 /**
  * Removes exactly `factorUids` from the user's enrolled factors, keeping any
  * other factor (e.g. one enrolled after the commit). Idempotent. Returns
  * whether factors remain.
+ *
+ * Known, accepted race: this is getUser then updateUser with the kept list,
+ * and Auth has no compare-and-set, so a factor enrolled in the milliseconds
+ * between the two calls would be dropped. The only effect is that the user
+ * must enrol that factor again (MFA is being removed anyway, which is what
+ * the subject and a second partner asked for); nothing is granted.
  */
 async function removeFactors(uid: string, factorUids: readonly string[]): Promise<boolean> {
   const current = (await adminAuth().getUser(uid)).multiFactor?.enrolledFactors ?? []
@@ -257,16 +263,20 @@ async function removeFactors(uid: string, factorUids: readonly string[]): Promis
  * One transaction checks the approval: it exists, is in the same firm and for
  * the same subject, and is unexpired; the approver is neither the subject nor
  * the caller, and is still an active partner of the firm cleared at least as
- * high as the subject. Otherwise 403 second_partner_required. After
- * MAX_FAILED_CODE_ATTEMPTS failed codes the approval is void (403
- * approval_voided).
+ * high as the subject. Otherwise 403 second_partner_required.
+ *
+ * Attempt cap: before that transaction, every code attempt against an unused
+ * approval reserves itself in its own transaction on the approval
+ * (`codeAttempts`): at MAX_CODE_ATTEMPTS or more it is refused with 403
+ * approval_voided, otherwise it increments the count. Reserving first keeps the
+ * cap exact under concurrency. The reservation fails closed, so a store error
+ * fails the call.
  *
  * An unused approval then needs a recovery code:
  * - no match, or none of the factors the codes were generated for is still
  *   enrolled → 403 invalid_code;
  * - already used → 409 code_used.
- * Each failure increments `failedAttempts` on the approval in a separate write
- * (the failed transaction is rolled back) and consumes nothing else.
+ * A rejected code consumes nothing but its reserved attempt.
  *
  * On success the approval is marked used and records the factor uids to
  * remove (those enrolled now). Every other code is invalidated: only the
@@ -301,73 +311,61 @@ export async function disableMfaHandler(
     const enrolledNow = await enrolledFactorUids(uid)
 
     const approvalRef = approvalsRef().doc(approvalId)
-    let factorUids: string[]
-    try {
-      factorUids = await adminDb().runTransaction(async (tx) => {
-        const subject = await readTargetDoc(tx, caller, uid)
-        const approval = (await tx.get(approvalRef)).data()
-        const approverUid: unknown = approval?.approverUid
-        const valid =
-          approval !== undefined &&
-          approval.firmId === caller.firmId &&
-          approval.subjectUid === uid &&
-          approval.expiresAt instanceof Timestamp &&
-          approval.expiresAt.toMillis() > Date.now() &&
-          isSafeDocId(approverUid) &&
-          approverUid !== uid &&
-          approverUid !== caller.uid
-        if (!valid) throw new HttpError(403, "second_partner_required")
-        const approver = (await tx.get(usersRef().doc(approverUid as string))).data()
-        if (
-          approver?.firmId !== caller.firmId ||
-          approver.role !== "partner" ||
-          approver.active !== true ||
-          !isKnownClassification(approver.clearanceLevel) ||
-          rankOf(approver.clearanceLevel) < rankOf(isKnownClassification(subject.clearanceLevel) ? subject.clearanceLevel : "privileged-restricted")
-        ) {
-          throw new HttpError(403, "second_partner_required")
-        }
-
-        if (approval.used !== false) {
-          const resumable = approval.used === true && approval.usedBy === caller.uid && approval.completed !== true
-          if (!resumable) throw new HttpError(403, "second_partner_required")
-          await audit.stage(tx, "allow", "resume")
-          return Array.isArray(approval.factorUids) ? (approval.factorUids as unknown[]).filter(isString) : []
-        }
-        if (typeof approval.failedAttempts === "number" && approval.failedAttempts >= MAX_FAILED_CODE_ATTEMPTS) {
-          throw new HttpError(403, "approval_voided")
-        }
-
-        const recovery = (await tx.get(recoveryRef(uid))).data() ?? {}
-        const index = matchCode(recovery, recoveryCode)
-        if (index === -1) throw new CodeRejected(403, "invalid_code")
-        const hashes = recovery.recoveryCodeHashes as CodeHash[]
-        if (hashes[index].used !== false) throw new CodeRejected(409, "code_used")
-        const boundTo: unknown = recovery.factorUids
-        if (!Array.isArray(boundTo) || !boundTo.some((f) => enrolledNow.includes(f as string))) {
-          throw new CodeRejected(403, "invalid_code")
-        }
-
-        await audit.stage(tx, "allow", "ok")
-        tx.update(recoveryRef(uid), {
-          recoveryCodeHashes: [{ ...hashes[index], used: true }],
-          invalidatedAt: FieldValue.serverTimestamp(),
-        })
-        tx.update(approvalRef, {
-          used: true,
-          usedBy: caller.uid,
-          usedAt: FieldValue.serverTimestamp(),
-          factorUids: enrolledNow,
-        })
-        return enrolledNow
-      })
-    } catch (err) {
-      if (err instanceof CodeRejected) {
-        // Its own write: the failed transaction was rolled back.
-        await approvalRef.update({ failedAttempts: FieldValue.increment(1) }).catch(() => undefined)
+    await reserveCodeAttempt(approvalRef, caller.firmId, uid)
+    const factorUids = await adminDb().runTransaction(async (tx) => {
+      const subject = await readTargetDoc(tx, caller, uid)
+      const approval = (await tx.get(approvalRef)).data()
+      const approverUid: unknown = approval?.approverUid
+      const valid =
+        approval !== undefined &&
+        approval.firmId === caller.firmId &&
+        approval.subjectUid === uid &&
+        approval.expiresAt instanceof Timestamp &&
+        approval.expiresAt.toMillis() > Date.now() &&
+        isSafeDocId(approverUid) &&
+        approverUid !== uid &&
+        approverUid !== caller.uid
+      if (!valid) throw new HttpError(403, "second_partner_required")
+      const approver = (await tx.get(usersRef().doc(approverUid as string))).data()
+      if (
+        approver?.firmId !== caller.firmId ||
+        approver.role !== "partner" ||
+        approver.active !== true ||
+        !isKnownClassification(approver.clearanceLevel) ||
+        rankOf(approver.clearanceLevel) < rankOf(isKnownClassification(subject.clearanceLevel) ? subject.clearanceLevel : "privileged-restricted")
+      ) {
+        throw new HttpError(403, "second_partner_required")
       }
-      throw err
-    }
+
+      if (approval.used !== false) {
+        const resumable = approval.used === true && approval.usedBy === caller.uid && approval.completed !== true
+        if (!resumable) throw new HttpError(403, "second_partner_required")
+        await audit.stage(tx, "allow", "resume")
+        return Array.isArray(approval.factorUids) ? (approval.factorUids as unknown[]).filter(isString) : []
+      }
+      const recovery = (await tx.get(recoveryRef(uid))).data() ?? {}
+      const index = matchCode(recovery, recoveryCode)
+      if (index === -1) throw new HttpError(403, "invalid_code")
+      const hashes = recovery.recoveryCodeHashes as CodeHash[]
+      if (hashes[index].used !== false) throw new HttpError(409, "code_used")
+      const boundTo: unknown = recovery.factorUids
+      if (!Array.isArray(boundTo) || !boundTo.some((f) => enrolledNow.includes(f as string))) {
+        throw new HttpError(403, "invalid_code")
+      }
+
+      await audit.stage(tx, "allow", "ok")
+      tx.update(recoveryRef(uid), {
+        recoveryCodeHashes: [{ ...hashes[index], used: true }],
+        invalidatedAt: FieldValue.serverTimestamp(),
+      })
+      tx.update(approvalRef, {
+        used: true,
+        usedBy: caller.uid,
+        usedAt: FieldValue.serverTimestamp(),
+        factorUids: enrolledNow,
+      })
+      return enrolledNow
+    })
     audit.committed()
 
     let mfaEnabled: boolean
@@ -385,8 +383,25 @@ export async function disableMfaHandler(
   })
 }
 
-/** A recovery-code rejection: counted against the approval. */
-class CodeRejected extends HttpError {}
+/**
+ * Reserves one code attempt on an unused approval for this firm and subject,
+ * in its own transaction: at MAX_CODE_ATTEMPTS or more → 403 approval_voided,
+ * otherwise `codeAttempts` is incremented. Anything else (missing, used,
+ * another subject) is left for the main transaction to refuse or resume.
+ */
+async function reserveCodeAttempt(
+  approvalRef: DocumentReference,
+  firmId: string,
+  uid: string
+): Promise<void> {
+  await adminDb().runTransaction(async (tx) => {
+    const approval = (await tx.get(approvalRef)).data()
+    if (!approval || approval.firmId !== firmId || approval.subjectUid !== uid || approval.used !== false) return
+    const attempts = typeof approval.codeAttempts === "number" ? approval.codeAttempts : 0
+    if (attempts >= MAX_CODE_ATTEMPTS) throw new HttpError(403, "approval_voided")
+    tx.update(approvalRef, { codeAttempts: attempts + 1 })
+  })
+}
 
 function isString(v: unknown): v is string {
   return typeof v === "string"
