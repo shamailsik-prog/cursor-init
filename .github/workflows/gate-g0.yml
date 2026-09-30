@@ -32,3 +32,15 @@ jobs:
         run: npm run test:all
       - name: Gate G-1 forensic
         run: python3 ci_gates/gate_g1.py
+      # Cloud Functions (functions/): own lockfile, typecheck, bundle, emulator suites.
+      # The rules suite (npm run test:rules) already runs inside "Unit tests" (test:all).
+      - name: Functions install
+        run: npm --prefix functions ci
+      - name: Functions typecheck
+        run: npm --prefix functions run typecheck
+      - name: Functions build
+        run: npm --prefix functions run build
+      - name: Functions tests (Auth + Firestore emulators)
+        run: npm --prefix functions run test:emu
+      - name: Gate G-2 cross-firm isolation (L18 §10)
+        run: npm run gate:g2
