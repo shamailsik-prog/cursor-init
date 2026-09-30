@@ -1,4 +1,5 @@
 import courtsSeed from "@/data/courts.json"
+import { PublicError } from "@/platform/http/publicError"
 import { loadCourts, normalise } from "@/core/case-number-normaliser"
 import type { SpineStore } from "@/platform/spine/store"
 
@@ -11,7 +12,7 @@ export function recordCaseNumber(
   courtId: string
 ): { status: "OK" | "AMBIGUOUS" | "REJECT"; canonical?: string } {
   const matter = store.matters.get(matterId)
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   const result = normalise(raw, courtId, courts)
   if (result.status === "REJECT") {
     store.followUps.push({

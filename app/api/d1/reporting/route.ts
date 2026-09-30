@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import {
-  rankOf,
+  rankOf, rankOfStoredOrMax,
   type Matter,
   type MatterReportExportAnalyticsRow,
   type MatterReportRelevanceFreshnessStatus,
@@ -88,12 +91,12 @@ function reportRelevanceSnapshotId(matterId: string): string {
 
 function parseExportFormat(value: unknown): "csv" | "json" | "pdf" {
   if (value === "csv" || value === "json" || value === "pdf") return value
-  throw new Error("exportFormat must be csv, json, or pdf")
+  throw new PublicError("exportFormat must be csv, json, or pdf")
 }
 
 function parseExportScope(value: unknown): "summary" | "detailed" | "relevance_review" {
   if (value === "summary" || value === "detailed" || value === "relevance_review") return value
-  throw new Error("exportScope must be summary, detailed, or relevance_review")
+  throw new PublicError("exportScope must be summary, detailed, or relevance_review")
 }
 
 function normalizeReason(value: unknown, fallback: string): string {
@@ -267,6 +270,10 @@ type RecomputeMatterReportRelevanceBody = {
 type Body = RecordMatterReportExportBody | RecomputeMatterReportRelevanceBody
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -312,7 +319,7 @@ export async function GET(request: Request) {
     }
 
     const all = (await repos.reportingIndex.listByFirm(refreshedActor.firmId))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (rowType ? row.rowType === rowType : true))
       .filter((row) => terms.every((term) => row.tags.includes(term)))
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -348,7 +355,7 @@ export async function GET(request: Request) {
       ...row,
       freshnessStatus: asFreshnessStatus(row.recomputedAt, now),
     }))
-    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
     .filter((row) => (scoreBand ? row.scoreBand === scoreBand : true))
     .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -369,7 +376,7 @@ export async function GET(request: Request) {
 
   const relevanceByMatter = new Map(normalizedRelevance.map((row) => [row.matterId, row]))
   const exportRows = (await repos.matterReportExportAnalytics.listByFirm(refreshedActor.firmId))
-    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
     .filter((row) => {
       const relevance = relevanceByMatter.get(row.matterId)
@@ -396,6 +403,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -534,7 +545,7 @@ export async function POST(request: Request) {
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "reporting operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "reporting operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

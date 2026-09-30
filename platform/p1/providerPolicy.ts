@@ -25,9 +25,10 @@ type DpaFile = {
 const dpa = dpaSeed as DpaFile
 
 /**
- * Conservative default: unknown DPA → block internal (rank 1) and above.
- * Internal opinions still carry client facts. Public (rank 0) may leave.
- * privileged-restricted additionally requires an in-region flag the firm has not set.
+ * Allow-list: only an explicit rank-0 (public) label may leave for an external
+ * provider. Everything else — every rank >= 1 and any unknown/malformed label —
+ * is blocked. (The DPA/residency rows are kept for the reason text; enabling
+ * internal+ traffic is a future, explicit firm decision, not a default.)
  * TODO(firm): DPA / residency — do not invent.
  */
 export function providerAllowedFor(
@@ -41,24 +42,24 @@ export function providerAllowedFor(
     }
   }
   const rank = classificationRank(classification)
+  if (rank === 0) return { allowed: true }
   const row = dpa.providers[provider]
-  if (rank >= 4) {
-    if (!row?.inRegion) {
-      return {
-        allowed: false,
-        reason:
-          "TODO(firm): data-residency region unset — privileged-restricted blocked (L17.13 / L18 §4.6)",
-      }
+  if (rank >= 4 && !row?.inRegion) {
+    return {
+      allowed: false,
+      reason:
+        "TODO(firm): data-residency region unset — privileged-restricted blocked (L17.13 / L18 §4.6)",
     }
   }
-  if (rank >= 1) {
-    if (!row?.dpaExecuted) {
-      return {
-        allowed: false,
-        reason:
-          "TODO(firm): DPA status unknown — provider blocked for internal+ (client-identifying; L18 §4.6 conservative)",
-      }
+  if (!row?.dpaExecuted) {
+    return {
+      allowed: false,
+      reason:
+        "TODO(firm): DPA status unknown — provider blocked for internal+ (client-identifying; L18 §4.6 conservative)",
     }
   }
-  return { allowed: true }
+  return {
+    allowed: false,
+    reason: "P1 policy: only public (rank 0) material may leave for an external provider",
+  }
 }

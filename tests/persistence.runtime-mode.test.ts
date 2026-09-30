@@ -803,6 +803,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(snoozeVariance.status).toBe(200)
+      // Four-eyes: the second approver must be a different partner in the firm.
+      getRuntimeStore().users.set("partner_a2", {
+        id: "partner_a2",
+        firmId: "firmA",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      })
       const recordRemediation = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -817,12 +824,14 @@ describe("Runtime persistence mode", () => {
             decision: "temporary_override",
             justification: "runtime controlled override while transport stabilizes",
             expiresInHours: 4,
-            secondApproverId: "partner_a",
+            secondApproverId: "partner_a2",
             note: "runtime remediation ledger row",
           }),
         })
       )
       expect(recordRemediation.status).toBe(200)
+      // Only needed as the approver; keep later owner auto-assignment unchanged.
+      getRuntimeStore().users.delete("partner_a2")
       const acknowledgeRemediationExpiry = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -889,6 +898,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(acknowledgeExpiry.status).toBe(200)
+      // Four-eyes: the second approver must be a different partner in the firm.
+      getRuntimeStore().users.set("partner_a2", {
+        id: "partner_a2",
+        firmId: "firmA",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      })
       const extendWaiver = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -901,7 +917,7 @@ describe("Runtime persistence mode", () => {
             actorId: "partner_a",
             packageId,
             extendHours: 8,
-            secondApproverId: "partner_a",
+            secondApproverId: "partner_a2",
             rolloverJustification: "runtime waiver extension exceeds baseline cap due closure",
             rolloverNote: "runtime rollover attestation row",
             note: "runtime waiver extended",
@@ -909,6 +925,8 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(extendWaiver.status).toBe(200)
+      // Only needed as the approver; keep later owner auto-assignment unchanged.
+      getRuntimeStore().users.delete("partner_a2")
       const rolloverAttestationDoc = await getDoc(
         doc(ctx.firestore(), "filing_escalation_waiver_rollover_attestations", `rollover:${packageId}:1`)
       )
@@ -10539,6 +10557,35 @@ describe("Runtime persistence mode", () => {
   it("persists committee-brain outputs and rehydrates listing after in-memory reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
+      // Committee classification is derived from the referenced matter (H1) and
+      // listings are filtered by matter membership (M4).
+      const internalMatterId = await createMatterViaRoute(
+        "Committee internal matter",
+        "0c7c2b8e-3f0a-4c55-9d7e-6a1f2b3c4d51"
+      )
+      const privilegedMatterRes = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "5e2f9a61-8b7c-4d3e-a1f0-9c8b7a6d5e42",
+          },
+          body: JSON.stringify({
+            action: "create",
+            actorId: "partner_a",
+            firmId: "firmA",
+            clientId: "client_a",
+            title: "Committee privileged matter",
+            courtId: "SHC",
+            classification: "privileged",
+            memberUserIds: ["associate_a", "clerk_a"],
+          }),
+        })
+      )
+      expect(privilegedMatterRes.status).toBe(200)
+      const privilegedMatterId = (
+        (await privilegedMatterRes.json()) as { result: { matter: { id: string } } }
+      ).result.matter.id
       const first = await committeePost(
         new Request("http://127.0.0.1/api/p1/committee-brain", {
           method: "POST",
@@ -10549,6 +10596,7 @@ describe("Runtime persistence mode", () => {
           body: JSON.stringify({
             actorId: "partner_a",
             body: "Partner committee summary",
+            matterId: privilegedMatterId,
             classification: "privileged",
             purpose: "committee-brain",
           }),
@@ -10566,6 +10614,7 @@ describe("Runtime persistence mode", () => {
           body: JSON.stringify({
             actorId: "associate_a",
             body: "Associate committee summary",
+            matterId: internalMatterId,
             classification: "internal",
             purpose: "summarise",
           }),

@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import type {
   Classification,
   FilingEscalationClosureComplianceDigestRow,
@@ -3698,6 +3701,10 @@ async function recomputeClosureComplianceState(
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -3749,7 +3756,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .filter((row) => {
           if (!dispatchStatus || !isFilingDispatchQueueStatus(dispatchStatus)) return true
@@ -3789,7 +3796,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .filter((row) => {
           if (!annexureStatus || !isFilingAnnexureGenerationStatus(annexureStatus)) return true
@@ -3822,7 +3829,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.recordedAt - a.recordedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -3904,7 +3911,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4026,7 +4033,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => a.slaTargetAt - b.slaTargetAt || b.updatedAt - a.updatedAt)
       const items = visible.slice(cursor, cursor + limit)
@@ -4060,7 +4067,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4144,7 +4151,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => a.status.localeCompare(b.status) || a.breachWindowStartedAt - b.breachWindowStartedAt)
       const items = visible.slice(cursor, cursor + limit)
@@ -4226,7 +4233,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4291,7 +4298,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .map((row) => {
@@ -4479,7 +4486,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .map((row) => {
@@ -4619,7 +4626,7 @@ export async function GET(request: Request) {
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (isFilingEscalationClosureSlaWindowScope(scope) ? row.scope === scope : true))
-        .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+        .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4639,7 +4646,7 @@ export async function GET(request: Request) {
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (isFilingEscalationClosureAutoAssignmentMode(mode) ? row.mode === mode : true))
-        .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+        .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4718,7 +4725,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .map((row) => {
@@ -4876,7 +4883,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -4934,7 +4941,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -4972,7 +4979,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5008,7 +5015,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => {
@@ -5050,7 +5057,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5086,7 +5093,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5124,7 +5131,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5166,7 +5173,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5208,7 +5215,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5252,7 +5259,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5292,7 +5299,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5330,7 +5337,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5368,7 +5375,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5406,7 +5413,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5442,7 +5449,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5478,7 +5485,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5514,7 +5521,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5552,7 +5559,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5588,7 +5595,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5624,7 +5631,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5660,7 +5667,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5696,7 +5703,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -6478,7 +6485,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .map((row) => {
           const quorum = row.ownerId ? adjudicationQuorumByOwner.get(row.ownerId) ?? null : null
@@ -6626,7 +6633,7 @@ export async function GET(request: Request) {
             const permission = checkPermission(store, user.id, "draft", row.matterId)
             if (!permission.allow) return false
           }
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6667,7 +6674,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.grantedAt - a.grantedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6747,7 +6754,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6830,7 +6837,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6876,7 +6883,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6907,7 +6914,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6994,7 +7001,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7028,7 +7035,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7128,7 +7135,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7222,7 +7229,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7243,7 +7250,7 @@ export async function GET(request: Request) {
       .filter((row) => {
         const permission = checkPermission(store, user.id, "draft", row.matterId)
         if (!permission.allow) return false
-        return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
       })
       .filter((row) => {
         if (!readiness) return true
@@ -7268,12 +7275,16 @@ export async function GET(request: Request) {
       nextCursor,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "filings read failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "filings read failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -9927,6 +9938,16 @@ export async function POST(request: Request) {
           { status: 403 }
         )
       }
+      // Four-eyes: the second approver may not be the actor. TODO(E-24 chain
+      // freeze): the second approval is still asserted by id in this request
+      // rather than confirmed by the approver's own authenticated session; that
+      // flow is out of scope while this chain is slated for freeze.
+      if (parsed.secondApproverId && parsed.secondApproverId === actor.id) {
+        return NextResponse.json(
+          { error: "second approver must be a different partner", code: "self_approval_forbidden" },
+          { status: 403 }
+        )
+      }
       await syncFirmMembers(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -10678,7 +10699,7 @@ export async function POST(request: Request) {
         if (value === undefined) return undefined
         const numeric = Number(value)
         if (!Number.isFinite(numeric) || numeric < 0.5 || numeric > 168) {
-          throw new Error("hours must be between 0.5 and 168")
+          throw new PublicError("hours must be between 0.5 and 168")
         }
         return Math.round(numeric * HOUR_MS)
       }
@@ -19107,6 +19128,16 @@ export async function POST(request: Request) {
       if (actor.role !== "partner") {
         return NextResponse.json({ error: "extend_breach_waiver requires partner role" }, { status: 403 })
       }
+      // Four-eyes: the second approver may not be the actor. TODO(E-24 chain
+      // freeze): the second approval is still asserted by id in this request
+      // rather than confirmed by the approver's own authenticated session; that
+      // flow is out of scope while this chain is slated for freeze.
+      if (parsed.secondApproverId && parsed.secondApproverId === actor.id) {
+        return NextResponse.json(
+          { error: "second approver must be a different partner", code: "self_approval_forbidden" },
+          { status: 403 }
+        )
+      }
       await syncFirmMembers(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -19334,8 +19365,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "filing package write failed"
+    const message = publicErrorMessage(err, "filing package write failed")
     const status = /preflight blocked/.test(message) ? 422 : 400
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status })
   }
 }

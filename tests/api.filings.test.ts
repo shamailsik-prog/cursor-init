@@ -1056,6 +1056,13 @@ describe("GET/POST /api/d4/filings", () => {
     expect(snoozeVarianceJson.result.policyVarianceDigest.status).toBe("snoozed")
     expect(typeof snoozeVarianceJson.result.policyVarianceDigest.snoozeUntil).toBe("number")
 
+    // Four-eyes: the second approver must be a different partner in the firm.
+    getRuntimeStore().users.set("partner_a2", {
+      id: "partner_a2",
+      firmId: "firmA",
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+    })
     const recordRemediation = await post(
       {
         action: "record_variance_remediation",
@@ -1064,12 +1071,14 @@ describe("GET/POST /api/d4/filings", () => {
         decision: "temporary_override",
         justification: "Controlled override while court transport backlog is resolved",
         expiresInHours: 4,
-        secondApproverId: "partner_a",
+        secondApproverId: "partner_a2",
         note: "Remediation ledger capture for policy variance governance",
       },
       "f0c3020d-65a8-4f6c-8bb9-6e8ce8b8ef31"
     )
     expect(recordRemediation.status).toBe(200)
+    // Only needed as the approver; keep later owner auto-assignment unchanged.
+    getRuntimeStore().users.delete("partner_a2")
     const remediationJson = (await recordRemediation.json()) as {
       result: {
         remediation: { decision: string; status: string }
@@ -2167,13 +2176,20 @@ describe("GET/POST /api/d4/filings", () => {
     }
     expect(acknowledgeWaiverExpiryJson.result.waiverExpiryDigest.status).toBe("acknowledged")
 
+    // Four-eyes: the second approver must be a different partner in the firm.
+    getRuntimeStore().users.set("partner_a2", {
+      id: "partner_a2",
+      firmId: "firmA",
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+    })
     const extendWaiver = await post(
       {
         action: "extend_breach_waiver",
         actorId: "partner_a",
         packageId,
         extendHours: 8,
-        secondApproverId: "partner_a",
+        secondApproverId: "partner_a2",
         rolloverJustification: "Waiver cap exceeded due documented registry closure period",
         rolloverNote: "Rollover attestation captured with partner signoff",
         note: "Extending waiver pending registry reopening",
@@ -2181,6 +2197,8 @@ describe("GET/POST /api/d4/filings", () => {
       "0b2da76f-47d7-4902-b5cd-faf6c2af9a56"
     )
     expect(extendWaiver.status).toBe(200)
+    // Only needed as the approver; keep later owner auto-assignment unchanged.
+    getRuntimeStore().users.delete("partner_a2")
     const extendWaiverJson = (await extendWaiver.json()) as {
       result: {
         waiver: { status: string }

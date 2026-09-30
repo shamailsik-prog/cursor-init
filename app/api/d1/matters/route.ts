@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
   IdempotencyCache,
@@ -7,8 +10,8 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { checkPermission } from "@/platform/p5/checkPermission"
-import { classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
-import { rankOf } from "@/platform/spine/store"
+import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -70,10 +73,10 @@ function parseCursor(value: string | null): number {
 function ensureActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for matter operations")
+    throw new PublicError("actor role not allowed for matter operations")
   }
   return actor
 }
@@ -82,20 +85,20 @@ function ensureMemberUsersInFirm(userIds: Iterable<string>, firmId: string) {
   const store = getRuntimeStore()
   for (const userId of userIds) {
     const user = store.users.get(userId)
-    if (!user) throw new Error(`unknown member user: ${userId}`)
-    if (user.firmId !== firmId) throw new Error("cross-firm membership rejected")
+    if (!user) throw new PublicError(`unknown member user: ${userId}`)
+    if (user.firmId !== firmId) throw new PublicError("cross-firm membership rejected")
   }
 }
 
 function ensureClientIdentityInFirm(clientId: string, firmId: string) {
   const store = getRuntimeStore()
   const client = store.users.get(clientId)
-  if (!client) throw new Error("unknown client")
+  if (!client) throw new PublicError("unknown client")
   if (client.firmId !== firmId) {
-    throw new Error("cross-firm client denied")
+    throw new PublicError("cross-firm client denied")
   }
   if (client.role !== "client") {
-    throw new Error("clientId must reference a client user")
+    throw new PublicError("clientId must reference a client user")
   }
 }
 
@@ -107,19 +110,23 @@ async function ensureMatterAccess(
   const store = getRuntimeStore()
   const actor = ensureActor(actorId)
   const matter = store.matters.get(matterId) ?? (await repos.matters.get(matterId))
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   store.matters.set(matter.id, matter)
-  if (matter.firmId !== actor.firmId) throw new Error("cross-firm access denied")
+  if (matter.firmId !== actor.firmId) throw new PublicError("cross-firm access denied")
   if (!store.members.has(store.memberKey(matterId, actorId))) {
-    throw new Error("actor is not a member of this matter")
+    throw new PublicError("actor is not a member of this matter")
   }
-  if (rankOf(actor.clearanceLevel) < rankOf(matter.classification)) {
-    throw new Error("actor clearance is below matter classification")
+  if (rankOf(actor.clearanceLevel) < rankOfStoredOrMax(matter.classification)) {
+    throw new PublicError("actor clearance is below matter classification")
   }
   return { actor, matter }
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repo = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -157,6 +164,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repo = await getRuntimeRepositories(store)
   let key: string
@@ -330,7 +341,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "matter operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "matter operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

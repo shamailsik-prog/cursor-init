@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -6,6 +9,7 @@ import {
 } from "@/platform/http/idempotency"
 import {
   rankOf,
+  rankOfStoredOrMax,
   type Classification,
   type FollowUp,
   type Matter,
@@ -2163,10 +2167,10 @@ function parseSnoozedUntil(value: unknown, now: number): number {
         ? Number.parseInt(value, 10)
         : Number.NaN
   if (!Number.isFinite(parsed)) {
-    throw new Error("snoozedUntil must be a unix epoch milliseconds number")
+    throw new PublicError("snoozedUntil must be a unix epoch milliseconds number")
   }
   if (parsed <= now) {
-    throw new Error("snoozedUntil must be in the future")
+    throw new PublicError("snoozedUntil must be in the future")
   }
   return parsed
 }
@@ -2184,10 +2188,10 @@ function parseOptionalFutureEpochMs(
         ? Number.parseInt(value, 10)
         : Number.NaN
   if (!Number.isFinite(parsed)) {
-    throw new Error(`${fieldName} must be a unix epoch milliseconds number`)
+    throw new PublicError(`${fieldName} must be a unix epoch milliseconds number`)
   }
   if (parsed <= now) {
-    throw new Error(`${fieldName} must be in the future`)
+    throw new PublicError(`${fieldName} must be in the future`)
   }
   return parsed
 }
@@ -12591,6 +12595,10 @@ type Body =
 ;
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -13093,7 +13101,7 @@ export async function GET(request: Request) {
 
   if (view === "activity") {
     const all = (await repos.workflowOpsActivity.listByFirm(refreshedActor.firmId))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (source ? row.source === source : true))
       .filter((row) => (action ? row.action === action : true))
@@ -13139,7 +13147,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (severity ? row.severity === severity : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13173,7 +13181,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asAttestationFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (attestationStatus ? row.attestationStatus === attestationStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13198,7 +13206,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asEscalationFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (escalationStatus ? row.escalationStatus === escalationStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13223,7 +13231,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asDisputeFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (disputeStatus ? row.disputeStatus === disputeStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13248,7 +13256,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asClosureFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (closureStatus ? row.closureStatus === closureStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13273,7 +13281,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asEnforcementFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (enforcementStatus ? row.enforcementStatus === enforcementStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13300,7 +13308,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asReconciliationFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (reconciliationStatus ? row.reconciliationStatus === reconciliationStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13325,7 +13333,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asEnforcementAttestationFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         enforcementAttestationStatus ? row.attestationStatus === enforcementAttestationStatus : true
@@ -13352,7 +13360,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asVarianceFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (varianceStatus ? row.varianceStatus === varianceStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13377,7 +13385,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asEnforcementWaiverFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (waiverStatus ? row.waiverStatus === waiverStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13402,7 +13410,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asVarianceRemediationQueueFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (remediationQueueStatus ? row.queueStatus === remediationQueueStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13427,7 +13435,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asWaiverExpiryFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (waiverExpiryStatus ? row.expiryStatus === waiverExpiryStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13452,7 +13460,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asVarianceRemediationSlaFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (remediationSlaStatus ? row.slaStatus === remediationSlaStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13477,7 +13485,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asWaiverExpiryDisputeFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) => (waiverExpiryDisputeStatus ? row.disputeStatus === waiverExpiryDisputeStatus : true))
       .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -13506,7 +13514,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asRemediationSlaBreachEscalationFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachEscalationStatus
@@ -13535,7 +13543,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asWaiverExpiryDisputeAdjudicationFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationStatus
@@ -13571,7 +13579,7 @@ export async function GET(request: Request) {
           now
         ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointStatus
@@ -13604,7 +13612,7 @@ export async function GET(request: Request) {
         ...row,
         freshnessStatus: asWaiverExpiryDisputeAdjudicationSloFreshnessStatus(row.recomputedAt, now),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloStatus
@@ -13642,7 +13650,7 @@ export async function GET(request: Request) {
           now
         ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationStatus
@@ -13678,7 +13686,7 @@ export async function GET(request: Request) {
           now
         ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtStatus
@@ -13718,7 +13726,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationExceptionStatus
@@ -13755,7 +13763,7 @@ export async function GET(request: Request) {
           now
         ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownStatus
@@ -13795,7 +13803,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueStatus
@@ -13833,7 +13841,7 @@ export async function GET(request: Request) {
           now
         ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementStatus
@@ -13873,7 +13881,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainStatus
@@ -13911,7 +13919,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationStatus
@@ -13952,7 +13960,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationStatus
@@ -13992,7 +14000,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationStatus
@@ -14033,7 +14041,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceStatus
@@ -14075,7 +14083,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationStatus
@@ -14117,7 +14125,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementStatus
@@ -14160,7 +14168,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceStatus
@@ -14202,7 +14210,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationStatus
@@ -14244,7 +14252,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerStatus
@@ -14286,7 +14294,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationStatus
@@ -14329,7 +14337,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationStatus
@@ -14371,7 +14379,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportStatus
@@ -14414,7 +14422,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -14456,7 +14464,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptStatus
@@ -14499,7 +14507,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -14541,7 +14549,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
@@ -14583,7 +14591,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffStatus
@@ -14625,7 +14633,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
@@ -14667,7 +14675,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentStatus
@@ -14706,7 +14714,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentStatus
@@ -14749,7 +14757,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -14791,7 +14799,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -14834,7 +14842,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerStatus
@@ -14876,7 +14884,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationStatus
@@ -14918,7 +14926,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationStatus
@@ -14960,7 +14968,7 @@ export async function GET(request: Request) {
             now
           ),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -14999,7 +15007,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -15038,7 +15046,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -15078,7 +15086,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -15117,7 +15125,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -15156,7 +15164,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
@@ -15194,7 +15202,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
@@ -15232,7 +15240,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentStatus
@@ -15270,7 +15278,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentStatus
@@ -15308,7 +15316,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
@@ -15347,7 +15355,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
@@ -15383,7 +15391,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus
@@ -15418,7 +15426,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentStatus
@@ -15453,7 +15461,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -15488,7 +15496,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -15523,7 +15531,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerStatus
@@ -15558,7 +15566,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationStatus
@@ -15592,7 +15600,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationStatus
@@ -15627,7 +15635,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -15663,7 +15671,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -15698,7 +15706,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -15733,7 +15741,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerStatus
@@ -15768,7 +15776,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationStatus
@@ -15804,7 +15812,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -15839,7 +15847,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -15875,7 +15883,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -15910,7 +15918,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -15945,7 +15953,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
@@ -15980,7 +15988,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
@@ -16018,7 +16026,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentStatus
@@ -16056,7 +16064,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentStatus
@@ -16094,7 +16102,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -16132,7 +16140,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -16170,7 +16178,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerStatus
@@ -16208,7 +16216,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerStatus
@@ -16246,7 +16254,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerStatus
@@ -16284,7 +16292,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationStatus
@@ -16323,7 +16331,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationStatus
@@ -16361,7 +16369,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationStatus
@@ -16399,7 +16407,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementSealVerificationStatus
@@ -16434,7 +16442,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerReconciliationClosureSealVerificationOutboundRegistryAttestationLedgerStatus
@@ -16469,7 +16477,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
@@ -16505,7 +16513,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgerStatus
@@ -16541,7 +16549,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -16577,7 +16585,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal537WaiverReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
@@ -16613,7 +16621,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal540VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -16649,7 +16657,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal537WaiverReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
@@ -16683,7 +16691,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal541WaiverReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
@@ -16717,7 +16725,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal542VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -16751,7 +16759,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal543WaiverReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
@@ -16785,7 +16793,7 @@ export async function GET(request: Request) {
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal544VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -16820,7 +16828,7 @@ if (view === "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlem
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal545WaiverReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
@@ -16854,7 +16862,7 @@ if (view === "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlem
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal544VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -16889,7 +16897,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal546VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -16926,7 +16934,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal540VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -16961,7 +16969,7 @@ if (view === "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlem
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal547WaiverReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
@@ -16995,7 +17003,7 @@ if (view === "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlem
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal544VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -17030,7 +17038,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal548VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -17064,7 +17072,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal549WaiverReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
@@ -17098,7 +17106,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         tbAckReconPdFreezeSeal550VariancePartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
@@ -17139,7 +17147,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementStatus
@@ -17173,7 +17181,7 @@ if (view === "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlem
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -17210,7 +17218,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -17245,7 +17253,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
@@ -17280,7 +17288,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
@@ -17318,7 +17326,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationStatus
@@ -17356,7 +17364,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationStatus
@@ -17390,7 +17398,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -17426,7 +17434,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -17463,7 +17471,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -17499,7 +17507,7 @@ if (view === "alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlem
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -17536,7 +17544,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -17571,7 +17579,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -17608,7 +17616,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationStatus
@@ -17643,7 +17651,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
@@ -17678,7 +17686,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
@@ -17713,7 +17721,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationStatus
@@ -17748,7 +17756,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
@@ -17786,7 +17794,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentStatus
@@ -17823,7 +17831,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentStatus
@@ -17861,7 +17869,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentStatus
@@ -17898,7 +17906,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentStatus
@@ -17935,7 +17943,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -17973,7 +17981,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -18011,7 +18019,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -18049,7 +18057,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         remediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationStatus
@@ -18083,7 +18091,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -18120,7 +18128,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
         freshnessStatus:
           now - row.recomputedAt <= FRESH_WINDOW_MS ? ("fresh" as const) : ("stale" as const),
       }))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerStatus
@@ -18147,6 +18155,10 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -47906,7 +47918,7 @@ if (
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "ops reporting action failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "ops reporting action failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

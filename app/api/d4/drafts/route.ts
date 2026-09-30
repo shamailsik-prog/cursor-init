@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification, type Classification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -85,10 +88,10 @@ function buildPreflightInput(parsed: {
   partnerOverride?: { partnerId?: string; reason?: string }
 }): DraftPreflightInput {
   if (!parsed.actorId || !parsed.matterId) {
-    throw new Error("actorId and matterId are required")
+    throw new PublicError("actorId and matterId are required")
   }
   if (!isClassification(parsed.classification)) {
-    throw new Error("classification must be a rank-0–4 label")
+    throw new PublicError("classification must be a rank-0–4 label")
   }
   const partnerOverride =
     parsed.partnerOverride?.partnerId || parsed.partnerOverride?.reason
@@ -108,6 +111,10 @@ function buildPreflightInput(parsed: {
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -226,7 +233,7 @@ export async function GET(request: Request) {
     .filter((draft) => {
       const permission = checkPermission(store, userId, "draft", draft.matterId)
       if (!permission.allow) return false
-      return rankOf(user.clearanceLevel) >= rankOf(draft.classification)
+      return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(draft.classification)
     })
     .sort((a, b) => {
       const scoreA = templateUsage.get(a.templateId) ?? 0
@@ -249,6 +256,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -290,7 +301,7 @@ export async function POST(request: Request) {
     if (parsed.action === "preflight") {
       const input = buildPreflightInput(parsed)
       const actor = store.users.get(input.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const result = runDraftPreflight(store, input)
       const payload = {
@@ -310,7 +321,7 @@ export async function POST(request: Request) {
       }
       const preflightInput = buildPreflightInput(parsed)
       const actor = store.users.get(preflightInput.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
       const gate = runDraftPreflight(store, preflightInput)
@@ -362,7 +373,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "draft operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "draft operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

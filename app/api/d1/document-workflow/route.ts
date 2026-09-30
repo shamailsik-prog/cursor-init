@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
-import { classificationField, idField, parseBody, readJsonLimited } from "@/platform/http/validation"
+import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited } from "@/platform/http/validation"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { type Classification } from "@/platform/p1/types"
-import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -77,7 +80,7 @@ function canViewWorkflowDocument(
   const user = store.users.get(userId)
   if (!user) return false
   if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
+  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, userId))
   return user.role !== "client" && user.role !== "intern"
 }
@@ -98,6 +101,10 @@ async function persistWorkflowEventsSince(
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -117,13 +124,13 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: "matterId is required for timeline view" }, { status: 400 })
       }
       const user = store.users.get(userId)
-      if (!user) throw new Error("unknown user")
+      if (!user) throw new PublicError("unknown user")
       await syncFirmMembers(store, repos, user.firmId)
       const matter = store.matters.get(matterId)
-      if (!matter) throw new Error("unknown matter")
-      if (matter.firmId !== user.firmId) throw new Error("cross-firm matter denied")
+      if (!matter) throw new PublicError("unknown matter")
+      if (matter.firmId !== user.firmId) throw new PublicError("cross-firm matter denied")
       if (!store.members.has(store.memberKey(matterId, user.id))) {
-        throw new Error("not a matter member")
+        throw new PublicError("not a matter member")
       }
       const timelineRows = (await repos.workflowEvents.listByFirm(user.firmId))
         .filter((event) => event.matterId === matterId)
@@ -153,7 +160,7 @@ export async function GET(request: Request) {
     const rawStatus = url.searchParams.get("status")
     const status = isWorkflowStatus(rawStatus) ? rawStatus : undefined
     const user = store.users.get(userId)
-    if (!user) throw new Error("unknown user")
+    if (!user) throw new PublicError("unknown user")
     await syncFirmMembers(store, repos, user.firmId)
     const docs = await repos.documents.listByFirm(user.firmId)
     const rows = await repos.workflow.listByFirm(user.firmId)
@@ -194,12 +201,16 @@ export async function GET(request: Request) {
       nextCursor,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "workflow read failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "workflow read failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -242,7 +253,7 @@ export async function POST(request: Request) {
         )
       }
       const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
@@ -268,7 +279,7 @@ export async function POST(request: Request) {
         )
       }
       const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
@@ -293,7 +304,7 @@ export async function POST(request: Request) {
         )
       }
       const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
@@ -328,7 +339,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "workflow write failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "workflow write failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

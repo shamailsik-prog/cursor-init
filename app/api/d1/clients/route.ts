@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
-import { classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
+import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification, type Classification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmEntities } from "@/platform/persistence/entitySync"
@@ -52,15 +55,19 @@ function parseCursor(value: string | null): number {
 function requireActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for client registry operations")
+    throw new PublicError("actor role not allowed for client registry operations")
   }
   return actor
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -82,7 +89,7 @@ export async function GET(request: Request) {
   await syncFirmEntities(store, repos, user.firmId)
   const all = [...store.entities.values()]
     .filter((row) => row.firmId === user.firmId)
-    .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .sort((a, b) => a.id.localeCompare(b.id))
   const items = all.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
@@ -97,6 +104,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -208,7 +219,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "client operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "client operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

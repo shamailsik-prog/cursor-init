@@ -1,5 +1,6 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
-import { rankOf, type Role, type SpineStore, type User } from "@/platform/spine/store"
+import { PublicError } from "@/platform/http/publicError"
+import { rankOf, rankOfStoredOrMax, type Role, type SpineStore, type User } from "@/platform/spine/store"
 
 export type PermissionDecision = {
   allow: boolean
@@ -58,14 +59,15 @@ export function seedUser(
   user: User
 ): User {
   if (!isClassification(user.clearanceLevel)) {
-    throw new Error("artefact write omitted classification")
+    throw new PublicError("artefact write omitted classification")
   }
   store.users.set(user.id, user)
   return user
 }
 
 export function requireClearance(user: User, classification: Classification): boolean {
-  return rankOf(user.clearanceLevel) >= rankOf(classification)
+  // `classification` comes from a stored record (e.g. matter): unreadable → max.
+  return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(classification)
 }
 
 export type { Role, User }

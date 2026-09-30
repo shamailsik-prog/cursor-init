@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -17,7 +20,7 @@ import {
   payloadTooLarge,
   readJsonLimited,
 } from "@/platform/http/validation"
-import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -55,10 +58,10 @@ function parseCursor(value: string | null): number {
 function requireActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for document ingest")
+    throw new PublicError("actor role not allowed for document ingest")
   }
   return actor
 }
@@ -71,7 +74,7 @@ function canViewDocument(
   const user = store.users.get(userId)
   if (!user) return false
   if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
+  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) {
     return store.members.has(store.memberKey(doc.matterId, userId))
   }
@@ -79,6 +82,10 @@ function canViewDocument(
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -122,7 +129,22 @@ export async function GET(request: Request) {
   })
 }
 
+// The boundary reads the (large) upload body once, under the same wire cap as the
+// handler. Getters so SIKANDER_MAX_UPLOAD_BYTES is read per request, as the handler does.
+const uploadBodyLimits: SessionRouteOptions = {
+  get maxBodyBytes() {
+    return maxUploadRequestBytes()
+  },
+  get reportedBodyLimit() {
+    return maxUploadBytes()
+  },
+}
+
 export async function POST(request: Request) {
+  return withSession(request, handlePost, uploadBodyLimits)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -183,7 +205,7 @@ export async function POST(request: Request) {
           { status: 403 }
         )
       }
-      if (rankOf(parsed.classification) < rankOf(matter.classification)) {
+      if (rankOf(parsed.classification) < rankOfStoredOrMax(matter.classification)) {
         return NextResponse.json(
           { error: "document classification cannot be lower than matter classification" },
           { status: 400 }
@@ -246,7 +268,7 @@ export async function POST(request: Request) {
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "document ingest failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "document ingest failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
