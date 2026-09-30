@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { z } from "zod"
+import { classificationField, idField, parseBody } from "@/platform/http/validation"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -20,31 +22,31 @@ import {
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-type TransitionBody = {
-  action: "transition"
-  actorId?: string
-  documentId?: string
-  nextStatus?: WorkflowStatus
-  reason?: string
-}
+const BodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("transition"),
+    actorId: idField,
+    documentId: idField,
+    nextStatus: z.enum(["queued", "processing", "review_required", "complete"]),
+    reason: z.string().max(2000).optional(),
+  }),
+  z.object({
+    action: z.literal("assign_reviewer"),
+    actorId: idField,
+    documentId: idField,
+    reviewerId: idField,
+  }),
+  z.object({
+    action: z.literal("review_decision"),
+    actorId: idField,
+    documentId: idField,
+    decision: z.enum(["confirm_classification", "declassify"]),
+    nextClassification: classificationField.optional(),
+    reason: z.string().max(2000).optional(),
+  }),
+])
 
-type AssignBody = {
-  action: "assign_reviewer"
-  actorId?: string
-  documentId?: string
-  reviewerId?: string
-}
-
-type DecisionBody = {
-  action: "review_decision"
-  actorId?: string
-  documentId?: string
-  decision?: "confirm_classification" | "declassify"
-  nextClassification?: string
-  reason?: string
-}
-
-type Body = TransitionBody | AssignBody | DecisionBody
+type Body = z.infer<typeof BodySchema>
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -209,15 +211,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
+  let raw: unknown
   try {
-    parsed = (await request.json()) as Body
+    raw = await request.json()
   } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
+    return NextResponse.json({ error: "invalid JSON body", code: "invalid_request" }, { status: 400 })
   }
-  if (!parsed.action) {
-    return NextResponse.json({ error: "action is required" }, { status: 400 })
-  }
+  const body = parseBody(BodySchema, raw)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
 
   const fingerprint = JSON.stringify({
     route: "/api/d1/document-workflow",

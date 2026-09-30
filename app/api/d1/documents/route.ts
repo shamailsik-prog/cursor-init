@@ -1,10 +1,21 @@
 import { NextResponse } from "next/server"
+import { z } from "zod"
 import {
   IdempotencyCache,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
+import {
+  base64DecodedLength,
+  base64Field,
+  classificationField,
+  idField,
+  maxUploadBytes,
+  maxUploadRequestBytes,
+  parseBody,
+  payloadTooLarge,
+} from "@/platform/http/validation"
 import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -16,17 +27,19 @@ const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 type SourceChannel = "web" | "team_portal" | "whatsapp" | "bulk"
 
-type IngestBody = {
-  action: "ingest"
-  actorId?: string
-  firmId?: string
-  matterId?: string | null
-  contentBase64?: string
-  sourceChannel?: SourceChannel
-  classification?: string
-}
+const BodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("ingest"),
+    actorId: idField,
+    firmId: idField,
+    matterId: idField.nullable().optional(),
+    contentBase64: base64Field,
+    sourceChannel: z.enum(["web", "team_portal", "whatsapp", "bulk"]),
+    classification: classificationField,
+  }),
+])
 
-type Body = IngestBody
+type Body = z.infer<typeof BodySchema>
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -131,11 +144,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
+  const declaredLength = Number(request.headers.get("content-length") ?? "")
+  if (Number.isFinite(declaredLength) && declaredLength > maxUploadRequestBytes()) {
+    return payloadTooLarge(maxUploadBytes())
+  }
+
+  let raw: unknown
   try {
-    parsed = (await request.json()) as Body
+    raw = await request.json()
   } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
+    return NextResponse.json({ error: "invalid JSON body", code: "invalid_request" }, { status: 400 })
+  }
+  const body = parseBody(BodySchema, raw)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
+  const uploadLimit = maxUploadBytes()
+  if (base64DecodedLength(parsed.contentBase64) > uploadLimit) {
+    return payloadTooLarge(uploadLimit)
   }
 
   if (parsed.action !== "ingest") {

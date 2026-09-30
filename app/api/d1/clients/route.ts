@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { z } from "zod"
+import { classificationField, idField, parseBody, textField } from "@/platform/http/validation"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -15,24 +17,25 @@ import { conflictCheck, createClient } from "@/services/d1-1/clients"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-type CreateBody = {
-  action: "create"
-  actorId?: string
-  firmId?: string
-  canonicalName?: string
-  cnic?: string
-  phone?: string
-  classification?: string
-}
+const BodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("create"),
+    actorId: idField,
+    firmId: idField,
+    canonicalName: textField(500),
+    cnic: textField(64),
+    phone: textField(64),
+    classification: classificationField,
+  }),
+  z.object({
+    action: z.literal("conflict_check"),
+    actorId: idField,
+    firmId: idField,
+    entityId: idField,
+  }),
+])
 
-type ConflictBody = {
-  action: "conflict_check"
-  actorId?: string
-  firmId?: string
-  entityId?: string
-}
-
-type Body = CreateBody | ConflictBody
+type Body = z.infer<typeof BodySchema>
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -105,15 +108,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
+  let raw: unknown
   try {
-    parsed = (await request.json()) as Body
+    raw = await request.json()
   } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
+    return NextResponse.json({ error: "invalid JSON body", code: "invalid_request" }, { status: 400 })
   }
-  if (!parsed.action) {
-    return NextResponse.json({ error: "action is required" }, { status: 400 })
-  }
+  const body = parseBody(BodySchema, raw)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
 
   const fingerprint = JSON.stringify({
     route: "/api/d1/clients",
