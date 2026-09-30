@@ -3721,23 +3721,27 @@ export async function GET(request: Request) {
     const firmPackages = await repos.filings.listByFirm(user.firmId)
     const artifactRows = await repos.filingPacketArtifacts.listByFirm(user.firmId)
     const artifactByPackage = new Map(artifactRows.map((row) => [row.packageId, row]))
+    // GET is side-effect free: rows missing for legacy packages are derived for this response
+    // only. create_package / decide_package (POST) persist them.
     for (const filingPackage of firmPackages) {
       if (artifactByPackage.has(filingPackage.id)) continue
       const draft =
         store.drafts.get(filingPackage.draftId) ?? (await repos.drafts.get(filingPackage.draftId))
-      const artifact = buildFilingPacketArtifactRow(filingPackage, draft)
-      await repos.filingPacketArtifacts.upsert(artifact)
-      store.filingPacketArtifacts.set(artifact.id, artifact)
-      artifactByPackage.set(filingPackage.id, artifact)
+      // Anchor derived timestamps to the package (FilingPackage has no updatedAt) so repeated
+      // GETs return identical rows.
+      artifactByPackage.set(
+        filingPackage.id,
+        buildFilingPacketArtifactRow(filingPackage, draft, { now: filingPackage.createdAt })
+      )
     }
     const queueRows = await repos.filingDispatchQueue.listByFirm(user.firmId)
     const queueByPackage = new Map(queueRows.map((row) => [row.packageId, row]))
     for (const filingPackage of firmPackages) {
       if (filingPackage.status !== "approved" || queueByPackage.has(filingPackage.id)) continue
-      const queueRow = buildFilingDispatchQueueRow(filingPackage)
-      await repos.filingDispatchQueue.upsert(queueRow)
-      store.filingDispatchQueue.set(queueRow.id, queueRow)
-      queueByPackage.set(filingPackage.id, queueRow)
+      queueByPackage.set(
+        filingPackage.id,
+        buildFilingDispatchQueueRow(filingPackage, { now: filingPackage.createdAt })
+      )
     }
     if (view === "dispatch") {
       const visible = [...queueByPackage.values()]

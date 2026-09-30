@@ -76,10 +76,19 @@ function ensureActor(actorId: string, firmId?: string) {
   return actor
 }
 
+function ensureMemberUsersInFirm(userIds: Iterable<string>, firmId: string) {
+  const store = getRuntimeStore()
+  for (const userId of userIds) {
+    const user = store.users.get(userId)
+    if (!user) throw new Error(`unknown member user: ${userId}`)
+    if (user.firmId !== firmId) throw new Error("cross-firm membership rejected")
+  }
+}
+
 function ensureClientIdentityInFirm(clientId: string, firmId: string) {
   const store = getRuntimeStore()
   const client = store.users.get(clientId)
-  if (!client) return
+  if (!client) throw new Error("unknown client")
   if (client.firmId !== firmId) {
     throw new Error("cross-firm client denied")
   }
@@ -203,6 +212,10 @@ export async function POST(request: Request) {
         return deny("actor clearance is below requested matter classification")
       }
       ensureClientIdentityInFirm(parsed.clientId, parsed.firmId)
+      // Validate every member before anything is persisted, so a bad member id cannot
+      // leave an orphaned matter behind.
+      const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
+      ensureMemberUsersInFirm(memberIds, parsed.firmId)
       const priorAuditCount = store.audit.length
       const matter = {
         id: store.id("mat"),
@@ -219,7 +232,6 @@ export async function POST(request: Request) {
       await repo.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
       // Keep in-memory mirror in sync for flows that still read the spine directly.
       store.matters.set(matter.id, matter)
-      const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
       for (const userId of memberIds) {
         addMember(store, matter.id, userId, parsed.firmId)
         await repo.members.upsert({ matterId: matter.id, userId, firmId: parsed.firmId })
