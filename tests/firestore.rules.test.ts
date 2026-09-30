@@ -619,3 +619,43 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
     })
   })
 })
+
+describe.each(["drafts", "evidence_items"])("Review round 2 — %s update (N3)", (coll) => {
+  const ASSOC_LOW = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const ASSOC_HIGH = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const INTERN = { firmId: "firmA", role: "intern", clearanceLevel: "privileged" }
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      for (const m of ["n3", "n3Other"]) {
+        await setDoc(doc(db, "matters", m), { firmId: "firmA", title: m, classification: "internal" })
+        for (const uid of ["n3-low", "n3-high", "n3-intern", "n3-client"]) {
+          await setDoc(doc(db, "matter_members", `${m}_${uid}`), { firmId: "firmA", matterId: m, userId: uid })
+        }
+      }
+      await setDoc(doc(db, coll, "n3Row"), { firmId: "firmA", matterId: "n3", classification: "internal" })
+      await setDoc(doc(db, coll, "n3RowPriv"), { firmId: "firmA", matterId: "n3", classification: "privileged" })
+    })
+  })
+
+  it("intern and client members cannot update", async () => {
+    await assertFails(updateDoc(doc(authed("n3-intern", INTERN), coll, "n3Row"), { note: "x" }))
+    await assertFails(updateDoc(doc(authed("n3-client", CLIENT), coll, "n3Row"), { note: "x" }))
+  })
+  it("member cannot update a row above own clearance", async () => {
+    await assertFails(updateDoc(doc(authed("n3-low", ASSOC_LOW), coll, "n3RowPriv"), { note: "x" }))
+  })
+  it("member cannot raise classification above own clearance", async () => {
+    await assertFails(updateDoc(doc(authed("n3-low", ASSOC_LOW), coll, "n3Row"), { classification: "privileged" }))
+  })
+  it("matterId and firmId are immutable", async () => {
+    const db = authed("n3-high", ASSOC_HIGH)
+    await assertFails(updateDoc(doc(db, coll, "n3Row"), { matterId: "n3Other" }))
+    await assertFails(updateDoc(doc(db, coll, "n3Row"), { firmId: "firmB" }))
+  })
+  it("cleared author member can monotonically update", async () => {
+    await assertSucceeds(updateDoc(doc(authed("n3-high", ASSOC_HIGH), coll, "n3Row"), { classification: "confidential" }))
+  })
+})

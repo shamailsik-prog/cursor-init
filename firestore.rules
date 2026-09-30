@@ -99,7 +99,9 @@ service cloud.firestore {
     match /evidence_items/{id} {
       allow read: if sameFirm() && isMember(resource.data.matterId) && cleared(resource.data.classification);
       allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
-      allow update: if sameFirm() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic();
+      allow update: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic()
+        && cleared(resource.data.classification) && clearedNew()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'firmId']);
       allow delete: if false;
     }
     match /custody_events/{id} {
@@ -117,7 +119,9 @@ service cloud.firestore {
     match /drafts/{id} {
       allow read: if sameFirm() && isMember(resource.data.matterId) && cleared(resource.data.classification);
       allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
-      allow update: if sameFirm() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic();
+      allow update: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic()
+        && cleared(resource.data.classification) && clearedNew()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'firmId']);
       allow delete: if false;
     }
     match /draft_versions/{id} {
