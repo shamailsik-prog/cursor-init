@@ -1,7 +1,6 @@
 import { logger } from "firebase-functions"
 import { onCall, type CallableRequest } from "firebase-functions/v2/https"
-import { FieldValue, type Transaction } from "firebase-admin/firestore"
-import type { UserRecord } from "firebase-admin/auth"
+import { FieldValue, type DocumentData, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminAuth, adminDb } from "../admin"
 import { REGION } from "../health"
@@ -58,7 +57,11 @@ class CallAudit {
 
   /** Stages the row in a transaction; call `committed()` once that transaction has committed. */
   async stage(tx: Transaction, decision: "allow" | "deny", reason: string): Promise<void> {
-    await appendAudit(this.row(decision, reason), tx)
+    try {
+      await appendAudit(this.row(decision, reason), tx)
+    } catch {
+      throw new HttpError(503, "audit_unavailable")
+    }
   }
 
   committed(): void {
@@ -87,12 +90,23 @@ class CallAudit {
   }
 }
 
+/** A loggable error code: the SDK's `code` string if any, never the message (which may carry an email). */
+function errorCode(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code
+  return typeof code === "string" ? code : "unknown"
+}
+
+/** Logs a failure with a generic message, its code and (optionally) a uid; no raw error text. */
+function logFailure(message: string, err: unknown, uid?: string): void {
+  logger.error(message, uid === undefined ? { code: errorCode(err) } : { uid, code: errorCode(err) })
+}
+
 /** Runs a callable body; any failure without an audit row yet is audited as a deny, then mapped to HttpsError. */
 async function audited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> {
   try {
     return await body()
   } catch (err) {
-    if (!(err instanceof HttpError)) logger.error("identity callable failed", err)
+    if (!(err instanceof HttpError)) logFailure("identity callable failed", err)
     const reason = err instanceof HttpError ? err.code : "internal"
     try {
       await audit.deny(reason)
@@ -151,26 +165,95 @@ function requireWithinOwnClearance(caller: Caller, clearance: Classification): v
 }
 
 /**
- * The caller may only act on users cleared no higher than themselves. A target
- * whose clearance claim is missing or malformed is treated as the highest rank.
+ * The caller may only act on users cleared no higher than themselves (per the
+ * target's users doc). A missing or malformed clearance counts as the highest rank.
  */
-function requireTargetWithinOwnClearance(caller: Caller, target: UserRecord): void {
-  const raw: unknown = target.customClaims?.clearanceLevel
+function requireTargetWithinOwnClearance(caller: Caller, raw: unknown): void {
   const targetRank = rankOf(isKnownClassification(raw) ? raw : "privileged-restricted")
   if (!(targetRank <= rankOf(caller.clearanceLevel))) throw new HttpError(403, "exceeds_own_clearance")
 }
 
-/** The target user, if it belongs to the caller's firm (per its current custom claims). Unknown → cross_firm too. */
-async function userInFirm(uid: string, firmId: string): Promise<UserRecord> {
-  let user: UserRecord
+/** Requires the Auth user to exist in the caller's firm (per its custom claims). Unknown → cross_firm too. */
+async function requireUserInFirm(uid: string, firmId: string): Promise<void> {
+  let firmClaim: unknown
   try {
-    user = await adminAuth().getUser(uid)
+    firmClaim = (await adminAuth().getUser(uid)).customClaims?.firmId
   } catch (err) {
-    if ((err as { code?: unknown })?.code === "auth/user-not-found") throw new HttpError(403, "cross_firm")
+    if (errorCode(err) === "auth/user-not-found") throw new HttpError(403, "cross_firm")
     throw err
   }
-  if (user.customClaims?.firmId !== firmId) throw new HttpError(403, "cross_firm")
-  return user
+  if (firmClaim !== firmId) throw new HttpError(403, "cross_firm")
+}
+
+const usersRef = () => adminDb().collection("users")
+
+/**
+ * Reads the target's users doc inside a transaction and applies the shared
+ * target checks: missing → 404 not_found, other firm → 403 cross_firm,
+ * clearance above the caller's → 403 exceeds_own_clearance.
+ */
+async function readTargetDoc(tx: Transaction, caller: Caller, uid: string): Promise<DocumentData> {
+  const doc = (await tx.get(usersRef().doc(uid))).data()
+  if (!doc) throw new HttpError(404, "not_found")
+  if (doc.firmId !== caller.firmId) throw new HttpError(403, "cross_firm")
+  requireTargetWithinOwnClearance(caller, doc.clearanceLevel)
+  return doc
+}
+
+/**
+ * Refuses (409 last_partner) a change that would leave the firm with no active
+ * partner other than `leavingUid`. Read inside the transaction, so two partners
+ * removing each other concurrently cannot both succeed.
+ */
+async function requireAnotherActivePartner(tx: Transaction, firmId: string, leavingUid: string): Promise<void> {
+  const partners = await tx.get(
+    usersRef().where("firmId", "==", firmId).where("role", "==", "partner").where("active", "==", true)
+  )
+  if (!partners.docs.some((d) => d.id !== leavingUid)) throw new HttpError(409, "last_partner")
+}
+
+function claimsVersionOf(doc: DocumentData | undefined): number {
+  const v: unknown = doc?.claimsVersion
+  return typeof v === "number" && Number.isInteger(v) ? v : 0
+}
+
+/**
+ * Makes the Auth claims mirror `users/{uid}` (role, clearanceLevel, firmId,
+ * claimsVersion), keeping unrelated claims. Re-reads the doc after each write
+ * and repeats if a newer version committed meanwhile, so concurrent writers
+ * converge on the latest doc state.
+ */
+async function syncClaimsFromDoc(uid: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const doc = (await usersRef().doc(uid).get()).data()
+    if (!doc) throw new HttpError(404, "not_found")
+    const existing = (await adminAuth().getUser(uid)).customClaims ?? {}
+    await adminAuth().setCustomUserClaims(uid, {
+      ...existing,
+      firmId: doc.firmId,
+      role: doc.role,
+      clearanceLevel: doc.clearanceLevel,
+      claimsVersion: claimsVersionOf(doc),
+    })
+    if (claimsVersionOf((await usersRef().doc(uid).get()).data()) === claimsVersionOf(doc)) return
+  }
+}
+
+/** True when running as a deployed function (not tests/emulated scripts). */
+function isHosted(): boolean {
+  return Boolean(process.env.K_SERVICE || process.env.FUNCTION_TARGET)
+}
+
+/**
+ * Hosted first-firm bootstrap gate: the caller's verified email must equal
+ * SIKANDER_BOOTSTRAP_FOUNDER_EMAIL (case-insensitive). Unset → 409
+ * bootstrap_not_configured; mismatch or unverified → 403 bootstrap_founder_mismatch.
+ */
+function requireBootstrapFounder(verifiedEmail: string | undefined): void {
+  if (!isHosted()) return
+  const expected = (process.env.SIKANDER_BOOTSTRAP_FOUNDER_EMAIL ?? "").trim().toLowerCase()
+  if (expected === "") throw new HttpError(409, "bootstrap_not_configured")
+  if (verifiedEmail?.trim().toLowerCase() !== expected) throw new HttpError(403, "bootstrap_founder_mismatch")
 }
 
 async function emailTaken(email: string): Promise<boolean> {
@@ -178,7 +261,7 @@ async function emailTaken(email: string): Promise<boolean> {
     await adminAuth().getUserByEmail(email)
     return true
   } catch (err) {
-    if ((err as { code?: unknown })?.code === "auth/user-not-found") return false
+    if (errorCode(err) === "auth/user-not-found") return false
     throw err
   }
 }
@@ -195,13 +278,18 @@ async function emailTaken(email: string): Promise<boolean> {
  * lets that founder call again: when the caller is the founder, has no firmId
  * claim and `firms/{firstFirmId}` exists, the founder claims and users doc are
  * re-applied idempotently and the same firmId is returned (audited as
- * allow `bootstrap_resume`).
+ * allow `bootstrap_resume`). A founder whose users doc is `active: false` is
+ * not resumed.
+ *
+ * Hosted deploys (K_SERVICE / FUNCTION_TARGET set) additionally gate the very
+ * first bootstrap on SIKANDER_BOOTSTRAP_FOUNDER_EMAIL, so a stranger cannot
+ * win the race on a fresh deploy. The platformAdmin path is unaffected.
  */
 export async function onboardFirmHandler(request: CallableRequest<unknown>): Promise<{ firmId: string }> {
   const data = dataOf(request)
   const audit = new CallAudit("identity.onboardFirm", request, "platform/bootstrap")
   return audited(audit, async () => {
-    const { uid, claims } = await callerWithoutFirm(request.auth)
+    const { uid, claims, verifiedEmail } = await callerWithoutFirm(request.auth)
     const name = typeof data.name === "string" ? data.name.trim() : ""
     if (name === "" || name.length > MAX_FIRM_NAME) throw new HttpError(400, "invalid_name")
     if (claims.firmId !== undefined) throw new HttpError(409, "already_onboarded")
@@ -213,7 +301,7 @@ export async function onboardFirmHandler(request: CallableRequest<unknown>): Pro
     const firmId = firmRef.id
 
     const userRef = db.collection("users").doc(uid)
-    const founderDoc = (firmId: string) => ({ firmId, ...FOUNDER, mfaEnabled: false, active: true })
+    const founderDoc = (founderFirmId: string) => ({ firmId: founderFirmId, ...FOUNDER, mfaEnabled: false, active: true })
 
     const outcome = await db.runTransaction(async (tx) => {
       const bootstrap = await tx.get(bootstrapRef)
@@ -224,7 +312,7 @@ export async function onboardFirmHandler(request: CallableRequest<unknown>): Pro
           tx.get(db.collection("firms").doc(firstFirmId)),
           tx.get(userRef),
         ])
-        if (firm.exists) {
+        if (firm.exists && userDoc.data()?.active !== false) {
           audit.firmId = firstFirmId
           audit.target = `firms/${firstFirmId}`
           await audit.stage(tx, "allow", "bootstrap_resume")
@@ -240,6 +328,7 @@ export async function onboardFirmHandler(request: CallableRequest<unknown>): Pro
         await audit.stage(tx, "deny", "bootstrap_closed")
         return { kind: "denied" as const }
       }
+      if (!bootstrap.exists && !isPlatformAdmin) requireBootstrapFounder(verifiedEmail)
       audit.firmId = firmId
       audit.target = `firms/${firmId}`
       await audit.stage(tx, "allow", "ok")
@@ -282,7 +371,7 @@ export async function createFirmUserHandler(request: CallableRequest<unknown>): 
     try {
       await adminAuth().createUser({ uid, email })
     } catch (err) {
-      if ((err as { code?: unknown })?.code === "auth/email-already-exists") throw new HttpError(409, "already_exists")
+      if (errorCode(err) === "auth/email-already-exists") throw new HttpError(409, "already_exists")
       throw err
     }
     try {
@@ -299,7 +388,7 @@ export async function createFirmUserHandler(request: CallableRequest<unknown>): 
       // Do not leave a half-provisioned account behind.
       await adminAuth()
         .deleteUser(uid)
-        .catch(() => undefined)
+        .catch((rollbackErr: unknown) => logFailure("createFirmUser rollback failed", rollbackErr, uid))
       throw err
     }
     return { uid }
@@ -308,13 +397,17 @@ export async function createFirmUserHandler(request: CallableRequest<unknown>): 
 
 /**
  * setUserClaims({ firmId, uid, role?, clearanceLevel? }). Partner only, same firm, never self.
- * Other existing custom claims are preserved, except `platformAdmin`, which this
- * path can never set or strip (an existing value is carried through unchanged).
- * The target's current clearance may not exceed the caller's.
- * Order: Auth claims → `users/{uid}` → refresh-token revocation. If the users-doc
- * write fails, the claims are rolled back to their previous value before the
- * error is returned. Revocation ends existing sessions so the next sign-in
- * carries the new claims (callables and requireAuth reject revoked sessions).
+ *
+ * `users/{uid}` is the source of truth and changes are serialised per target:
+ * a transaction re-reads the doc, re-checks the target's clearance against the
+ * fresh value, refuses to demote the firm's last active partner (409
+ * last_partner), and writes the new role/clearance with `claimsVersion + 1`.
+ * After commit the Auth claims are set from the committed doc (other existing
+ * claims, including `platformAdmin`, are kept: this path can neither set nor
+ * strip it), then refresh tokens are revoked so sessions end and the next
+ * sign-in carries the new claims. If setting the claims fails, the doc is
+ * reverted to its prior role/clearance, but only while `claimsVersion` is
+ * still ours (a newer change stays authoritative), and the error is returned.
  */
 export async function setUserClaimsHandler(
   request: CallableRequest<unknown>
@@ -333,37 +426,65 @@ export async function setUserClaimsHandler(
     if (role === undefined && clearanceLevel === undefined) throw new HttpError(400, "nothing_to_change")
     if (uid === caller.uid) throw new HttpError(403, "self_change_forbidden")
     if (clearanceLevel !== undefined) requireWithinOwnClearance(caller, clearanceLevel)
-    const target = await userInFirm(uid, caller.firmId)
-    requireTargetWithinOwnClearance(caller, target)
-    await audit.allow()
+    await requireUserInFirm(uid, caller.firmId)
 
-    const previous = { ...(target.customClaims ?? {}) }
-    const next = { ...previous, ...(role && { role }), ...(clearanceLevel && { clearanceLevel }) }
-    await adminAuth().setCustomUserClaims(uid, next)
+    const userRef = usersRef().doc(uid)
+    const change = await adminDb().runTransaction(async (tx) => {
+      const current = await readTargetDoc(tx, caller, uid)
+      const nextRole: unknown = role ?? current.role
+      const nextClearance: unknown = clearanceLevel ?? current.clearanceLevel
+      if (!isRole(nextRole) || !isKnownClassification(nextClearance)) throw new HttpError(409, "target_state_invalid")
+      if (current.role === "partner" && current.active === true && nextRole !== "partner") {
+        await requireAnotherActivePartner(tx, caller.firmId, uid)
+      }
+      const version = claimsVersionOf(current) + 1
+      await audit.stage(tx, "allow", "ok")
+      tx.update(userRef, {
+        role: nextRole,
+        clearanceLevel: nextClearance,
+        claimsVersion: version,
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      return { version, role: nextRole, clearanceLevel: nextClearance, before: { role: current.role, clearanceLevel: current.clearanceLevel } }
+    })
+    audit.committed()
+
     try {
-      await adminDb()
-        .collection("users")
-        .doc(uid)
-        .set(
-          { firmId: caller.firmId, ...(role && { role }), ...(clearanceLevel && { clearanceLevel }), updatedAt: FieldValue.serverTimestamp() },
-          { merge: true }
-        )
+      await syncClaimsFromDoc(uid)
     } catch (err) {
-      await adminAuth()
-        .setCustomUserClaims(uid, previous)
-        .catch((rollbackErr: unknown) => logger.error("setUserClaims claims rollback failed", { uid, rollbackErr }))
+      await revertIfStillOurs(uid, change.version, change.before).catch((revertErr: unknown) =>
+        logFailure("setUserClaims revert failed", revertErr, uid)
+      )
       throw err
     }
     await adminAuth().revokeRefreshTokens(uid)
-    return { uid, role: next.role as Role, clearanceLevel: next.clearanceLevel as Classification }
+    return { uid, role: change.role, clearanceLevel: change.clearanceLevel }
+  })
+}
+
+/** Restores the users doc's prior role/clearance (as a new version) if `version` is still the latest. */
+async function revertIfStillOurs(uid: string, version: number, before: { role: unknown; clearanceLevel: unknown }): Promise<void> {
+  const userRef = usersRef().doc(uid)
+  await adminDb().runTransaction(async (tx) => {
+    const doc = (await tx.get(userRef)).data()
+    if (!doc || claimsVersionOf(doc) !== version) return
+    tx.update(userRef, {
+      role: before.role,
+      clearanceLevel: before.clearanceLevel,
+      claimsVersion: version + 1,
+      updatedAt: FieldValue.serverTimestamp(),
+    })
   })
 }
 
 /**
  * deactivateUser({ firmId, uid }). Partner only, same firm, never self.
- * Disables the Auth user, revokes its refresh tokens and sets users/{uid}.active=false.
- * Documents the user created are left untouched. The target's current
- * clearance may not exceed the caller's.
+ * In a transaction on `users/{uid}` (missing → 404 not_found): the target's
+ * current clearance may not exceed the caller's, the firm's last active
+ * partner cannot be deactivated (409 last_partner), and the doc is set
+ * `active: false` (which alone locks the user out: callers need an active doc).
+ * Then the Auth user is disabled and its refresh tokens revoked. Documents the
+ * user created are left untouched.
  *
  * Afterwards the user's old token is rejected with 401 `user_disabled`, not
  * `token_revoked`: both the Admin SDK's verifyIdToken(checkRevoked) and
@@ -381,15 +502,20 @@ export async function deactivateUserHandler(request: CallableRequest<unknown>): 
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
     if (uid === caller.uid) throw new HttpError(403, "self_change_forbidden")
-    requireTargetWithinOwnClearance(caller, await userInFirm(uid, caller.firmId))
-    await audit.allow()
+    await requireUserInFirm(uid, caller.firmId)
+
+    await adminDb().runTransaction(async (tx) => {
+      const current = await readTargetDoc(tx, caller, uid)
+      if (current.role === "partner" && current.active === true) {
+        await requireAnotherActivePartner(tx, caller.firmId, uid)
+      }
+      await audit.stage(tx, "allow", "ok")
+      tx.update(usersRef().doc(uid), { active: false, deactivatedAt: FieldValue.serverTimestamp() })
+    })
+    audit.committed()
 
     await adminAuth().updateUser(uid, { disabled: true })
     await adminAuth().revokeRefreshTokens(uid)
-    await adminDb()
-      .collection("users")
-      .doc(uid)
-      .set({ active: false, deactivatedAt: FieldValue.serverTimestamp() }, { merge: true })
     return { uid, active: false }
   })
 }

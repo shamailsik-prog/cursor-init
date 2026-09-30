@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { DocumentReference } from "firebase-admin/firestore"
+import { Firestore } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
@@ -11,7 +11,18 @@ import {
   onboardFirmHandler,
   setUserClaimsHandler,
 } from "../src/p5/identity"
+import { appendAudit } from "../src/p5/audit"
 import { EMULATORS, callableAuth, mintIdToken, uniq } from "./emu"
+
+vi.mock("../src/p5/audit", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/p5/audit")>()
+  return { ...real, appendAudit: vi.fn(real.appendAudit) }
+})
+
+/** Every logger.error call, serialised, for "no PII in logs" assertions. */
+function loggedText(spy: { mock: { calls: unknown[][] } }): string {
+  return JSON.stringify(spy.mock.calls, (_k, v) => (v instanceof Error ? { name: v.name, message: v.message } : v))
+}
 
 async function httpsErrorOf(p: Promise<unknown>): Promise<HttpsError> {
   try {
@@ -241,6 +252,71 @@ describe.skipIf(!EMULATORS)("onboardFirm", () => {
     })
   })
 
+  it("stranded founder whose users doc is inactive is not resumed (bootstrap_closed)", async () => {
+    const { uid, token } = await mintIdToken(null)
+    const spy = vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("injected claims failure"))
+    const log = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    try {
+      await httpsErrorOf(onboardFirmHandler(await req(token, { name: "Stranded" })))
+    } finally {
+      spy.mockRestore()
+      log.mockRestore()
+    }
+    await adminDb().collection("users").doc(uid).update({ active: false })
+    const err = await httpsErrorOf(onboardFirmHandler(await req(token, { name: "Again" })))
+    expectHttps(err, "permission-denied", "bootstrap_closed")
+    expect((await adminAuth().getUser(uid)).customClaims ?? {}).toEqual({})
+    expect((await adminDb().collection("users").doc(uid).get()).data()?.active).toBe(false)
+  })
+
+  describe("hosted bootstrap (K_SERVICE / FUNCTION_TARGET set)", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it("founder email env unset → failed-precondition bootstrap_not_configured; nothing created", async () => {
+      vi.stubEnv("K_SERVICE", "onboardFirm")
+      vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", "")
+      const { uid, token } = await mintIdToken(null, { emailVerified: true })
+      const err = await httpsErrorOf(onboardFirmHandler(await req(token, { name: "X" })))
+      expectHttps(err, "failed-precondition", "bootstrap_not_configured")
+      expect(await bootstrapRef().get()).toMatchObject({ exists: false })
+      expect(await auditCount(uid, ACTION)).toBe(1)
+    })
+
+    it("verified email equal to the env (case-insensitive) → bootstrap allowed", async () => {
+      vi.stubEnv("FUNCTION_TARGET", "onboardFirm")
+      const email = `${uniq("founder")}@example.test`
+      vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", email.toUpperCase())
+      const { token } = await mintIdToken(null, { emailVerified: true, email })
+      await expect(onboardFirmHandler(await req(token, { name: "Founded" }))).resolves.toHaveProperty("firmId")
+    })
+
+    it.each([
+      ["another verified email", false, true],
+      ["the right email, unverified", true, false],
+    ])("%s → permission-denied bootstrap_founder_mismatch", async (_label, sameEmail, verified) => {
+      vi.stubEnv("K_SERVICE", "onboardFirm")
+      const email = `${uniq("founder")}@example.test`
+      vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", email)
+      const { uid, token } = await mintIdToken(null, {
+        emailVerified: verified,
+        email: sameEmail ? email : `${uniq("other")}@example.test`,
+      })
+      const err = await httpsErrorOf(onboardFirmHandler(await req(token, { name: "X" })))
+      expectHttps(err, "permission-denied", "bootstrap_founder_mismatch")
+      expect(await bootstrapRef().get()).toMatchObject({ exists: false })
+      expect(await auditCount(uid, ACTION)).toBe(1)
+    })
+
+    it("platformAdmin path is unaffected by the founder-email gate", async () => {
+      vi.stubEnv("K_SERVICE", "onboardFirm")
+      vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", "")
+      const { token } = await mintIdToken({ platformAdmin: true })
+      await expect(onboardFirmHandler(await req(token, { name: "Admin-made" }))).resolves.toHaveProperty("firmId")
+    })
+  })
+
   it("founderUid match but the firm doc is missing → no resume (bootstrap_closed)", async () => {
     const { uid, token } = await mintIdToken(null)
     await bootstrapRef().set({ firstFirmId: uniq("gone"), founderUid: uid, at: new Date() })
@@ -376,6 +452,46 @@ describe.skipIf(!EMULATORS)("createFirmUser", () => {
     expect(await auditCount(partner.uid, ACTION)).toBe(1)
   })
 
+  it("claims write fails after createUser → Auth user deleted, no users doc, internal; logs carry no email", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const email = `${uniq("rollback")}@example.test`
+    const claims = vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error(`boom for ${email}`))
+    const del = vi.spyOn(adminAuth(), "deleteUser").mockRejectedValueOnce(new Error(`cannot delete ${email}`))
+    const log = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    try {
+      const err = await httpsErrorOf(
+        createFirmUserHandler(await req(partner.token, { firmId, email, role: "clerk", clearanceLevel: "internal" }))
+      )
+      expectHttps(err, "internal", "internal")
+      expect(del).toHaveBeenCalledTimes(1)
+      expect(loggedText(log)).toContain("rollback")
+      expect(loggedText(log)).not.toContain(email)
+    } finally {
+      claims.mockRestore()
+      del.mockRestore()
+      log.mockRestore()
+    }
+    expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("claims write fails after createUser → the half-provisioned Auth user is deleted", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const email = `${uniq("rollback")}@example.test`
+    const claims = vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("injected"))
+    const log = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    try {
+      await httpsErrorOf(
+        createFirmUserHandler(await req(partner.token, { firmId, email, role: "clerk", clearanceLevel: "internal" }))
+      )
+    } finally {
+      claims.mockRestore()
+      log.mockRestore()
+    }
+    await expect(adminAuth().getUserByEmail(email)).rejects.toMatchObject({ code: "auth/user-not-found" })
+  })
+
   it("duplicate email → already-exists", async () => {
     const firmId = uniq("firm")
     const partner = await mintIdToken(partnerClaims(firmId))
@@ -386,6 +502,43 @@ describe.skipIf(!EMULATORS)("createFirmUser", () => {
     )
     expectHttps(err, "already-exists", "already_exists")
     expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+})
+
+/**
+ * Simulates a concurrent deactivation of the caller: once the handler looks up
+ * the target in Auth (i.e. after the caller was authorised), the caller's users
+ * doc is flipped to inactive.
+ */
+async function deactivateCallerMidway(callerUid: string, targetUid: string) {
+  const auth = adminAuth()
+  const realGetUser = auth.getUser.bind(auth)
+  const spy = vi.spyOn(auth, "getUser").mockImplementation(async (uid: string) => {
+    if (uid === targetUid) {
+      spy.mockRestore()
+      await adminDb().collection("users").doc(callerUid).update({ active: false })
+    }
+    return realGetUser(uid)
+  })
+}
+
+describe.skipIf(!EMULATORS)("error logging", () => {
+  it("unexpected errors are logged with a code and a generic message only (no raw error text / email)", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const email = `${uniq("pii")}@example.test`
+    const err = Object.assign(new Error(`The user with email ${email} failed`), { code: "auth/internal-error" })
+    const create = vi.spyOn(adminAuth(), "createUser").mockRejectedValueOnce(err)
+    const log = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    try {
+      await httpsErrorOf(createFirmUserHandler(await req(partner.token, { firmId, email, role: "clerk", clearanceLevel: "internal" })))
+      expect(log).toHaveBeenCalled()
+      expect(loggedText(log)).toContain("auth/internal-error")
+      expect(loggedText(log)).not.toContain(email)
+    } finally {
+      create.mockRestore()
+      log.mockRestore()
+    }
   })
 })
 
@@ -413,10 +566,11 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
       firmId,
       role: "clerk",
       clearanceLevel: "privileged",
+      claimsVersion: 1,
       locale: "ur-PK",
     })
     const doc = (await adminDb().collection("users").doc(target.uid).get()).data()
-    expect(doc).toMatchObject({ firmId, role: "clerk", clearanceLevel: "privileged", active: true })
+    expect(doc).toMatchObject({ firmId, role: "clerk", clearanceLevel: "privileged", active: true, claimsVersion: 1 })
 
     // The old session is revoked so the new claims take effect on the next sign-in.
     const { callerFromCallable } = await import("../src/p5/auth")
@@ -432,7 +586,12 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
     const partner = await mintIdToken(partnerClaims(firmId))
     const target = await member(firmId)
     await setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "intern" }))
-    expect((await adminAuth().getUser(target.uid)).customClaims).toEqual({ firmId, role: "intern", clearanceLevel: "confidential" })
+    expect((await adminAuth().getUser(target.uid)).customClaims).toEqual({
+      firmId,
+      role: "intern",
+      clearanceLevel: "confidential",
+      claimsVersion: 1,
+    })
   })
 
   it("an existing platformAdmin claim on the target is preserved (a partner can neither set nor strip it)", async () => {
@@ -444,8 +603,97 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
       firmId,
       role: "clerk",
       clearanceLevel: "confidential",
+      claimsVersion: 1,
       platformAdmin: true,
     })
+  })
+
+  it("two concurrent calls on one target are serialised: both changes land, claims match the users doc", async () => {
+    const firmId = uniq("firm")
+    const p1 = await mintIdToken(partnerClaims(firmId))
+    const p2 = await mintIdToken(partnerClaims(firmId))
+    const target = await member(firmId, { locale: "ur-PK" })
+    const results = await Promise.allSettled([
+      setUserClaimsHandler(await req(p1.token, { firmId, uid: target.uid, role: "clerk" })),
+      setUserClaimsHandler(await req(p2.token, { firmId, uid: target.uid, clearanceLevel: "internal" })),
+    ])
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"])
+    const doc = (await adminDb().collection("users").doc(target.uid).get()).data()
+    expect(doc).toMatchObject({ role: "clerk", clearanceLevel: "internal", claimsVersion: 2 })
+    expect((await adminAuth().getUser(target.uid)).customClaims).toEqual({
+      firmId,
+      role: "clerk",
+      clearanceLevel: "internal",
+      claimsVersion: 2,
+      locale: "ur-PK",
+    })
+    expect(await auditCount(p1.uid, ACTION)).toBe(1)
+    expect(await auditCount(p2.uid, ACTION)).toBe(1)
+  })
+
+  it("the target-clearance check uses the users doc, not stale Auth claims", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId, "confidential"))
+    const target = await member(firmId)
+    // Raised elsewhere: the doc (source of truth) is ahead of the target's claims.
+    await adminDb().collection("users").doc(target.uid).update({ clearanceLevel: "privileged" })
+    const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
+    expectHttps(err, "permission-denied", "exceeds_own_clearance")
+    expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("same-firm user without a users doc → not-found; nothing changed", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await mintIdToken({ firmId, role: "associate", clearanceLevel: "internal" }, { userDoc: false })
+    const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
+    expectHttps(err, "not-found", "not_found")
+    expect((await adminDb().collection("users").doc(target.uid).get()).exists).toBe(false)
+    expect((await adminAuth().getUser(target.uid)).customClaims?.role).toBe("associate")
+    expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("demoting the firm's last active partner → failed-precondition last_partner", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await mintIdToken(partnerClaims(firmId))
+    // Race: the caller is deactivated elsewhere after being authorised, before the change commits.
+    await deactivateCallerMidway(partner.uid, target.uid)
+    const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "associate" })))
+    expectHttps(err, "failed-precondition", "last_partner")
+    expect((await adminDb().collection("users").doc(target.uid).get()).data()?.role).toBe("partner")
+    expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("demoting one of two active partners is allowed", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await mintIdToken(partnerClaims(firmId))
+    await expect(
+      setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "associate" }))
+    ).resolves.toMatchObject({ role: "associate" })
+  })
+
+  it("a demoted partner's old token is denied the partner action even if revocation failed", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await mintIdToken(partnerClaims(firmId))
+    const oldTargetRequest = await req(target.token, {
+      firmId,
+      email: `${uniq("n")}@example.test`,
+      role: "clerk",
+      clearanceLevel: "internal",
+    })
+    const revoke = vi.spyOn(adminAuth(), "revokeRefreshTokens").mockRejectedValueOnce(new Error("injected revoke failure"))
+    const log = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    try {
+      await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "associate" })))
+    } finally {
+      revoke.mockRestore()
+      log.mockRestore()
+    }
+    const err = await httpsErrorOf(createFirmUserHandler(oldTargetRequest))
+    expectHttps(err, "unauthenticated", "claims_stale")
   })
 
   it("target whose current clearance is above the caller's → permission-denied exceeds_own_clearance", async () => {
@@ -466,36 +714,57 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
       vi.restoreAllMocks()
     })
 
-    it("users-doc write fails after the claims changed → claims rolled back, internal, one audit row", async () => {
+    it("users-doc transaction fails → nothing changed (claims never touched), internal, one audit row", async () => {
       const firmId = uniq("firm")
       const partner = await mintIdToken(partnerClaims(firmId))
       const target = await member(firmId, { locale: "ur-PK", platformAdmin: true })
       const before = (await adminAuth().getUser(target.uid)).customClaims
       const setClaims = vi.spyOn(adminAuth(), "setCustomUserClaims")
       const revoke = vi.spyOn(adminAuth(), "revokeRefreshTokens")
-      vi.spyOn(DocumentReference.prototype, "set").mockRejectedValueOnce(new Error("injected users-doc failure"))
+      vi.spyOn(Firestore.prototype, "runTransaction").mockRejectedValueOnce(new Error("injected users-doc failure"))
 
       const err = await httpsErrorOf(
         setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk", clearanceLevel: "internal" }))
       )
       expectHttps(err, "internal", "internal")
-      expect(setClaims).toHaveBeenCalledTimes(2) // apply, then roll back
+      expect(setClaims).not.toHaveBeenCalled()
       expect(revoke).not.toHaveBeenCalled()
       expect((await adminAuth().getUser(target.uid)).customClaims).toEqual(before)
       expect((await adminDb().collection("users").doc(target.uid).get()).data()).toMatchObject({ role: "associate" })
       expect(await auditCount(partner.uid, ACTION)).toBe(1)
     })
 
-    it("Auth claims write fails → nothing changed, users doc untouched, internal", async () => {
+    it("Auth claims write fails after the doc committed → doc reverted to its prior state (version still ours), internal", async () => {
       const firmId = uniq("firm")
       const partner = await mintIdToken(partnerClaims(firmId))
       const target = await member(firmId)
+      const revoke = vi.spyOn(adminAuth(), "revokeRefreshTokens")
       vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("injected claims failure"))
       const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
       expectHttps(err, "internal", "internal")
+      expect(revoke).not.toHaveBeenCalled()
       expect((await adminAuth().getUser(target.uid)).customClaims?.role).toBe("associate")
-      expect((await adminDb().collection("users").doc(target.uid).get()).data()).toMatchObject({ role: "associate" })
+      expect((await adminDb().collection("users").doc(target.uid).get()).data()).toMatchObject({
+        role: "associate",
+        clearanceLevel: "confidential",
+        claimsVersion: 2,
+      })
       expect(await auditCount(partner.uid, ACTION)).toBe(1)
+    })
+
+    it("Auth claims write fails but a newer change already committed → that newer doc state is kept", async () => {
+      const firmId = uniq("firm")
+      const partner = await mintIdToken(partnerClaims(firmId))
+      const target = await member(firmId)
+      const users = adminDb().collection("users")
+      vi.spyOn(adminAuth(), "setCustomUserClaims").mockImplementationOnce(async () => {
+        // A newer change lands between our commit and our claims write, which then fails.
+        await users.doc(target.uid).update({ role: "intern", claimsVersion: 2 })
+        throw new Error("injected claims failure")
+      })
+      const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
+      expectHttps(err, "internal", "internal")
+      expect((await users.doc(target.uid).get()).data()).toMatchObject({ role: "intern", claimsVersion: 2 })
     })
   })
 
@@ -644,6 +913,54 @@ describe.skipIf(!EMULATORS)("deactivateUser", () => {
     expectHttps(err, "permission-denied", "exceeds_own_clearance")
     expect((await adminAuth().getUser(target.uid)).disabled).toBe(false)
     expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("unknown uid → permission-denied cross_firm", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const err = await httpsErrorOf(deactivateUserHandler(await req(partner.token, { firmId, uid: uniq("ghost") })))
+    expectHttps(err, "permission-denied", "cross_firm")
+    expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("same-firm user without a users doc → not-found; Auth user not disabled", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await mintIdToken({ firmId, role: "associate", clearanceLevel: "internal" }, { userDoc: false })
+    const err = await httpsErrorOf(deactivateUserHandler(await req(partner.token, { firmId, uid: target.uid })))
+    expectHttps(err, "not-found", "not_found")
+    expect((await adminAuth().getUser(target.uid)).disabled).toBe(false)
+    expect((await adminDb().collection("users").doc(target.uid).get()).exists).toBe(false)
+  })
+
+  it("deactivating the firm's last active partner → failed-precondition last_partner", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await mintIdToken(partnerClaims(firmId))
+    await deactivateCallerMidway(partner.uid, target.uid)
+    const err = await httpsErrorOf(deactivateUserHandler(await req(partner.token, { firmId, uid: target.uid })))
+    expectHttps(err, "failed-precondition", "last_partner")
+    expect((await adminAuth().getUser(target.uid)).disabled).toBe(false)
+    expect((await adminDb().collection("users").doc(target.uid).get()).data()?.active).toBe(true)
+    expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("audit write fails → unavailable audit_unavailable and nothing is mutated", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await member(firmId)
+    vi.mocked(appendAudit).mockRejectedValue(new Error("audit store down"))
+    try {
+      const err = await httpsErrorOf(deactivateUserHandler(await req(partner.token, { firmId, uid: target.uid })))
+      expectHttps(err, "unavailable", "audit_unavailable")
+    } finally {
+      vi.mocked(appendAudit).mockReset()
+      const real = await vi.importActual<typeof import("../src/p5/audit")>("../src/p5/audit")
+      vi.mocked(appendAudit).mockImplementation(real.appendAudit)
+    }
+    expect((await adminAuth().getUser(target.uid)).disabled).toBe(false)
+    expect((await adminDb().collection("users").doc(target.uid).get()).data()?.active).toBe(true)
+    expect(await auditCount(partner.uid, ACTION)).toBe(0)
   })
 
   it("target with a malformed clearance claim is treated as the highest rank", async () => {

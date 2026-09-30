@@ -1,8 +1,8 @@
 import type { CallableRequest } from "firebase-functions/v2/https"
 import type { Classification } from "@/platform/p1/types"
-import { adminAuth } from "../admin"
+import { adminAuth, adminDb } from "../admin"
 import { HttpError } from "../http/errors"
-import { isKnownClassification } from "./classification"
+import { isKnownClassification, rankOf } from "./classification"
 
 /**
  * Mirrors `Role` in platform/spine/store.ts (guarded by test/p5.role.test.ts).
@@ -12,7 +12,10 @@ import { isKnownClassification } from "./classification"
 export const ROLES = ["partner", "associate", "clerk", "intern", "accounts", "client"] as const
 export type Role = (typeof ROLES)[number]
 
-/** Verified identity. Custom claims `firmId`, `role`, `clearanceLevel` are authoritative. */
+/**
+ * Verified identity. `users/{uid}` is authoritative for role and clearance; the
+ * token's custom claims can only restrict them (see `bindToUserDoc`).
+ */
 export type Caller = { uid: string; firmId: string; role: Role; clearanceLevel: Classification }
 
 const ROLE_SET: ReadonlySet<string> = new Set<string>(ROLES)
@@ -56,7 +59,31 @@ export async function requireAuth(req: { headers: Record<string, string | undefi
     if (code === "auth/user-disabled") throw new HttpError(401, "user_disabled")
     throw new HttpError(401, "invalid_token")
   }
-  return callerFromClaims(decoded.uid, decoded, header(req.headers, "x-firm-id"))
+  return bindToUserDoc(callerFromClaims(decoded.uid, decoded, header(req.headers, "x-firm-id")))
+}
+
+/**
+ * Applies the authoritative `users/{uid}` doc to a token-derived Caller:
+ * missing doc or not `active: true` → 403 inactive_user; doc in another firm →
+ * 403 firm_mismatch; malformed doc role/clearance → 403 no_claims; doc role ≠
+ * token role → 401 claims_stale (refresh the token). Clearance is the lower of
+ * the doc's and the token's, so a demotion takes effect before revocation does.
+ * Unreadable doc → 503 store_unavailable.
+ */
+async function bindToUserDoc(caller: Caller): Promise<Caller> {
+  let doc: Record<string, unknown> | undefined
+  try {
+    doc = (await adminDb().collection("users").doc(caller.uid).get()).data()
+  } catch {
+    throw new HttpError(503, "store_unavailable")
+  }
+  if (!doc || doc.active !== true) throw new HttpError(403, "inactive_user")
+  if (doc.firmId !== caller.firmId) throw new HttpError(403, "firm_mismatch")
+  if (!isRole(doc.role) || !isKnownClassification(doc.clearanceLevel)) throw new HttpError(403, "no_claims")
+  if (doc.role !== caller.role) throw new HttpError(401, "claims_stale")
+  const clearanceLevel =
+    rankOf(doc.clearanceLevel) < rankOf(caller.clearanceLevel) ? doc.clearanceLevel : caller.clearanceLevel
+  return { ...caller, clearanceLevel }
 }
 
 /**
@@ -94,17 +121,19 @@ export async function callerFromCallable(auth: CallableRequest["auth"], firmIdHe
   if (!auth) throw new HttpError(401, "missing_token")
   if (typeof firmIdHeader !== "string" || firmIdHeader === "") throw new HttpError(400, "firm_required")
   const { claims } = await verifyCallableSession(auth)
-  return callerFromClaims(auth.uid, claims, firmIdHeader)
+  return bindToUserDoc(callerFromClaims(auth.uid, claims, firmIdHeader))
 }
 
 /**
  * Callable identity for callers that have no firm yet (firm onboarding):
- * the same revocation/disabled checks, returning the uid and the user's
- * *current* custom claims from the user record (not the possibly stale token).
+ * the same revocation/disabled checks, returning the uid, the user's
+ * *current* custom claims from the user record (not the possibly stale token)
+ * and the token's email when it is verified.
  */
 export async function callerWithoutFirm(
   auth: CallableRequest["auth"]
-): Promise<{ uid: string; claims: Record<string, unknown> }> {
-  const { customClaims } = await verifyCallableSession(auth)
-  return { uid: auth!.uid, claims: customClaims }
+): Promise<{ uid: string; claims: Record<string, unknown>; verifiedEmail?: string }> {
+  const { claims, customClaims } = await verifyCallableSession(auth)
+  const verifiedEmail = claims.email_verified === true && typeof claims.email === "string" ? claims.email : undefined
+  return { uid: auth!.uid, claims: customClaims, verifiedEmail }
 }

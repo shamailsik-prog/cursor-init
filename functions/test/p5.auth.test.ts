@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { adminAuth } from "../src/admin"
+import { adminAuth, adminDb } from "../src/admin"
 import { HttpError } from "../src/http/errors"
 import { callerFromCallable, requireAuth } from "../src/p5/auth"
-import { EMULATORS, mintIdToken, uniq } from "./emu"
+import { EMULATORS, callableAuth, mintIdToken, uniq } from "./emu"
 
 async function httpErrorOf(p: Promise<unknown>): Promise<HttpError> {
   try {
@@ -108,11 +108,6 @@ describe.skipIf(!EMULATORS)("requireAuth (Auth emulator)", () => {
   })
 })
 
-async function callableAuth(token: string) {
-  // What the onCall runtime hands us: a verified (not revocation-checked) token.
-  const decoded = await adminAuth().verifyIdToken(token)
-  return { uid: decoded.uid, token: decoded, rawToken: token } as never
-}
 
 describe.skipIf(!EMULATORS)("requireAuth header handling (Auth emulator)", () => {
   it("capitalised Authorization / X-Firm-Id headers are accepted", async () => {
@@ -220,5 +215,75 @@ describe.skipIf(!EMULATORS)("requireAuth disabled user (Auth emulator)", () => {
     const err = await httpErrorOf(requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } }))
     expect(err.status).toBe(401)
     expect(err.code).toBe("user_disabled")
+  })
+})
+
+describe.skipIf(!EMULATORS)("users/{uid} is authoritative (requireAuth + callerFromCallable)", () => {
+  const partner = (firmId: string) => ({ firmId, role: "partner", clearanceLevel: "privileged" })
+  const users = () => adminDb().collection("users")
+
+  async function both(token: string, firmId: string) {
+    const http = requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } })
+    const callable = callerFromCallable(await callableAuth(token), firmId)
+    return Promise.allSettled([http, callable])
+  }
+
+  function rejectedWith(results: PromiseSettledResult<unknown>[], status: number, code: string) {
+    for (const r of results) {
+      expect(r.status).toBe("rejected")
+      expect((r as PromiseRejectedResult).reason).toMatchObject({ status, code })
+    }
+  }
+
+  it("missing users doc → 403 inactive_user", async () => {
+    const firmId = uniq("firm")
+    const { token } = await mintIdToken(partner(firmId), { userDoc: false })
+    rejectedWith(await both(token, firmId), 403, "inactive_user")
+  })
+
+  it("users doc active:false → 403 inactive_user", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(partner(firmId))
+    await users().doc(uid).update({ active: false })
+    rejectedWith(await both(token, firmId), 403, "inactive_user")
+  })
+
+  it("users doc of another firm → 403 firm_mismatch", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(partner(firmId))
+    await users().doc(uid).update({ firmId: uniq("other") })
+    rejectedWith(await both(token, firmId), 403, "firm_mismatch")
+  })
+
+  it("demoted partner (doc role changed, old token still says partner) → 401 claims_stale", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(partner(firmId))
+    await users().doc(uid).update({ role: "associate" })
+    rejectedWith(await both(token, firmId), 401, "claims_stale")
+  })
+
+  it("doc clearance lower than the token's → Caller gets the lower clearance", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(partner(firmId))
+    await users().doc(uid).update({ clearanceLevel: "internal" })
+    for (const r of await both(token, firmId)) {
+      expect(r).toEqual({ status: "fulfilled", value: { uid, firmId, role: "partner", clearanceLevel: "internal" } })
+    }
+  })
+
+  it("doc clearance higher than the token's → Caller keeps the token's (claims only restrict)", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken({ firmId, role: "associate", clearanceLevel: "internal" })
+    await users().doc(uid).update({ clearanceLevel: "privileged-restricted" })
+    for (const r of await both(token, firmId)) {
+      expect(r).toEqual({ status: "fulfilled", value: { uid, firmId, role: "associate", clearanceLevel: "internal" } })
+    }
+  })
+
+  it("malformed doc clearance (prototype key) → 403 no_claims", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(partner(firmId))
+    await users().doc(uid).update({ clearanceLevel: "constructor" })
+    rejectedWith(await both(token, firmId), 403, "no_claims")
   })
 })
