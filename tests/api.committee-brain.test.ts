@@ -1,12 +1,33 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { GET, POST } from "@/app/api/p1/committee-brain/route"
 import { setTransportForTests } from "@/platform/p1/internalAICaller"
-import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
+import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
+import type { Classification } from "@/platform/spine/store"
 
 afterEach(() => {
   setTransportForTests(null)
   resetRuntimeStoreForTests()
 })
+
+// Committee classification is derived from the referenced matter (H1), and
+// listings are filtered by matter membership (M4), so fixtures live on matters.
+function seedMatter(id: string, classification: Classification, members: string[]) {
+  const store = getRuntimeStore()
+  store.matters.set(id, {
+    id,
+    firmId: "firmA",
+    clientId: "client_a",
+    title: `Matter ${id}`,
+    courtId: "SHC",
+    caseNumber: null,
+    caseNumberStatus: "pending",
+    status: "live",
+    classification,
+  })
+  for (const userId of members) {
+    store.members.set(store.memberKey(id, userId), { matterId: id, userId, firmId: "firmA" })
+  }
+}
 
 function post(body: unknown, key = "dddddddd-dddd-4ddd-8ddd-dddddddddddd") {
   return POST(
@@ -95,8 +116,10 @@ describe("POST /api/p1/committee-brain", () => {
   it("returns a masked outbound payload and stays blocked without credentials", async () => {
     const cnic = "42101-1234567-1"
     const party = "Muhammad Ali Khan"
+    seedMatter("mat_public", "public", ["partner_a"])
     const res = await post({
       body: `Counsel for ${party}, CNIC ${cnic}`,
+      matterId: "mat_public",
       classification: "public",
       actorId: "partner_a",
       purpose: "summarise",
@@ -140,10 +163,13 @@ describe("POST /api/p1/committee-brain", () => {
   })
 
   it("lists persisted outputs with actor-bound firm and clearance filtering", async () => {
+    seedMatter("mat_internal", "internal", ["partner_a", "clerk_a"])
+    seedMatter("mat_privileged", "privileged", ["partner_a", "clerk_a"])
     const first = await post(
       {
         actorId: "partner_a",
         body: "internal summary",
+        matterId: "mat_internal",
         classification: "internal",
       },
       "b8f0d1f8-6b5c-4384-844a-1a6485daed74"
@@ -153,6 +179,7 @@ describe("POST /api/p1/committee-brain", () => {
       {
         actorId: "partner_a",
         body: "privileged summary",
+        matterId: "mat_privileged",
         classification: "privileged",
       },
       "f5fb869a-e344-4462-99f7-e0f0762ec8eb"

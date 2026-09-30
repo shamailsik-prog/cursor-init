@@ -1873,6 +1873,9 @@ export type CommitteeBrainOutput = {
   firmId: string
   actorId: string
   classification: Classification
+  /** Matter the output was derived from; null/absent = author-only visibility. */
+  matterId?: string | null
+  documentIds?: string[]
   purpose: string
   blocked: boolean
   reason?: string

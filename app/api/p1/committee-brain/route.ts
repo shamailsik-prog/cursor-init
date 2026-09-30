@@ -3,7 +3,14 @@ import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { callCommitteeBrain } from "@/platform/p1/internalAICaller"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, type CommitteeBrainOutput } from "@/platform/spine/store"
+import {
+  CommitteeScopeError,
+  canAccessMatter,
+  resolveCommitteeScope,
+  strictestClassification,
+} from "@/platform/p5/committeeScope"
+import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import {
@@ -17,8 +24,16 @@ const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 type Body = {
   actorId?: string
   body?: string
+  /**
+   * Optional caller label. It can only RAISE the classification derived from
+   * the referenced matter/documents, never lower it (H1).
+   */
   classification?: string
+  /** Matter / documents the text comes from; the classification source. */
+  matterId?: string
+  documentIds?: string[]
   purpose?: string
+  /** Extra names to mask, added to the names derived from the matter. */
   partyNames?: string[]
 }
 
@@ -65,9 +80,31 @@ async function handleGet(request: Request) {
     const actor = requireActor(actorId)
     const blockedFilter =
       blockedParam === "true" ? true : blockedParam === "false" ? false : undefined
-    const all = (await repos.committeeOutputs.listByFirm(actor.firmId))
+    const cleared = (await repos.committeeOutputs.listByFirm(actor.firmId))
       .filter((row) => rankOf(actor.clearanceLevel) >= rankOf(row.classification))
       .filter((row) => (blockedFilter === undefined ? true : row.blocked === blockedFilter))
+    // M4: matter-scoped outputs only for matters the caller may access
+    // (P5 checkPermission: same firm + membership + clearance); outputs with
+    // no matter are visible to their author only.
+    if (cleared.some((row) => row.matterId)) {
+      await syncFirmMembers(store, repos, actor.firmId)
+    }
+    const matterAccess = new Map<string, boolean>()
+    const visible: CommitteeBrainOutput[] = []
+    for (const row of cleared) {
+      if (!row.matterId) {
+        if (row.actorId === actor.id) visible.push(row)
+        continue
+      }
+      let allowed = matterAccess.get(row.matterId)
+      if (allowed === undefined) {
+        allowed = (await canAccessMatter(store, repos, actor, row.matterId, "committee_brain_read"))
+          .allow
+        matterAccess.set(row.matterId, allowed)
+      }
+      if (allowed) visible.push(row)
+    }
+    const all = visible
       .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
     const items = all.slice(cursor, cursor + limit)
     const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
@@ -112,25 +149,37 @@ async function handlePost(request: Request) {
   if (!parsed.body || typeof parsed.body !== "string") {
     return NextResponse.json({ error: "body is required" }, { status: 400 })
   }
-  if (!isClassification(parsed.classification)) {
+  if (parsed.classification !== undefined && !isClassification(parsed.classification)) {
     return NextResponse.json(
       { error: "classification must be a rank-0–4 label" },
       { status: 400 }
     )
   }
-  const classification: Classification = parsed.classification
-  const partyNames = Array.isArray(parsed.partyNames)
+  const requestedClassification: Classification | undefined = parsed.classification
+  if (parsed.matterId !== undefined && (typeof parsed.matterId !== "string" || !parsed.matterId)) {
+    return NextResponse.json({ error: "matterId must be a string" }, { status: 400 })
+  }
+  if (
+    parsed.documentIds !== undefined &&
+    (!Array.isArray(parsed.documentIds) ||
+      !parsed.documentIds.every((id) => typeof id === "string" && id.length > 0))
+  ) {
+    return NextResponse.json({ error: "documentIds must be an array of ids" }, { status: 400 })
+  }
+  const requestedPartyNames = Array.isArray(parsed.partyNames)
     ? parsed.partyNames.filter((n) => typeof n === "string" && n.length > 0)
-    : undefined
+    : []
   const purpose =
     typeof parsed.purpose === "string" ? parsed.purpose : "committee-brain"
   const fingerprint = JSON.stringify({
     route: "/api/p1/committee-brain",
     actorId: parsed.actorId,
     body: parsed.body,
-    classification,
+    classification: requestedClassification ?? null,
+    matterId: parsed.matterId ?? null,
+    documentIds: parsed.documentIds ?? [],
     purpose,
-    partyNames: partyNames ?? [],
+    partyNames: requestedPartyNames,
   })
   const replay = idempotency.getReplay(key, fingerprint)
   if (replay.conflict) {
@@ -145,6 +194,30 @@ async function handlePost(request: Request) {
 
   try {
     const actor = requireActor(parsed.actorId)
+    let scope
+    try {
+      scope = await resolveCommitteeScope(store, repos, actor, {
+        matterId: parsed.matterId,
+        documentIds: parsed.documentIds,
+      })
+    } catch (err) {
+      if (err instanceof CommitteeScopeError) {
+        return NextResponse.json(
+          { error: err.message, code: err.status === 404 ? "NOT_FOUND" : "FORBIDDEN" },
+          { status: err.status }
+        )
+      }
+      throw err
+    }
+    // H1: the derived classification is authoritative; a caller label may
+    // only make it stricter.
+    const classification: Classification =
+      strictestClassification(
+        requestedClassification
+          ? [scope.classification, requestedClassification]
+          : [scope.classification]
+      ) ?? scope.classification
+    const partyNames = [...new Set([...scope.partyNames, ...requestedPartyNames])]
     if (rankOf(actor.clearanceLevel) < rankOf(classification)) {
       return NextResponse.json(
         { error: "actor clearance is below requested committee classification" },
@@ -157,13 +230,15 @@ async function handlePost(request: Request) {
       classification,
       provider: "ai-gateway",
       purpose,
-      partyNames,
+      partyNames: partyNames.length > 0 ? partyNames : undefined,
     })
-    const output = {
+    const output: CommitteeBrainOutput = {
       id: store.id("cbo"),
       firmId: actor.firmId,
       actorId: actor.id,
       classification,
+      matterId: scope.matterId,
+      documentIds: scope.documentIds,
       purpose,
       blocked: result.blocked,
       reason: result.reason,
