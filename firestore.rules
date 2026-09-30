@@ -28,7 +28,8 @@ service cloud.firestore {
 
     match /firms/{firmId} {
       allow read: if signedIn() && tok().firmId == firmId;
-      allow write: if signedIn() && tok().firmId == firmId && isPartner();
+      // Cloud Functions (Admin SDK) are the only writers: onboarding, mfaEnforcedRoles, dataResidency, plan.
+      allow create, update, delete: if false;
     }
     match /users/{uid} {
       allow read: if sameFirm() && (isStaff() || request.auth.uid == uid);
