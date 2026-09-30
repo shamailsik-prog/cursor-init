@@ -102,30 +102,86 @@ describe.skipIf(!EMULATORS)("requireAuth (Auth emulator)", () => {
   })
 })
 
-describe("callerFromCallable", () => {
-  const auth = (token: Record<string, unknown>) => ({ uid: "u1", token, rawToken: "raw" }) as never
+async function callableAuth(token: string) {
+  // What the onCall runtime hands us: a verified (not revocation-checked) token.
+  const decoded = await adminAuth().verifyIdToken(token)
+  return { uid: decoded.uid, token: decoded, rawToken: token } as never
+}
 
-  it("missing auth → 401 missing_token", () => {
-    expect(() => callerFromCallable(undefined)).toThrow(HttpError)
-    try {
-      callerFromCallable(undefined)
-    } catch (e) {
-      expect((e as HttpError).status).toBe(401)
-      expect((e as HttpError).code).toBe("missing_token")
+describe("callerFromCallable (no emulator needed)", () => {
+  it("missing auth → 401 missing_token", async () => {
+    const err = await httpErrorOf(callerFromCallable(undefined, "f1"))
+    expect(err.status).toBe(401)
+    expect(err.code).toBe("missing_token")
+  })
+})
+
+describe.skipIf(!EMULATORS)("callerFromCallable (Auth emulator)", () => {
+  it("valid claims + matching firmId → Caller", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(goodClaims(firmId))
+    await expect(callerFromCallable(await callableAuth(token), firmId)).resolves.toEqual({
+      uid,
+      firmId,
+      role: "associate",
+      clearanceLevel: "confidential",
+    })
+  })
+
+  it("missing or empty firmId → 400 firm_required", async () => {
+    const { token } = await mintIdToken(goodClaims(uniq("firm")))
+    const auth = await callableAuth(token)
+    for (const firm of [undefined, ""]) {
+      const err = await httpErrorOf(callerFromCallable(auth, firm as never))
+      expect(err.status).toBe(400)
+      expect(err.code).toBe("firm_required")
     }
   })
 
-  it("valid claims → Caller; mismatching firm header → 403 firm_mismatch; bad claims → 403 no_claims", () => {
-    const token = { firmId: "f1", role: "clerk", clearanceLevel: "internal" }
-    expect(callerFromCallable(auth(token), "f1")).toEqual({
-      uid: "u1",
-      firmId: "f1",
-      role: "clerk",
-      clearanceLevel: "internal",
-    })
-    expect(() => callerFromCallable(auth(token), "f2")).toThrow(expect.objectContaining({ status: 403, code: "firm_mismatch" }))
-    expect(() => callerFromCallable(auth({ ...token, role: "root" }), "f1")).toThrow(
-      expect.objectContaining({ status: 403, code: "no_claims" })
-    )
+  it("mismatching firmId → 403 firm_mismatch", async () => {
+    const { token } = await mintIdToken(goodClaims(uniq("firm")))
+    const err = await httpErrorOf(callerFromCallable(await callableAuth(token), uniq("other")))
+    expect(err.status).toBe(403)
+    expect(err.code).toBe("firm_mismatch")
+  })
+
+  it("malformed claims → 403 no_claims", async () => {
+    const firmId = uniq("firm")
+    const { token } = await mintIdToken({ firmId, role: "root", clearanceLevel: "internal" })
+    const err = await httpErrorOf(callerFromCallable(await callableAuth(token), firmId))
+    expect(err.status).toBe(403)
+    expect(err.code).toBe("no_claims")
+  })
+
+  it("revoked session → 401 token_revoked", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(goodClaims(firmId))
+    const auth = await callableAuth(token)
+    await new Promise((r) => setTimeout(r, 1100))
+    await adminAuth().revokeRefreshTokens(uid)
+    const err = await httpErrorOf(callerFromCallable(auth, firmId))
+    expect(err.status).toBe(401)
+    expect(err.code).toBe("token_revoked")
+  })
+
+  it("disabled user → 401 user_disabled", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(goodClaims(firmId))
+    const auth = await callableAuth(token)
+    await adminAuth().updateUser(uid, { disabled: true })
+    const err = await httpErrorOf(callerFromCallable(auth, firmId))
+    expect(err.status).toBe(401)
+    expect(err.code).toBe("user_disabled")
+  })
+})
+
+describe.skipIf(!EMULATORS)("requireAuth disabled user (Auth emulator)", () => {
+  it("disabled user → 401 user_disabled", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(goodClaims(firmId))
+    await adminAuth().updateUser(uid, { disabled: true })
+    const err = await httpErrorOf(requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } }))
+    expect(err.status).toBe(401)
+    expect(err.code).toBe("user_disabled")
   })
 })

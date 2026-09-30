@@ -4,19 +4,20 @@ import { adminAuth } from "../admin"
 import { HttpError } from "../http/errors"
 
 /**
- * Mirrors `Role` in platform/spine/store.ts. Defined here rather than imported
- * because pulling that file into the functions typecheck surfaces its own
- * unrelated type errors.
+ * Mirrors `Role` in platform/spine/store.ts (guarded by test/p5.role.test.ts).
+ * Defined here rather than imported because pulling that file into the
+ * functions typecheck surfaces its own unrelated type errors.
  */
-export type Role = "partner" | "associate" | "clerk" | "intern" | "accounts" | "client"
+export const ROLES = ["partner", "associate", "clerk", "intern", "accounts", "client"] as const
+export type Role = (typeof ROLES)[number]
 
 /** Verified identity. Custom claims `firmId`, `role`, `clearanceLevel` are authoritative. */
 export type Caller = { uid: string; firmId: string; role: Role; clearanceLevel: Classification }
 
-const ROLES: ReadonlySet<string> = new Set<Role>(["partner", "associate", "clerk", "intern", "accounts", "client"])
+const ROLE_SET: ReadonlySet<string> = new Set<string>(ROLES)
 
 function isRole(value: unknown): value is Role {
-  return typeof value === "string" && ROLES.has(value)
+  return typeof value === "string" && ROLE_SET.has(value)
 }
 
 function header(headers: Record<string, string | undefined>, name: string): string | undefined {
@@ -58,13 +59,29 @@ export async function requireAuth(req: { headers: Record<string, string | undefi
 }
 
 /**
- * Callable (onCall) identity. The token was verified by the callable runtime
- * (without a revocation check). If `firmIdHeader` is supplied it must equal
- * claims.firmId; when omitted the caller is bound to its claimed firm.
+ * Callable (onCall) identity. The callable runtime verifies the token but does
+ * not check revocation, so this re-checks the user record: revoked sessions
+ * → 401 token_revoked, disabled users → 401 user_disabled. Callables must pass
+ * an explicit firm (`request.data.firmId`): missing → 400 firm_required,
+ * ≠ claims.firmId → 403 firm_mismatch.
  */
-export function callerFromCallable(auth: CallableRequest["auth"], firmIdHeader?: string): Caller {
+export async function callerFromCallable(auth: CallableRequest["auth"], firmIdHeader: string): Promise<Caller> {
   if (!auth) throw new HttpError(401, "missing_token")
+  if (typeof firmIdHeader !== "string" || firmIdHeader === "") throw new HttpError(400, "firm_required")
+
   const claims = auth.token as unknown as Record<string, unknown>
-  const bound = firmIdHeader === undefined ? claims.firmId : firmIdHeader
-  return callerFromClaims(auth.uid, claims, typeof bound === "string" ? bound : undefined)
+  const authTime = claims.auth_time
+  if (typeof authTime !== "number") throw new HttpError(401, "invalid_token")
+
+  let user: Awaited<ReturnType<ReturnType<typeof adminAuth>["getUser"]>>
+  try {
+    user = await adminAuth().getUser(auth.uid)
+  } catch {
+    throw new HttpError(401, "invalid_token")
+  }
+  if (user.disabled) throw new HttpError(401, "user_disabled")
+  const validAfter = user.tokensValidAfterTime ? Date.parse(user.tokensValidAfterTime) : NaN
+  if (!Number.isNaN(validAfter) && authTime * 1000 < validAfter) throw new HttpError(401, "token_revoked")
+
+  return callerFromClaims(auth.uid, claims, firmIdHeader)
 }
