@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -88,7 +89,7 @@ async function syncCourtOpsState(
 ) {
   const repos = await getRuntimeRepositories(store)
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
+  if (!actor) throw new PublicError("unknown actor")
 
   const firmDocs = await repos.documents.listByFirm(actor.firmId)
   for (const row of firmDocs) {
@@ -280,7 +281,7 @@ async function handlePost(request: Request) {
         reason: parsed.reason,
       })
       const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await repos.workflowOpsActivity.upsert(
         buildCourtOpsActivityRow({
           id: `ops:court_ops:ack:${parsed.queueType}:${parsed.id}`,

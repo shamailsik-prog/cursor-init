@@ -1,4 +1,5 @@
 import { rankOf, type FilingPackage, type SpineStore } from "@/platform/spine/store"
+import { PublicError } from "@/platform/http/publicError"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   runDraftPreflight,
@@ -18,19 +19,19 @@ export function createFilingPackage(
   preflight: ReturnType<typeof runDraftPreflight>
 } {
   const actor = store.users.get(input.actorId)
-  if (!actor) throw new Error("unknown actor")
+  if (!actor) throw new PublicError("unknown actor")
   const matter = store.matters.get(input.matterId)
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   const draft = store.drafts.get(input.draftId)
-  if (!draft) throw new Error("unknown draft")
-  if (draft.matterId !== input.matterId) throw new Error("draft does not belong to matter")
+  if (!draft) throw new PublicError("unknown draft")
+  if (draft.matterId !== input.matterId) throw new PublicError("draft does not belong to matter")
   const permission = checkPermission(store, actor.id, "draft", input.matterId)
-  if (!permission.allow) throw new Error(`permission denied: ${permission.reason}`)
+  if (!permission.allow) throw new PublicError(`permission denied: ${permission.reason}`)
   if (rankOf(draft.classification) < rankOf(matter.classification)) {
-    throw new Error("draft classification cannot be lower than matter classification")
+    throw new PublicError("draft classification cannot be lower than matter classification")
   }
   const gate = runDraftPreflight(store, input.preflight)
-  if (!gate.ok) throw new Error("preflight blocked filing package")
+  if (!gate.ok) throw new PublicError("preflight blocked filing package")
   const filingPackage: FilingPackage = {
     id: store.id("pkg"),
     firmId: matter.firmId,
@@ -65,14 +66,14 @@ export function decideFilingPackage(
   }
 ): FilingPackage {
   const actor = store.users.get(input.actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (actor.role !== "partner") throw new Error("partner role required")
-  if (!input.reason.trim()) throw new Error("reason is required")
+  if (!actor) throw new PublicError("unknown actor")
+  if (actor.role !== "partner") throw new PublicError("partner role required")
+  if (!input.reason.trim()) throw new PublicError("reason is required")
   const filingPackage = store.filingPackages.get(input.packageId)
-  if (!filingPackage) throw new Error("unknown filing package")
-  if (filingPackage.firmId !== actor.firmId) throw new Error("cross-firm decision denied")
+  if (!filingPackage) throw new PublicError("unknown filing package")
+  if (filingPackage.firmId !== actor.firmId) throw new PublicError("cross-firm decision denied")
   const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
-  if (!permission.allow) throw new Error(`permission denied: ${permission.reason}`)
+  if (!permission.allow) throw new PublicError(`permission denied: ${permission.reason}`)
   filingPackage.status =
     input.decision === "approve" ? "approved" : "rejected"
   filingPackage.approvedBy = actor.id
@@ -104,7 +105,7 @@ export function listFilingPackages(
   nextCursor: string | null
 } {
   const user = store.users.get(input.userId)
-  if (!user) throw new Error("unknown user")
+  if (!user) throw new PublicError("unknown user")
   const visible = [...store.filingPackages.values()]
     .filter((row) => row.firmId === user.firmId)
     .filter((row) => (input.matterId ? row.matterId === input.matterId : true))

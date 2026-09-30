@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { GET, POST } from "@/app/api/p1/committee-brain/route"
 import { setTransportForTests } from "@/platform/p1/internalAICaller"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
@@ -43,6 +43,11 @@ function post(body: unknown, key = "dddddddd-dddd-4ddd-8ddd-dddddddddddd") {
 }
 
 describe("POST /api/p1/committee-brain", () => {
+  // Every committee-brain POST must name a matter (matter_required).
+  beforeEach(() => {
+    seedMatter("mat_general", "public", ["partner_a"])
+  })
+
   it("requires Idempotency-Key", async () => {
     const res = await POST(
       new Request("http://127.0.0.1/api/p1/committee-brain", {
@@ -64,6 +69,7 @@ describe("POST /api/p1/committee-brain", () => {
       body: "hello",
       classification: "public",
       actorId: "partner_a",
+      matterId: "mat_general",
       purpose: "summarise",
     }
     const first = await post(payload, key)
@@ -83,6 +89,7 @@ describe("POST /api/p1/committee-brain", () => {
         body: "hello",
         classification: "public",
         actorId: "partner_a",
+        matterId: "mat_general",
         purpose: "summarise",
       },
       key
@@ -92,6 +99,7 @@ describe("POST /api/p1/committee-brain", () => {
         body: "hello again",
         classification: "public",
         actorId: "partner_a",
+        matterId: "mat_general",
         purpose: "summarise",
       },
       key
@@ -152,6 +160,7 @@ describe("POST /api/p1/committee-brain", () => {
       {
         actorId: "partner_a",
         body: "privileged memo",
+        matterId: "mat_general",
         classification: "privileged",
       },
       "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"

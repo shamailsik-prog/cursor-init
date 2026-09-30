@@ -1,4 +1,5 @@
 import { declassify } from "@/platform/classification/declassify"
+import { PublicError } from "@/platform/http/publicError"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
   rankOf,
@@ -51,14 +52,14 @@ function requireActorAndDocument(
   documentId: string
 ): { actor: User; doc: DocumentRecord; row: DocumentWorkflow } {
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
+  if (!actor) throw new PublicError("unknown actor")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for workflow actions")
+    throw new PublicError("actor role not allowed for workflow actions")
   }
   const doc = store.documents.get(documentId)
-  if (!doc) throw new Error("unknown document")
+  if (!doc) throw new PublicError("unknown document")
   if (!isUserVisibleForDocument(store, actor, doc)) {
-    throw new Error("actor not permitted for this document")
+    throw new PublicError("actor not permitted for this document")
   }
   const row = ensureWorkflowRow(store, doc)
   return { actor, doc, row }
@@ -79,7 +80,7 @@ export function transitionWorkflowStatus(
     input.documentId
   )
   if (!TRANSITIONS[row.status].includes(input.nextStatus)) {
-    throw new Error(`invalid transition: ${row.status} -> ${input.nextStatus}`)
+    throw new PublicError(`invalid transition: ${row.status} -> ${input.nextStatus}`)
   }
   row.status = input.nextStatus
   row.updatedAt = Date.now()
@@ -119,16 +120,16 @@ export function assignReviewer(
     input.documentId
   )
   const reviewer = store.users.get(input.reviewerId)
-  if (!reviewer) throw new Error("unknown reviewer")
-  if (reviewer.firmId !== doc.firmId) throw new Error("cross-firm reviewer denied")
+  if (!reviewer) throw new PublicError("unknown reviewer")
+  if (reviewer.firmId !== doc.firmId) throw new PublicError("cross-firm reviewer denied")
   if (reviewer.role === "client" || reviewer.role === "intern") {
-    throw new Error("reviewer role not allowed")
+    throw new PublicError("reviewer role not allowed")
   }
   if (rankOf(reviewer.clearanceLevel) < rankOf(doc.classification)) {
-    throw new Error("reviewer clearance too low")
+    throw new PublicError("reviewer clearance too low")
   }
   if (doc.matterId && !store.members.has(store.memberKey(doc.matterId, reviewer.id))) {
-    throw new Error("reviewer is not a member of this matter")
+    throw new PublicError("reviewer is not a member of this matter")
   }
   row.reviewerId = reviewer.id
   row.updatedAt = Date.now()
@@ -171,7 +172,7 @@ export function applyReviewDecision(
     input.documentId
   )
   if (row.reviewerId && row.reviewerId !== actor.id && actor.role !== "partner") {
-    throw new Error("only assigned reviewer or partner may submit review decision")
+    throw new PublicError("only assigned reviewer or partner may submit review decision")
   }
   if (input.decision === "confirm_classification") {
     row.status = "complete"
@@ -199,15 +200,15 @@ export function applyReviewDecision(
   }
 
   if (!isClassification(input.nextClassification)) {
-    throw new Error("nextClassification must be a rank-0–4 label")
+    throw new PublicError("nextClassification must be a rank-0–4 label")
   }
   if (!input.reason?.trim()) {
-    throw new Error("declassify decision requires a reason")
+    throw new PublicError("declassify decision requires a reason")
   }
   const next = input.nextClassification as Classification
   declassify(store, doc.id, next, actor.id, input.reason)
   const updated = store.documents.get(doc.id)
-  if (!updated) throw new Error("document missing after declassify")
+  if (!updated) throw new PublicError("document missing after declassify")
   row.status = "complete"
   row.updatedAt = Date.now()
   store.workflowEvents.push({
@@ -247,7 +248,7 @@ export function listWorkflowQueue(
   nextCursor: string | null
 } {
   const user = store.users.get(userId)
-  if (!user) throw new Error("unknown user")
+  if (!user) throw new PublicError("unknown user")
   const visible = [...store.documents.values()]
     .filter((doc) => (opts.matterId ? doc.matterId === opts.matterId : true))
     .filter((doc) => isUserVisibleForDocument(store, user, doc))
@@ -292,12 +293,12 @@ export function listWorkflowTimeline(
   nextCursor: string | null
 } {
   const user = store.users.get(userId)
-  if (!user) throw new Error("unknown user")
+  if (!user) throw new PublicError("unknown user")
   const matter = store.matters.get(matterId)
-  if (!matter) throw new Error("unknown matter")
-  if (matter.firmId !== user.firmId) throw new Error("cross-firm matter denied")
+  if (!matter) throw new PublicError("unknown matter")
+  if (matter.firmId !== user.firmId) throw new PublicError("cross-firm matter denied")
   if (!store.members.has(store.memberKey(matterId, user.id))) {
-    throw new Error("not a matter member")
+    throw new PublicError("not a matter member")
   }
   const items = store.workflowEvents
     .filter((event) => event.matterId === matterId)

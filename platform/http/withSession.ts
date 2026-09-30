@@ -5,7 +5,10 @@
  *   //   return withSession(request, handleGet)
  *   // (the original handler body is renamed to `handleGet` / `handlePost`)
  *
- * 1. Resolves the caller via P5 `resolveSession` (401/403/503 on failure).
+ * 1. Resolves the caller via P5 `resolveSession` (401/403/503 on failure) and
+ *    passes it to the handler as `handler(request, session)`. The handler runs
+ *    inside `runWithSession`, so `store.users.get(callerId)` (and therefore P5
+ *    checkPermission) sees clearance = min(record, token claim).
  * 2. Binds the request to that caller so the (unchanged) handler cannot be
  *    driven as someone else:
  *      - every `actorId` / `userId` in the query string or top-level JSON body
@@ -13,6 +16,10 @@
  *        otherwise 403 IDENTITY_MISMATCH;
  *      - when absent they are injected (query: actorId + userId; body: actorId),
  *        so handlers that read the identity from the request see the session.
+ *      - only TOP-LEVEL `actorId` / `userId` / `firmId` keys are bound. Handlers
+ *        must not read the caller's identity from nested or differently named
+ *        keys; subject ids (targetUserId, secondApproverId, …) are business
+ *        fields that the handler must authorise itself.
  * 3. Catches anything the handler throws and returns a generic 500 body with a
  *    stable code; details are logged server-side only.
  *
@@ -24,10 +31,27 @@
  * Every other app/api route requires a session (enforced by
  * tests/auth.route-coverage.test.ts).
  */
-import { AuthError, resolveSession, type Session } from "@/platform/p5/session"
+import { AuthError, loadUserRecord, resolveSession, type Session } from "@/platform/p5/session"
+import { runWithSession } from "@/platform/p5/requestSession"
 import { errorResponse, internalErrorResponse } from "@/platform/http/errors"
 
-export type RouteHandler = (request: Request) => Promise<Response> | Response
+/**
+ * The caller as seen by a handler. `null` only for public routes and for
+ * insecure-dev requests whose claimed identity is absent or unknown.
+ * `clearance` is already min(record, claim); `role` is the record's.
+ */
+export type HandlerSession = {
+  userId: string
+  firmId: string
+  role: Session["role"]
+  clearance: Session["clearance"]
+  mode: "firebase" | "insecure-dev"
+}
+
+export type RouteHandler = (
+  request: Request,
+  session: HandlerSession | null
+) => Promise<Response> | Response
 
 export type SessionRouteOptions = {
   /** No authentication at all. Reserved for health/status endpoints. */
@@ -115,13 +139,33 @@ function describe(request: Request): string {
   }
 }
 
+/** insecure-dev only: the identity the request claims (actorId, else userId). */
+async function claimedIdentity(request: Request): Promise<string | null> {
+  const url = new URL(request.url)
+  const fromQuery = url.searchParams.get("actorId") || url.searchParams.get("userId")
+  if (fromQuery) return fromQuery
+  const method = request.method.toUpperCase()
+  if (method === "GET" || method === "HEAD") return null
+  try {
+    const parsed: unknown = JSON.parse(await request.clone().text())
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>
+      const id = record.actorId ?? record.userId
+      return typeof id === "string" && id ? id : null
+    }
+  } catch {
+    // not JSON — the handler reports its own 400
+  }
+  return null
+}
+
 export async function withSession(
   request: Request,
   handler: RouteHandler,
   options: SessionRouteOptions = {}
 ): Promise<Response> {
   try {
-    if (options.public) return await handler(request)
+    if (options.public) return await handler(request, null)
 
     let session: Awaited<ReturnType<typeof resolveSession>>
     try {
@@ -133,11 +177,40 @@ export async function withSession(
       }
       throw err
     }
-    if (session.mode === "insecure-dev") return await handler(request)
+
+    if (session.mode === "insecure-dev") {
+      // Trust the request's identity (local/tests only), but still hydrate the
+      // record from the repository layer so handlers do not see "unknown actor"
+      // for a user that exists only in Firestore.
+      const claimed = await claimedIdentity(request)
+      const record = claimed ? await loadUserRecord(claimed) : null
+      const devSession: HandlerSession | null = record
+        ? {
+            userId: record.id,
+            firmId: record.firmId,
+            role: record.role,
+            clearance: record.clearanceLevel,
+            mode: "insecure-dev",
+          }
+        : null
+      return await handler(request, devSession)
+    }
 
     const bound = await bindRequestToSession(request, session, options)
     if (bound instanceof Response) return bound
-    return await handler(bound)
+    const handlerSession: HandlerSession = {
+      userId: session.userId,
+      firmId: session.firmId,
+      role: session.role,
+      clearance: session.clearance,
+      mode: "firebase",
+    }
+    // Code that looks the caller up by id sees clearance = min(record, claim)
+    // for this request only.
+    return await runWithSession(
+      { userId: session.userId, firmId: session.firmId, clearance: session.clearance },
+      () => handler(bound, handlerSession)
+    )
   } catch (err) {
     return internalErrorResponse(err, describe(request))
   }

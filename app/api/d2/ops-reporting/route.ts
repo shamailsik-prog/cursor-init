@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -2165,10 +2166,10 @@ function parseSnoozedUntil(value: unknown, now: number): number {
         ? Number.parseInt(value, 10)
         : Number.NaN
   if (!Number.isFinite(parsed)) {
-    throw new Error("snoozedUntil must be a unix epoch milliseconds number")
+    throw new PublicError("snoozedUntil must be a unix epoch milliseconds number")
   }
   if (parsed <= now) {
-    throw new Error("snoozedUntil must be in the future")
+    throw new PublicError("snoozedUntil must be in the future")
   }
   return parsed
 }
@@ -2186,10 +2187,10 @@ function parseOptionalFutureEpochMs(
         ? Number.parseInt(value, 10)
         : Number.NaN
   if (!Number.isFinite(parsed)) {
-    throw new Error(`${fieldName} must be a unix epoch milliseconds number`)
+    throw new PublicError(`${fieldName} must be a unix epoch milliseconds number`)
   }
   if (parsed <= now) {
-    throw new Error(`${fieldName} must be in the future`)
+    throw new PublicError(`${fieldName} must be in the future`)
   }
   return parsed
 }

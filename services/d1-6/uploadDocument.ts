@@ -1,4 +1,5 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
+import { PublicError } from "@/platform/http/publicError"
 import { rankOf, type SpineStore } from "@/platform/spine/store"
 
 export function uploadDocument(
@@ -13,7 +14,7 @@ export function uploadDocument(
   }
 ): { docId: string; reused: boolean } {
   if (!isClassification(input.classification)) {
-    throw new Error("artefact write omitted classification")
+    throw new PublicError("artefact write omitted classification")
   }
   const hash = store.hashKey(input.firmId, input.bytes)
   const existingId = store.docsByHash.get(hash)

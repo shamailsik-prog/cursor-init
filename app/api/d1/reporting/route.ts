@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -90,12 +91,12 @@ function reportRelevanceSnapshotId(matterId: string): string {
 
 function parseExportFormat(value: unknown): "csv" | "json" | "pdf" {
   if (value === "csv" || value === "json" || value === "pdf") return value
-  throw new Error("exportFormat must be csv, json, or pdf")
+  throw new PublicError("exportFormat must be csv, json, or pdf")
 }
 
 function parseExportScope(value: unknown): "summary" | "detailed" | "relevance_review" {
   if (value === "summary" || value === "detailed" || value === "relevance_review") return value
-  throw new Error("exportScope must be summary, detailed, or relevance_review")
+  throw new PublicError("exportScope must be summary, detailed, or relevance_review")
 }
 
 function normalizeReason(value: unknown, fallback: string): string {

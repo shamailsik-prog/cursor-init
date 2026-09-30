@@ -1,4 +1,5 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
+import { PublicError } from "@/platform/http/publicError"
 import { rankOf, type DraftRecord, type SpineStore } from "@/platform/spine/store"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
@@ -71,16 +72,16 @@ export function runDraftPreflight(
   input: DraftPreflightInput
 ): DraftPreflightResult {
   if (!isClassification(input.classification)) {
-    throw new Error("classification must be a rank-0–4 label")
+    throw new PublicError("classification must be a rank-0–4 label")
   }
   const actor = store.users.get(input.actorId)
-  if (!actor) throw new Error("unknown actor")
+  if (!actor) throw new PublicError("unknown actor")
   const matter = store.matters.get(input.matterId)
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   const permission = checkPermission(store, input.actorId, "draft", input.matterId)
-  if (!permission.allow) throw new Error(`permission denied: ${permission.reason}`)
+  if (!permission.allow) throw new PublicError(`permission denied: ${permission.reason}`)
   if (rankOf(input.classification) < rankOf(matter.classification)) {
-    throw new Error("draft classification cannot be lower than matter classification")
+    throw new PublicError("draft classification cannot be lower than matter classification")
   }
 
   const citation = verifyCitations(
@@ -124,13 +125,13 @@ export function composeDraft(
   }
 ): DraftRecord {
   const templateExists = getDocumentTypes().some((type) => type.id === input.templateId)
-  if (!templateExists) throw new Error("unknown templateId")
+  if (!templateExists) throw new PublicError("unknown templateId")
   const gate = runDraftPreflight(store, input.preflight)
   if (!gate.ok) {
-    throw new Error("preflight blocked drafting")
+    throw new PublicError("preflight blocked drafting")
   }
   const matter = store.matters.get(input.matterId)
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   const draft: DraftRecord = {
     id: store.id("drf"),
     firmId: matter.firmId,

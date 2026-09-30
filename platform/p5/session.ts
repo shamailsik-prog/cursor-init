@@ -12,8 +12,10 @@
  *     record, and a differing role claim is ignored in favour of the record.
  *   - "insecure-dev": local development and tests ONLY. Trusts the
  *     `actorId` / `userId` the request carries, exactly as routes did before
- *     authentication existed. Must be set explicitly and is refused when
- *     NODE_ENV === "production".
+ *     authentication existed. Must be set explicitly, and is allowed only when
+ *     NODE_ENV is "development" or "test" and no hosted-runtime marker
+ *     (K_SERVICE, VERCEL, VERCEL_ENV, FUNCTION_TARGET, FIREBASE_CONFIG,
+ *     GAE_SERVICE) is present; otherwise 503.
  *
  * Any other value fails closed.
  */
@@ -68,15 +70,35 @@ const KNOWN_ROLES: ReadonlySet<string> = new Set<Role>([
 
 let insecureDevWarned = false
 
+/** Env vars set by Cloud Run, Vercel, Cloud Functions, Firebase and App Engine. */
+const HOSTED_RUNTIME_MARKERS = [
+  "K_SERVICE",
+  "VERCEL",
+  "VERCEL_ENV",
+  "FUNCTION_TARGET",
+  "FIREBASE_CONFIG",
+  "GAE_SERVICE",
+] as const
+
 export function resolveAuthMode(env: NodeJS.ProcessEnv = process.env): AuthMode {
   const raw = (env.SIKANDER_AUTH_MODE ?? "").trim().toLowerCase()
   if (raw === "" || raw === "firebase") return "firebase"
   if (raw === "insecure-dev") {
-    if (env.NODE_ENV === "production") {
+    // Allow-list, not deny-list: only a local development or test process, and
+    // never on a hosted runtime even if NODE_ENV was mis-set there.
+    if (env.NODE_ENV !== "development" && env.NODE_ENV !== "test") {
       throw new AuthError(
         503,
         "AUTH_MISCONFIGURED",
-        "SIKANDER_AUTH_MODE=insecure-dev is refused when NODE_ENV=production"
+        `SIKANDER_AUTH_MODE=insecure-dev is refused when NODE_ENV=${env.NODE_ENV ?? "(unset)"}`
+      )
+    }
+    const hosted = HOSTED_RUNTIME_MARKERS.find((name) => (env[name] ?? "") !== "")
+    if (hosted) {
+      throw new AuthError(
+        503,
+        "AUTH_MISCONFIGURED",
+        `SIKANDER_AUTH_MODE=insecure-dev is refused on a hosted runtime (${hosted} is set)`
       )
     }
     if (!insecureDevWarned) {
@@ -147,19 +169,33 @@ function bearerToken(request: Request): string | null {
   return match ? match[1] : null
 }
 
+/**
+ * Loads a user through the repository layer (Firestore in runtime mode) and
+ * hydrates the per-instance store with it, so handlers that look the caller
+ * up in memory see the provisioned record.
+ *   - `preferRepository` (firebase mode): the repository is authoritative, so a
+ *     demotion made through another instance is seen immediately.
+ *   - otherwise the in-memory record wins and the repository fills a miss.
+ */
 export async function loadUserRecord(
   userId: string,
-  store: SpineStore = getRuntimeStore()
+  options: { preferRepository?: boolean; store?: SpineStore } = {}
 ): Promise<User | null> {
+  const store = options.store ?? getRuntimeStore()
   const cached = store.users.get(userId)
-  if (cached) return cached
+  if (cached && !options.preferRepository) return cached
+  let fromRepo: User | null = null
   try {
     const repos = await getRuntimeRepositories(store)
-    return (await repos.users.get(userId)) ?? null
+    fromRepo = (await repos.users.get(userId)) ?? null
   } catch (err) {
     console.error("[auth] user lookup failed", err)
-    return null
   }
+  if (fromRepo) {
+    store.users.set(fromRepo.id, fromRepo)
+    return fromRepo
+  }
+  return cached ?? null
 }
 
 function stricterClearance(a: Classification, b: Classification): Classification {
@@ -191,7 +227,7 @@ export async function resolveSession(request: Request): Promise<Session | Insecu
     throw new AuthError(401, "AUTH_INVALID", "invalid or expired token")
   }
 
-  const record = await loadUserRecord(decoded.uid)
+  const record = await loadUserRecord(decoded.uid, { preferRepository: true })
   if (!record) {
     throw new AuthError(403, "USER_NOT_PROVISIONED", "user not provisioned")
   }

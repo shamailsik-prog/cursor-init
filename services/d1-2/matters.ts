@@ -1,4 +1,5 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
+import { PublicError } from "@/platform/http/publicError"
 import type { SpineStore } from "@/platform/spine/store"
 import { notifyAccounts } from "@/platform/p4/intimation"
 
@@ -13,7 +14,7 @@ export function createMatter(
   }
 ) {
   if (!isClassification(input.classification)) {
-    throw new Error("artefact write omitted classification")
+    throw new PublicError("artefact write omitted classification")
   }
   const id = store.id("mat")
   store.matters.set(id, {
@@ -37,13 +38,13 @@ export function addMember(
   firmId: string
 ) {
   const matter = store.matters.get(matterId)
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   if (firmId !== matter.firmId) {
-    throw new Error("cross-firm membership rejected")
+    throw new PublicError("cross-firm membership rejected")
   }
   const user = store.users.get(userId)
   if (user && user.firmId !== matter.firmId) {
-    throw new Error("cross-firm membership rejected")
+    throw new PublicError("cross-firm membership rejected")
   }
   store.members.set(store.memberKey(matterId, userId), {
     matterId,
@@ -54,7 +55,7 @@ export function addMember(
 
 export function confirmEngagement(store: SpineStore, matterId: string, now = Date.now()) {
   const matter = store.matters.get(matterId)
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   matter.status = "live"
   notifyAccounts(store, matterId, now)
 }

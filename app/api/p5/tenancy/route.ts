@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -346,13 +347,13 @@ function parseBoolean(value: string | null): boolean {
 function parseLineageDisputeStatus(value: string | null): "open" | "resolved" | undefined {
   if (!value) return undefined
   if (value === "open" || value === "resolved") return value
-  throw new Error("status must be open or resolved")
+  throw new PublicError("status must be open or resolved")
 }
 
 function parseLineageDigestStatus(value: string | null): "aligned" | "needs_review" | undefined {
   if (!value) return undefined
   if (value === "aligned" || value === "needs_review") return value
-  throw new Error("status must be aligned or needs_review")
+  throw new PublicError("status must be aligned or needs_review")
 }
 
 function parseLineageDisputeDisposition(
@@ -366,7 +367,7 @@ function parseLineageDisputeDisposition(
   ) {
     return value
   }
-  throw new Error("disposition must be confirm_divergence, dismiss_dispute, or mark_reconciled")
+  throw new PublicError("disposition must be confirm_divergence, dismiss_dispute, or mark_reconciled")
 }
 
 function parseLineageArbitrationDisposition(
@@ -380,7 +381,7 @@ function parseLineageArbitrationDisposition(
   ) {
     return value
   }
-  throw new Error(
+  throw new PublicError(
     "disposition must be confirm_needs_review, dismiss_needs_review, or mark_reconciled"
   )
 }
@@ -388,7 +389,7 @@ function parseLineageArbitrationDisposition(
 function parseLineageQueueStatus(value: string | null): "queued" | "assigned" | "arbitrated" | undefined {
   if (!value) return undefined
   if (value === "queued" || value === "assigned" || value === "arbitrated") return value
-  throw new Error("status must be queued, assigned, or arbitrated")
+  throw new PublicError("status must be queued, assigned, or arbitrated")
 }
 
 function parseLineageClosureStatus(
@@ -398,7 +399,7 @@ function parseLineageClosureStatus(
   if (value === "pending_attestation" || value === "closed_attested" || value === "reopened") {
     return value
   }
-  throw new Error("status must be pending_attestation, closed_attested, or reopened")
+  throw new PublicError("status must be pending_attestation, closed_attested, or reopened")
 }
 
 function parseLineageClosureAdjudicationStatus(
@@ -413,7 +414,7 @@ function parseLineageClosureAdjudicationStatus(
   ) {
     return value
   }
-  throw new Error(
+  throw new PublicError(
     "status must be standby, quorum_pending, verdict_window_open, or verdict_recorded"
   )
 }
@@ -429,7 +430,7 @@ function parseLineageDebtRetirementStatus(
   ) {
     return value
   }
-  throw new Error("status must be pressure_open, retirement_attested, or carryover_reopened")
+  throw new PublicError("status must be pressure_open, retirement_attested, or carryover_reopened")
 }
 
 function parseLineageSettlementStatus(
@@ -449,7 +450,7 @@ function parseLineageSettlementStatus(
   ) {
     return value
   }
-  throw new Error(
+  throw new PublicError(
     "status must be draft, publication_checkpointed, correction_logged, or sla_confirmed"
   )
 }
@@ -466,7 +467,7 @@ function parseLineageDebtRetirementDisputeStatus(
   ) {
     return value
   }
-  throw new Error("status must be open, reviewer_assigned, resolved, or rollback_controlled")
+  throw new PublicError("status must be open, reviewer_assigned, resolved, or rollback_controlled")
 }
 
 function parseDebtRetirementDisputeResolutionOutcome(
@@ -480,7 +481,7 @@ function parseDebtRetirementDisputeResolutionOutcome(
   ) {
     return value
   }
-  throw new Error(
+  throw new PublicError(
     "resolutionOutcome must be uphold_retirement, reopen_debt, or require_rollback_review"
   )
 }
@@ -490,7 +491,7 @@ function parseExternalSessionIdentityBridgeStatus(
 ): "attested" | "quarantined" | "cleared" | undefined {
   if (!value) return undefined
   if (value === "attested" || value === "quarantined" || value === "cleared") return value
-  throw new Error("status must be attested, quarantined, or cleared")
+  throw new PublicError("status must be attested, quarantined, or cleared")
 }
 
 function parseExternalSessionIdentityBridgeMismatchStatus(
@@ -500,7 +501,7 @@ function parseExternalSessionIdentityBridgeMismatchStatus(
   if (value === "aligned" || value === "mismatch_detected" || value === "assertion_missing") {
     return value
   }
-  throw new Error("mismatchStatus must be aligned, mismatch_detected, or assertion_missing")
+  throw new PublicError("mismatchStatus must be aligned, mismatch_detected, or assertion_missing")
 }
 
 function isRole(value: unknown): value is Role {
@@ -522,7 +523,7 @@ function normalizeOptionalString(value: string | null | undefined): string | und
 function parseAuthBoundary(value: unknown): TenancyAuthBoundary | undefined {
   if (value == null || value === "") return undefined
   if (value === "runtime_local" || value === "external_session_hint") return value
-  throw new Error("authBoundary must be runtime_local or external_session_hint")
+  throw new PublicError("authBoundary must be runtime_local or external_session_hint")
 }
 
 async function loadUser(
@@ -602,7 +603,13 @@ async function handleGet(request: Request) {
       let existingReference = null
       if (sessionReferenceId) {
         existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
-        if (!existingReference) {
+        // One answer for "does not exist" and "not yours" (no existence oracle);
+        // ownership is checked before revealing the reference's state.
+        if (
+          !existingReference ||
+          (requestedUserId && requestedUserId !== existingReference.userId) ||
+          (requestedFirmId && requestedFirmId !== existingReference.firmId)
+        ) {
           return NextResponse.json({ error: "unknown session reference" }, { status: 404 })
         }
         const state = getTenancySessionReferenceState(existingReference)
@@ -613,12 +620,6 @@ async function handleGet(request: Request) {
           return NextResponse.json({ error: "session reference expired" }, { status: 410 })
         }
         store.tenancySessionReferences.set(existingReference.id, existingReference)
-        if (requestedUserId && requestedUserId !== existingReference.userId) {
-          return NextResponse.json({ error: "session reference user mismatch" }, { status: 400 })
-        }
-        if (requestedFirmId && requestedFirmId !== existingReference.firmId) {
-          return NextResponse.json({ error: "cross-firm session reference denied" }, { status: 400 })
-        }
         resolvedUserId = existingReference.userId
         resolvedFirmId = existingReference.firmId
       }
@@ -1631,7 +1632,7 @@ async function handlePost(request: Request) {
       const firmId = parsed.firmId
       const sessionReferenceId = parsed.sessionReferenceId
       if (!actorId || !firmId || !sessionReferenceId) {
-        throw new Error("actorId, firmId, and sessionReferenceId are required")
+        throw new PublicError("actorId, firmId, and sessionReferenceId are required")
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
@@ -1696,7 +1697,7 @@ async function handlePost(request: Request) {
       const firmId = parsed.firmId
       const parentSessionReferenceId = parsed.sessionReferenceId
       if (!actorId || !firmId || !parentSessionReferenceId) {
-        throw new Error("actorId, firmId, and sessionReferenceId are required")
+        throw new PublicError("actorId, firmId, and sessionReferenceId are required")
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
@@ -1772,7 +1773,7 @@ async function handlePost(request: Request) {
       const sessionReferenceId = parsed.sessionReferenceId
       const reason = normalizeOptionalString(parsed.reason)
       if (!actorId || !firmId || !sessionReferenceId || !reason) {
-        throw new Error("actorId, firmId, sessionReferenceId, and reason are required")
+        throw new PublicError("actorId, firmId, sessionReferenceId, and reason are required")
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
@@ -1832,7 +1833,7 @@ async function handlePost(request: Request) {
       const disputeId = parsed.disputeId
       const disposition = parseLineageDisputeDisposition(parsed.disposition)
       if (!actorId || !firmId || !disputeId || !disposition) {
-        throw new Error("actorId, firmId, disputeId, and disposition are required")
+        throw new PublicError("actorId, firmId, disputeId, and disposition are required")
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
@@ -1904,7 +1905,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const assignedPartnerId = parsed.assignedPartnerId
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !assignedPartnerId) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and assignedPartnerId are required"
         )
       }
@@ -1955,7 +1956,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const disposition = parseLineageArbitrationDisposition(parsed.disposition)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !disposition) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and disposition are required"
         )
       }
@@ -2005,7 +2006,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const closureReason = normalizeOptionalString(parsed.closureReason)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !closureReason) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and closureReason are required"
         )
       }
@@ -2055,7 +2056,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const reopenTrigger = normalizeOptionalString(parsed.reopenTrigger)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !reopenTrigger) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and reopenTrigger are required"
         )
       }
@@ -2105,7 +2106,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const panelPartnerIds = parsed.panelPartnerIds
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !Array.isArray(panelPartnerIds)) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and panelPartnerIds are required"
         )
       }
@@ -2166,7 +2167,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const disposition = parseLineageArbitrationDisposition(parsed.disposition)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !disposition) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and disposition are required"
         )
       }
@@ -2226,7 +2227,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const retirementNote = normalizeOptionalString(parsed.retirementNote)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !retirementNote) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and retirementNote are required"
         )
       }
@@ -2283,7 +2284,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const carryoverSignal = normalizeOptionalString(parsed.carryoverSignal)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !carryoverSignal) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and carryoverSignal are required"
         )
       }
@@ -2340,7 +2341,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const publicationChannel = normalizeOptionalString(parsed.publicationChannel)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !publicationChannel) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and publicationChannel are required"
         )
       }
@@ -2391,7 +2392,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const correctionNote = normalizeOptionalString(parsed.correctionNote)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !correctionNote) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and correctionNote are required"
         )
       }
@@ -2441,7 +2442,7 @@ async function handlePost(request: Request) {
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       if (!actorId || !firmId || !lineageRootSessionReferenceId) {
-        throw new Error("actorId, firmId, and lineageRootSessionReferenceId are required")
+        throw new PublicError("actorId, firmId, and lineageRootSessionReferenceId are required")
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
@@ -2489,7 +2490,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const challengeReason = normalizeOptionalString(parsed.challengeReason)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !challengeReason) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and challengeReason are required"
         )
       }
@@ -2540,7 +2541,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const reviewerId = normalizeOptionalString(parsed.reviewerId)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !reviewerId) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and reviewerId are required"
         )
       }
@@ -2593,7 +2594,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const resolutionOutcome = parseDebtRetirementDisputeResolutionOutcome(parsed.resolutionOutcome)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !resolutionOutcome) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and resolutionOutcome are required"
         )
       }
@@ -2647,7 +2648,7 @@ async function handlePost(request: Request) {
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
       const rollbackControlNote = normalizeOptionalString(parsed.rollbackControlNote)
       if (!actorId || !firmId || !lineageRootSessionReferenceId || !rollbackControlNote) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, lineageRootSessionReferenceId, and rollbackControlNote are required"
         )
       }
@@ -2701,7 +2702,7 @@ async function handlePost(request: Request) {
       const assertedIssuer = normalizeOptionalString(parsed.assertedIssuer)
       const assertedSubject = normalizeOptionalString(parsed.assertedSubject)
       if (!actorId || !firmId || !sessionReferenceId || !assertedIssuer || !assertedSubject) {
-        throw new Error(
+        throw new PublicError(
           "actorId, firmId, sessionReferenceId, assertedIssuer, and assertedSubject are required"
         )
       }
@@ -2733,7 +2734,7 @@ async function handlePost(request: Request) {
       const sessionReferenceId = parsed.sessionReferenceId
       const quarantineReason = normalizeOptionalString(parsed.quarantineReason)
       if (!actorId || !firmId || !sessionReferenceId || !quarantineReason) {
-        throw new Error("actorId, firmId, sessionReferenceId, and quarantineReason are required")
+        throw new PublicError("actorId, firmId, sessionReferenceId, and quarantineReason are required")
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
@@ -2761,7 +2762,7 @@ async function handlePost(request: Request) {
       const sessionReferenceId = parsed.sessionReferenceId
       const clearReason = normalizeOptionalString(parsed.clearReason)
       if (!actorId || !firmId || !sessionReferenceId || !clearReason) {
-        throw new Error("actorId, firmId, sessionReferenceId, and clearReason are required")
+        throw new PublicError("actorId, firmId, sessionReferenceId, and clearReason are required")
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmTenancySessionReferences(store, repos, firmId)
@@ -2797,7 +2798,7 @@ async function handlePost(request: Request) {
       !nextClearance ||
       !isClassification(nextClearance)
     ) {
-      throw new Error("actorId, firmId, targetUserId, nextRole, and nextClearance are required")
+      throw new PublicError("actorId, firmId, targetUserId, nextRole, and nextClearance are required")
     }
 
     const sessionReferenceId = normalizeOptionalString(parsed.sessionReferenceId)
@@ -2817,20 +2818,20 @@ async function handlePost(request: Request) {
     let existingReference = null
     if (sessionReferenceId) {
       existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
-      if (!existingReference) throw new Error("unknown session reference")
+      if (!existingReference) throw new PublicError("unknown session reference")
       store.tenancySessionReferences.set(existingReference.id, existingReference)
       if (existingReference.firmId !== firmId) {
-        throw new Error("cross-firm session reference denied")
+        throw new PublicError("cross-firm session reference denied")
       }
       if (existingReference.userId !== actorId) {
-        throw new Error("session reference actor mismatch")
+        throw new PublicError("session reference actor mismatch")
       }
       const state = getTenancySessionReferenceState(existingReference)
-      if (state === "revoked") throw new Error("session reference revoked")
-      if (state === "expired") throw new Error("session reference expired")
+      if (state === "revoked") throw new PublicError("session reference revoked")
+      if (state === "expired") throw new PublicError("session reference expired")
     }
     const actor = await loadUser(store, repos, actorId)
-    if (!actor) throw new Error("unknown actor")
+    if (!actor) throw new PublicError("unknown actor")
     const sessionReference = upsertTenancySessionReference(store, {
       user: actor,
       existing: existingReference,

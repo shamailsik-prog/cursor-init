@@ -14,6 +14,7 @@ vi.mock("firebase-admin/auth", () => ({
 import { GET as mattersGet, POST as mattersPost } from "@/app/api/d1/matters/route"
 import { GET as tenancyGet, POST as tenancyPost } from "@/app/api/p5/tenancy/route"
 import { GET as monitorGet } from "@/app/api/g0/monitor/route"
+import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import { resetSessionStateForTests, resolveSession } from "@/platform/p5/session"
 import { withSession } from "@/platform/http/withSession"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
@@ -23,6 +24,9 @@ const TOKENS: Record<string, Record<string, unknown>> = {
   "token-clerk-a": { uid: "clerk_a", firmId: "firmA", clearanceLevel: "privileged-restricted" },
   "token-partner-b": { uid: "partner_b", firmId: "firmB" },
   "token-ghost": { uid: "ghost_user" },
+  // partner_a's record is privileged-restricted; this claim restricts it to internal.
+  "token-partner-a-internal": { uid: "partner_a", firmId: "firmA", clearanceLevel: "internal" },
+  "token-repo-only": { uid: "repo_only_user", firmId: "firmA" },
 }
 
 function authed(
@@ -310,5 +314,146 @@ describe("insecure-dev mode", () => {
     const res = await mattersGet(new Request("http://127.0.0.1/api/d1/matters?userId=partner_a"))
     expect(res.status).toBe(503)
     expect(((await res.json()) as { code: string }).code).toBe("AUTH_MISCONFIGURED")
+  })
+})
+
+describe("insecure-dev is local-only (#3)", () => {
+  it.each(["staging", "preview", "production", ""])("is refused when NODE_ENV=%s", async (env) => {
+    vi.stubEnv("SIKANDER_AUTH_MODE", "insecure-dev")
+    vi.stubEnv("NODE_ENV", env)
+    const res = await mattersGet(new Request("http://127.0.0.1/api/d1/matters?userId=partner_a"))
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { code: string }).code).toBe("AUTH_MISCONFIGURED")
+  })
+
+  it.each(["K_SERVICE", "VERCEL", "VERCEL_ENV", "FUNCTION_TARGET", "FIREBASE_CONFIG", "GAE_SERVICE"])(
+    "is refused on a hosted runtime (%s set)",
+    async (marker) => {
+      vi.stubEnv("SIKANDER_AUTH_MODE", "insecure-dev")
+      vi.stubEnv("NODE_ENV", "development")
+      vi.stubEnv(marker, "x")
+      const res = await mattersGet(new Request("http://127.0.0.1/api/d1/matters?userId=partner_a"))
+      expect(res.status).toBe(503)
+    }
+  )
+
+  it("is allowed for NODE_ENV=development on a workstation", async () => {
+    vi.stubEnv("SIKANDER_AUTH_MODE", "insecure-dev")
+    vi.stubEnv("NODE_ENV", "development")
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const res = await mattersGet(new Request("http://127.0.0.1/api/d1/matters?userId=partner_a"))
+    expect(res.status).toBe(200)
+    warn.mockRestore()
+  })
+})
+
+describe("handlers authorise against the session (#5)", () => {
+  function seedPrivilegedOutput() {
+    const store = getRuntimeStore()
+    store.matters.set("mat_priv", {
+      id: "mat_priv",
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Privileged matter",
+      courtId: "SHC",
+      caseNumber: null,
+      caseNumberStatus: "pending",
+      status: "live",
+      classification: "privileged",
+    })
+    store.members.set(store.memberKey("mat_priv", "partner_a"), {
+      matterId: "mat_priv",
+      userId: "partner_a",
+      firmId: "firmA",
+    })
+    store.committeeOutputs.set("cbo_priv", {
+      id: "cbo_priv",
+      firmId: "firmA",
+      actorId: "partner_a",
+      classification: "privileged",
+      matterId: "mat_priv",
+      documentIds: [],
+      purpose: "committee-brain",
+      blocked: true,
+      outbound: {
+        body: "[masked]",
+        metadata: {
+          classification: "privileged",
+          provider: "ai-gateway",
+          purpose: "committee-brain",
+          redactionCounts: {},
+        },
+      },
+      createdAt: 1,
+    })
+  }
+
+  it("a restricting clearance claim blocks a read the record would allow", async () => {
+    seedPrivilegedOutput()
+    const url = "http://127.0.0.1/api/p1/committee-brain?limit=10&cursor=0"
+    const full = await committeeGet(authed(url))
+    expect(((await full.json()) as { total: number }).total).toBe(1)
+
+    const restricted = await committeeGet(authed(url, { token: "token-partner-a-internal" }))
+    expect(restricted.status).toBe(200)
+    expect(((await restricted.json()) as { total: number }).total).toBe(0)
+
+    // The claim does not leak into later requests without it.
+    const again = await committeeGet(authed(url))
+    expect(((await again.json()) as { total: number }).total).toBe(1)
+  })
+
+  it("a restricting clearance claim blocks a write on a higher-classified matter", async () => {
+    seedPrivilegedOutput()
+    const res = await committeePost(
+      authed("http://127.0.0.1/api/p1/committee-brain", {
+        token: "token-partner-a-internal",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "4d5e6f70-8192-4a3b-9c4d-5e6f70819203",
+        },
+        body: JSON.stringify({ matterId: "mat_priv", body: "memo" }),
+      })
+    )
+    expect(res.status).toBe(403)
+  })
+
+  it("passes the resolved session to the handler", async () => {
+    let seen: unknown = null
+    const res = await withSession(authed("http://127.0.0.1/api/x"), async (_req, session) => {
+      seen = session
+      return new Response("ok")
+    })
+    expect(res.status).toBe(200)
+    expect(seen).toMatchObject({ userId: "partner_a", firmId: "firmA", mode: "firebase" })
+  })
+
+  it("loads a user who is only in the repository layer before the handler runs", async () => {
+    const store = getRuntimeStore()
+    store.users.set("repo_only_user", {
+      id: "repo_only_user",
+      firmId: "firmA",
+      role: "associate",
+      clearanceLevel: "internal",
+    })
+    const { getRuntimeRepositories } = await import("@/platform/persistence/runtimeRepositories")
+    const repos = await getRuntimeRepositories(store)
+    const record = store.users.get("repo_only_user")!
+    // Simulate a fresh instance: the record exists in the repository but not in memory.
+    const reposGet = vi.spyOn(repos.users, "get")
+    store.users.delete("repo_only_user")
+    const repoModule = await import("@/platform/persistence/runtimeRepositories")
+    const spy = vi.spyOn(repoModule, "getRuntimeRepositories").mockResolvedValue({
+      ...repos,
+      users: { ...repos.users, get: async (id: string) => (id === record.id ? record : null) },
+    })
+    const res = await committeeGet(
+      authed("http://127.0.0.1/api/p1/committee-brain?limit=10&cursor=0", { token: "token-repo-only" })
+    )
+    expect(res.status).toBe(200)
+    expect(store.users.get("repo_only_user")?.id).toBe("repo_only_user")
+    spy.mockRestore()
+    reposGet.mockRestore()
   })
 })

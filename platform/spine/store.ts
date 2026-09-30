@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { Classification } from "@/platform/p1/types"
 import { classificationRank } from "@/platform/p1/types"
+import { currentRequestIdentity } from "@/platform/p5/requestSession"
 
 export type { Classification } from "@/platform/p1/types"
 
@@ -5985,7 +5986,7 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
 
 
 export class SpineStore {
-  users = new Map<string, User>()
+  users: Map<string, User> = new SessionScopedUserMap()
   members = new Map<string, MatterMember>()
   matters = new Map<string, Matter>()
   documents = new Map<string, DocumentRecord>()
@@ -6701,6 +6702,24 @@ export class SpineStore {
 
 export function newStore(): SpineStore {
   return new SpineStore()
+}
+
+/**
+ * Users map whose `get` applies the current request's clearance ceiling to the
+ * authenticated caller (see platform/p5/requestSession.ts). Only lowers, never
+ * raises; other users and all writes are untouched.
+ */
+class SessionScopedUserMap extends Map<string, User> {
+  override get(id: string): User | undefined {
+    const record = super.get(id)
+    if (!record) return record
+    const identity = currentRequestIdentity()
+    if (!identity || identity.userId !== id) return record
+    if (classificationRank(identity.clearance) >= classificationRank(record.clearanceLevel)) {
+      return record
+    }
+    return { ...record, clearanceLevel: identity.clearance }
+  }
 }
 
 export function rankOf(c: Classification): number {

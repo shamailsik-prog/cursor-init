@@ -1,4 +1,5 @@
 import { checkPermission } from "@/platform/p5/checkPermission"
+import { PublicError } from "@/platform/http/publicError"
 import type { SpineStore, WorkflowStatus } from "@/platform/spine/store"
 import { transitionWorkflowStatus } from "@/services/d1-7/documentWorkflow"
 
@@ -10,9 +11,9 @@ type OpsActor = {
 
 function requireOpsActor(store: SpineStore, userId: string): OpsActor {
   const actor = store.users.get(userId)
-  if (!actor) throw new Error("unknown actor")
+  if (!actor) throw new PublicError("unknown actor")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for court ops")
+    throw new PublicError("actor role not allowed for court ops")
   }
   return actor
 }
@@ -113,10 +114,10 @@ export function resolveFollowUp(
 ) {
   const actor = requireOpsActor(store, input.actorId)
   const follow = store.followUps.find((row) => row.id === input.followUpId)
-  if (!follow) throw new Error("unknown follow_up id")
-  if (follow.firmId !== actor.firmId) throw new Error("cross-firm follow_up denied")
+  if (!follow) throw new PublicError("unknown follow_up id")
+  if (follow.firmId !== actor.firmId) throw new PublicError("cross-firm follow_up denied")
   if (!canAccessMatter(store, actor.id, follow.matterId)) {
-    throw new Error("actor cannot resolve this follow_up")
+    throw new PublicError("actor cannot resolve this follow_up")
   }
   follow.status = "resolved"
   follow.resolvedBy = actor.id

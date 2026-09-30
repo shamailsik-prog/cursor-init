@@ -11,6 +11,9 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 
 export { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
 
+/** Fixed reason recorded when the transport fails for any other cause. */
+export const TRANSPORT_ERROR_REASON = "transport_error"
+
 export type OutboundRequest = {
   /** Masked prompt/transcript/document text. Never includes classification. */
   body: string
@@ -105,9 +108,13 @@ export async function callCommitteeBrain(
       outbound,
     }
   } catch (err) {
-    const reason =
-      err instanceof Error ? err.message : PHASE0_NO_CREDENTIALS
-    return { blocked: true, reason, outbound }
+    // The reason is returned to callers and persisted with committee outputs,
+    // so never echo provider/gateway error text: use a fixed code, log detail.
+    if (err instanceof Error && err.message === PHASE0_NO_CREDENTIALS) {
+      return { blocked: true, reason: PHASE0_NO_CREDENTIALS, outbound }
+    }
+    console.error("[p1] transport error", err)
+    return { blocked: true, reason: TRANSPORT_ERROR_REASON, outbound }
   }
 }
 

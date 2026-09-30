@@ -1,14 +1,15 @@
 /**
  * Server-side scope for Committee Brain requests (Layer 18 §4.5 / §4.6).
  *
- * The classification that drives P1 provider policy is derived from the
- * records the request references — never from a caller-supplied label:
- *   aggregate = max rank over the referenced matter and documents;
- *   nothing referenced → privileged-restricted (most restrictive).
+ * Every request names a matter (required). The classification that drives P1
+ * provider policy — and that the caller's free text inherits — is
+ *   max(matter, every referenced document, any caller label);
+ * every referenced document must belong to that matter, and an unreadable
+ * persisted label counts as privileged-restricted.
  * Access to every referenced matter goes through P5 `checkPermission`.
  */
 import { checkPermission } from "@/platform/p5/checkPermission"
-import { classificationRank, type Classification } from "@/platform/p1/types"
+import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import type { Matter, SpineStore, User } from "@/platform/spine/store"
 
@@ -16,10 +17,12 @@ export const MOST_RESTRICTIVE: Classification = "privileged-restricted"
 
 export class CommitteeScopeError extends Error {
   readonly status: 403 | 404
-  constructor(status: 403 | 404, message: string) {
+  readonly code: string
+  constructor(status: 403 | 404, message: string, code: string) {
     super(message)
     this.name = "CommitteeScopeError"
     this.status = status
+    this.code = code
   }
 }
 
@@ -68,53 +71,55 @@ export async function canAccessMatter(
   return { ...decision, matter }
 }
 
+/** A persisted label we cannot read is treated as the most restrictive. */
+function readableLabel(value: unknown): Classification {
+  return isClassification(value) ? value : MOST_RESTRICTIVE
+}
+
 export async function resolveCommitteeScope(
   store: SpineStore,
   repos: SpineRepositories,
   actor: User,
-  input: { matterId?: string; documentIds?: string[] }
+  input: { matterId: string; documentIds?: string[] }
 ): Promise<CommitteeScope> {
-  const labels: Classification[] = []
-  const partyNames = new Set<string>()
-  const checkedMatters = new Set<string>()
-
-  const requireMatter = async (matterId: string) => {
-    if (checkedMatters.has(matterId)) return
-    const decision = await canAccessMatter(store, repos, actor, matterId)
-    if (!decision.matter) throw new CommitteeScopeError(404, "unknown matter")
-    if (!decision.allow) {
-      throw new CommitteeScopeError(403, `permission denied: ${decision.reason}`)
-    }
-    checkedMatters.add(matterId)
-    labels.push(decision.matter.classification)
-    const client =
-      store.entities.get(decision.matter.clientId) ??
-      (await repos.entities.get(decision.matter.clientId))
-    if (client && client.firmId === actor.firmId && client.canonicalName) {
-      partyNames.add(client.canonicalName)
-    }
+  const decision = await canAccessMatter(store, repos, actor, input.matterId)
+  if (!decision.matter) throw new CommitteeScopeError(404, "unknown matter", "NOT_FOUND")
+  if (!decision.allow) {
+    throw new CommitteeScopeError(403, `permission denied: ${decision.reason}`, "FORBIDDEN")
   }
-
-  if (input.matterId) await requireMatter(input.matterId)
+  const matter = decision.matter
+  const labels: Classification[] = [readableLabel(matter.classification)]
+  const partyNames = new Set<string>()
+  const client = store.entities.get(matter.clientId) ?? (await repos.entities.get(matter.clientId))
+  if (client && client.firmId === actor.firmId && client.canonicalName) {
+    partyNames.add(client.canonicalName)
+  }
 
   const documentIds = [...new Set(input.documentIds ?? [])]
   for (const documentId of documentIds) {
     const doc = store.documents.get(documentId) ?? (await repos.documents.get(documentId))
     // Cross-firm documents are reported as unknown: no existence oracle.
     if (!doc || doc.firmId !== actor.firmId) {
-      throw new CommitteeScopeError(404, "unknown document")
+      throw new CommitteeScopeError(404, "unknown document", "NOT_FOUND")
     }
-    if (doc.matterId) {
-      await requireMatter(doc.matterId)
-    } else if (classificationRank(actor.clearanceLevel) < classificationRank(doc.classification)) {
-      throw new CommitteeScopeError(403, "permission denied: clearance")
+    // Every referenced document must belong to the request's matter. This keeps
+    // the output's audience (members of that matter) equal to the audience of
+    // everything it was derived from (#4), and stops a matter-less or
+    // other-matter document from lowering the label (#2).
+    if (doc.matterId !== matter.id) {
+      throw new CommitteeScopeError(
+        403,
+        "document does not belong to the referenced matter",
+        "document_matter_mismatch"
+      )
     }
-    labels.push(doc.classification)
+    labels.push(readableLabel(doc.classification))
   }
 
   return {
+    // Free text in the request inherits this: max(matter, documents).
     classification: strictestClassification(labels) ?? MOST_RESTRICTIVE,
-    matterId: input.matterId ?? null,
+    matterId: matter.id,
     documentIds,
     partyNames: [...partyNames],
   }

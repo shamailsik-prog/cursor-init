@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
@@ -70,10 +71,10 @@ function parseCursor(value: string | null): number {
 function ensureActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for matter operations")
+    throw new PublicError("actor role not allowed for matter operations")
   }
   return actor
 }
@@ -83,10 +84,10 @@ function ensureClientIdentityInFirm(clientId: string, firmId: string) {
   const client = store.users.get(clientId)
   if (!client) return
   if (client.firmId !== firmId) {
-    throw new Error("cross-firm client denied")
+    throw new PublicError("cross-firm client denied")
   }
   if (client.role !== "client") {
-    throw new Error("clientId must reference a client user")
+    throw new PublicError("clientId must reference a client user")
   }
 }
 
@@ -98,14 +99,14 @@ async function ensureMatterAccess(
   const store = getRuntimeStore()
   const actor = ensureActor(actorId)
   const matter = store.matters.get(matterId) ?? (await repos.matters.get(matterId))
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   store.matters.set(matter.id, matter)
-  if (matter.firmId !== actor.firmId) throw new Error("cross-firm access denied")
+  if (matter.firmId !== actor.firmId) throw new PublicError("cross-firm access denied")
   if (!store.members.has(store.memberKey(matterId, actorId))) {
-    throw new Error("actor is not a member of this matter")
+    throw new PublicError("actor is not a member of this matter")
   }
   if (rankOf(actor.clearanceLevel) < rankOf(matter.classification)) {
-    throw new Error("actor clearance is below matter classification")
+    throw new PublicError("actor clearance is below matter classification")
   }
   return { actor, matter }
 }

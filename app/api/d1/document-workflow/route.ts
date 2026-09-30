@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -121,13 +122,13 @@ async function handleGet(request: Request) {
         return NextResponse.json({ error: "matterId is required for timeline view" }, { status: 400 })
       }
       const user = store.users.get(userId)
-      if (!user) throw new Error("unknown user")
+      if (!user) throw new PublicError("unknown user")
       await syncFirmMembers(store, repos, user.firmId)
       const matter = store.matters.get(matterId)
-      if (!matter) throw new Error("unknown matter")
-      if (matter.firmId !== user.firmId) throw new Error("cross-firm matter denied")
+      if (!matter) throw new PublicError("unknown matter")
+      if (matter.firmId !== user.firmId) throw new PublicError("cross-firm matter denied")
       if (!store.members.has(store.memberKey(matterId, user.id))) {
-        throw new Error("not a matter member")
+        throw new PublicError("not a matter member")
       }
       const timelineRows = (await repos.workflowEvents.listByFirm(user.firmId))
         .filter((event) => event.matterId === matterId)
@@ -157,7 +158,7 @@ async function handleGet(request: Request) {
     const rawStatus = url.searchParams.get("status")
     const status = isWorkflowStatus(rawStatus) ? rawStatus : undefined
     const user = store.users.get(userId)
-    if (!user) throw new Error("unknown user")
+    if (!user) throw new PublicError("unknown user")
     await syncFirmMembers(store, repos, user.firmId)
     const docs = await repos.documents.listByFirm(user.firmId)
     const rows = await repos.workflow.listByFirm(user.firmId)
@@ -254,7 +255,7 @@ async function handlePost(request: Request) {
         )
       }
       const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
@@ -280,7 +281,7 @@ async function handlePost(request: Request) {
         )
       }
       const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
@@ -305,7 +306,7 @@ async function handlePost(request: Request) {
         )
       }
       const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length

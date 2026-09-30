@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -87,10 +88,10 @@ function buildPreflightInput(parsed: {
   partnerOverride?: { partnerId?: string; reason?: string }
 }): DraftPreflightInput {
   if (!parsed.actorId || !parsed.matterId) {
-    throw new Error("actorId and matterId are required")
+    throw new PublicError("actorId and matterId are required")
   }
   if (!isClassification(parsed.classification)) {
-    throw new Error("classification must be a rank-0–4 label")
+    throw new PublicError("classification must be a rank-0–4 label")
   }
   const partnerOverride =
     parsed.partnerOverride?.partnerId || parsed.partnerOverride?.reason
@@ -300,7 +301,7 @@ async function handlePost(request: Request) {
     if (parsed.action === "preflight") {
       const input = buildPreflightInput(parsed)
       const actor = store.users.get(input.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const result = runDraftPreflight(store, input)
       const payload = {
@@ -320,7 +321,7 @@ async function handlePost(request: Request) {
       }
       const preflightInput = buildPreflightInput(parsed)
       const actor = store.users.get(preflightInput.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
       const gate = runDraftPreflight(store, preflightInput)

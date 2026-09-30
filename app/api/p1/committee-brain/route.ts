@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
@@ -29,7 +30,7 @@ type Body = {
    * the referenced matter/documents, never lower it (H1).
    */
   classification?: string
-  /** Matter / documents the text comes from; the classification source. */
+  /** REQUIRED. Matter the text belongs to; with documentIds, the classification source. */
   matterId?: string
   documentIds?: string[]
   purpose?: string
@@ -52,9 +53,9 @@ function parseCursor(value: string | null): number {
 function requireActor(actorId: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
+  if (!actor) throw new PublicError("unknown actor")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for committee brain operations")
+    throw new PublicError("actor role not allowed for committee brain operations")
   }
   return actor
 }
@@ -83,9 +84,10 @@ async function handleGet(request: Request) {
     const cleared = (await repos.committeeOutputs.listByFirm(actor.firmId))
       .filter((row) => rankOf(actor.clearanceLevel) >= rankOf(row.classification))
       .filter((row) => (blockedFilter === undefined ? true : row.blocked === blockedFilter))
-    // M4: matter-scoped outputs only for matters the caller may access
-    // (P5 checkPermission: same firm + membership + clearance); outputs with
-    // no matter are visible to their author only.
+    // M4: outputs are visible only on matters the caller may access (P5
+    // checkPermission: same firm + membership + clearance). Every new output
+    // has a matterId, and all its documents belong to that matter. Legacy rows
+    // written before matterId was required stay readable by their author only.
     if (cleared.some((row) => row.matterId)) {
       await syncFirmMembers(store, repos, actor.firmId)
     }
@@ -156,9 +158,16 @@ async function handlePost(request: Request) {
     )
   }
   const requestedClassification: Classification | undefined = parsed.classification
-  if (parsed.matterId !== undefined && (typeof parsed.matterId !== "string" || !parsed.matterId)) {
-    return NextResponse.json({ error: "matterId must be a string" }, { status: 400 })
+  // H1: free text has no trustworthy label of its own, so every request must
+  // name the matter it belongs to; the text inherits that matter's (and its
+  // documents') classification.
+  if (typeof parsed.matterId !== "string" || !parsed.matterId) {
+    return NextResponse.json(
+      { error: "matterId is required", code: "matter_required" },
+      { status: 400 }
+    )
   }
+  const matterId: string = parsed.matterId
   if (
     parsed.documentIds !== undefined &&
     (!Array.isArray(parsed.documentIds) ||
@@ -176,7 +185,7 @@ async function handlePost(request: Request) {
     actorId: parsed.actorId,
     body: parsed.body,
     classification: requestedClassification ?? null,
-    matterId: parsed.matterId ?? null,
+    matterId,
     documentIds: parsed.documentIds ?? [],
     purpose,
     partyNames: requestedPartyNames,
@@ -197,13 +206,13 @@ async function handlePost(request: Request) {
     let scope
     try {
       scope = await resolveCommitteeScope(store, repos, actor, {
-        matterId: parsed.matterId,
+        matterId,
         documentIds: parsed.documentIds,
       })
     } catch (err) {
       if (err instanceof CommitteeScopeError) {
         return NextResponse.json(
-          { error: err.message, code: err.status === 404 ? "NOT_FOUND" : "FORBIDDEN" },
+          { error: err.message, code: err.code },
           { status: err.status }
         )
       }

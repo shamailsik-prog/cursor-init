@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -9933,6 +9934,16 @@ async function handlePost(request: Request) {
           { status: 403 }
         )
       }
+      // Four-eyes: the second approver may not be the actor. TODO(E-24 chain
+      // freeze): the second approval is still asserted by id in this request
+      // rather than confirmed by the approver's own authenticated session; that
+      // flow is out of scope while this chain is slated for freeze.
+      if (parsed.secondApproverId && parsed.secondApproverId === actor.id) {
+        return NextResponse.json(
+          { error: "second approver must be a different partner", code: "self_approval_forbidden" },
+          { status: 403 }
+        )
+      }
       await syncFirmMembers(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -10684,7 +10695,7 @@ async function handlePost(request: Request) {
         if (value === undefined) return undefined
         const numeric = Number(value)
         if (!Number.isFinite(numeric) || numeric < 0.5 || numeric > 168) {
-          throw new Error("hours must be between 0.5 and 168")
+          throw new PublicError("hours must be between 0.5 and 168")
         }
         return Math.round(numeric * HOUR_MS)
       }
@@ -19112,6 +19123,16 @@ async function handlePost(request: Request) {
       if (!actor) return NextResponse.json({ error: "unknown actor" }, { status: 404 })
       if (actor.role !== "partner") {
         return NextResponse.json({ error: "extend_breach_waiver requires partner role" }, { status: 403 })
+      }
+      // Four-eyes: the second approver may not be the actor. TODO(E-24 chain
+      // freeze): the second approval is still asserted by id in this request
+      // rather than confirmed by the approver's own authenticated session; that
+      // flow is out of scope while this chain is slated for freeze.
+      if (parsed.secondApproverId && parsed.secondApproverId === actor.id) {
+        return NextResponse.json(
+          { error: "second approver must be a different partner", code: "self_approval_forbidden" },
+          { status: 403 }
+        )
       }
       await syncFirmMembers(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))

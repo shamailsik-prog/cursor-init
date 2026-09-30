@@ -803,6 +803,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(snoozeVariance.status).toBe(200)
+      // Four-eyes: the second approver must be a different partner in the firm.
+      getRuntimeStore().users.set("partner_a2", {
+        id: "partner_a2",
+        firmId: "firmA",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      })
       const recordRemediation = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -817,12 +824,14 @@ describe("Runtime persistence mode", () => {
             decision: "temporary_override",
             justification: "runtime controlled override while transport stabilizes",
             expiresInHours: 4,
-            secondApproverId: "partner_a",
+            secondApproverId: "partner_a2",
             note: "runtime remediation ledger row",
           }),
         })
       )
       expect(recordRemediation.status).toBe(200)
+      // Only needed as the approver; keep later owner auto-assignment unchanged.
+      getRuntimeStore().users.delete("partner_a2")
       const acknowledgeRemediationExpiry = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -889,6 +898,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(acknowledgeExpiry.status).toBe(200)
+      // Four-eyes: the second approver must be a different partner in the firm.
+      getRuntimeStore().users.set("partner_a2", {
+        id: "partner_a2",
+        firmId: "firmA",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      })
       const extendWaiver = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -901,7 +917,7 @@ describe("Runtime persistence mode", () => {
             actorId: "partner_a",
             packageId,
             extendHours: 8,
-            secondApproverId: "partner_a",
+            secondApproverId: "partner_a2",
             rolloverJustification: "runtime waiver extension exceeds baseline cap due closure",
             rolloverNote: "runtime rollover attestation row",
             note: "runtime waiver extended",
@@ -909,6 +925,8 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(extendWaiver.status).toBe(200)
+      // Only needed as the approver; keep later owner auto-assignment unchanged.
+      getRuntimeStore().users.delete("partner_a2")
       const rolloverAttestationDoc = await getDoc(
         doc(ctx.firestore(), "filing_escalation_waiver_rollover_attestations", `rollover:${packageId}:1`)
       )

@@ -92,12 +92,10 @@ describe("committee-brain classification is derived server-side (H1)", () => {
     expect(stored?.matterId).toBe("mat_priv")
   })
 
-  it("defaults to privileged-restricted when nothing identifies the material", async () => {
+  it("refuses free text that names no matter (matter_required)", async () => {
     const res = await post({ actorId: "partner_a", body: "unlabelled text", classification: "public" })
-    expect(res.status).toBe(200)
-    const json = (await res.json()) as PostJson
-    expect(json.result.outbound.metadata.classification).toBe("privileged-restricted")
-    expect(json.result.blocked).toBe(true)
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { code: string }).code).toBe("matter_required")
     expect(sent).toBe(0)
   })
 
@@ -202,8 +200,26 @@ describe("committee-brain GET is filtered by matter membership (M4)", () => {
     expect(associateJson.total).toBe(0)
   })
 
-  it("shows matter-less outputs only to their author", async () => {
-    expect((await post({ actorId: "partner_a", body: "unscoped" })).status).toBe(200)
+  it("keeps legacy matter-less outputs readable by their author only", async () => {
+    // Written before matterId was required; new writes always carry a matter.
+    getRuntimeStore().committeeOutputs.set("cbo_legacy", {
+      id: "cbo_legacy",
+      firmId: "firmA",
+      actorId: "partner_a",
+      classification: "internal",
+      purpose: "committee-brain",
+      blocked: true,
+      outbound: {
+        body: "[masked]",
+        metadata: {
+          classification: "internal",
+          provider: "ai-gateway",
+          purpose: "committee-brain",
+          redactionCounts: {},
+        },
+      },
+      createdAt: 1,
+    })
     const author = await GET(
       new Request("http://127.0.0.1/api/p1/committee-brain?actorId=partner_a&limit=10&cursor=0")
     )
