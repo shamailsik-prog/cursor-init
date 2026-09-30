@@ -10,16 +10,46 @@ export function setFirestorePersistenceForTests(db: unknown | null): void {
   firestoreDbForTests = db
 }
 
+/** Persistence is misconfigured; requests fail closed instead of silently using memory. */
+export class PersistenceConfigurationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "PersistenceConfigurationError"
+  }
+}
+
+function isTestRunner(): boolean {
+  return process.env.VITEST !== undefined || process.env.NODE_ENV === "test"
+}
+
 export async function getRuntimeRepositories(
   store: SpineStore
 ): Promise<SpineRepositories> {
-  const mode = (process.env.SIKANDER_PERSISTENCE_MODE ?? "memory").toLowerCase()
-  if (mode !== "firestore") {
+  const raw = process.env.SIKANDER_PERSISTENCE_MODE
+  const mode = raw?.trim().toLowerCase() ?? ""
+  if (mode === "memory") {
     return createMemoryRepositories(store)
   }
-  if (!firestoreDbForTests) {
-    return createMemoryRepositories(store)
+  if (mode === "") {
+    if (isTestRunner()) return createMemoryRepositories(store)
+    throw new PersistenceConfigurationError(
+      "SIKANDER_PERSISTENCE_MODE is not set. Set SIKANDER_PERSISTENCE_MODE=memory explicitly for " +
+        "non-durable local development; there is no silent in-memory default."
+    )
   }
-  const mod = await import("@/platform/persistence/firestoreSpineRepositories")
-  return mod.createFirestoreRepositories(firestoreDbForTests as never)
+  if (mode === "firestore") {
+    if (!firestoreDbForTests) {
+      throw new PersistenceConfigurationError(
+        "SIKANDER_PERSISTENCE_MODE=firestore but no Firestore database is configured. " +
+          "Production Firestore persistence (firebase-admin with firm service-account " +
+          "credentials) is not wired yet — TODO(firm); only the test-injected emulator database " +
+          "is supported. Refusing to fall back to in-memory storage."
+      )
+    }
+    const mod = await import("@/platform/persistence/firestoreSpineRepositories")
+    return mod.createFirestoreRepositories(firestoreDbForTests as never)
+  }
+  throw new PersistenceConfigurationError(
+    `Unknown SIKANDER_PERSISTENCE_MODE "${raw}"; expected "memory" or "firestore".`
+  )
 }
