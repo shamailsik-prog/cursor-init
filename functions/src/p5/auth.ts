@@ -139,9 +139,10 @@ async function verifyCallableSession(
  * Callable (onCall) identity: a revocation/disabled-checked session bound to
  * an explicit firm (`request.data.firmId`): missing → 400 firm_required,
  * ≠ claims.firmId → 403 firm_mismatch. The firm's MFA policy applies
- * (403 mfa_required); `mfaExempt` is only for the MFA-recovery callables
- * (disableMfa, generateRecoveryCodes), which a user who lost their device
- * must reach with the first factor alone.
+ * (403 mfa_required); `mfaExempt` is only for the MFA-recovery and
+ * enrolment callables (disableMfa, generateRecoveryCodes, syncMfaStatus),
+ * which a user who lost their device, or is still enrolling, must reach with
+ * the first factor alone.
  */
 export async function callerFromCallable(
   auth: CallableRequest["auth"],

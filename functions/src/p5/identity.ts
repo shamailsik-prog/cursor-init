@@ -1,13 +1,25 @@
-import { logger } from "firebase-functions"
 import { onCall, type CallableRequest } from "firebase-functions/v2/https"
 import { FieldValue, type DocumentData, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminAuth, adminDb } from "../admin"
 import { REGION } from "../health"
-import { HttpError, toHttpsError } from "../http/errors"
-import { appendAudit } from "./audit"
+import { HttpError } from "../http/errors"
 import { callerFromCallable, callerWithoutFirm, isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
+import {
+  CallAudit,
+  audited,
+  dataOf,
+  errorCode,
+  isSafeDocId,
+  logFailure,
+  parseRole,
+  parseUid,
+  readTargetDoc,
+  requirePartner,
+  usersRef,
+  type Data,
+} from "./common"
 
 /**
  * Module 40 identity lifecycle callables: firm onboarding, firm users, claims
@@ -16,155 +28,19 @@ import { isKnownClassification, rankOf } from "./classification"
  * write stops the call (503 audit_unavailable → `unavailable`) with nothing changed.
  */
 
-type Data = Record<string, unknown>
-
 const MAX_FIRM_NAME = 200
 const MAX_EMAIL = 254
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const FOUNDER = { role: "partner", clearanceLevel: "privileged-restricted" } as const
 
-export function dataOf(request: CallableRequest<unknown>): Data {
-  const d = request.data
-  return d !== null && typeof d === "object" && !Array.isArray(d) ? (d as Data) : {}
-}
-
-/** Collects the audit context of one call and writes its single row. */
-export class CallAudit {
-  firmId = ""
-  target: string
-  private readonly actorId: string
-  private written = false
-
-  constructor(
-    private readonly action: string,
-    request: CallableRequest<unknown>,
-    target: string
-  ) {
-    // request.auth is the runtime-verified token; unauthenticated calls are "anonymous".
-    this.actorId = request.auth?.uid ?? "anonymous"
-    this.target = target
-  }
-
-  /** Records the allow decision; throws 503 audit_unavailable if it cannot be written. */
-  async allow(): Promise<void> {
-    await this.write("allow", "ok")
-  }
-
-  /** Records a deny decision unless this call already has its row. */
-  async deny(reason: string): Promise<void> {
-    if (!this.written) await this.write("deny", reason)
-  }
-
-  /** Stages the row in a transaction; call `committed()` once that transaction has committed. */
-  async stage(tx: Transaction, decision: "allow" | "deny", reason: string): Promise<void> {
-    try {
-      await appendAudit(this.row(decision, reason), tx)
-    } catch {
-      throw new HttpError(503, "audit_unavailable")
-    }
-  }
-
-  committed(): void {
-    this.written = true
-  }
-
-  /**
-   * Records a post-commit incident (e.g. a failed claims sync) as an extra deny
-   * row, after this call's decision row. Best effort: a failure is logged.
-   */
-  async incident(reason: string): Promise<void> {
-    try {
-      await appendAudit(this.row("deny", reason))
-    } catch (err) {
-      logFailure("identity incident audit failed", err)
-    }
-  }
-
-  private async write(decision: "allow" | "deny", reason: string): Promise<void> {
-    try {
-      await appendAudit(this.row(decision, reason))
-    } catch {
-      throw new HttpError(503, "audit_unavailable")
-    }
-    this.written = true
-  }
-
-  private row(decision: "allow" | "deny", reason: string) {
-    return {
-      firmId: this.firmId,
-      actorId: this.actorId,
-      action: this.action,
-      target: this.target,
-      classification: "internal" as Classification,
-      decision,
-      reason,
-    }
-  }
-}
-
-/** A loggable error code: the SDK's `code` string if any, never the message (which may carry an email). */
-function errorCode(err: unknown): string {
-  const code = (err as { code?: unknown } | null)?.code
-  return typeof code === "string" ? code : "unknown"
-}
-
-/** Logs a failure with a generic message, its code and (optionally) a uid; no raw error text. */
-export function logFailure(message: string, err: unknown, uid?: string): void {
-  logger.error(message, uid === undefined ? { code: errorCode(err) } : { uid, code: errorCode(err) })
-}
-
-/** Runs a callable body; any failure without an audit row yet is audited as a deny, then mapped to HttpsError. */
-export async function audited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> {
-  try {
-    return await body()
-  } catch (err) {
-    if (!(err instanceof HttpError)) logFailure("identity callable failed", err)
-    const reason = err instanceof HttpError ? err.code : "internal"
-    try {
-      await audit.deny(reason)
-    } catch (auditErr) {
-      throw toHttpsError(auditErr)
-    }
-    throw toHttpsError(err)
-  }
-}
-
-export function requirePartner(caller: Caller): void {
-  if (caller.role !== "partner") throw new HttpError(403, "partner_only")
-}
-
 function forbidPlatformAdmin(data: Data): void {
   if (Object.hasOwn(data, "platformAdmin")) throw new HttpError(403, "platform_admin_forbidden")
-}
-
-/** A safe single Firestore document id: non-empty, ≤128 chars, no "/", not "." / "..", not reserved `__*__`. */
-export function isSafeDocId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value !== "" &&
-    value.length <= 128 &&
-    !value.includes("/") &&
-    value !== "." &&
-    value !== ".." &&
-    !/^__.*__$/.test(value)
-  )
-}
-
-/** A user id that is also a safe single Firestore document id. */
-export function parseUid(value: unknown): string {
-  if (!isSafeDocId(value)) throw new HttpError(400, "invalid_uid")
-  return value
 }
 
 function parseEmail(value: unknown): string {
   const email = typeof value === "string" ? value.trim() : ""
   if (email.length > MAX_EMAIL || !EMAIL_RE.test(email)) throw new HttpError(400, "invalid_email")
   return email
-}
-
-export function parseRole(value: unknown): Role {
-  if (!isRole(value)) throw new HttpError(400, "invalid_role")
-  return value
 }
 
 function parseClearance(value: unknown): Classification {
@@ -174,15 +50,6 @@ function parseClearance(value: unknown): Classification {
 
 function requireWithinOwnClearance(caller: Caller, clearance: Classification): void {
   if (!(rankOf(clearance) <= rankOf(caller.clearanceLevel))) throw new HttpError(403, "exceeds_own_clearance")
-}
-
-/**
- * The caller may only act on users cleared no higher than themselves (per the
- * target's users doc). A missing or malformed clearance counts as the highest rank.
- */
-function requireTargetWithinOwnClearance(caller: Caller, raw: unknown): void {
-  const targetRank = rankOf(isKnownClassification(raw) ? raw : "privileged-restricted")
-  if (!(targetRank <= rankOf(caller.clearanceLevel))) throw new HttpError(403, "exceeds_own_clearance")
 }
 
 /** Requires the Auth user to exist in the caller's firm (per its custom claims). Unknown → cross_firm too. */
@@ -195,21 +62,6 @@ async function requireUserInFirm(uid: string, firmId: string): Promise<void> {
     throw err
   }
   if (firmClaim !== firmId) throw new HttpError(403, "cross_firm")
-}
-
-const usersRef = () => adminDb().collection("users")
-
-/**
- * Reads the target's users doc inside a transaction and applies the shared
- * target checks: missing → 404 not_found, other firm → 403 cross_firm,
- * clearance above the caller's → 403 exceeds_own_clearance.
- */
-export async function readTargetDoc(tx: Transaction, caller: Caller, uid: string): Promise<DocumentData> {
-  const doc = (await tx.get(usersRef().doc(uid))).data()
-  if (!doc) throw new HttpError(404, "not_found")
-  if (doc.firmId !== caller.firmId) throw new HttpError(403, "cross_firm")
-  requireTargetWithinOwnClearance(caller, doc.clearanceLevel)
-  return doc
 }
 
 /**

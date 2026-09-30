@@ -123,14 +123,20 @@ resumes idempotently and returns the same `firmId` (audited as
   `firms/{firmId}.mfaEnforcedRoles`. `requireAuth` and `callerFromCallable`
   refuse an enforced role whose token has no `firebase.sign_in_second_factor`
   with 403 `mfa_required`. Only `disableMfa` and `generateRecoveryCodes` are
-  exempt, so a user who lost the device can still recover.
+  exempt, along with `syncMfaStatus`, so a user who lost the device can still
+  recover and a user who is enrolling can finish.
 - `generateRecoveryCodes({ firmId })` returns 10 codes once and replaces any
-  earlier set. Only HMAC-SHA-256 hashes with a per-user salt are stored
-  (`users/{uid}.recoveryCodeHashes`, `recoveryCodeSalt`). After a factor is
-  enrolled, regenerating needs a second-factor session.
+  earlier set. Only HMAC-SHA-256 hashes with a per-user salt are stored, in
+  the server-only `mfa_recovery/{uid}` (no rules match, so clients are denied).
+  After a factor is enrolled, regenerating needs a second-factor session.
+- `syncMfaStatus({ firmId })` sets `users/{uid}.mfaEnabled` from the Auth
+  user's enrolled factors. The client calls it after enrolling.
 - Disabling needs two people: another partner calls
   `approveMfaDisable({ firmId, uid })`, which creates a one-hour, single-use
   `mfa_disable_approvals/{id}`. Then the subject, or a partner who is not the
   approver, calls `disableMfa({ firmId, uid, recoveryCode, approvalId })`.
+  This invalidates all remaining codes. If a step after commit fails, the
+  same caller can retry with the same approval and no code, while the
+  approval is unexpired and factors remain enrolled.
 - In the emulator tests, `mintMfaIdToken` (test/emu.ts) signs in through the
   Auth emulator's phone MFA flow to get a real second-factor token.
