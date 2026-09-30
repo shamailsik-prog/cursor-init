@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { Firestore } from "firebase-admin/firestore"
+import { Firestore, Timestamp } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
@@ -151,9 +151,10 @@ describe.skipIf(!EMULATORS)("onboardFirm", () => {
     expect(rows[0]).toMatchObject({ decision: "deny", reason: "bootstrap_closed" })
   })
 
-  it("after bootstrap, a platformAdmin caller may onboard another firm (platformAdmin claim kept)", async () => {
+  it("after bootstrap and a recorded G-2 pass (R-5), a platformAdmin caller may onboard another firm (platformAdmin claim kept)", async () => {
     const first = await mintIdToken(null)
     await onboardFirmHandler(await req(first.token, { name: "First" }))
+    await adminDb().collection("platform").doc("gates").set({ g2PassedAt: Timestamp.now() })
 
     const { uid, token } = await mintIdToken({ platformAdmin: true })
     const res = (await onboardFirmHandler(await req(token, { name: "Second" }))) as { firmId: string }

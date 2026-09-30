@@ -650,6 +650,8 @@ describe.skipIf(!EMULATORS)("router over the emulators", () => {
     it("onboardFirm uses the no-firm path (no X-Firm-Id needed); an onboarded caller → 409 already_onboarded", async () => {
       const r = router()
       const admin = await mintIdToken({ platformAdmin: true })
+      // R-5: a firm may already exist on this emulator, so record the G-2 pass a second firm needs.
+      await adminDb().collection("platform").doc("gates").set({ g2PassedAt: Timestamp.now() })
       const out = await send(r, { path: `${P}/onboardFirm`, token: admin.token, body: { name: "HTTP Firm" } })
       expect(out.status).toBe(200)
       const firmId = (out.body as { firmId: string }).firmId

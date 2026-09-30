@@ -76,8 +76,8 @@ A different or unverified email fails with `permission-denied` / `bootstrap_foun
 
 The first call to `onboardFirm` on a fresh project makes the caller the
 founding partner of the first firm. It records `platform/bootstrap`. After
-that, only a `platformAdmin` can onboard more firms. To keep a stranger from
-winning that race:
+that, only a `platformAdmin` can onboard more firms, and only once Gate G-2
+has passed (R-5, see "Gates" below). To keep a stranger from winning that race:
 
 1. **Keep self sign-up off.** Disable new-account creation in Firebase Auth
    (Identity Platform "user actions: enable create") until step 5 is done.
@@ -104,6 +104,21 @@ If the claims write fails after the firm was created, the founder sees
 `internal`. The founder should simply call `onboardFirm` again: the call
 resumes idempotently and returns the same `firmId` (audited as
 `bootstrap_resume`).
+
+## Gates and the second firm (R-5, L18 §10)
+
+- R-5: no second firm is onboarded until tenant isolation has passed a live
+  cross-tenant test. Once `platform/bootstrap` exists, `onboardFirm` on the
+  platformAdmin path fails with `failed-precondition` / `second_firm_forbidden`
+  (HTTP 409, audited as a deny) unless `platform/gates.g2PassedAt` is set.
+- Run `npm run gate:g2` (repo root). On a green run a platform admin calls
+  `recordGatePass({ gate: "G-2", evidence: { summary, commitSha?, runUrl? } })`.
+  It is refused with `platform_admin_only` for anyone without
+  `platformAdmin: true`. In one transaction it writes the allow audit row,
+  `platform/gates` (`g2PassedAt`, `g2PassedBy`, `g2Evidence`, `g2PassId`) and
+  an append-only `gate_passes/{id}`. Both are server-only (no rules match).
+- The emulator suites share singleton docs (`platform/bootstrap`,
+  `platform/gates`), so `vitest.config.ts` runs test files one at a time.
 
 ## Identity model (P5, Module 40)
 

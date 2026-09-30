@@ -6,6 +6,7 @@ import { CALLABLE_OPTIONS } from "../health"
 import { HttpError } from "../http/errors"
 import { isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
+import { g2Passed } from "./gates"
 import {
   callableHandler,
   errorCode,
@@ -199,6 +200,10 @@ async function emailTaken(email: string): Promise<boolean> {
  * Hosted deploys (K_SERVICE / FUNCTION_TARGET set) additionally gate the very
  * first bootstrap on SIKANDER_BOOTSTRAP_FOUNDER_EMAIL, so a stranger cannot
  * win the race on a fresh deploy. The platformAdmin path is unaffected.
+ *
+ * R-5: once a firm exists (`platform/bootstrap`), the platformAdmin path
+ * refuses a second firm with 409 second_firm_forbidden (audited as a deny)
+ * until `platform/gates.g2PassedAt` is set by recordGatePass (gates.ts).
  */
 export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
   auth: "firmless",
@@ -244,6 +249,13 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
         await audit.stage(tx, "deny", "bootstrap_closed")
         return { kind: "denied" as const }
       }
+      if (bootstrap.exists && !(await g2Passed(tx))) {
+        // R-5: a firm already exists, so this would be a second firm; Gate G-2 must have passed.
+        audit.firmId = ""
+        audit.target = "platform/gates"
+        await audit.stage(tx, "deny", "second_firm_forbidden")
+        return { kind: "second_firm_forbidden" as const }
+      }
       if (!bootstrap.exists && !isPlatformAdmin) requireBootstrapFounder(verifiedEmail)
       audit.firmId = firmId
       audit.target = `firms/${firmId}`
@@ -256,6 +268,7 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
     })
     audit.committed()
     if (outcome.kind === "denied") throw new HttpError(403, "bootstrap_closed")
+    if (outcome.kind === "second_firm_forbidden") throw new HttpError(409, "second_firm_forbidden")
 
     await adminAuth().setCustomUserClaims(uid, { ...claims, firmId: outcome.firmId, ...FOUNDER })
     return { firmId: outcome.firmId }
