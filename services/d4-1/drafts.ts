@@ -34,6 +34,8 @@ export type DraftPreflightResult = {
   ok: boolean
   citationStatus: "OK" | "OVERRULED"
   temporal: Array<{ sectionId: string; status: "OK" | "TEMPORAL-MISMATCH" }>
+  /** Set when a citation-gate block was cleared by the calling partner's recorded reason. */
+  partnerOverride?: { partnerId: string; reason: string }
 }
 
 export function listTemplateCatalog(query: string): TemplateSummary[] {
@@ -69,7 +71,8 @@ export function listTemplates(
 
 export function runDraftPreflight(
   store: SpineStore,
-  input: DraftPreflightInput
+  input: DraftPreflightInput,
+  options: { recordOverride?: boolean } = {}
 ): DraftPreflightResult {
   if (!isClassification(input.classification)) {
     throw new PublicError("classification must be a rank-0–4 label")
@@ -84,12 +87,26 @@ export function runDraftPreflight(
     throw new PublicError("draft classification cannot be lower than matter classification")
   }
 
-  const citation = verifyCitations(
-    store,
-    input.citedJudgmentIds,
-    input.partnerOverride
-  )
+  const caller = { actorId: input.actorId, firmId: matter.firmId }
+  const unaided = verifyCitations(store, input.citedJudgmentIds)
+  const citation =
+    unaided.status === "OK"
+      ? unaided
+      : verifyCitations(store, input.citedJudgmentIds, input.partnerOverride, caller)
   const citationStatus = citation.status === "OVERRULED" ? "OVERRULED" : "OK"
+  const overrideApplied =
+    unaided.status !== "OK" && citation.status === "OK" && input.partnerOverride
+      ? { partnerId: input.partnerOverride.partnerId, reason: input.partnerOverride.reason.trim() }
+      : undefined
+  if (overrideApplied && options.recordOverride !== false) {
+    store.audit.push({
+      action: "citation_gate_override",
+      actorId: input.actorId,
+      target: input.matterId,
+      classification: input.classification,
+      reason: overrideApplied.reason,
+    })
+  }
   const temporal = input.temporalCitations.map((row) => {
     const gate = checkTemporalConsistency(
       store,
@@ -109,6 +126,7 @@ export function runDraftPreflight(
     ok: !citationBlocked && !temporalBlocked,
     citationStatus,
     temporal,
+    ...(overrideApplied ? { partnerOverride: overrideApplied } : {}),
   }
 }
 

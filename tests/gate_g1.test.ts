@@ -150,15 +150,33 @@ describe("Gate G-1 forensic spine", () => {
     const blocked = verifyCitations(store, ["j-old"])
     expect(blocked.status).toBe("OVERRULED")
     if (blocked.status === "OVERRULED") expect(blocked.blocked).toBe(true)
-    const internAttempt = verifyCitations(store, ["j-old"], {
-      partnerId: "intern1",
-      reason: "because I said so",
-    })
+    const internAttempt = verifyCitations(
+      store,
+      ["j-old"],
+      { partnerId: "intern1", reason: "because I said so" },
+      { actorId: "intern1", firmId: "firmA" }
+    )
     expect(internAttempt.status).toBe("OVERRULED")
-    const overridden = verifyCitations(store, ["j-old"], {
-      partnerId: "partner1",
-      reason: "Partner recorded reason",
-    })
+    const spoofed = verifyCitations(
+      store,
+      ["j-old"],
+      { partnerId: "partner1", reason: "named someone else" },
+      { actorId: "associate1", firmId: "firmA" }
+    )
+    expect(spoofed.status).toBe("OVERRULED")
+    const crossFirm = verifyCitations(
+      store,
+      ["j-old"],
+      { partnerId: "partner1", reason: "other firm matter" },
+      { actorId: "partner1", firmId: "firmB" }
+    )
+    expect(crossFirm.status).toBe("OVERRULED")
+    const overridden = verifyCitations(
+      store,
+      ["j-old"],
+      { partnerId: "partner1", reason: "Partner recorded reason" },
+      { actorId: "partner1", firmId: "firmA" }
+    )
     expect(overridden.status).toBe("OK")
   })
 

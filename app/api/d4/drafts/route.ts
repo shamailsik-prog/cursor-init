@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
-import { withSession } from "@/platform/http/withSession"
+import { withSession, type HandlerSession } from "@/platform/http/withSession"
+import { errorResponse } from "@/platform/http/errors"
+import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
+import type { SpineStore } from "@/platform/spine/store"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
@@ -79,27 +82,32 @@ function normalizeTerms(value: string | null): string[] {
     .filter((term) => term.length > 0)
 }
 
-function buildPreflightInput(parsed: {
-  actorId?: string
-  matterId?: string
-  classification?: string
-  citedJudgmentIds?: string[]
-  temporalCitations?: TemporalCitationInput[]
-  partnerOverride?: { partnerId?: string; reason?: string }
-}): DraftPreflightInput {
+function buildPreflightInput(
+  store: SpineStore,
+  session: HandlerSession | null,
+  parsed: {
+    actorId?: string
+    matterId?: string
+    classification?: string
+    citedJudgmentIds?: string[]
+    temporalCitations?: TemporalCitationInput[]
+    partnerOverride?: { partnerId?: string; reason?: string }
+  }
+): DraftPreflightInput | Response {
   if (!parsed.actorId || !parsed.matterId) {
     throw new PublicError("actorId and matterId are required")
   }
   if (!isClassification(parsed.classification)) {
     throw new PublicError("classification must be a rank-0–4 label")
   }
-  const partnerOverride =
-    parsed.partnerOverride?.partnerId || parsed.partnerOverride?.reason
-      ? {
-          partnerId: parsed.partnerOverride?.partnerId ?? "",
-          reason: parsed.partnerOverride?.reason ?? "",
-        }
-      : undefined
+  // The override partner is the authenticated caller (L17.1 human control), never a body field.
+  const resolved = resolvePartnerOverride(
+    store,
+    parsed.partnerOverride,
+    session?.userId ?? undefined
+  )
+  if (!resolved.ok) return errorResponse(resolved.status, resolved.code, resolved.error)
+  const partnerOverride = resolved.override
   return {
     actorId: parsed.actorId,
     matterId: parsed.matterId,
@@ -259,7 +267,7 @@ export async function POST(request: Request) {
   return withSession(request, handlePost)
 }
 
-async function handlePost(request: Request) {
+async function handlePost(request: Request, session: HandlerSession | null) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -299,11 +307,14 @@ async function handlePost(request: Request) {
 
   try {
     if (parsed.action === "preflight") {
-      const input = buildPreflightInput(parsed)
+      const input = buildPreflightInput(store, session, parsed)
+      if (input instanceof Response) return input
       const actor = store.users.get(input.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      const priorAuditCount = store.audit.length
       const result = runDraftPreflight(store, input)
+      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "preflight",
         result,
@@ -319,12 +330,14 @@ async function handlePost(request: Request) {
           { status: 400 }
         )
       }
-      const preflightInput = buildPreflightInput(parsed)
+      const preflightInput = buildPreflightInput(store, session, parsed)
+      if (preflightInput instanceof Response) return preflightInput
       const actor = store.users.get(preflightInput.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const priorAuditCount = store.audit.length
-      const gate = runDraftPreflight(store, preflightInput)
+      // Pre-check only for the 422 body; composeDraft re-runs the gate and records any override.
+      const gate = runDraftPreflight(store, preflightInput, { recordOverride: false })
       if (!gate.ok) {
         return NextResponse.json(
           { error: "preflight blocked drafting", preflight: gate },

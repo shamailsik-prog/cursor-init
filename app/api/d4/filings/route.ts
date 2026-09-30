@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
-import { withSession } from "@/platform/http/withSession"
-import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
+import { withSession, type HandlerSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, errorResponse, publicErrorMessage } from "@/platform/http/errors"
+import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -7284,7 +7285,7 @@ export async function POST(request: Request) {
   return withSession(request, handlePost)
 }
 
-async function handlePost(request: Request) {
+async function handlePost(request: Request, session: HandlerSession | null) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -7335,13 +7336,16 @@ async function handlePost(request: Request) {
           { status: 400 }
         )
       }
-      const partnerOverride =
-        parsed.partnerOverride?.partnerId || parsed.partnerOverride?.reason
-          ? {
-              partnerId: parsed.partnerOverride?.partnerId ?? "",
-              reason: parsed.partnerOverride?.reason ?? "",
-            }
-          : undefined
+      // The override partner is the authenticated caller (L17.1 human control), never a body field.
+      const resolvedOverride = resolvePartnerOverride(
+        store,
+        parsed.partnerOverride,
+        session?.userId ?? undefined
+      )
+      if (!resolvedOverride.ok) {
+        return errorResponse(resolvedOverride.status, resolvedOverride.code, resolvedOverride.error)
+      }
+      const partnerOverride = resolvedOverride.override
       const actor = store.users.get(parsed.actorId)
       if (!actor) {
         return NextResponse.json({ error: "unknown actor" }, { status: 404 })

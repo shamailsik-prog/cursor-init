@@ -149,7 +149,7 @@ describe("POST/GET /api/d4/drafts", () => {
     expect(json.result.result.citationStatus).toBe("OVERRULED")
   })
 
-  it("requires partner override reason for overruled citations and allows compose when provided", async () => {
+  it("rejects an associate naming a partner in partnerOverride (403), keeping the OVERRULED block", async () => {
     const matterId = seedMatter("internal")
     const store = getRuntimeStore()
     seedJudgment(store, "j-old", "Old authority", "single")
@@ -172,7 +172,7 @@ describe("POST/GET /api/d4/drafts", () => {
     )
     expect(blocked.status).toBe(422)
 
-    const allowed = await post(
+    const spoofed = await post(
       {
         action: "compose",
         actorId: "associate_a",
@@ -190,12 +190,93 @@ describe("POST/GET /api/d4/drafts", () => {
       },
       "2de03efa-37e4-471a-9667-3a79f443a873"
     )
+    expect(spoofed.status).toBe(403)
+    expect([...store.drafts.values()]).toHaveLength(0)
+    expect(store.audit.some((row) => row.action === "citation_gate_override")).toBe(false)
+
+    const associateSelf = await post(
+      {
+        action: "preflight",
+        actorId: "associate_a",
+        matterId,
+        classification: "internal",
+        citedJudgmentIds: ["j-old"],
+        partnerOverride: { reason: "I am not a partner" },
+      },
+      "5a0f3e38-0d33-4a0e-9d7c-4b1f0a6b9e11"
+    )
+    expect(associateSelf.status).toBe(403)
+  })
+
+  it("lets the partner override the OVERRULED block for themselves with a reason, and audits the reason", async () => {
+    const matterId = seedMatter("internal")
+    const store = getRuntimeStore()
+    seedJudgment(store, "j-old", "Old authority", "single")
+    seedJudgment(store, "j-new", "Larger bench", "larger")
+    seedTreatment(store, "j-new", "j-old", "overruled", "larger")
+
+    const missingReason = await post(
+      {
+        action: "compose",
+        actorId: "partner_a",
+        matterId,
+        templateId: templateId(),
+        title: "Partner draft",
+        body: "Body",
+        classification: "internal",
+        citedJudgmentIds: ["j-old"],
+        partnerOverride: { partnerId: "partner_a", reason: "   " },
+      },
+      "0c5d3a55-6a57-4d59-a0f4-1f2e6b8d7c01"
+    )
+    expect(missingReason.status).toBe(400)
+
+    const naming = await post(
+      {
+        action: "compose",
+        actorId: "partner_a",
+        matterId,
+        templateId: templateId(),
+        title: "Partner draft",
+        body: "Body",
+        classification: "internal",
+        citedJudgmentIds: ["j-old"],
+        partnerOverride: { partnerId: "partner_b", reason: "Other firm partner" },
+      },
+      "6e7b1a9c-2f44-4c1e-8d0b-3a5c9e7f1d02"
+    )
+    expect(naming.status).toBe(403)
+
+    const allowed = await post(
+      {
+        action: "compose",
+        actorId: "partner_a",
+        matterId,
+        templateId: templateId(),
+        title: "Partner draft",
+        body: "Body",
+        classification: "internal",
+        citedJudgmentIds: ["j-old"],
+        temporalCitations: [],
+        partnerOverride: {
+          reason: "Distinguished on facts and client instruction",
+        },
+      },
+      "9d2c4b1a-7e6f-4a3b-8c5d-0e1f2a3b4c03"
+    )
     expect(allowed.status).toBe(200)
     const ok = (await allowed.json()) as {
       result: { draft: { id: string; templateId: string } }
     }
     expect(ok.result.draft.id).toBeTruthy()
     expect(ok.result.draft.templateId).toBe(templateId())
+    const overrides = store.audit.filter((row) => row.action === "citation_gate_override")
+    expect(overrides).toHaveLength(1)
+    expect(overrides[0]).toMatchObject({
+      actorId: "partner_a",
+      target: matterId,
+      reason: "Distinguished on facts and client instruction",
+    })
   })
 
   it("blocks compose when temporal preflight mismatches statute text", async () => {

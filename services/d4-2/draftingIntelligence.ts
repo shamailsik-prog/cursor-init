@@ -1,4 +1,5 @@
 import type { SpineStore } from "@/platform/spine/store"
+import { isEffectivePartnerOverride, type PartnerOverride } from "@/services/d4-2/partnerOverride"
 
 export type GateResult =
   | { status: "OK" }
@@ -24,10 +25,15 @@ export function seedTreatment(
   store.treatments.push({ treatingId, treatedId, treatment, treatingBenchType })
 }
 
+/**
+ * `caller` is the authenticated actor and the firm that owns the matter. A partner override
+ * is effective only when its partnerId is that caller, a partner of that firm, with a reason.
+ */
 export function verifyCitations(
   store: SpineStore,
   citedJudgmentIds: string[],
-  partnerOverride?: { partnerId: string; reason: string }
+  partnerOverride?: PartnerOverride,
+  caller?: { actorId: string; firmId: string }
 ): GateResult {
   for (const cited of citedJudgmentIds) {
     const hit = store.treatments.find(
@@ -41,11 +47,7 @@ export function verifyCitations(
       treated &&
       benchRank(treating.benchType) > benchRank(treated.benchType)
     if (hit.treatment === "overruled" && (larger || hit.treatingBenchType === "larger")) {
-      if (partnerOverride?.reason.trim()) {
-        const partner = store.users.get(partnerOverride.partnerId)
-        if (!partner || partner.role !== "partner") {
-          return { status: "OVERRULED", blocked: true }
-        }
+      if (isEffectivePartnerOverride(store, partnerOverride, caller)) {
         return { status: "OK" }
       }
       return { status: "OVERRULED", blocked: true }

@@ -80,6 +80,44 @@ describe("GET/POST /api/d4/filings", () => {
       "58de6792-a8d0-4964-8440-9e8d48cecbab"
     )
     expect(blocked.status).toBe(422)
+
+    const spoofed = await post(
+      {
+        action: "create_package",
+        actorId: "associate_a",
+        matterId,
+        draftId,
+        classification: "internal",
+        citedJudgmentIds: ["j-old"],
+        temporalCitations: [],
+        partnerOverride: { partnerId: "partner_a", reason: "named partner" },
+      },
+      "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e04"
+    )
+    expect(spoofed.status).toBe(403)
+    expect([...store.filingPackages.values()]).toHaveLength(0)
+
+    const partnerSelf = await post(
+      {
+        action: "create_package",
+        actorId: "partner_a",
+        matterId,
+        draftId,
+        classification: "internal",
+        citedJudgmentIds: ["j-old"],
+        temporalCitations: [],
+        partnerOverride: { reason: "Distinguished; later bench on different statute" },
+      },
+      "8d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f05"
+    )
+    expect(partnerSelf.status).toBe(200)
+    const overrides = store.audit.filter((row) => row.action === "citation_gate_override")
+    expect(overrides).toHaveLength(1)
+    expect(overrides[0]).toMatchObject({
+      actorId: "partner_a",
+      target: matterId,
+      reason: "Distinguished; later bench on different statute",
+    })
   })
 
   it("creates pending filing package and supports partner approval", async () => {
@@ -166,10 +204,6 @@ describe("GET/POST /api/d4/filings", () => {
         classification: "internal",
         citedJudgmentIds: [],
         temporalCitations: [],
-        partnerOverride: {
-          partnerId: "partner_a",
-          reason: "allow duplicate package for test",
-        },
       },
       "b1e5eaa7-74d4-43ef-a578-c6d5ad2654fc"
     )
