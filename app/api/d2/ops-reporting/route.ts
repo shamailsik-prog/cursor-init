@@ -33341,7 +33341,7 @@ if (
       }
       if (
         currentTbAckReconPdFreezeSeal527WaiverExternalDistributionAuditLedger.externalDistributionAuditLedgerStatus !==
-        "transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_entry_recorded"
+        "transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_entry_recorded"
       ) {
         return NextResponse.json(
           { error: "external distribution audit ledger finalization requires entry recorded status" },
