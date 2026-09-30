@@ -6,6 +6,8 @@ import {
 } from "@firebase/rules-unit-testing"
 import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
 import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { newStore } from "@/platform/spine/store"
 
 const RULES = readFileSync("firestore.rules", "utf8")
 
@@ -5044,15 +5046,36 @@ describe("Firestore repository adapters", () => {
       await expect(
         repos.audit.append({ ...original, action: "matter_delete", target: "mat_other" })
       ).rejects.toBeInstanceOf(AuditAppendConflictError)
-      await expect(repos.audit.append({ ...original })).rejects.toBeInstanceOf(
-        AuditAppendConflictError
-      )
+      // Identical re-append (retry / overlapping write-through) is an idempotent no-op.
+      await expect(repos.audit.append({ ...original })).resolves.toBeUndefined()
       const rows = (await repos.audit.listByFirm("firmA")).filter(
         (row) => row.id === "aud_insert_only_1"
       )
       expect(rows).toHaveLength(1)
       expect(rows[0]?.action).toBe("matter_create")
       expect(rows[0]?.target).toBe("mat_audit_1")
+
+      // Overlapping write-through ranges (two in-flight requests) persist each row once.
+      const runtime = newStore()
+      const entry = (target: string) => ({
+        firmId: "firmA",
+        action: "matter_update",
+        actorId: "partner_a",
+        target,
+        classification: "internal" as const,
+      })
+      runtime.audit.push(entry("mat_overlap_a"))
+      const priorB = runtime.audit.length
+      runtime.audit.push(entry("mat_overlap_b"))
+      await persistAuditEntriesSince(runtime, repos, 0)
+      await expect(persistAuditEntriesSince(runtime, repos, priorB)).resolves.toBeUndefined()
+      const overlapRows = (await repos.audit.listByFirm("firmA")).filter((row) =>
+        row.target.startsWith("mat_overlap_")
+      )
+      expect(overlapRows.map((row) => row.target).sort()).toEqual([
+        "mat_overlap_a",
+        "mat_overlap_b",
+      ])
     })
   })
 })

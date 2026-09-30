@@ -156,7 +156,10 @@ import type {
 } from "@/platform/spine/store"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { createDenyByDefaultWorkflowOpsRepositoryBinder } from "@/platform/persistence/denyByDefaultWorkflowOpsRepository"
-import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
+import {
+  AuditAppendConflictError,
+  auditRowsEqual,
+} from "@/platform/persistence/auditAppendConflictError"
 
 async function setById<T extends { id: string }>(db: Firestore, collectionName: string, row: T) {
   await setDoc(doc(db, collectionName, row.id), row)
@@ -1738,7 +1741,11 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         // Insert-only: never overwrite an existing audit row (setDoc alone would replace it).
         await runTransaction(db, async (tx) => {
           const current = await tx.get(ref)
-          if (current.exists()) throw new AuditAppendConflictError(auditId)
+          if (current.exists()) {
+            // Identical re-append (retry / overlapping write-through) is a no-op.
+            if (auditRowsEqual(current.data(), payload)) return
+            throw new AuditAppendConflictError(auditId)
+          }
           tx.set(ref, payload)
         })
       },

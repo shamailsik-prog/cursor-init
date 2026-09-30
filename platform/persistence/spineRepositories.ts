@@ -142,8 +142,12 @@ import type {
   WorkflowEvent,
   User,
   SpineStore,
+  WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationRow,
 } from "@/platform/spine/store"
-import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
+import {
+  AuditAppendConflictError,
+  auditRowsEqual,
+} from "@/platform/persistence/auditAppendConflictError"
 
 export { AuditAppendConflictError }
 
@@ -621,9 +625,18 @@ export type IntimationRepository = {
   listByMatter(matterId: string): Promise<Intimation[]>
 }
 
+/** Repository shape of a dedicated TB ack-recon lattice view collection. */
+export type WorkflowOpsLatticeViewRepository<TRow> = {
+  upsert(row: TRow): Promise<void>
+  get(id: string): Promise<TRow | null>
+  listByFirm(firmId: string): Promise<TRow[]>
+  listByMatter(matterId: string): Promise<TRow[]>
+}
+
 /**
- * Insert-only audit log. `append` rejects with `AuditAppendConflictError` when the id
- * already exists; rows are never replaced.
+ * Insert-only audit log. Re-appending an identical row is an idempotent no-op; `append`
+ * rejects with `AuditAppendConflictError` when the id exists with different content.
+ * Rows are never replaced.
  * TODO(audit-tamper-evidence): add a per-firm hash chain (prevHash = sha256 of the previous
  * row) once a chain-head collection and its firestore.rules block exist; a Firestore chain
  * needs a transactional per-firm head document, which is out of scope for this repository.
@@ -3206,11 +3219,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async append(row) {
         if (row.id) {
           const existing = store.audit.find((entry) => entry.id === row.id)
-          // In memory mode the runtime store is the backing store, so audit write-through
-          // hands back the very row object already held in store.audit; that is not a
-          // second insert. Any other row reusing the id is rejected, never replaced.
-          if (existing === row) return
-          if (existing) throw new AuditAppendConflictError(row.id)
+          if (existing) {
+            // Identical re-append (retry / overlapping write-through) is a no-op; a row
+            // with differing content is rejected, never replaced.
+            if (auditRowsEqual(existing, row)) return
+            throw new AuditAppendConflictError(row.id)
+          }
         }
         store.audit.push(row)
       },
