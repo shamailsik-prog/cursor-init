@@ -19,8 +19,9 @@ govern until signed.
 Layer 18 Erratum Set No. 1 > Layer 18 > Layer 17 > earlier text, where they conflict (stated on p. 343 of the
 extract, line 9425). Between Layer 17 and Layer 18: Layer 17 governs scope and rules; Layer 18 governs
 implementation form (Layer 18 §0.2, p. 287, line 7787). Where an erratum set and the layer it is bound behind
-differ, the erratum set governs (Erratum Set No. 1, status line, p. 336). An erratum set once signed ranks above
-the erratum sets before it.
+differ, the erratum set governs (Erratum Set No. 1, status line, p. 336). An erratum set once signed is taken to rank above
+the erratum sets before it. That last ordering is inferred from Set No. 1's status line (p. 336); it is not stated in the set,
+and the partner is to confirm it at signature. The Phase 3 layer (p. 343) ranks below Erratum Set No. 1.
 
 ## How a new numbered layer or erratum is added (Layer 17 §1.4, p. 245, lines 6692–6699)
 
