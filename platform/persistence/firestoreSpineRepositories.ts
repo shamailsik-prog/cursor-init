@@ -1,3 +1,4 @@
+import { markAuditRowPersisted } from "@/platform/audit/requestAudit"
 import {
   collection,
   doc,
@@ -1772,6 +1773,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           }
           tx.set(ref, payload)
         })
+        markAuditRowPersisted(row)
       },
       async listByFirm(firmId) {
         return listByFirm<AuditEntry & { firmId: string }>(db, "audit_log", firmId)

@@ -1,3 +1,4 @@
+import { AuditLog } from "@/platform/audit/requestAudit"
 import { createHash, randomUUID } from "node:crypto"
 import type { Classification } from "@/platform/p1/types"
 import { classificationRank, isClassification } from "@/platform/p1/types"
@@ -5600,7 +5601,8 @@ export class SpineStore {
   links: EntityLink[] = []
   followUps: FollowUp[] = []
   intimations: Intimation[] = []
-  audit: AuditEntry[] = []
+  /** Bounded, request-collected audit log (platform/audit/requestAudit.ts). */
+  audit: AuditEntry[] = new AuditLog()
   sectionVersions: StatuteSectionVersion[] = []
   judgments = new Map<string, Judgment>()
   treatments: TreatmentRow[] = []

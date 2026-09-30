@@ -1,3 +1,4 @@
+import { markAuditRowPersisted } from "@/platform/audit/requestAudit"
 import type {
   DocumentRecord,
   DraftRecord,
@@ -3251,11 +3252,15 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           if (existing) {
             // Identical re-append (retry / overlapping write-through) is a no-op; a row
             // with differing content is rejected, never replaced.
-            if (auditRowsEqual(existing, row)) return
+            if (auditRowsEqual(existing, row)) {
+              markAuditRowPersisted(row)
+              return
+            }
             throw new AuditAppendConflictError(row.id)
           }
         }
         store.audit.push(row)
+        markAuditRowPersisted(row)
       },
       async listByFirm(firmId) {
         return store.audit.filter((row) => row.firmId === firmId)

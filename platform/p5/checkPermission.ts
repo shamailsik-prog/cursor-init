@@ -16,9 +16,15 @@ export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set([
 /**
  * P5 permission check (Layer 18 §4.5): "returns allow/deny with reason; logs to
  * auditPrivilegeAccess". Every decision appends exactly one `permission_check` row to the
- * spine audit log — the log the audit repository appends to and that routes write through
- * with persistAuditEntriesSince. If that append fails the decision is deny
- * `audit_unavailable` (fail closed): an unaudited allow is never returned.
+ * spine audit log. What "fail closed" means here, precisely:
+ *   - if the in-process append throws, the decision is deny `audit_unavailable`;
+ *   - the durable write happens when the request ends: `withSession` persists every row the
+ *     request created through the audit repository before the response is returned, and
+ *     answers 503 AUDIT_UNAVAILABLE if that fails. A read therefore never returns data whose
+ *     access decision was not durably audited; a write whose effect already committed still
+ *     gets 503 and is logged.
+ * Awaiting the durable append *before* returning allow needs an async P5 — the true fix,
+ * tracked as a follow-up (checkPermission is synchronous at ~225 call sites).
  */
 export function checkPermission(
   store: SpineStore,
