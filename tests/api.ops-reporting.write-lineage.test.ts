@@ -16,11 +16,13 @@ type HandlerInfo = { actions: string[]; line: number; repos: Set<string>; stores
 function analyse(): HandlerInfo[] {
   const text = readFileSync(ROUTE, "utf8")
   const sf = ts.createSourceFile(ROUTE, text, ts.ScriptTarget.Latest, true)
+  // The exported POST is the session wrapper (`return withSession(request, handlePost)`);
+  // the dispatch lives in handlePost.
   let post: ts.FunctionDeclaration | undefined
   ts.forEachChild(sf, (n) => {
-    if (ts.isFunctionDeclaration(n) && n.name?.text === "POST") post = n
+    if (ts.isFunctionDeclaration(n) && n.name?.text === "handlePost") post = n
   })
-  if (!post?.body) throw new Error("POST not found")
+  if (!post?.body) throw new Error("handlePost not found")
 
   const lookupCollection = new Map<string, string>()
   for (const st of post.body.statements) {
