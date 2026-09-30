@@ -32,13 +32,12 @@ service cloud.firestore {
     }
     match /users/{uid} {
       allow read: if sameFirm() && (isStaff() || request.auth.uid == uid);
-      // Partners administer other users only: never above their own clearance (target before and after), roles from the known set.
-      allow update: if sameFirm() && firmIdUnchanged() && (request.auth.uid == uid
-                      ? !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'active', 'clearanceLevel', 'mfaEnabled', 'firmId'])
-                      : isPartner() && cleared(resource.data.clearanceLevel) && cleared(request.resource.data.clearanceLevel)
-                        && request.resource.data.role in ['partner', 'associate', 'clerk', 'intern', 'accounts', 'client']
-                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'clearanceLevel', 'displayName', 'active']));  // mfaEnabled: self-service/Admin SDK only
-      allow create, delete: if false; // Admin SDK (P5) only
+      // users/{uid} is the authoritative identity record: role, clearanceLevel, active, firmId, mfaEnabled,
+      // claimsVersion, deactivatedAt, updatedAt, createdAt are written only by Cloud Functions (Admin SDK),
+      // which sync custom claims from it. Client SDK may change displayName only: on self, or a partner on a same-firm user.
+      allow update: if sameFirm() && firmIdUnchanged() && (request.auth.uid == uid || isPartner())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']);
+      allow create, delete: if false; // Cloud Functions (Admin SDK) only
     }
     match /matter_members/{id} {
       allow read: if sameFirm() && memberOrPartner(resource.data.matterId);
