@@ -396,8 +396,10 @@ service cloud.firestore {
     match /filing_escalation_closure_queue_drain_reconciliation/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_escalation_closure_settlement_arbitration/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /filing_escalation_closure_queue_reentry_compliance/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /feature_flags/{id}  { allow read: if signedIn(); allow write: if false; }
-    match /firm_feature_overrides/{id} { allow read: if sameFirm(); allow write: if false; }
+    // L17.6 #41 / review R1 #10: the register-only accounts role reads no configuration either.
+    // No accounts UI consumes flags today; if one ever does, serve the needed flags via the API.
+    match /feature_flags/{id}  { allow read: if signedIn() && !isRegisterOnly(); allow write: if false; }
+    match /firm_feature_overrides/{id} { allow read: if sameFirm() && !isRegisterOnly(); allow write: if false; }
 
     match /{document=**} { allow read, write: if false; }
   }

@@ -1086,3 +1086,20 @@ describe("Review R1 #9 — documents create: matter floor and client-sourced flo
     await assertSucceeds(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flWeb"), { firmId: "firmA", matterId: "flInt", classification: "internal", sourceChannel: "web" }))
   })
 })
+
+describe("Review R1 #10 — accounts cannot read feature flags or firm overrides (L17.6 #41)", () => {
+  const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "internal" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "feature_flags", "ffL17"), { name: "L17_6", enabled: true })
+      await setDoc(doc(ctx.firestore(), "firm_feature_overrides", "ffoA"), { firmId: "firmA", flag: "L17_6", enabled: true })
+    })
+  })
+  it("accounts denied; staff still read", async () => {
+    await assertFails(getDoc(doc(authed("ff-acc", ACCOUNTS), "feature_flags", "ffL17")))
+    await assertFails(getDoc(doc(authed("ff-acc", ACCOUNTS), "firm_feature_overrides", "ffoA")))
+    await assertSucceeds(getDoc(doc(authed("ff-assoc", ASSOC), "feature_flags", "ffL17")))
+    await assertSucceeds(getDoc(doc(authed("ff-assoc", ASSOC), "firm_feature_overrides", "ffoA")))
+  })
+})
