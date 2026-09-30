@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { Classification } from "@/platform/p1/types"
-import { classificationRank } from "@/platform/p1/types"
+import { classificationRank, isClassification } from "@/platform/p1/types"
 import { currentRequestIdentity } from "@/platform/p5/requestSession"
 
 export type { Classification } from "@/platform/p1/types"
@@ -6705,14 +6705,14 @@ export function newStore(): SpineStore {
 }
 
 /**
- * Users map whose `get` applies the current request's clearance ceiling to the
- * authenticated caller (see platform/p5/requestSession.ts). Only lowers, never
- * raises; other users and all writes are untouched.
+ * Users map that applies the current request's clearance ceiling to the
+ * authenticated caller on EVERY read path — get, values, entries, forEach and
+ * iteration (see platform/p5/requestSession.ts). It only lowers, never raises;
+ * other users and all writes are untouched. Use `storedUserRecord` when the
+ * provisioned (uncapped) record is needed, e.g. for session-reference snapshots.
  */
 class SessionScopedUserMap extends Map<string, User> {
-  override get(id: string): User | undefined {
-    const record = super.get(id)
-    if (!record) return record
+  private cap(id: string, record: User): User {
     const identity = currentRequestIdentity()
     if (!identity || identity.userId !== id) return record
     if (classificationRank(identity.clearance) >= classificationRank(record.clearanceLevel)) {
@@ -6720,6 +6720,51 @@ class SessionScopedUserMap extends Map<string, User> {
     }
     return { ...record, clearanceLevel: identity.clearance }
   }
+
+  /** The provisioned record, ignoring any request-scoped ceiling. */
+  getStored(id: string): User | undefined {
+    return super.get(id)
+  }
+
+  override get(id: string): User | undefined {
+    const record = super.get(id)
+    return record ? this.cap(id, record) : record
+  }
+
+  override *entries(): MapIterator<[string, User]> {
+    for (const [id, record] of super.entries()) yield [id, this.cap(id, record)]
+  }
+
+  override *values(): MapIterator<User> {
+    for (const [id, record] of super.entries()) yield this.cap(id, record)
+  }
+
+  override [Symbol.iterator](): MapIterator<[string, User]> {
+    return this.entries()
+  }
+
+  override forEach(
+    callbackfn: (value: User, key: string, map: Map<string, User>) => void,
+    thisArg?: unknown
+  ): void {
+    for (const [id, record] of this.entries()) callbackfn.call(thisArg, record, id, this)
+  }
+}
+
+/** The caller's provisioned record, without the request-scoped clearance ceiling. */
+export function storedUserRecord(store: SpineStore, id: string): User | undefined {
+  const users = store.users
+  return users instanceof SessionScopedUserMap ? users.getStored(id) : users.get(id)
+}
+
+/**
+ * Rank of a PERSISTED label. An unreadable legacy/poisoned label is treated as
+ * privileged-restricted (the maximum) instead of throwing, so one bad row is
+ * hidden from everyone below the maximum clearance rather than breaking a
+ * whole listing.
+ */
+export function rankOfStoredOrMax(label: unknown): number {
+  return isClassification(label) ? classificationRank(label) : classificationRank("privileged-restricted")
 }
 
 export function rankOf(c: Classification): number {

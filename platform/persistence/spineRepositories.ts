@@ -143,6 +143,7 @@ import type {
   User,
   SpineStore,
 } from "@/platform/spine/store"
+import { storedUserRecord } from "@/platform/spine/store"
 
 export type MatterRepository = {
   create(row: Matter): Promise<void>
@@ -2080,11 +2081,15 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.users.set(row.id, row)
       },
+      // The repository returns provisioned records, never a request-scoped
+      // clearance ceiling (callers write repository rows back into the store).
       async get(id) {
-        return store.users.get(id) ?? null
+        return storedUserRecord(store, id) ?? null
       },
       async listByFirm(firmId) {
-        return [...store.users.values()].filter((row) => row.firmId === firmId)
+        return [...store.users.keys()]
+          .map((id) => storedUserRecord(store, id))
+          .filter((row): row is User => Boolean(row) && row!.firmId === firmId)
       },
     },
     entities: {

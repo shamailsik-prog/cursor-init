@@ -145,7 +145,8 @@ describe("POST /api/p1/committee-brain", () => {
     expect(json.result.agent).toBe("sikander-ai")
     expect(json.result.outbound.body).not.toContain(cnic)
     expect(json.result.outbound.body).not.toContain(party)
-    expect(json.result.outbound.metadata.classification).toBe("public")
+    // Caller free text is floored at internal even on a public matter (N1).
+    expect(json.result.outbound.metadata.classification).toBe("internal")
   })
 
   it("blocks privileged without sending to a transport", async () => {

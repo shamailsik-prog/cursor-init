@@ -127,12 +127,12 @@ describe("committee-brain classification is derived server-side (H1)", () => {
     expect(json.result.outbound.metadata.classification).toBe("privileged")
   })
 
-  it("keeps a genuinely public matter public", async () => {
+  it("floors caller free text on a public matter at internal (N1)", async () => {
     seedMatter("mat_pub", "public", ["partner_a"])
     const res = await post({ actorId: "partner_a", matterId: "mat_pub", body: "press release" })
     expect(res.status).toBe(200)
     const json = (await res.json()) as PostJson
-    expect(json.result.outbound.metadata.classification).toBe("public")
+    expect(json.result.outbound.metadata.classification).toBe("internal")
   })
 
   it("refuses a matter the actor is not a member of", async () => {

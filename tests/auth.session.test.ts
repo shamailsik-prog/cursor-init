@@ -457,3 +457,39 @@ describe("handlers authorise against the session (#5)", () => {
     reposGet.mockRestore()
   })
 })
+
+describe("session references and identity lookups (round 2)", () => {
+  it("N2: alternating capped and full tokens does not look like privilege drift", async () => {
+    const url = "http://127.0.0.1/api/p5/tenancy?view=session&limit=10&cursor=0"
+    const first = await tenancyGet(authed(url, { token: "token-partner-a-internal" }))
+    expect(first.status).toBe(200)
+    const ref = ((await first.json()) as { sessionReference: { id: string } }).sessionReference.id
+    expect(getRuntimeStore().tenancySessionReferences.get(ref)?.clearanceSnapshot).toBe(
+      "privileged-restricted"
+    )
+    const again = await tenancyGet(authed(`${url}&sessionRefId=${ref}`))
+    expect(again.status).toBe(200)
+    const capped = await tenancyGet(authed(`${url}&sessionRefId=${ref}`, { token: "token-partner-a-internal" }))
+    expect(capped.status).toBe(200)
+  })
+
+  it("N4: a failed repository read is 503 identity_unavailable, not a stale cached record", async () => {
+    const repoModule = await import("@/platform/persistence/runtimeRepositories")
+    const real = await repoModule.getRuntimeRepositories(getRuntimeStore())
+    const spy = vi.spyOn(repoModule, "getRuntimeRepositories").mockResolvedValue({
+      ...real,
+      users: {
+        ...real.users,
+        get: async () => {
+          throw new Error("firestore unavailable")
+        },
+      },
+    })
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    const res = await mattersGet(authed("http://127.0.0.1/api/d1/matters?limit=10&cursor=0"))
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { code: string }).code).toBe("identity_unavailable")
+    spy.mockRestore()
+    err.mockRestore()
+  })
+})

@@ -4,7 +4,7 @@ import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { callCommitteeBrain } from "@/platform/p1/internalAICaller"
-import { rankOf, type CommitteeBrainOutput } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type CommitteeBrainOutput } from "@/platform/spine/store"
 import {
   CommitteeScopeError,
   canAccessMatter,
@@ -21,6 +21,9 @@ import {
 } from "@/platform/http/idempotency"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
+
+/** Minimum classification for caller-supplied free text (N1). */
+const FREE_TEXT_FLOOR: Classification = "internal"
 
 type Body = {
   actorId?: string
@@ -82,7 +85,7 @@ async function handleGet(request: Request) {
     const blockedFilter =
       blockedParam === "true" ? true : blockedParam === "false" ? false : undefined
     const cleared = (await repos.committeeOutputs.listByFirm(actor.firmId))
-      .filter((row) => rankOf(actor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(actor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (blockedFilter === undefined ? true : row.blocked === blockedFilter))
     // M4: outputs are visible only on matters the caller may access (P5
     // checkPermission: same firm + membership + clearance). Every new output
@@ -219,13 +222,14 @@ async function handlePost(request: Request) {
       throw err
     }
     // H1: the derived classification is authoritative; a caller label may
-    // only make it stricter.
-    const classification: Classification =
-      strictestClassification(
-        requestedClassification
-          ? [scope.classification, requestedClassification]
-          : [scope.classification]
-      ) ?? scope.classification
+    // only make it stricter. N1: caller-authored free text is never rank 0 —
+    // anyone can create a "public" matter, so text the server did not build
+    // from referenced records is floored at internal and cannot pass the
+    // rank-0-only provider allow-list.
+    const labels: Classification[] = [scope.classification]
+    if (requestedClassification) labels.push(requestedClassification)
+    labels.push(FREE_TEXT_FLOOR) // `body` is required, so it is always caller text
+    const classification: Classification = strictestClassification(labels) ?? scope.classification
     const partyNames = [...new Set([...scope.partyNames, ...requestedPartyNames])]
     if (rankOf(actor.clearanceLevel) < rankOf(classification)) {
       return NextResponse.json(

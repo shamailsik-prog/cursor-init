@@ -42,6 +42,7 @@ export type AuthErrorCode =
   | "FIRM_HEADER_REQUIRED"
   | "FIRM_MISMATCH"
   | "USER_NOT_PROVISIONED"
+  | "identity_unavailable"
 
 export class AuthError extends Error {
   readonly status: number
@@ -190,6 +191,12 @@ export async function loadUserRecord(
     fromRepo = (await repos.users.get(userId)) ?? null
   } catch (err) {
     console.error("[auth] user lookup failed", err)
+    if (options.preferRepository) {
+      // Firebase mode: the repository is authoritative. Never authenticate
+      // against a possibly stale in-memory record (a user demoted or
+      // deprovisioned on another instance) while it is unreachable.
+      throw new AuthError(503, "identity_unavailable", "identity service unavailable")
+    }
   }
   if (fromRepo) {
     store.users.set(fromRepo.id, fromRepo)

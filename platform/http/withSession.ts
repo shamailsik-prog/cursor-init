@@ -173,7 +173,13 @@ export async function withSession(
     } catch (err) {
       if (err instanceof AuthError) {
         if (err.status >= 500) console.error("[auth]", err.message)
-        return errorResponse(err.status, err.code, err.status >= 500 ? "auth not configured" : err.message)
+        const publicMessage =
+          err.code === "identity_unavailable"
+            ? "identity service unavailable"
+            : err.status >= 500
+              ? "auth not configured"
+              : err.message
+        return errorResponse(err.status, err.code, publicMessage)
       }
       throw err
     }

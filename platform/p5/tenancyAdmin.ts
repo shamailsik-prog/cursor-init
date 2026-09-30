@@ -2,6 +2,7 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
 import {
   rankOf,
+  storedUserRecord,
   type Role,
   type SpineStore,
   type TenancyAuthBoundary,
@@ -308,10 +309,10 @@ export function upsertTenancySessionReference(
   const now = input.now ?? Date.now()
   const existing = input.existing ?? null
   if (existing && existing.userId !== input.user.id) {
-    throw new PublicError("session reference user mismatch")
+    throw new PublicError("unknown session reference")
   }
   if (existing && existing.firmId !== input.user.firmId) {
-    throw new PublicError("cross-firm session reference denied")
+    throw new PublicError("unknown session reference")
   }
   const authBoundary = input.authBoundary ?? existing?.authBoundary ?? "runtime_local"
   const rawExternalSessionId = input.externalSessionId ?? existing?.externalSessionId ?? null
@@ -335,7 +336,10 @@ export function upsertTenancySessionReference(
     firmId: input.user.firmId,
     userId: input.user.id,
     roleSnapshot: input.user.role,
-    clearanceSnapshot: input.user.clearanceLevel,
+    // Snapshot the provisioned clearance, not a request-scoped ceiling, so a
+    // capped token does not register as privilege drift.
+    clearanceSnapshot:
+      storedUserRecord(store, input.user.id)?.clearanceLevel ?? input.user.clearanceLevel,
     parentSessionReferenceId: input.parentSessionReferenceId ?? existing?.parentSessionReferenceId ?? null,
     lineageRootSessionReferenceId,
     lineageDepth,
@@ -407,7 +411,7 @@ export function reissueTenancySessionReference(
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const parent = store.tenancySessionReferences.get(input.parentSessionReferenceId)
   if (!parent) throw new PublicError("unknown session reference")
-  if (parent.firmId !== input.firmId) throw new PublicError("cross-firm session reference denied")
+  if (parent.firmId !== input.firmId) throw new PublicError("unknown session reference")
   if (getTenancySessionReferenceState(parent, input.now) !== "active") {
     throw new PublicError("session reference is not active")
   }
@@ -422,7 +426,7 @@ export function reissueTenancySessionReference(
     authBoundary: nextAuthBoundary,
     externalSessionId: nextExternalSessionId,
     roleSnapshot: user.role,
-    clearanceSnapshot: user.clearanceLevel,
+    clearanceSnapshot: storedUserRecord(store, user.id)?.clearanceLevel ?? user.clearanceLevel,
   })
   const now = input.now ?? Date.now()
   const reference = upsertTenancySessionReference(store, {
@@ -479,7 +483,7 @@ export function revokeTenancySessionReference(
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const reference = store.tenancySessionReferences.get(input.sessionReferenceId)
   if (!reference) throw new PublicError("unknown session reference")
-  if (reference.firmId !== input.firmId) throw new PublicError("cross-firm session reference denied")
+  if (reference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const now = input.now ?? Date.now()
   const revoked =
     reference.revokedAt !== null
@@ -598,7 +602,7 @@ export function listSessionReferenceLineage(
   requirePartnerInFirm(store, actorId, firmId)
   const root = store.tenancySessionReferences.get(rootSessionReferenceId)
   if (!root) throw new PublicError("unknown root session reference")
-  if (root.firmId !== firmId) throw new PublicError("cross-firm session reference denied")
+  if (root.firmId !== firmId) throw new PublicError("unknown session reference")
   const now = Date.now()
   const rows = [...store.tenancySessionReferences.values()]
     .filter((row) => row.firmId === firmId)
@@ -672,7 +676,7 @@ export function attestSessionLineageDispute(
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
   if (!sessionReference) throw new PublicError("unknown session reference")
-  if (sessionReference.firmId !== input.firmId) throw new PublicError("cross-firm session reference denied")
+  if (sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const reason = input.reason.trim()
   if (!reason) throw new PublicError("reason is required")
   const now = input.now ?? Date.now()
@@ -1570,8 +1574,7 @@ export function governLineageClosureAdjudication(
   if (panelPartnerIds.length === 0) throw new PublicError("panelPartnerIds must include at least one partner")
   for (const partnerId of panelPartnerIds) {
     const user = store.users.get(partnerId)
-    if (!user) throw new PublicError(`unknown panel partner: ${partnerId}`)
-    if (user.firmId !== input.firmId) throw new PublicError("cross-firm panel partner denied")
+    if (!user || user.firmId !== input.firmId) throw new PublicError("unknown panel partner")
     if (user.role !== "partner") throw new PublicError("panel partner must have partner role")
   }
   const requiredPanelQuorum = Math.max(1, Math.min(input.requiredPanelQuorum ?? 2, 12))
@@ -2264,7 +2267,7 @@ export function attestExternalSessionIdentityBridge(
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
   if (!sessionReference) throw new PublicError("unknown session reference")
-  if (sessionReference.firmId !== input.firmId) throw new PublicError("cross-firm session reference denied")
+  if (sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const assertedIssuer = input.assertedIssuer.trim()
   if (!assertedIssuer) throw new PublicError("assertedIssuer is required")
   const assertedSubject = input.assertedSubject.trim()
@@ -2350,7 +2353,7 @@ export function quarantineExternalSessionIdentityBridge(
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
   if (!sessionReference) throw new PublicError("unknown session reference")
-  if (sessionReference.firmId !== input.firmId) throw new PublicError("cross-firm session reference denied")
+  if (sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const quarantineReason = input.quarantineReason.trim()
   if (!quarantineReason) throw new PublicError("quarantineReason is required")
   const now = input.now ?? Date.now()
@@ -2423,7 +2426,7 @@ export function clearExternalSessionIdentityBridge(
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
   if (!sessionReference) throw new PublicError("unknown session reference")
-  if (sessionReference.firmId !== input.firmId) throw new PublicError("cross-firm session reference denied")
+  if (sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const clearReason = input.clearReason.trim()
   if (!clearReason) throw new PublicError("clearReason is required")
   const now = input.now ?? Date.now()

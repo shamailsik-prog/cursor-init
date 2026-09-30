@@ -15,6 +15,7 @@ import type {
   TenancyLineageReconciliationQueueArbitrationDisposition,
   User,
 } from "@/platform/spine/store"
+import { storedUserRecord } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -638,7 +639,8 @@ async function handleGet(request: Request) {
       if (
         existingReference &&
         (existingReference.roleSnapshot !== user.role ||
-          existingReference.clearanceSnapshot !== user.clearanceLevel)
+          existingReference.clearanceSnapshot !==
+            (storedUserRecord(store, user.id)?.clearanceLevel ?? user.clearanceLevel))
       ) {
         const now = Date.now()
         const staleReference = {
@@ -2820,11 +2822,9 @@ async function handlePost(request: Request) {
       existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
       if (!existingReference) throw new PublicError("unknown session reference")
       store.tenancySessionReferences.set(existingReference.id, existingReference)
-      if (existingReference.firmId !== firmId) {
-        throw new PublicError("cross-firm session reference denied")
-      }
-      if (existingReference.userId !== actorId) {
-        throw new PublicError("session reference actor mismatch")
+      // Same answer for unknown, other-firm and other-user references.
+      if (existingReference.firmId !== firmId || existingReference.userId !== actorId) {
+        throw new PublicError("unknown session reference")
       }
       const state = getTenancySessionReferenceState(existingReference)
       if (state === "revoked") throw new PublicError("session reference revoked")
