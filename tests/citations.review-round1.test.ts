@@ -199,3 +199,38 @@ describe("gate evasion through /api/d4/drafts is closed", () => {
     expect(other.status).toBe(422)
   })
 })
+
+describe("override spoofing (review probe: every body variant from an associate is refused)", () => {
+  afterEach(() => resetRuntimeStoreForTests())
+  let k = 0
+  const key = () => `c2c2c2c2-0000-4000-8000-${String(++k).padStart(12, "0")}`
+  it.each([
+    [{ partnerId: "partner_a", reason: "r" }],
+    [{ partnerId: "associate_a", reason: "r" }],
+    [{ reason: "r" }],
+    [{ partnerId: " associate_a ", reason: "r" }],
+    [{ partnerId: ["partner_a"], reason: "r" }],
+    ["partner_a"],
+    [[{ partnerId: "partner_a", reason: "r" }]],
+  ])("%j", async (variant) => {
+    const store = getRuntimeStore()
+    const m = createMatter(store, { firmId: "firmA", clientId: "client_a", title: "t", courtId: "SHC", classification: "internal" })
+    for (const u of ["partner_a", "associate_a"]) addMember(store, m.id, u, "firmA")
+    seedJudgment(store, "j-old", "Old", "single", "2019 SCMR 1234")
+    seedJudgment(store, "j-new", "New", "larger", "2021 SCMR 1")
+    seedTreatment(store, "j-new", "j-old", "overruled", "larger")
+    const res = await DRAFTS(
+      new Request("http://127.0.0.1/api/d4/drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": key() },
+        body: JSON.stringify({
+          action: "compose", actorId: "associate_a", matterId: m.id, templateId: getDocumentTypes()[0]!.id,
+          title: "x", body: "2019 SCMR 1234", classification: "internal", partnerOverride: variant,
+        }),
+      })
+    )
+    expect([400, 403, 422]).toContain(res.status)
+    expect([...store.drafts.values()]).toHaveLength(0)
+    expect(store.audit.some((row) => row.action === "citation_gate_override")).toBe(false)
+  })
+})
