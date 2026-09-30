@@ -16,5 +16,8 @@ def require_admin_api_key(x_api_key: str | None = Header(default=None)) -> None:
     Uses constant-time comparison to avoid leaking key match timing.
     """
     expected = settings.ADMIN_API_KEY
-    if not expected or not x_api_key or not compare_digest(x_api_key, expected):
+    # Compare UTF-8 bytes: compare_digest on str raises TypeError for non-ASCII input (-> 500).
+    if not expected or not x_api_key or not compare_digest(
+        x_api_key.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="Invalid key")

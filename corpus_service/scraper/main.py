@@ -52,8 +52,10 @@ async def health():
         return {"status":"degraded","db_connected":False,"total_pdfs":total_pdfs,"seen":seen}
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
+    # Static shell only; the page prompts for the admin key and sends it as X-API-Key.
     p=pathlib.Path(__file__).parent/"templates"/"dashboard.html"
-    return p.read_text() if p.exists() else "<h1>Dashboard missing</h1>"
+    html = p.read_text() if p.exists() else "<h1>Dashboard missing</h1>"
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 @app.get("/api/live-feed")
 async def live_feed(_: None = Depends(require_admin_api_key)):
     import pathlib

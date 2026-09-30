@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import secrets
 from functools import lru_cache
 from urllib.parse import unquote, urlsplit
 from pathlib import Path
@@ -29,6 +30,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _DEFAULT_DB_PASSWORDS = frozenset(
     {"legal_scraper_pass", "legal", "postgres", "password", "changeme", "change_me", "admin", "secret"}
 )
+_MIN_PROD_DB_PASSWORD_LENGTH = 16
 
 
 class Settings(BaseSettings):
@@ -129,7 +131,8 @@ class Settings(BaseSettings):
     PLAYWRIGHT_TIMEOUT_MS: int = Field(default=30000, ge=5000, le=120000)
 
     # FINAL_2 — login scraping permanently disabled in production
-    ENVIRONMENT: Literal["development", "staging", "production"] = Field(default="development")
+    # Fail closed: without an explicit ENVIRONMENT=development / APP_ENV=development the service is production.
+    ENVIRONMENT: Literal["development", "staging", "production"] = Field(default="production")
     ALLOW_LOGIN_SCRAPING: bool = Field(default=False, description="FINAL_2: must remain false in production")
     CORS_ALLOW_ORIGINS: str = Field(
         default="",
@@ -213,8 +216,8 @@ class Settings(BaseSettings):
     def require_or_generate_secrets(self):
         """
         Production/staging: require ENCRYPTION_KEY, ADMIN_API_KEY, SECRET_KEY from env.
-        Development: auto-generate ephemeral Fernet / placeholder secrets so local boots
-        never ship a known shared credential from source.
+        Development (explicit opt-in only): auto-generate ephemeral random secrets per process,
+        so no constant from source is ever a valid credential. Generated values are never logged.
         """
         is_prodish = self.is_prodish()
 
@@ -229,34 +232,43 @@ class Settings(BaseSettings):
         if not self.ADMIN_API_KEY:
             if is_prodish:
                 raise ValueError("ADMIN_API_KEY must be set via environment in production/staging")
-            object.__setattr__(self, "ADMIN_API_KEY", "dev-only-admin-api-key-not-for-production")
+            object.__setattr__(self, "ADMIN_API_KEY", secrets.token_urlsafe(32))
             logging.getLogger(__name__).warning(
-                "ADMIN_API_KEY unset — using development placeholder"
+                "ADMIN_API_KEY unset — generated a random per-process key for development only"
+                " (not logged; set ADMIN_API_KEY to use admin routes)"
             )
 
         if not self.SECRET_KEY:
             if is_prodish:
                 raise ValueError("SECRET_KEY must be set via environment in production/staging")
-            object.__setattr__(self, "SECRET_KEY", "dev-only-jwt-secret-not-for-production-64chars-xxxx")
+            object.__setattr__(self, "SECRET_KEY", secrets.token_urlsafe(48))
 
         if is_prodish:
             password = urlsplit(self.DATABASE_URL).password
-            if not password or unquote(password).lower() in _DEFAULT_DB_PASSWORDS:
+            password = unquote(password) if password else ""
+            if (
+                len(password) < _MIN_PROD_DB_PASSWORD_LENGTH
+                or password.lower() in _DEFAULT_DB_PASSWORDS
+            ):
                 raise ValueError(
-                    "DATABASE_URL must carry a non-default database password in production/staging"
+                    "DATABASE_URL must carry a non-default database password of at least "
+                    f"{_MIN_PROD_DB_PASSWORD_LENGTH} characters in production/staging"
                 )
 
         return self
 
     def is_prodish(self) -> bool:
         """
-        Production/staging if ENVIRONMENT says so, or if APP_ENV was explicitly set to it.
-        (APP_ENV's field default is ignored so unconfigured local boots stay development.)
+        Fail closed. Development only when ENVIRONMENT or APP_ENV is *explicitly* set to
+        "development" and neither is explicitly production/staging; anything else (including
+        both unset) is production-grade.
         """
-        prodish = ("production", "staging")
-        if str(self.ENVIRONMENT).lower() in prodish:
-            return True
-        return "APP_ENV" in self.model_fields_set and str(self.APP_ENV).lower() in prodish
+        explicit = {
+            str(getattr(self, name)).lower()
+            for name in ("ENVIRONMENT", "APP_ENV")
+            if name in self.model_fields_set
+        }
+        return not ("development" in explicit and not explicit & {"production", "staging"})
 
     @field_validator("TIMEZONE")
     @classmethod
