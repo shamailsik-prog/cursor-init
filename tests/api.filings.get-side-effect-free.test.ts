@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { GET, POST } from "@/app/api/d4/filings/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
@@ -6,6 +6,7 @@ import { composeDraft } from "@/services/d4-1/drafts"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
 afterEach(() => {
+  vi.restoreAllMocks()
   resetRuntimeStoreForTests()
 })
 
@@ -126,5 +127,35 @@ describe("GET /api/d4/filings is side-effect free", () => {
 
     expect(store.filingPacketArtifacts.size).toBe(0)
     expect(store.filingDispatchQueue.size).toBe(0)
+  })
+
+  it("derives the same rows on every GET (timestamps anchored to the package, not the clock)", async () => {
+    const packageId = await seedApprovedPackage()
+    const store = getRuntimeStore()
+    const createdAt = [...store.filingPackages.values()].find((row) => row.id === packageId)
+      ?.createdAt
+    store.filingPacketArtifacts.clear()
+    store.filingDispatchQueue.clear()
+
+    let clock = 5_000_000_000_000
+    vi.spyOn(Date, "now").mockImplementation(() => (clock += 60_000))
+    const read = async () => {
+      const list = (await (await get({ userId: "associate_a", limit: "10", cursor: "0" })).json()) as {
+        items: Array<{ id: string; packetArtifact: unknown }>
+      }
+      const dispatch = (await (
+        await get({ view: "dispatch", userId: "associate_a", limit: "10", cursor: "0" })
+      ).json()) as { items: Array<{ packageId: string; updatedAt: number }> }
+      return {
+        artifact: list.items.find((row) => row.id === packageId)?.packetArtifact,
+        queue: dispatch.items.find((row) => row.packageId === packageId),
+      }
+    }
+    const first = await read()
+    const second = await read()
+    expect(first.artifact).toBeDefined()
+    expect(first.queue).toBeDefined()
+    expect(second).toEqual(first)
+    expect(first.queue?.updatedAt).toBe(createdAt)
   })
 })

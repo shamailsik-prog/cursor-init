@@ -3727,13 +3727,21 @@ export async function GET(request: Request) {
       if (artifactByPackage.has(filingPackage.id)) continue
       const draft =
         store.drafts.get(filingPackage.draftId) ?? (await repos.drafts.get(filingPackage.draftId))
-      artifactByPackage.set(filingPackage.id, buildFilingPacketArtifactRow(filingPackage, draft))
+      // Anchor derived timestamps to the package (FilingPackage has no updatedAt) so repeated
+      // GETs return identical rows.
+      artifactByPackage.set(
+        filingPackage.id,
+        buildFilingPacketArtifactRow(filingPackage, draft, { now: filingPackage.createdAt })
+      )
     }
     const queueRows = await repos.filingDispatchQueue.listByFirm(user.firmId)
     const queueByPackage = new Map(queueRows.map((row) => [row.packageId, row]))
     for (const filingPackage of firmPackages) {
       if (filingPackage.status !== "approved" || queueByPackage.has(filingPackage.id)) continue
-      queueByPackage.set(filingPackage.id, buildFilingDispatchQueueRow(filingPackage))
+      queueByPackage.set(
+        filingPackage.id,
+        buildFilingDispatchQueueRow(filingPackage, { now: filingPackage.createdAt })
+      )
     }
     if (view === "dispatch") {
       const visible = [...queueByPackage.values()]
