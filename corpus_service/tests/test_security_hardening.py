@@ -1,4 +1,7 @@
+import json
 import os
+import shutil
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -72,6 +75,16 @@ class DatabasePasswordInProductionTests(unittest.TestCase):
                 ENVIRONMENT="production",
                 DATABASE_URL="postgresql+asyncpg://legal:Short-pw-15char@postgres:5432/legal_scraper",
             )
+
+    def test_login_scraping_follows_is_prodish(self):
+        clean = {k: v for k, v in os.environ.items() if k not in ("ENVIRONMENT", "APP_ENV")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            s = Settings(_env_file=None, APP_ENV="development", ALLOW_LOGIN_SCRAPING=True)
+            self.assertFalse(s.is_prodish())
+            with self.assertRaises(ValidationError):
+                make_settings(DATABASE_URL=STRONG_DB_URL, ALLOW_LOGIN_SCRAPING=True)
+            with self.assertRaises(ValidationError):
+                make_settings(ENVIRONMENT="staging", DATABASE_URL=STRONG_DB_URL, ALLOW_LOGIN_SCRAPING=True)
 
     def test_explicit_app_env_production_also_enforced(self):
         with self.assertRaises(ValidationError):
@@ -147,6 +160,33 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("X-API-Key", res.text)
         self.assertIn("sessionStorage", res.text)
         self.assertNotIn(settings.ADMIN_API_KEY, res.text)
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed")
+class DashboardPollingTests(unittest.TestCase):
+    """N4: a rejected/cancelled key pauses polling (no prompt loop) until re-entered."""
+
+    def run_harness(self, prompts):
+        out = subprocess.run(
+            ["node", str(PROJECT_ROOT / "tests" / "dashboard_harness.mjs"),
+             str(PROJECT_ROOT / "scraper" / "templates" / "dashboard.html"), json.dumps(prompts)],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        return json.loads(out.stdout.strip().splitlines()[-1])
+
+    def test_wrong_key_prompts_once_then_stops_polling_until_unlock(self):
+        result = self.run_harness(["bad", "good"])
+        self.assertEqual(result["before"]["prompt"], 1)
+        self.assertEqual(result["before"]["feed"], 1)  # one 401, then no more authenticated polling
+        self.assertEqual(result["after"]["prompt"], 2)  # unlock() re-prompts once
+        self.assertEqual(result["feed"], "line")
+        self.assertEqual(result["unhandled"], 0)
+
+    def test_cancelled_prompt_does_not_loop(self):
+        result = self.run_harness([None])
+        self.assertEqual(result["before"]["prompt"], 1)
+        self.assertEqual(result["before"]["feed"], 0)
+        self.assertEqual(result["unhandled"], 0)
 
 
 class HealthDoesNotLeakErrorsTests(unittest.TestCase):

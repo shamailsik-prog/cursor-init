@@ -182,9 +182,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def refuse_login_scraping_in_production(self):
         """FINAL_2: login-form scraping is non-overridable in production."""
-        env = getattr(self, "ENVIRONMENT", None) or getattr(self, "APP_ENV", "production")
-        if self.ALLOW_LOGIN_SCRAPING and str(env).lower() == "production":
-            raise ValueError("ALLOW_LOGIN_SCRAPING cannot be true when ENVIRONMENT=production")
+        if self.ALLOW_LOGIN_SCRAPING and self.is_prodish():
+            raise ValueError("ALLOW_LOGIN_SCRAPING cannot be true in production/staging")
         return self
 
     @field_validator("LOG_LEVEL", mode="before")
