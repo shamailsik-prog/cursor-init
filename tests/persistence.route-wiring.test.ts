@@ -33,6 +33,13 @@ const baseStore = {
   links: [],
   members: new Map([["mat_1_associate_a", { matterId: "mat_1", userId: "associate_a", firmId: "firmA" }]]),
   jobs: [],
+  // P5 checkPermission appends one audit row per decision and fails closed without an audit log.
+  audit: [] as unknown[],
+  auditSeq: 0,
+  id(prefix: string) {
+    this.auditSeq += 1
+    return `${prefix}_${this.auditSeq}`
+  },
   documents: new Map(),
   filingPackages: new Map(),
   filingPacketArtifacts: new Map(),

@@ -13,7 +13,58 @@ export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set([
   "record_accounts_entry",
 ])
 
+/**
+ * P5 permission check (Layer 18 §4.5): "returns allow/deny with reason; logs to
+ * auditPrivilegeAccess". Every decision appends exactly one `permission_check` row to the
+ * spine audit log — the log the audit repository appends to and that routes write through
+ * with persistAuditEntriesSince. If that append fails the decision is deny
+ * `audit_unavailable` (fail closed): an unaudited allow is never returned.
+ */
 export function checkPermission(
+  store: SpineStore,
+  userId: string,
+  action: string,
+  matterId?: string,
+  extra?: { scope?: "own_matters" }
+): PermissionDecision {
+  const decision = decide(store, userId, action, matterId, extra)
+  try {
+    appendPermissionAudit(store, userId, action, matterId, decision)
+  } catch {
+    return { allow: false, reason: "audit_unavailable" }
+  }
+  return decision
+}
+
+function appendPermissionAudit(
+  store: SpineStore,
+  userId: string,
+  action: string,
+  matterId: string | undefined,
+  decision: PermissionDecision
+): void {
+  const user = store.users.get(userId)
+  const matter = matterId ? store.matters.get(matterId) : undefined
+  const classification: Classification = matter
+    ? isClassification(matter.classification)
+      ? matter.classification
+      : "privileged-restricted"
+    : "internal"
+  store.audit.push({
+    id: store.id("aud"),
+    // A decision with no resolvable principal is still recorded (under the matter's firm
+    // when known) so the write-through never drops it for want of a firm.
+    firmId: user?.firmId ?? matter?.firmId ?? "_unresolved",
+    at: Date.now(),
+    action: "permission_check",
+    actorId: userId,
+    target: matterId ?? action,
+    classification,
+    reason: `${decision.allow ? "allow" : "deny"}:${action}:${decision.reason}`,
+  })
+}
+
+function decide(
   store: SpineStore,
   userId: string,
   action: string,
