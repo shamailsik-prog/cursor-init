@@ -43,9 +43,9 @@ type CbJson = {
   result: { blocked: boolean; outbound: { metadata: { classification: string } } }
 }
 
-describe("N1 caller free text is never sent at rank 0", () => {
+describe("N1 caller free text is floored at internal (L18 §4.6: internal may go to any configured provider)", () => {
   it.each(["clerk_a", "associate_a"])(
-    "%s self-creates a public matter, then sends privileged free text under it: blocked, not sent",
+    "%s self-creates a public matter: free text under it is classified internal, not public (§4.6 allows it)",
     async (actorId) => {
       const m = await post(mattersPost, "http://127.0.0.1/api/d1/matters", {
         action: "create",
@@ -65,13 +65,36 @@ describe("N1 caller free text is never sent at rank 0", () => {
       })
       expect(res.status).toBe(200)
       const json = (await res.json()) as CbJson
-      expect(json.result.blocked).toBe(true)
       expect(json.result.outbound.metadata.classification).toBe("internal")
-      expect(sent).toBe(0)
+      expect(json.result.blocked).toBe(false)
+      expect(sent).toBe(1)
     }
   )
 
-  it("a body label cannot lower free text below internal", async () => {
+  it("§4.6: free text the caller labels privileged in a public matter is blocked without a DPA provider", async () => {
+    const m = await post(mattersPost, "http://127.0.0.1/api/d1/matters", {
+      action: "create",
+      actorId: "partner_a",
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "t",
+      courtId: "SHC",
+      classification: "public",
+    })
+    const matterId = ((await m.json()) as { result: { matter: { id: string } } }).result.matter.id
+    const res = await post(committeePost, "http://127.0.0.1/api/p1/committee-brain", {
+      actorId: "partner_a",
+      matterId,
+      body: "PRIVILEGED strategy memo",
+      classification: "privileged",
+    })
+    const json = (await res.json()) as CbJson
+    expect(json.result.outbound.metadata.classification).toBe("privileged")
+    expect(json.result.blocked).toBe(true)
+    expect(sent).toBe(0)
+  })
+
+  it("§4.6: a body label cannot lower free text below internal", async () => {
     const m = await post(mattersPost, "http://127.0.0.1/api/d1/matters", {
       action: "create",
       actorId: "partner_a",
@@ -90,7 +113,7 @@ describe("N1 caller free text is never sent at rank 0", () => {
     })
     const json = (await res.json()) as CbJson
     expect(json.result.outbound.metadata.classification).toBe("internal")
-    expect(sent).toBe(0)
+    expect(sent).toBe(1)
   })
 
   it("re-ingesting privileged bytes with a lower label keeps the higher label", async () => {

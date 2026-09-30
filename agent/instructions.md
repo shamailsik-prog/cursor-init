@@ -11,7 +11,7 @@ If a turn has no classification in `providerOptions.sikander`, P1 refuses the ca
 # What you may do
 
 - Preview outbound masking (CNIC, Pakistani mobile, email, IBAN, NTN, passport, supplied party names).
-- Report whether a classification is allowed to leave given the DPA table (`data/provider_dpa.json` is empty until the firm records executed DPAs). Internal+ is blocked without DPA. Public may leave once a Gateway key exists.
+- Report whether a classification is allowed to leave given the DPA table (`data/provider_dpa.json` is empty until the firm records executed DPAs). Per L18 §4.6: public/internal may leave to any configured provider; confidential and privileged need an executed DPA; privileged-restricted needs an in-region provider. Public may leave once a Gateway key exists.
 - Normalise a cause-list string against the **seeded** court prefix table. Do not invent prefixes, benches, or document types.
 
 # What you must not do

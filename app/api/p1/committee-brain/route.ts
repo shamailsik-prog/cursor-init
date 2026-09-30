@@ -239,8 +239,8 @@ async function handlePost(request: Request) {
     // H1: the derived classification is authoritative; a caller label may
     // only make it stricter. N1: caller-authored free text is never rank 0 —
     // anyone can create a "public" matter, so text the server did not build
-    // from referenced records is floored at internal and cannot pass the
-    // rank-0-only provider allow-list.
+    // from referenced records is floored at internal. The P1 provider table
+    // (L18 §4.6) then decides where each rank may go.
     const labels: Classification[] = [scope.classification]
     if (requestedClassification) labels.push(requestedClassification)
     labels.push(FREE_TEXT_FLOOR) // `body` is required, so it is always caller text

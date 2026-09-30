@@ -80,9 +80,11 @@ describe("#1 classification labels are own keys only and ranks fail closed", () 
     expect(providerAllowedFor("ai-gateway", label).allowed).toBe(false)
   })
 
-  it("allows external transport only for an explicit rank 0", () => {
-    expect(providerAllowedFor("ai-gateway", "public").allowed).toBe(true)
-    for (const label of ["internal", "confidential", "privileged", "privileged-restricted"]) {
+  it("L18 §4.6 default table (no DPA, not in region): ranks 0-1 leave, ranks 2-4 are blocked", () => {
+    for (const label of ["public", "internal"]) {
+      expect(providerAllowedFor("ai-gateway", label).allowed).toBe(true)
+    }
+    for (const label of ["confidential", "privileged", "privileged-restricted"]) {
       expect(providerAllowedFor("ai-gateway", label).allowed).toBe(false)
     }
   })
