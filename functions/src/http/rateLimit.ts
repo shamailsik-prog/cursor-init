@@ -1,5 +1,6 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../admin"
+import { trustedProxyHops } from "../deployConfig"
 import { logFailure } from "../log"
 import { HttpError, RateLimitedError } from "./errors"
 
@@ -98,17 +99,6 @@ export async function rateLimit(
 ): Promise<void> {
   const now = opts.now ?? Date.now()
   await consume(`${caller.uid}_${kind}_${windowId(now)}`, limitFor(kind, opts.firm), now)
-}
-
-/**
- * `TRUSTED_PROXY_HOPS`: how many proxies of our own sit in front of Google's
- * front end and append to X-Forwarded-For (external Application Load Balancer,
- * Firebase Hosting rewrite, ...). Default 0: direct function / run.app URLs.
- * Anything but a non-negative integer counts as 0.
- */
-function trustedProxyHops(): number {
-  const raw = process.env.TRUSTED_PROXY_HOPS ?? ""
-  return /^\d+$/.test(raw) ? Number(raw) : 0
 }
 
 /**

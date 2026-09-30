@@ -1,17 +1,10 @@
 import { onRequest, type Request } from "firebase-functions/v2/https"
 import type { Response } from "express"
+import { INGRESS_SETTINGS } from "../deployConfig"
 import { FUNCTION_TIMEOUT_SECONDS, REGION } from "../health"
 import { TokenRejectedError, bindHttpSession, firmlessFromToken, verifyBearer } from "../p5/auth"
-import {
-  CallAudit,
-  header,
-  runAudited,
-  type Data,
-  type FirmlessIdentity,
-  type Headers,
-  type Operation,
-  type Session,
-} from "../p5/common"
+import { CallAudit, runAudited, type Data, type FirmlessIdentity, type Operation, type Session } from "../p5/common"
+import { header, type Headers } from "./headers"
 import {
   approveMfaDisableOp,
   disableMfaOp,
@@ -255,4 +248,7 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
 /** Built at module load, so a duplicate route fails the deploy bundle's first import. */
 const router = createRouter(ROUTES)
 
-export const api = onRequest({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, router)
+export const api = onRequest(
+  { region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS, ingressSettings: INGRESS_SETTINGS },
+  router
+)

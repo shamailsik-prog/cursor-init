@@ -227,5 +227,16 @@ resumes idempotently and returns the same `firmId` (audited as
   test request. If this is left at 0 behind a proxy, every failed-auth request
   shares the proxy's single 60/min bucket, and one attacker can turn everyone
   else's 401 into 429. Set it in `functions/.env.<projectId>`.
+
+  When `TRUSTED_PROXY_HOPS` > 0, also set
+  `SIKANDER_INGRESS_SETTINGS=ALLOW_INTERNAL_AND_GCLB`. This applies to `api`
+  and every callable, and it rejects direct requests that bypass the load
+  balancer. A direct request could otherwise put any address in the hop that
+  is now trusted. Accepted values are `ALLOW_ALL` (the default, right for
+  hops = 0), `ALLOW_INTERNAL_ONLY` and `ALLOW_INTERNAL_AND_GCLB`. Any other
+  value fails the deploy. If hops > 0 while ingress is still `ALLOW_ALL`, the
+  functions log a warning when they load. For a Firebase Hosting rewrite,
+  check that Hosting still reaches the functions under the restricted ingress
+  before you rely on it.
 - **Rules:** both collections are server-only. No rule matches them, so the
   default deny applies.

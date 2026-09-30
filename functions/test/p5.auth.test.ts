@@ -223,9 +223,13 @@ describe.skipIf(!EMULATORS)("users/{uid} is authoritative (requireAuth + callerF
   const users = () => adminDb().collection("users")
 
   async function both(token: string, firmId: string) {
-    const http = requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } })
-    const callable = callerFromCallable(await callableAuth(token), firmId)
-    return Promise.allSettled([http, callable])
+    // Resolve the callable auth first: both calls then start together under one allSettled,
+    // so neither rejection is ever unhandled while the other is being set up.
+    const auth = await callableAuth(token)
+    return Promise.allSettled([
+      requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } }),
+      callerFromCallable(auth, firmId),
+    ])
   }
 
   function rejectedWith(results: PromiseSettledResult<unknown>[], status: number, code: string) {

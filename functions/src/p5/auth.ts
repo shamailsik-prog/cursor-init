@@ -4,7 +4,7 @@ import type { Classification } from "@/platform/p1/types"
 import { adminAuth, adminDb } from "../admin"
 import { HttpError } from "../http/errors"
 import { isKnownClassification, rankOf } from "./classification"
-import { header, type Headers } from "./common"
+import { header, type Headers } from "../http/headers"
 
 /**
  * Mirrors `Role` in platform/spine/store.ts (guarded by test/p5.role.test.ts).
