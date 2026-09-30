@@ -9,6 +9,8 @@ import {
   DEFAULT_MAX_UPLOAD_BYTES,
   fingerprintOf,
   maxUploadBytes,
+  maxUploadRequestBytes,
+  readJsonLimited,
 } from "@/platform/http/validation"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
@@ -256,5 +258,91 @@ describe("review round 1 — idempotency fingerprint (#10)", () => {
     expect(fp).toMatch(/^[0-9a-f]{64}$/)
     expect(fingerprintOf({ body: "x".repeat(100_000) })).toBe(fp)
     expect(fingerprintOf({ body: "y" })).not.toBe(fp)
+  })
+})
+
+function streamRequest(chunks: Uint8Array[], error?: Error) {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const c of chunks) controller.enqueue(c)
+      if (error) controller.error(error)
+      else controller.close()
+    },
+  })
+  return new Request("http://127.0.0.1/x", { method: "POST", body, duplex: "half" } as RequestInit)
+}
+
+describe("review round 2 — readJsonLimited edges (N1)", () => {
+  it("decodes a multi-byte character split across chunks", async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ s: "é€" }))
+    const split = bytes.indexOf(0xc3) + 1 // inside the 2-byte é
+    const res = await readJsonLimited(streamRequest([bytes.slice(0, split), bytes.slice(split)]))
+    expect(res.ok && res.data).toEqual({ s: "é€" })
+  })
+
+  it("strips a leading UTF-8 BOM", async () => {
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf])
+    const res = await readJsonLimited(streamRequest([bom, new TextEncoder().encode('{"a":1}')]))
+    expect(res.ok && res.data).toEqual({ a: 1 })
+  })
+
+  it("an aborted body (stream error) is 400 invalid_request, not a throw", async () => {
+    const res = await readJsonLimited(streamRequest([new TextEncoder().encode('{"a":')], new Error("aborted")))
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.response.status).toBe(400)
+      expect(((await res.response.json()) as { code: string }).code).toBe("invalid_request")
+    }
+  })
+
+  it("an aborted body on a route is 400", async () => {
+    const req = new Request("http://127.0.0.1/api/d1/matters", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+      body: new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('{"action":'))
+          c.error(new Error("client went away"))
+        },
+      }),
+      duplex: "half",
+    } as RequestInit)
+    const res = await mattersPost(req)
+    expect(res.status).toBe(400)
+  })
+})
+
+describe("review round 2 — documents wire allowance (N2)", () => {
+  it("allowance is ceil(cap*4/3*1.03) + 64KB", () => {
+    vi.stubEnv("SIKANDER_MAX_UPLOAD_BYTES", "3000000")
+    expect(maxUploadRequestBytes()).toBe(Math.ceil(((3_000_000 * 4) / 3) * 1.03) + 64 * 1024)
+  })
+
+  it("accepts a line-wrapped base64 upload exactly at the decoded cap", async () => {
+    const cap = 3 * 1024 * 1024
+    vi.stubEnv("SIKANDER_MAX_UPLOAD_BYTES", String(cap))
+    const matterId = seedMatter()
+    const bytes = Buffer.alloc(cap)
+    for (let i = 0; i < cap; i++) bytes[i] = (i * 31 + 7) & 0xff
+    const wrapped = bytes.toString("base64").replace(/(.{76})/g, "$1\n")
+    const body = JSON.stringify({
+      action: "ingest",
+      actorId: "partner_a",
+      firmId: "firmA",
+      matterId,
+      contentBase64: wrapped,
+      sourceChannel: "bulk",
+      classification: "internal",
+    })
+    // Old allowance (ceil(cap*4/3) + 64KB) is too small for this wire size.
+    expect(body.length).toBeGreaterThan(Math.ceil((cap * 4) / 3) + 64 * 1024)
+    const res = await documentsPost(
+      new Request("http://127.0.0.1/api/d1/documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+        body,
+      })
+    )
+    expect(res.status).toBe(200)
   })
 })

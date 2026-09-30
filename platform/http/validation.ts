@@ -27,10 +27,11 @@ export function base64DecodedLength(value: string): number {
 
 /**
  * Upper bound on a JSON request carrying a base64 upload of `maxUploadBytes()` decoded
- * bytes: base64 inflation (4/3) plus a fixed allowance for the other JSON fields.
+ * bytes: base64 inflation (4/3), 3% for line-wrapped (MIME-style) base64, plus a fixed
+ * allowance for the other JSON fields. The decoded-size check is the authoritative cap.
  */
 export function maxUploadRequestBytes(): number {
-  return Math.ceil((maxUploadBytes() * 4) / 3) + 64 * 1024
+  return Math.ceil(((maxUploadBytes() * 4) / 3) * 1.03) + 64 * 1024
 }
 
 export function invalidRequest(error: string, issues?: { path: string; message: string }[]) {
@@ -63,19 +64,27 @@ export async function readJsonLimited(
   let total = 0
   if (request.body) {
     const reader = request.body.getReader()
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      total += value.byteLength
-      if (total > limitBytes) {
-        await reader.cancel().catch(() => undefined)
-        return { ok: false, response: payloadTooLarge(reportedLimit) }
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        total += value.byteLength
+        if (total > limitBytes) {
+          await reader.cancel().catch(() => undefined)
+          return { ok: false, response: payloadTooLarge(reportedLimit) }
+        }
+        chunks.push(value)
       }
-      chunks.push(value)
+    } catch {
+      // Client aborted or the body stream errored mid-read.
+      return { ok: false, response: invalidRequest("request body could not be read") }
     }
   }
   try {
-    return { ok: true, data: JSON.parse(Buffer.concat(chunks, total).toString("utf8")) }
+    // Decode once over the concatenated bytes (multi-byte chars may span chunks); drop a BOM
+    // as Request.json() does.
+    const text = Buffer.concat(chunks, total).toString("utf8").replace(/^\uFEFF/, "")
+    return { ok: true, data: JSON.parse(text) }
   } catch {
     return { ok: false, response: invalidRequest("invalid JSON body") }
   }
