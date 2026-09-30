@@ -7,13 +7,15 @@
   "scripts": {
     "build": "node build.mjs",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "test:emu": "cd .. && npx firebase emulators:exec --only auth,firestore --project demo-sikander \"npm --prefix functions test\""
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",
     "firebase-functions": "^6.0.0"
   },
   "devDependencies": {
+    "@types/express": "^4.17.25",
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.6.0",
