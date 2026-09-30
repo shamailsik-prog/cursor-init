@@ -22,6 +22,8 @@ jobs:
           distribution: temurin
           java-version: "21"
       - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
       - name: Gate G-0 static
         run: bash ci_gates/gate_g0.sh
       - name: Lint
