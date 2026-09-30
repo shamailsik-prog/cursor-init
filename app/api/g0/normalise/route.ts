@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { withSession } from "@/platform/http/withSession"
 import courtsSeed from "@/data/courts.json"
 import { loadCourts, normalise } from "@/core/case-number-normaliser"
 import {
@@ -11,6 +12,10 @@ const courts = loadCourts(courtsSeed)
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   let key: string
   try {
     key = requireIdempotencyKey(request)

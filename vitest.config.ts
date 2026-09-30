@@ -9,6 +9,9 @@ export default defineConfig({
     // still pass. Threads pool avoids that false non-zero exit.
     pool: "threads",
     include: ["tests/**/*.test.ts"],
+    // Route handlers fail closed (Firebase auth) unless told otherwise; the
+    // unit suite opts into the local-only insecure-dev mode.
+    setupFiles: ["tests/setup/auth-mode.ts"],
     // These suites call initializeTestEnvironment() and require the Firestore
     // emulator. Skip them under a plain `vitest run`; they execute via
     // `npm run test:rules`, which wraps them with `firebase emulators:exec`.

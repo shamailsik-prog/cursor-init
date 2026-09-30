@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -267,6 +269,10 @@ type RecomputeMatterReportRelevanceBody = {
 type Body = RecordMatterReportExportBody | RecomputeMatterReportRelevanceBody
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -396,6 +402,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -534,7 +544,7 @@ export async function POST(request: Request) {
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "reporting operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "reporting operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

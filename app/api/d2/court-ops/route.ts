@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -148,6 +150,10 @@ async function persistWorkflowEventsSince(
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const url = new URL(request.url)
   const userId = url.searchParams.get("userId")
@@ -169,12 +175,16 @@ export async function GET(request: Request) {
       nextCursor: queue.nextCursor,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "queue read failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "queue read failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   let key: string
   try {
@@ -361,7 +371,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "court ops write failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "court ops write failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

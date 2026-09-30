@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -76,6 +78,12 @@ import {
 } from "@/platform/p5/tenancyAdmin"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
+
+/** On `view=session_refs`, `userId` filters the listing; the caller is `actorId`. */
+const TENANCY_GET_SESSION_OPTIONS = {
+  subjectQueryParams: (url: URL) =>
+    url.searchParams.get("view") === "session_refs" ? ["userId"] : [],
+}
 
 type UpdateRoleBody = {
   action: "update_role"
@@ -563,6 +571,10 @@ async function recomputeAndPersistLineageDigestState(
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet, TENANCY_GET_SESSION_OPTIONS)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -1261,12 +1273,16 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ error: "unknown view" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "tenancy read failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "tenancy read failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -2930,7 +2946,7 @@ export async function POST(request: Request) {
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "tenancy write failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "tenancy write failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

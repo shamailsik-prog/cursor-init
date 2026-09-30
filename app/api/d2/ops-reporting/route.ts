@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -12591,6 +12593,10 @@ type Body =
 ;
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -18147,6 +18153,10 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -47906,7 +47916,7 @@ if (
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "ops reporting action failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "ops reporting action failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
