@@ -55,7 +55,10 @@ export function payloadTooLarge(limit: number) {
  */
 const preparsedBodies = new WeakMap<Request, { data: unknown; bytes: number }>()
 
-/** Record that `request`'s body was already read (`bytes` long) and parsed to `data`. */
+/**
+ * Record that `request`'s body was already read and parsed to `data`. `bytes` is the raw
+ * wire size as received, which is what every cap is checked against.
+ */
 export function attachParsedBody(request: Request, data: unknown, bytes: number): void {
   preparsedBodies.set(request, { data, bytes })
 }

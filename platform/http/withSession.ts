@@ -134,7 +134,9 @@ function rebuild(
     signal: request.signal,
   })
   if (body.parsedOk && text !== undefined) {
-    attachParsedBody(next, body.parsed, mutated ? Buffer.byteLength(text, "utf8") : body.bytes)
+    // Caps are enforced against the raw wire size, never the re-serialised body
+    // (filling in actorId must not push an at-cap request over its limit).
+    attachParsedBody(next, body.parsed, body.bytes)
   }
   return next
 }

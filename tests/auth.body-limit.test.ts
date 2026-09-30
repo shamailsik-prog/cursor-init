@@ -160,6 +160,48 @@ describe("session boundary enforces the d1 body caps (auth x rules)", () => {
     expect(seen).toEqual({ note: "hello", actorId: "partner_a" })
   })
 
+  it("checks caps against the raw wire size, not the body after actorId fill-in", async () => {
+    // Exactly DEFAULT_JSON_BODY_BYTES on the wire, with no actorId: filling actorId in
+    // from the session grows the re-serialised body past the cap, which must not matter.
+    const skeleton = JSON.stringify({ note: "" })
+    const body = JSON.stringify({ note: "x".repeat(DEFAULT_JSON_BODY_BYTES - Buffer.byteLength(skeleton)) })
+    expect(Buffer.byteLength(body)).toBe(DEFAULT_JSON_BODY_BYTES)
+    let seen: Record<string, unknown> | undefined
+    const res = await withSession(
+      authedPost("http://127.0.0.1/api/x", body),
+      async (request) => {
+        const raw = await readJsonLimited(request)
+        if (!raw.ok) return raw.response
+        seen = raw.data as Record<string, unknown>
+        return Response.json({ ok: true })
+      },
+      { maxBodyBytes: DEFAULT_JSON_BODY_BYTES }
+    )
+    expect(res.status).toBe(200)
+    expect(seen?.actorId).toBe("partner_a")
+    // One byte over on the wire is still refused.
+    const over = await withSession(
+      authedPost("http://127.0.0.1/api/x", body + " "),
+      async () => Response.json({ ok: true }),
+      { maxBodyBytes: DEFAULT_JSON_BODY_BYTES }
+    )
+    expect(over.status).toBe(413)
+  })
+
+  it("a d1 route accepts an at-cap body without actorId past the size check", async () => {
+    const skeleton = JSON.stringify({ action: "create", firmId: "firmA", title: "" })
+    const body = JSON.stringify({
+      action: "create",
+      firmId: "firmA",
+      title: "x".repeat(DEFAULT_JSON_BODY_BYTES - Buffer.byteLength(skeleton)),
+    })
+    expect(Buffer.byteLength(body)).toBe(DEFAULT_JSON_BODY_BYTES)
+    const res = await mattersPost(authedPost("http://127.0.0.1/api/d1/matters", body))
+    // Reaches schema validation (title too long, fields missing), not a 413.
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { code: string }).code).toBe("invalid_request")
+  })
+
   it("a handler cap smaller than the boundary cap still applies to the handed-over body", async () => {
     const res = await withSession(
       authedPost("http://127.0.0.1/api/x", JSON.stringify({ note: "x".repeat(4096) })),
