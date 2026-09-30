@@ -1,13 +1,23 @@
-import { Timestamp } from "firebase-admin/firestore"
+import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../admin"
-import { logFailure } from "../p5/common"
-import { HttpError } from "./errors"
+import { logFailure } from "../log"
+import { HttpError, RateLimitedError } from "./errors"
+
+export { RateLimitedError }
 
 /**
  * Per-user rate limits (L18 §4.4), fixed one-minute UTC windows. Each window
- * is a counter doc `rate_limits/{uid}_{kind}_{yyyyMMddHHmm}` incremented in a
- * transaction; the request that would exceed the limit is refused with 429
- * `rate_limited` and a Retry-After of the seconds left in the window (≥ 1).
+ * is a counter doc `rate_limits/{uid}_{kind}_{yyyyMMddHHmm}`. A request
+ * increments it atomically (FieldValue.increment) and reads it back; if the
+ * count exceeds the limit it is refused with 429 `rate_limited` and a
+ * Retry-After of the seconds left in the window (≥ 1).
+ *
+ * Why not a read-modify-write transaction: concurrent requests from one user
+ * all contend on the same doc, and 30 parallel calls stalled past 15 s on the
+ * emulator. Increment + read never admits more than the limit (each read sees
+ * at least the request's own increment, so an admitted request is among the
+ * first `limit`); under a burst it may refuse a few more than strictly needed.
+ * Refused requests are counted too, which only keeps the window closed.
  * The collection is server-only (no rules match) and carries `expiresAt` for
  * a Firestore TTL policy.
  *
@@ -29,13 +39,6 @@ export const MAX_LIMIT_OVERRIDE = 1000
 const WINDOW_MS = 60_000
 /** Counter docs outlive their window by an hour, then the TTL policy may delete them. */
 const COUNTER_TTL_MS = 60 * 60 * 1000
-
-export class RateLimitedError extends HttpError {
-  constructor(readonly retryAfter: number) {
-    super(429, "rate_limited")
-    this.name = "RateLimitedError"
-  }
-}
 
 const pad = (n: number, width = 2) => String(n).padStart(width, "0")
 
@@ -67,27 +70,24 @@ export function limitFor(kind: RateKind, firm: Record<string, unknown> | undefin
 }
 
 /**
- * Takes one request from the counter `rate_limits/{docId}` (limit per window).
- * Over the limit → RateLimitedError (the count is not incremented). The store
- * failing → 503 store_unavailable (fails closed).
+ * Counts one request on `rate_limits/{docId}` and refuses it when the count
+ * is over `limit` → RateLimitedError. The store failing → 503
+ * store_unavailable (fails closed).
  */
 async function consume(docId: string, limit: number, nowMs: number): Promise<void> {
-  const db = adminDb()
-  const ref = db.collection("rate_limits").doc(docId)
-  let allowed: boolean
+  const ref = adminDb().collection("rate_limits").doc(docId)
+  let count: unknown
   try {
-    allowed = await db.runTransaction(async (tx) => {
-      const count: unknown = (await tx.get(ref)).data()?.count
-      const used = typeof count === "number" ? count : 0
-      if (used >= limit) return false
-      tx.set(ref, { count: used + 1, expiresAt: Timestamp.fromMillis(windowEnd(nowMs) + COUNTER_TTL_MS) })
-      return true
-    })
+    await ref.set(
+      { count: FieldValue.increment(1), expiresAt: Timestamp.fromMillis(windowEnd(nowMs) + COUNTER_TTL_MS) },
+      { merge: true }
+    )
+    count = (await ref.get()).data()?.count
   } catch (err) {
     logFailure("rate limit store failed", err)
     throw new HttpError(503, "store_unavailable")
   }
-  if (!allowed) throw new RateLimitedError(retryAfterSeconds(nowMs))
+  if (typeof count !== "number" || count > limit) throw new RateLimitedError(retryAfterSeconds(nowMs))
 }
 
 /** Per-user limit for an authenticated request, per firm override if the firm doc sets one. */
@@ -98,6 +98,21 @@ export async function rateLimit(
 ): Promise<void> {
   const now = opts.now ?? Date.now()
   await consume(`${caller.uid}_${kind}_${windowId(now)}`, limitFor(kind, opts.firm), now)
+}
+
+/**
+ * The client IP for the per-IP limit: the *last* `X-Forwarded-For` hop, else `req.ip`.
+ * Google's front end (Cloud Run / Cloud Functions) appends the address of the
+ * connection it received to X-Forwarded-For; every earlier hop is whatever the
+ * client sent, so keying on the first hop would let a caller pick a fresh key
+ * per request. If a load balancer or proxy of our own is ever put in front of
+ * `api`, this must move to the hop that proxy appends.
+ */
+export function clientIp(req: { headers: Record<string, unknown>; ip?: string }): string {
+  const raw = req.headers["x-forwarded-for"]
+  const value = Array.isArray(raw) ? raw.join(",") : typeof raw === "string" ? raw : ""
+  const hops = value.split(",").map((h) => h.trim()).filter((h) => h !== "")
+  return hops[hops.length - 1] ?? req.ip ?? "unknown"
 }
 
 /** Per-IP limit for requests that failed authentication: `rate_limits/ip:{ip}_anon_{yyyyMMddHHmm}`. */

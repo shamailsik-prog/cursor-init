@@ -102,6 +102,7 @@ function matchCode(doc: DocumentData, code: string): number {
  */
 export const enforceMfaForRoleOp: FirmOperation<{ firmId: string; role: Role; enforced: boolean }> = {
   auth: "firm",
+  kind: "general",
   action: "identity.enforceMfaForRole",
   target: "firms",
   run: async ({ caller }, data, audit) => {
@@ -139,6 +140,7 @@ export const enforceMfaForRoleHandler = callableHandler(enforceMfaForRoleOp)
  */
 export const generateRecoveryCodesOp: FirmOperation<{ codes: string[] }> = {
   auth: "firm",
+  kind: "general",
   action: "identity.generateRecoveryCodes",
   target: "users",
   run: async ({ caller, secondFactor }, _data, audit) => {
@@ -174,6 +176,7 @@ export const generateRecoveryCodesHandler = callableHandler(generateRecoveryCode
  */
 export const approveMfaDisableOp: FirmOperation<{ approvalId: string; expiresAt: string }> = {
   auth: "firm",
+  kind: "general",
   action: "identity.approveMfaDisable",
   target: "users",
   run: async ({ caller }, data, audit) => {
@@ -293,6 +296,7 @@ async function removeFactors(uid: string, factorUids: readonly string[]): Promis
  */
 export const disableMfaOp: FirmOperation<{ uid: string; mfaEnabled: boolean }> = {
   auth: "firm",
+  kind: "general",
   action: "identity.disableMfa",
   target: "users",
   // Only the subject (a user who lost the device) is exempt from the MFA policy.
@@ -413,6 +417,7 @@ function isString(v: unknown): v is string {
  */
 export const syncMfaStatusOp: FirmOperation<{ uid: string; mfaEnabled: boolean }> = {
   auth: "firm",
+  kind: "general",
   action: "identity.syncMfaStatus",
   target: "users",
   mfaExempt: () => true,

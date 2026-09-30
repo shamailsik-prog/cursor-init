@@ -2,7 +2,7 @@ import { onRequest, type Request } from "firebase-functions/v2/https"
 import type { Response } from "express"
 import { REGION } from "../health"
 import { bindHttpSession, firmlessFromToken, verifyBearer } from "../p5/auth"
-import { CallAudit, logFailure, runAudited, type Data, type FirmlessIdentity, type Operation, type Session } from "../p5/common"
+import { CallAudit, runAudited, type Data, type FirmlessIdentity, type Operation, type Session } from "../p5/common"
 import {
   approveMfaDisableOp,
   disableMfaOp,
@@ -13,7 +13,8 @@ import {
 import { createFirmUserOp, deactivateUserOp, onboardFirmOp, setUserClaimsOp } from "../p5/identity"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
-import { RateLimitedError, rateLimit, rateLimitAnonymous, type RateKind } from "./rateLimit"
+import { logFailure } from "../log"
+import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKind } from "./rateLimit"
 
 /**
  * The HTTP entry `api` (L18 §4.1): GET/POST/PUT under /api/{domain}/{service}/{function},
@@ -46,22 +47,25 @@ export const MAX_BODY_BYTES = 1024 * 1024
 
 const IDENTITY = "/api/platform/identity"
 
+/** A POST route whose rate-limit kind is the operation's own (the callable applies the same kind). */
+const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
+  method: "POST",
+  path,
+  handler,
+  kind: handler.kind,
+  ...extra,
+})
+
 export const ROUTES: readonly Route[] = [
-  { method: "POST", path: `${IDENTITY}/onboardFirm`, handler: onboardFirmOp, kind: "general" },
-  { method: "POST", path: `${IDENTITY}/createFirmUser`, handler: createFirmUserOp, kind: "general" },
-  { method: "POST", path: `${IDENTITY}/setUserClaims`, handler: setUserClaimsOp, kind: "general" },
-  { method: "POST", path: `${IDENTITY}/deactivateUser`, handler: deactivateUserOp, kind: "general" },
-  { method: "POST", path: `${IDENTITY}/enforceMfaForRole`, handler: enforceMfaForRoleOp, kind: "general" },
-  { method: "POST", path: `${IDENTITY}/approveMfaDisable`, handler: approveMfaDisableOp, kind: "general" },
-  { method: "POST", path: `${IDENTITY}/disableMfa`, handler: disableMfaOp, kind: "general" },
-  {
-    method: "POST",
-    path: `${IDENTITY}/generateRecoveryCodes`,
-    handler: generateRecoveryCodesOp,
-    kind: "general",
-    redactReplay: true,
-  },
-  { method: "POST", path: `${IDENTITY}/syncMfaStatus`, handler: syncMfaStatusOp, kind: "general" },
+  post(`${IDENTITY}/onboardFirm`, onboardFirmOp),
+  post(`${IDENTITY}/createFirmUser`, createFirmUserOp),
+  post(`${IDENTITY}/setUserClaims`, setUserClaimsOp),
+  post(`${IDENTITY}/deactivateUser`, deactivateUserOp),
+  post(`${IDENTITY}/enforceMfaForRole`, enforceMfaForRoleOp),
+  post(`${IDENTITY}/approveMfaDisable`, approveMfaDisableOp),
+  post(`${IDENTITY}/disableMfa`, disableMfaOp),
+  post(`${IDENTITY}/generateRecoveryCodes`, generateRecoveryCodesOp, { redactReplay: true }),
+  post(`${IDENTITY}/syncMfaStatus`, syncMfaStatusOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
@@ -101,12 +105,6 @@ function header(headers: Headers, name: string): string | undefined {
 function normalisePath(path: string): string {
   const trimmed = path.length > 1 ? path.replace(/\/+$/, "") : path
   return trimmed.startsWith("/api/") ? trimmed : `/api${trimmed}`
-}
-
-/** The client IP for the anonymous limit: the first X-Forwarded-For hop, else req.ip. */
-export function clientIp(req: Pick<ApiRequest, "headers" | "ip">): string {
-  const first = header(req.headers as Headers, "x-forwarded-for")?.split(",")[0]?.trim()
-  return first || req.ip || "unknown"
 }
 
 function isJson(contentType: string | undefined): boolean {

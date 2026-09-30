@@ -165,15 +165,25 @@ resumes idempotently and returns the same `firmId` (audited as
   `{ "error": { "code": "..." } }`.
 - **Rate limits:** fixed one-minute UTC windows per user, counted in
   `rate_limits/{uid}_{kind}_{yyyyMMddHHmm}`: 60/min `general`, 10/min `p1`.
-  A firm can override them with `firms/{firmId}.rateLimits = { general, p1 }`
-  (integers 1–1000). Requests that fail authentication count against the
-  client IP (first `X-Forwarded-For` hop, else `req.ip`), 60/min; over that they
-  get 429 and no `audit_log` row.
+  Each request adds one with an atomic increment and reads the count back,
+  instead of a transaction, because parallel calls from one user would contend
+  on the doc. This never admits more than the limit. A firm can override the
+  limits with `firms/{firmId}.rateLimits = { general, p1 }` (integers 1–1000).
+  Requests that fail authentication count against the client IP, 60/min.
+  Over that they get 429 and no `audit_log` row. The client IP is the *last*
+  `X-Forwarded-For` hop, which Google's front end appends; earlier hops are
+  client-supplied. Without the header, `req.ip` is used.
+- **Callables share the limits.** `callableHandler` applies the same per-IP
+  limit (from `request.rawRequest`) and the same per-user counters, using the
+  operation's `kind`. The HTTP route uses the same kind. A refused call gets
+  `resource-exhausted` with details `{ code: "rate_limited", retryAfter }`.
 - **Idempotency:** `idempotency_keys/{firmId}_{key}` (`_nofirm_{key}` for
   `onboardFirm`) holds the claim and the stored response for 24 h. A replay
   returns the stored status and body with `reused: true`. The same key with
   another body, route or user gives 422 `idempotency_key_reused`, and a
   duplicate while the first is running gives 409 `idempotency_in_progress`.
+  The claim is a 5-minute lease (`claimedAt`): a claim still `in_progress`
+  after that, for example after a crash, is taken over by the same request.
   5xx responses are not stored, so a retry runs again. The
   `generateRecoveryCodes` response is never stored: its replay is
   `{ redacted: true, reused: true }`, so generate again with a new key if the

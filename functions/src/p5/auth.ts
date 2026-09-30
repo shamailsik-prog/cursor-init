@@ -192,11 +192,20 @@ export async function callerFromCallable(
   firmIdHeader: string,
   opts: { mfaExempt?: boolean } = {}
 ): Promise<Caller> {
+  return (await callableSession(auth, firmIdHeader, opts)).caller
+}
+
+/** callerFromCallable, also returning the firm doc read for the binding (per-firm settings such as rate limits). */
+export async function callableSession(
+  auth: CallableRequest["auth"],
+  firmIdHeader: string,
+  opts: { mfaExempt?: boolean } = {}
+): Promise<{ caller: Caller; firm: Record<string, unknown> | undefined }> {
   if (!auth) throw new HttpError(401, "missing_token")
   if (typeof firmIdHeader !== "string" || firmIdHeader === "") throw new HttpError(400, "firm_required")
   const { claims } = await verifyCallableSession(auth)
   const caller = callerFromClaims(auth.uid, claims, firmIdHeader)
-  return (await bindToUserDoc(caller, { secondFactor: hasSecondFactor(claims), mfaExempt: opts.mfaExempt === true })).caller
+  return bindToUserDoc(caller, { secondFactor: hasSecondFactor(claims), mfaExempt: opts.mfaExempt === true })
 }
 
 /** A caller without a firm yet (onboarding): uid, current custom claims, verified email if any. */

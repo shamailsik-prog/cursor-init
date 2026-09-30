@@ -13,18 +13,28 @@ export class HttpError extends Error {
   }
 }
 
+/** 429 rate_limited; `retryAfter` is the whole seconds until the limit window ends. */
+export class RateLimitedError extends HttpError {
+  constructor(readonly retryAfter: number) {
+    super(429, "rate_limited")
+    this.name = "RateLimitedError"
+  }
+}
+
 const CALLABLE_CODES: Record<number, FunctionsErrorCode> = {
   400: "invalid-argument",
   401: "unauthenticated",
   403: "permission-denied",
   404: "not-found",
+  429: "resource-exhausted",
   503: "unavailable",
 }
 
 /**
  * Maps an HttpError onto the callable protocol's HttpsError, carrying the
  * machine-readable code in `details.code`. 409 maps to `already-exists` for
- * code "already_exists" and to `failed-precondition` otherwise. Anything
+ * code "already_exists" and to `failed-precondition` otherwise. 429 maps to
+ * `resource-exhausted` with `details.retryAfter` (seconds). Anything
  * that is not an HttpError becomes a bare `internal` (no message leak).
  */
 export function toHttpsError(err: unknown): HttpsError {
@@ -36,5 +46,6 @@ export function toHttpsError(err: unknown): HttpsError {
         ? "already-exists"
         : "failed-precondition"
       : (CALLABLE_CODES[err.status] ?? "internal")
-  return new HttpsError(code, err.code, { code: err.code })
+  const details = err instanceof RateLimitedError ? { code: err.code, retryAfter: err.retryAfter } : { code: err.code }
+  return new HttpsError(code, err.code, details)
 }

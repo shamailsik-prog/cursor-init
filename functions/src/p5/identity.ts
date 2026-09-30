@@ -202,6 +202,7 @@ async function emailTaken(email: string): Promise<boolean> {
  */
 export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
   auth: "firmless",
+  kind: "general",
   action: "identity.onboardFirm",
   target: "platform/bootstrap",
   run: async ({ uid, claims, verifiedEmail }, data, audit) => {
@@ -268,6 +269,7 @@ export const onboardFirmHandler = callableHandler(onboardFirmOp)
  */
 export const createFirmUserOp: FirmOperation<{ uid: string }> = {
   auth: "firm",
+  kind: "general",
   action: "identity.createFirmUser",
   target: "users",
   run: async ({ caller }, data, audit) => {
@@ -328,6 +330,7 @@ export const createFirmUserHandler = callableHandler(createFirmUserOp)
  */
 export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearanceLevel: Classification }> = {
   auth: "firm",
+  kind: "general",
   action: "identity.setUserClaims",
   target: "users",
   run: async ({ caller }, data, audit) => {
@@ -469,6 +472,7 @@ async function revertIfStillOurs(
  */
 export const deactivateUserOp: FirmOperation<{ uid: string; active: false }> = {
   auth: "firm",
+  kind: "general",
   action: "identity.deactivateUser",
   target: "users",
   run: async ({ caller }, data, audit) => {
