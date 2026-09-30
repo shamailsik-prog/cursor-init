@@ -610,6 +610,10 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
 
   describe("matter_members id binding (#9)", () => {
     it("create requires id == matterId_userId", async () => {
+      // R1 #6: the adding partner must already be a member of the matter.
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "matter_members", "r1_partner1"), { firmId: "firmA", matterId: "r1", userId: "partner1" })
+      })
       const db = authed("partner1", PARTNER)
       await assertFails(setDoc(doc(db, "matter_members", "r1_someoneElse"), { firmId: "firmA", matterId: "r1", userId: "rv-new" }))
       await assertSucceeds(setDoc(doc(db, "matter_members", "r1_rv-new"), { firmId: "firmA", matterId: "r1", userId: "rv-new" }))
@@ -979,5 +983,80 @@ describe("Review R1 #5 — a draft under a filing package is locked against body
   it("unlocked (or legacy, unflagged) drafts stay editable by a member author", async () => {
     await assertSucceeds(updateDoc(doc(authed("lk-assoc", ASSOC), "drafts", "lkOpen"), { body: "revised" }))
     await assertSucceeds(updateDoc(doc(authed("lk-assoc", ASSOC), "drafts", "lkLegacy"), { body: "revised" }))
+  })
+})
+
+describe("Review R1 #6 — every matter-bound collection requires membership (R-2, no role exempt)", () => {
+  const PARTNER_OUT = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC_OUT = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  const CLERK_IN = { firmId: "firmA", role: "clerk", clearanceLevel: "privileged-restricted" }
+  const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted" }
+  const LONG = (s: string) => s
+  // A sample across the families: filing chain, workflow-ops lattice (incl. a LEGACY_GOVERNANCE
+  // chain collection and a writer-less dedicated view), analytics, committee outputs.
+  const SAMPLE = [
+    "filing_packet_artifacts",
+    "filing_annexures",
+    "filing_submission_dispatch_queue",
+    "filing_submission_receipts",
+    "filing_escalation_rollover_reaffirmation_sla",
+    "committee_outputs",
+    "matter_report_export_analytics",
+    "workflow_ops_activity",
+    "workflow_ops_alert_waiver_expiry_dispute_adjudications",
+    LONG(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_tb_ack_recon_pd_freeze_seal_view513"
+    ),
+  ]
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "sgM"), { firmId: "firmA", title: "S", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "sgM_sg-clerk"), { firmId: "firmA", matterId: "sgM", userId: "sg-clerk" })
+      await setDoc(doc(db, "matter_members", "sgM_sg-partner-in"), { firmId: "firmA", matterId: "sgM", userId: "sg-partner-in" })
+      for (const coll of SAMPLE) {
+        await setDoc(doc(db, coll, "row"), { id: "row", firmId: "firmA", matterId: "sgM", classification: "internal" })
+        await setDoc(doc(db, coll, "rowNoMatter"), { id: "rowNoMatter", firmId: "firmA", classification: "internal" })
+      }
+      await setDoc(doc(db, "intimation_register", "sgIr"), { firmId: "firmA", matterId: "sgM", status: "asked" })
+      await setDoc(doc(db, "matter_client_search_index", "sgIdxM"), { firmId: "firmA", rowType: "matter", referenceId: "sgM", linkedMatterId: null, classification: "internal", label: "Secret v Co" })
+      await setDoc(doc(db, "matter_client_search_index", "sgIdxC"), { firmId: "firmA", rowType: "client", referenceId: "c1", linkedMatterId: "sgM", classification: "internal", label: "Client" })
+      await setDoc(doc(db, "matter_client_search_index", "sgIdxFree"), { firmId: "firmA", rowType: "client", referenceId: "c2", linkedMatterId: null, classification: "internal", label: "Prospect" })
+    })
+  })
+
+  it.each(SAMPLE)("%s: non-member partner and associate denied; member clerk allowed; row without matterId denied", async (coll) => {
+    await assertFails(getDoc(doc(authed("sg-partner-out", PARTNER_OUT), coll, "row")))
+    await assertFails(getDoc(doc(authed("sg-assoc-out", ASSOC_OUT), coll, "row")))
+    await assertSucceeds(getDoc(doc(authed("sg-clerk", CLERK_IN), coll, "row")))
+    await assertFails(getDoc(doc(authed("sg-clerk", CLERK_IN), coll, "rowNoMatter")))
+  })
+
+  it("intimation_register: accounts reads firm-wide; partners/associates only as members", async () => {
+    await assertSucceeds(getDoc(doc(authed("sg-acc", ACCOUNTS), "intimation_register", "sgIr")))
+    await assertFails(getDoc(doc(authed("sg-partner-out", PARTNER_OUT), "intimation_register", "sgIr")))
+    await assertSucceeds(getDoc(doc(authed("sg-partner-in", PARTNER_OUT), "intimation_register", "sgIr")))
+  })
+
+  it("matter_client_search_index: matter rows and matter-linked client rows need membership", async () => {
+    await assertFails(getDoc(doc(authed("sg-partner-out", PARTNER_OUT), "matter_client_search_index", "sgIdxM")))
+    await assertFails(getDoc(doc(authed("sg-partner-out", PARTNER_OUT), "matter_client_search_index", "sgIdxC")))
+    await assertSucceeds(getDoc(doc(authed("sg-clerk", CLERK_IN), "matter_client_search_index", "sgIdxM")))
+    await assertSucceeds(getDoc(doc(authed("sg-partner-out", PARTNER_OUT), "matter_client_search_index", "sgIdxFree")))
+  })
+
+  describe("matter_members: no self-assignment; the adder must already be a member", () => {
+    it("a non-member partner cannot add themselves, then read the matter", async () => {
+      const db = authed("p9", PARTNER_OUT)
+      await assertFails(setDoc(doc(db, "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9" }))
+      await assertFails(getDoc(doc(db, "matters", "sgM")))
+    })
+    it("a non-member partner cannot add someone else either", async () => {
+      await assertFails(setDoc(doc(authed("p9", PARTNER_OUT), "matter_members", "sgM_p10"), { firmId: "firmA", matterId: "sgM", userId: "p10" }))
+    })
+    it("a member partner can add another partner", async () => {
+      await assertSucceeds(setDoc(doc(authed("sg-partner-in", PARTNER_OUT), "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9" }))
+    })
   })
 })

@@ -54,6 +54,54 @@ export function addMember(
   })
 }
 
+/** Refused membership assignment (review R1 #6); carries a stable code and HTTP status. */
+export class MembershipAssignmentError extends PublicError {
+  constructor(
+    readonly code: "self_assignment_forbidden" | "partner_required" | "not_member",
+    message: string
+  ) {
+    super(message)
+    this.name = "MembershipAssignmentError"
+  }
+}
+
+/**
+ * R-2 "no matter access without membership, and no role is exempt": only a partner who is
+ * already a member of the matter assigns another user, and nobody assigns themselves (a
+ * non-member partner cannot self-assign into a matter). Initial membership of a new matter is
+ * set by the matters API at creation. Mirrored by firestore.rules matter_members create.
+ */
+export function assignMatterMember(
+  store: SpineStore,
+  input: { actorId: string; matterId: string; userId: string }
+) {
+  const actor = store.users.get(input.actorId)
+  if (!actor) throw new PublicError("unknown actor")
+  const matter = store.matters.get(input.matterId)
+  if (!matter || matter.firmId !== actor.firmId) throw new PublicError("unknown matter")
+  if (input.userId === actor.id) {
+    throw new MembershipAssignmentError(
+      "self_assignment_forbidden",
+      "a user cannot assign themselves to a matter; a partner who is a member must add them"
+    )
+  }
+  if (actor.role !== "partner") {
+    throw new MembershipAssignmentError("partner_required", "only a partner assigns matter members")
+  }
+  if (!store.members.has(store.memberKey(input.matterId, actor.id))) {
+    throw new MembershipAssignmentError("not_member", "only a member of the matter assigns its members")
+  }
+  addMember(store, input.matterId, input.userId, matter.firmId)
+  store.audit.push({
+    action: "matter_member_add",
+    actorId: actor.id,
+    target: input.matterId,
+    classification: matter.classification,
+    reason: `added ${input.userId}`,
+  })
+  return { matterId: input.matterId, userId: input.userId, firmId: matter.firmId }
+}
+
 export function confirmEngagement(store: SpineStore, matterId: string, now = Date.now()) {
   const matter = store.matters.get(matterId)
   if (!matter) throw new PublicError("unknown matter")

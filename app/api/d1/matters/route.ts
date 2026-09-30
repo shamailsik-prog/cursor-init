@@ -20,7 +20,9 @@ import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrou
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import {
   addMember,
+  assignMatterMember,
   confirmEngagement,
+  MembershipAssignmentError,
 } from "@/services/d1-2/matters"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
@@ -36,6 +38,12 @@ const BodySchema = z.discriminatedUnion("action", [
     courtId: idField,
     classification: classificationField,
     memberUserIds: z.array(idField).max(200).optional(),
+  }),
+  z.object({
+    action: z.literal("add_member"),
+    actorId: idField,
+    matterId: idField,
+    userId: idField,
   }),
   z.object({
     action: z.literal("confirm_engagement"),
@@ -256,6 +264,32 @@ async function handlePost(request: Request) {
         action: "create",
         matter,
       }
+      idempotency.set(key, payload, fingerprint)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (parsed.action === "add_member") {
+      const actor = ensureActor(parsed.actorId)
+      await syncFirmMembers(store, repo, actor.firmId)
+      const matter = store.matters.get(parsed.matterId) ?? (await repo.matters.get(parsed.matterId))
+      if (matter) store.matters.set(matter.id, matter)
+      const priorAuditCount = store.audit.length
+      let member: { matterId: string; userId: string; firmId: string }
+      try {
+        member = assignMatterMember(store, {
+          actorId: parsed.actorId,
+          matterId: parsed.matterId,
+          userId: parsed.userId,
+        })
+      } catch (err) {
+        if (err instanceof MembershipAssignmentError) {
+          return NextResponse.json({ error: err.message, code: err.code }, { status: 403 })
+        }
+        throw err
+      }
+      await repo.members.upsert(member)
+      await persistAuditEntriesSince(store, repo, priorAuditCount)
+      const payload = { action: "add_member", member }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
