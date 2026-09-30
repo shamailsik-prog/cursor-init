@@ -1,6 +1,6 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
-import { rankOf, type Role, type SpineStore, type User } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type Role, type SpineStore, type User } from "@/platform/spine/store"
 
 export type PermissionDecision = {
   allow: boolean
@@ -66,7 +66,8 @@ export function seedUser(
 }
 
 export function requireClearance(user: User, classification: Classification): boolean {
-  return rankOf(user.clearanceLevel) >= rankOf(classification)
+  // `classification` comes from a stored record (e.g. matter): unreadable → max.
+  return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(classification)
 }
 
 export type { Role, User }

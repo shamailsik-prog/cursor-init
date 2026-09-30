@@ -22,6 +22,14 @@ import {
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
+/** Allowed `purpose` values (I1); anything else is 400 invalid_purpose. */
+const COMMITTEE_PURPOSES = ["committee-brain", "summarise", "research", "translate", "ops-audit"] as const
+type CommitteePurpose = (typeof COMMITTEE_PURPOSES)[number]
+const COMMITTEE_PURPOSE_SET: ReadonlySet<string> = new Set(COMMITTEE_PURPOSES)
+function isCommitteePurpose(value: unknown): value is CommitteePurpose {
+  return typeof value === "string" && COMMITTEE_PURPOSE_SET.has(value)
+}
+
 /** Minimum classification for caller-supplied free text (N1). */
 const FREE_TEXT_FLOOR: Classification = "internal"
 
@@ -181,8 +189,15 @@ async function handlePost(request: Request) {
   const requestedPartyNames = Array.isArray(parsed.partyNames)
     ? parsed.partyNames.filter((n) => typeof n === "string" && n.length > 0)
     : []
-  const purpose =
-    typeof parsed.purpose === "string" ? parsed.purpose : "committee-brain"
+  // I1: purpose travels to the provider in metadata, so it is a fixed
+  // server-side value, never caller free text.
+  if (parsed.purpose !== undefined && !isCommitteePurpose(parsed.purpose)) {
+    return NextResponse.json(
+      { error: "purpose must be one of: " + COMMITTEE_PURPOSES.join(", "), code: "invalid_purpose" },
+      { status: 400 }
+    )
+  }
+  const purpose: CommitteePurpose = isCommitteePurpose(parsed.purpose) ? parsed.purpose : "committee-brain"
   const fingerprint = JSON.stringify({
     route: "/api/p1/committee-brain",
     actorId: parsed.actorId,

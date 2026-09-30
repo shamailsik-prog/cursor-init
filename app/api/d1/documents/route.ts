@@ -8,7 +8,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
-import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -71,7 +71,7 @@ function canViewDocument(
   const user = store.users.get(userId)
   if (!user) return false
   if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
+  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) {
     return store.members.has(store.memberKey(doc.matterId, userId))
   }
@@ -207,7 +207,7 @@ async function handlePost(request: Request) {
           { status: 403 }
         )
       }
-      if (rankOf(parsed.classification) < rankOf(matter.classification)) {
+      if (rankOf(parsed.classification) < rankOfStoredOrMax(matter.classification)) {
         return NextResponse.json(
           { error: "document classification cannot be lower than matter classification" },
           { status: 400 }

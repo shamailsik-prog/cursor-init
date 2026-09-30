@@ -473,7 +473,7 @@ describe("session references and identity lookups (round 2)", () => {
     expect(capped.status).toBe(200)
   })
 
-  it("N4: a failed repository read is 503 identity_unavailable, not a stale cached record", async () => {
+  it("N4: a failed repository read is 503 IDENTITY_UNAVAILABLE, not a stale cached record", async () => {
     const repoModule = await import("@/platform/persistence/runtimeRepositories")
     const real = await repoModule.getRuntimeRepositories(getRuntimeStore())
     const spy = vi.spyOn(repoModule, "getRuntimeRepositories").mockResolvedValue({
@@ -488,8 +488,25 @@ describe("session references and identity lookups (round 2)", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {})
     const res = await mattersGet(authed("http://127.0.0.1/api/d1/matters?limit=10&cursor=0"))
     expect(res.status).toBe(503)
-    expect(((await res.json()) as { code: string }).code).toBe("identity_unavailable")
+    expect(((await res.json()) as { code: string }).code).toBe("IDENTITY_UNAVAILABLE")
     spy.mockRestore()
     err.mockRestore()
+  })
+})
+
+describe("round 3 follow-ups (firebase mode)", () => {
+  it("R1: a repository 'not found' is 403 USER_NOT_PROVISIONED and evicts the cached user", async () => {
+    expect(getRuntimeStore().users.has("partner_a")).toBe(true)
+    const repoModule = await import("@/platform/persistence/runtimeRepositories")
+    const real = await repoModule.getRuntimeRepositories(getRuntimeStore())
+    const spy = vi.spyOn(repoModule, "getRuntimeRepositories").mockResolvedValue({
+      ...real,
+      users: { ...real.users, get: async () => null },
+    })
+    const res = await mattersGet(authed("http://127.0.0.1/api/d1/matters?limit=10&cursor=0"))
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { code: string }).code).toBe("USER_NOT_PROVISIONED")
+    expect(getRuntimeStore().users.has("partner_a")).toBe(false)
+    spy.mockRestore()
   })
 })

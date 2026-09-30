@@ -1,4 +1,4 @@
-import { rankOf, type FilingPackage, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type FilingPackage, type SpineStore } from "@/platform/spine/store"
 import { PublicError } from "@/platform/http/publicError"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
@@ -27,7 +27,7 @@ export function createFilingPackage(
   if (draft.matterId !== input.matterId) throw new PublicError("draft does not belong to matter")
   const permission = checkPermission(store, actor.id, "draft", input.matterId)
   if (!permission.allow) throw new PublicError(`permission denied: ${permission.reason}`)
-  if (rankOf(draft.classification) < rankOf(matter.classification)) {
+  if (rankOfStoredOrMax(draft.classification) < rankOfStoredOrMax(matter.classification)) {
     throw new PublicError("draft classification cannot be lower than matter classification")
   }
   const gate = runDraftPreflight(store, input.preflight)
@@ -112,7 +112,7 @@ export function listFilingPackages(
     .filter((row) => {
       const permission = checkPermission(store, user.id, "draft", row.matterId)
       if (!permission.allow) return false
-      return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+      return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
     })
     .sort((a, b) => a.id.localeCompare(b.id))
   const page = visible.slice(input.cursor, input.cursor + input.limit)

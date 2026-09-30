@@ -1,7 +1,7 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
 import {
-  rankOf,
+  rankOf, rankOfStoredOrMax,
   storedUserRecord,
   type Role,
   type SpineStore,
@@ -51,8 +51,8 @@ export type TenancyExternalSessionIdentityBridgeMismatchStatus =
 
 function requirePartnerInFirm(store: SpineStore, actorId: string, firmId: string): User {
   const actor = store.users.get(actorId)
-  if (!actor) throw new PublicError("unknown actor")
-  if (actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!actor || actor.firmId !== firmId) throw new PublicError("unknown actor")
   if (actor.role !== "partner") throw new PublicError("partner role required")
   return actor
 }
@@ -178,7 +178,7 @@ export function listFirmAudit(
   const actor = requirePartnerInFirm(store, actorId, firmId)
   const rows = store.audit
     .filter((entry) => entry.firmId === firmId)
-    .filter((entry) => rankOf(entry.classification) <= rankOf(actor.clearanceLevel))
+    .filter((entry) => rankOfStoredOrMax(entry.classification) <= rankOf(actor.clearanceLevel))
     .map((entry) => ({
       id: entry.id ?? "",
       action: entry.action,
@@ -233,8 +233,8 @@ export function updateUserRole(
 ): { user: User; auditEntry: NonNullable<SpineStore["audit"][number]> } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const target = store.users.get(input.targetUserId)
-  if (!target) throw new PublicError("unknown target user")
-  if (target.firmId !== input.firmId) throw new PublicError("cross-firm target denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!target || target.firmId !== input.firmId) throw new PublicError("unknown target user")
   if (!isClassification(input.nextClearance)) {
     throw new PublicError("nextClearance must be a rank-0–4 label")
   }
@@ -410,8 +410,8 @@ export function reissueTenancySessionReference(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const parent = store.tenancySessionReferences.get(input.parentSessionReferenceId)
-  if (!parent) throw new PublicError("unknown session reference")
-  if (parent.firmId !== input.firmId) throw new PublicError("unknown session reference")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!parent || parent.firmId !== input.firmId) throw new PublicError("unknown session reference")
   if (getTenancySessionReferenceState(parent, input.now) !== "active") {
     throw new PublicError("session reference is not active")
   }
@@ -482,8 +482,8 @@ export function revokeTenancySessionReference(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const reference = store.tenancySessionReferences.get(input.sessionReferenceId)
-  if (!reference) throw new PublicError("unknown session reference")
-  if (reference.firmId !== input.firmId) throw new PublicError("unknown session reference")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!reference || reference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const now = input.now ?? Date.now()
   const revoked =
     reference.revokedAt !== null
@@ -601,8 +601,8 @@ export function listSessionReferenceLineage(
 } {
   requirePartnerInFirm(store, actorId, firmId)
   const root = store.tenancySessionReferences.get(rootSessionReferenceId)
-  if (!root) throw new PublicError("unknown root session reference")
-  if (root.firmId !== firmId) throw new PublicError("unknown session reference")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!root || root.firmId !== firmId) throw new PublicError("unknown session reference")
   const now = Date.now()
   const rows = [...store.tenancySessionReferences.values()]
     .filter((row) => row.firmId === firmId)
@@ -675,8 +675,8 @@ export function attestSessionLineageDispute(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
-  if (!sessionReference) throw new PublicError("unknown session reference")
-  if (sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!sessionReference || sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const reason = input.reason.trim()
   if (!reason) throw new PublicError("reason is required")
   const now = input.now ?? Date.now()
@@ -739,8 +739,8 @@ export function resolveSessionLineageDispute(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const dispute = store.tenancyLineageDisputeAttestations.get(input.disputeId)
-  if (!dispute) throw new PublicError("unknown lineage dispute")
-  if (dispute.firmId !== input.firmId) throw new PublicError("cross-firm dispute denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!dispute || dispute.firmId !== input.firmId) throw new PublicError("unknown lineage dispute")
   const now = input.now ?? Date.now()
   const resolved: TenancyLineageDisputeAttestationRow = {
     ...dispute,
@@ -1310,14 +1310,14 @@ export function assignLineageReconciliationArbitration(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const assignee = store.users.get(input.assignedPartnerId)
-  if (!assignee) throw new PublicError("unknown assigned partner")
-  if (assignee.firmId !== input.firmId) throw new PublicError("cross-firm assigned partner denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!assignee || assignee.firmId !== input.firmId) throw new PublicError("unknown assigned partner")
   if (assignee.role !== "partner") throw new PublicError("assigned partner must be a partner")
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const existing =
     store.tenancyLineageReconciliationQueueArbitrations.get(
@@ -1378,8 +1378,8 @@ export function arbitrateLineageReconciliationQueue(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const existing =
     store.tenancyLineageReconciliationQueueArbitrations.get(
@@ -1437,8 +1437,8 @@ export function attestLineageDigestClosureCheckpoint(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const closureReason = input.closureReason.trim()
   if (!closureReason) throw new PublicError("closureReason is required")
   const now = input.now ?? Date.now()
@@ -1499,8 +1499,8 @@ export function reopenLineageDigestClosureCheckpoint(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const reopenTrigger = input.reopenTrigger.trim()
   if (!reopenTrigger) throw new PublicError("reopenTrigger is required")
   const now = input.now ?? Date.now()
@@ -1562,8 +1562,8 @@ export function governLineageClosureAdjudication(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const monitoring = ensureLineageReconciliationMonitoringRows(store, {
     firmId: input.firmId,
@@ -1661,8 +1661,8 @@ export function recordLineageClosureAdjudicationVerdict(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const monitoring = ensureLineageReconciliationMonitoringRows(store, {
     firmId: input.firmId,
@@ -1741,8 +1741,8 @@ export function attestLineageArbitrationDebtRetirement(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const retirementNote = input.retirementNote.trim()
   if (!retirementNote) throw new PublicError("retirementNote is required")
   const now = input.now ?? Date.now()
@@ -1799,8 +1799,8 @@ export function reopenLineageArbitrationDebtRetirement(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const carryoverSignal = input.carryoverSignal.trim()
   if (!carryoverSignal) throw new PublicError("carryoverSignal is required")
   const now = input.now ?? Date.now()
@@ -1859,8 +1859,8 @@ export function checkpointLineageClosureAdjudicationSettlementPublication(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const publicationChannel = input.publicationChannel.trim()
   if (!publicationChannel) throw new PublicError("publicationChannel is required")
   const now = input.now ?? Date.now()
@@ -1917,8 +1917,8 @@ export function logLineageClosureAdjudicationSettlementCorrection(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const correctionNote = input.correctionNote.trim()
   if (!correctionNote) throw new PublicError("correctionNote is required")
   const now = input.now ?? Date.now()
@@ -1974,8 +1974,8 @@ export function confirmLineageClosureAdjudicationSettlementSla(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const monitoring = ensureLineageReconciliationMonitoringRows(store, {
     firmId: input.firmId,
@@ -2032,8 +2032,8 @@ export function openLineageArbitrationDebtRetirementDispute(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const challengeReason = input.challengeReason.trim()
   if (!challengeReason) throw new PublicError("challengeReason is required")
   const now = input.now ?? Date.now()
@@ -2088,14 +2088,14 @@ export function assignLineageArbitrationDebtRetirementDisputeReviewer(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const reviewer = store.users.get(input.reviewerId)
-  if (!reviewer) throw new PublicError("unknown reviewer")
-  if (reviewer.firmId !== input.firmId) throw new PublicError("cross-firm reviewer denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!reviewer || reviewer.firmId !== input.firmId) throw new PublicError("unknown reviewer")
   if (reviewer.role !== "partner") throw new PublicError("reviewer must be a partner")
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const monitoring = ensureLineageReconciliationMonitoringRows(store, {
     firmId: input.firmId,
@@ -2151,8 +2151,8 @@ export function resolveLineageArbitrationDebtRetirementDispute(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const monitoring = ensureLineageReconciliationMonitoringRows(store, {
     firmId: input.firmId,
@@ -2208,8 +2208,8 @@ export function controlLineageArbitrationDebtRetirementDisputeRollback(
   const digest = store.tenancyLineageReconciliationDigests.get(
     lineageDigestId(input.lineageRootSessionReferenceId)
   )
-  if (!digest) throw new PublicError("unknown lineage reconciliation digest")
-  if (digest.firmId !== input.firmId) throw new PublicError("cross-firm digest denied")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const rollbackControlNote = input.rollbackControlNote.trim()
   if (!rollbackControlNote) throw new PublicError("rollbackControlNote is required")
   const now = input.now ?? Date.now()
@@ -2266,8 +2266,8 @@ export function attestExternalSessionIdentityBridge(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
-  if (!sessionReference) throw new PublicError("unknown session reference")
-  if (sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!sessionReference || sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const assertedIssuer = input.assertedIssuer.trim()
   if (!assertedIssuer) throw new PublicError("assertedIssuer is required")
   const assertedSubject = input.assertedSubject.trim()
@@ -2352,8 +2352,8 @@ export function quarantineExternalSessionIdentityBridge(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
-  if (!sessionReference) throw new PublicError("unknown session reference")
-  if (sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!sessionReference || sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const quarantineReason = input.quarantineReason.trim()
   if (!quarantineReason) throw new PublicError("quarantineReason is required")
   const now = input.now ?? Date.now()
@@ -2425,8 +2425,8 @@ export function clearExternalSessionIdentityBridge(
 } {
   const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
   const sessionReference = store.tenancySessionReferences.get(input.sessionReferenceId)
-  if (!sessionReference) throw new PublicError("unknown session reference")
-  if (sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
+  // One answer for not-found and other-firm (no cross-firm existence oracle).
+  if (!sessionReference || sessionReference.firmId !== input.firmId) throw new PublicError("unknown session reference")
   const clearReason = input.clearReason.trim()
   if (!clearReason) throw new PublicError("clearReason is required")
   const now = input.now ?? Date.now()

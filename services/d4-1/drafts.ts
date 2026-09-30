@@ -1,6 +1,6 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
-import { rankOf, type DraftRecord, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type DraftRecord, type SpineStore } from "@/platform/spine/store"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   checkTemporalConsistency,
@@ -80,7 +80,7 @@ export function runDraftPreflight(
   if (!matter) throw new PublicError("unknown matter")
   const permission = checkPermission(store, input.actorId, "draft", input.matterId)
   if (!permission.allow) throw new PublicError(`permission denied: ${permission.reason}`)
-  if (rankOf(input.classification) < rankOf(matter.classification)) {
+  if (rankOf(input.classification) < rankOfStoredOrMax(matter.classification)) {
     throw new PublicError("draft classification cannot be lower than matter classification")
   }
 

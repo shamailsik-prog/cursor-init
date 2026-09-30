@@ -1,6 +1,6 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
-import { rankOf, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type SpineStore } from "@/platform/spine/store"
 
 export function uploadDocument(
   store: SpineStore,
@@ -22,7 +22,7 @@ export function uploadDocument(
     const existing = store.documents.get(existingId)
     if (
       existing &&
-      rankOf(input.classification) > rankOf(existing.classification)
+      rankOf(input.classification) > rankOfStoredOrMax(existing.classification)
     ) {
       existing.classification = input.classification
       for (const job of store.jobs) {

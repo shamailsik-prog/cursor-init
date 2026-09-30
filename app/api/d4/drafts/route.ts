@@ -8,7 +8,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification, type Classification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -233,7 +233,7 @@ async function handleGet(request: Request) {
     .filter((draft) => {
       const permission = checkPermission(store, userId, "draft", draft.matterId)
       if (!permission.allow) return false
-      return rankOf(user.clearanceLevel) >= rankOf(draft.classification)
+      return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(draft.classification)
     })
     .sort((a, b) => {
       const scoreA = templateUsage.get(a.templateId) ?? 0

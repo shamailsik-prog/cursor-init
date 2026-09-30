@@ -2,7 +2,7 @@ import { declassify } from "@/platform/classification/declassify"
 import { PublicError } from "@/platform/http/publicError"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
-  rankOf,
+  rankOf, rankOfStoredOrMax,
   type DocumentRecord,
   type DocumentWorkflow,
   type SpineStore,
@@ -23,7 +23,7 @@ function isUserVisibleForDocument(
   doc: DocumentRecord
 ): boolean {
   if (doc.firmId !== user.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
+  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, user.id))
   return user.role !== "client" && user.role !== "intern"
 }
@@ -125,7 +125,7 @@ export function assignReviewer(
   if (reviewer.role === "client" || reviewer.role === "intern") {
     throw new PublicError("reviewer role not allowed")
   }
-  if (rankOf(reviewer.clearanceLevel) < rankOf(doc.classification)) {
+  if (rankOf(reviewer.clearanceLevel) < rankOfStoredOrMax(doc.classification)) {
     throw new PublicError("reviewer clearance too low")
   }
   if (doc.matterId && !store.members.has(store.memberKey(doc.matterId, reviewer.id))) {

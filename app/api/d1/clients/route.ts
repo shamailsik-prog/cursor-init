@@ -8,7 +8,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification, type Classification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmEntities } from "@/platform/persistence/entitySync"
@@ -86,7 +86,7 @@ async function handleGet(request: Request) {
   await syncFirmEntities(store, repos, user.firmId)
   const all = [...store.entities.values()]
     .filter((row) => row.firmId === user.firmId)
-    .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .sort((a, b) => a.id.localeCompare(b.id))
   const items = all.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null

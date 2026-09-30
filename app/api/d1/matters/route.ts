@@ -9,7 +9,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { checkPermission } from "@/platform/p5/checkPermission"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -105,7 +105,7 @@ async function ensureMatterAccess(
   if (!store.members.has(store.memberKey(matterId, actorId))) {
     throw new PublicError("actor is not a member of this matter")
   }
-  if (rankOf(actor.clearanceLevel) < rankOf(matter.classification)) {
+  if (rankOf(actor.clearanceLevel) < rankOfStoredOrMax(matter.classification)) {
     throw new PublicError("actor clearance is below matter classification")
   }
   return { actor, matter }

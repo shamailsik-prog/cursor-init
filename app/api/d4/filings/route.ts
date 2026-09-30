@@ -8,7 +8,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import type {
   Classification,
   FilingEscalationClosureComplianceDigestRow,
@@ -3752,7 +3752,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .filter((row) => {
           if (!dispatchStatus || !isFilingDispatchQueueStatus(dispatchStatus)) return true
@@ -3792,7 +3792,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .filter((row) => {
           if (!annexureStatus || !isFilingAnnexureGenerationStatus(annexureStatus)) return true
@@ -3825,7 +3825,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.recordedAt - a.recordedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -3907,7 +3907,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4029,7 +4029,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => a.slaTargetAt - b.slaTargetAt || b.updatedAt - a.updatedAt)
       const items = visible.slice(cursor, cursor + limit)
@@ -4063,7 +4063,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4147,7 +4147,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => a.status.localeCompare(b.status) || a.breachWindowStartedAt - b.breachWindowStartedAt)
       const items = visible.slice(cursor, cursor + limit)
@@ -4229,7 +4229,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4294,7 +4294,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .map((row) => {
@@ -4482,7 +4482,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .map((row) => {
@@ -4622,7 +4622,7 @@ async function handleGet(request: Request) {
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (isFilingEscalationClosureSlaWindowScope(scope) ? row.scope === scope : true))
-        .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+        .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4642,7 +4642,7 @@ async function handleGet(request: Request) {
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (isFilingEscalationClosureAutoAssignmentMode(mode) ? row.mode === mode : true))
-        .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+        .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4721,7 +4721,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .map((row) => {
@@ -4879,7 +4879,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -4937,7 +4937,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -4975,7 +4975,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5011,7 +5011,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => {
@@ -5053,7 +5053,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5089,7 +5089,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5127,7 +5127,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5169,7 +5169,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5211,7 +5211,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5255,7 +5255,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5295,7 +5295,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5333,7 +5333,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5371,7 +5371,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5409,7 +5409,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5445,7 +5445,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5481,7 +5481,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5517,7 +5517,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5555,7 +5555,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5591,7 +5591,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5627,7 +5627,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5663,7 +5663,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -5699,7 +5699,7 @@ async function handleGet(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -6481,7 +6481,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .map((row) => {
           const quorum = row.ownerId ? adjudicationQuorumByOwner.get(row.ownerId) ?? null : null
@@ -6629,7 +6629,7 @@ async function handleGet(request: Request) {
             const permission = checkPermission(store, user.id, "draft", row.matterId)
             if (!permission.allow) return false
           }
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6670,7 +6670,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.grantedAt - a.grantedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6750,7 +6750,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6833,7 +6833,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6879,7 +6879,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6910,7 +6910,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6997,7 +6997,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7031,7 +7031,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7131,7 +7131,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7225,7 +7225,7 @@ async function handleGet(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7246,7 +7246,7 @@ async function handleGet(request: Request) {
       .filter((row) => {
         const permission = checkPermission(store, user.id, "draft", row.matterId)
         if (!permission.allow) return false
-        return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
       })
       .filter((row) => {
         if (!readiness) return true

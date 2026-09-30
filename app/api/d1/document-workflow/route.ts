@@ -8,7 +8,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { type Classification } from "@/platform/p1/types"
-import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -78,7 +78,7 @@ function canViewWorkflowDocument(
   const user = store.users.get(userId)
   if (!user) return false
   if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
+  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, userId))
   return user.role !== "client" && user.role !== "intern"
 }

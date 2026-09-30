@@ -8,7 +8,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import {
-  rankOf,
+  rankOf, rankOfStoredOrMax,
   type Matter,
   type MatterReportExportAnalyticsRow,
   type MatterReportRelevanceFreshnessStatus,
@@ -319,7 +319,7 @@ async function handleGet(request: Request) {
     }
 
     const all = (await repos.reportingIndex.listByFirm(refreshedActor.firmId))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (rowType ? row.rowType === rowType : true))
       .filter((row) => terms.every((term) => row.tags.includes(term)))
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -355,7 +355,7 @@ async function handleGet(request: Request) {
       ...row,
       freshnessStatus: asFreshnessStatus(row.recomputedAt, now),
     }))
-    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
     .filter((row) => (scoreBand ? row.scoreBand === scoreBand : true))
     .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -376,7 +376,7 @@ async function handleGet(request: Request) {
 
   const relevanceByMatter = new Map(normalizedRelevance.map((row) => [row.matterId, row]))
   const exportRows = (await repos.matterReportExportAnalytics.listByFirm(refreshedActor.firmId))
-    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
     .filter((row) => {
       const relevance = relevanceByMatter.get(row.matterId)

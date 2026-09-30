@@ -630,11 +630,9 @@ async function handleGet(request: Request) {
       }
 
       const user = await loadUser(store, repos, resolvedUserId)
-      if (!user) {
+      // One answer for unknown and other-firm users (no existence oracle).
+      if (!user || (resolvedFirmId && resolvedFirmId !== user.firmId)) {
         return NextResponse.json({ error: "unknown user" }, { status: 400 })
-      }
-      if (resolvedFirmId && resolvedFirmId !== user.firmId) {
-        return NextResponse.json({ error: "firm scope mismatch" }, { status: 400 })
       }
       if (
         existingReference &&
