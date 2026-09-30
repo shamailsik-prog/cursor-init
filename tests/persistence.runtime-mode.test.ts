@@ -6931,7 +6931,17 @@ describe("Runtime persistence mode", () => {
     })
   })
 
-  it("persists workflow/court-ops activity index and rehydrates reporting after reset", async () => {
+  // One cumulative ops-alert lifecycle, split into sequential parts so no single test nears
+  // the timeout: every ops-reporting request costs ~215 Firestore round-trips in the route.
+  // Later parts continue from the Firestore state persisted by earlier parts (the runtime
+  // store is reset between parts, so each part also exercises rehydration).
+  let activityFlow: { matterId: string; docId: string } | null = null
+  function requireActivityFlow() {
+    if (!activityFlow) throw new Error("activity flow part 1 must run first")
+    return activityFlow
+  }
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 1/6)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
       const matterId = await createMatterViaRoute(
@@ -7437,6 +7447,14 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(enforcementAttestationReopen.status).toBe(200)
+      activityFlow = { matterId, docId }
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 2/6)", async () => {
+    const { matterId } = requireActivityFlow()
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       const enforcementRecomplete = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -7745,6 +7763,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(remediationSlaBreachEscalationOpen.status).toBe(200)
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 3/6)", async () => {
+    const { matterId } = requireActivityFlow()
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       const remediationSlaBreachEscalationAssign = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -8042,6 +8067,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(waiverExpiryDisputeAdjudicationResolve.status).toBe(200)
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 4/6)", async () => {
+    const { matterId } = requireActivityFlow()
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       const remediationSlaBreachResolutionCheckpointOpen = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -8409,6 +8441,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(remediationSlaResolve.status).toBe(200)
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 5/6)", async () => {
+    const { matterId } = requireActivityFlow()
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       getRuntimeStore().workflowOpsAlertDigests = new Map()
       getRuntimeStore().workflowOpsAlertAttestations = new Map()
@@ -8665,6 +8704,13 @@ describe("Runtime persistence mode", () => {
             row.extendedBy === "partner_a"
         )
       ).toBe(true)
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 6/6)", async () => {
+    const { matterId, docId } = requireActivityFlow()
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       const remediationSlaView = await opsReportingGet(
         new Request(
