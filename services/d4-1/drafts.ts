@@ -126,13 +126,18 @@ export function runDraftPreflight(
     citation.overridden && input.partnerOverride
       ? { partnerId: input.partnerOverride.partnerId, reason: input.partnerOverride.reason.trim() }
       : undefined
-  if (overrideApplied && options.recordOverride !== false) {
+  // Only committing steps record the override (review R1 #7): compose and package creation
+  // (the approval-routing step) pass recordOverride; a preflight dry run does not.
+  if (overrideApplied && options.recordOverride === true) {
     store.audit.push({
       action: "citation_gate_override",
       actorId: input.actorId,
       target: input.matterId,
-      classification: input.classification,
+      classification: isClassification(matter.classification) ? matter.classification : "privileged-restricted",
       reason: overrideApplied.reason,
+      overriddenAuthorities: citation.findings
+        .filter((f) => f.status !== "VERIFIED")
+        .map((f) => `${f.ref}:${f.status}`),
     })
   }
   const temporal = input.temporalCitations.map((row) => {
@@ -174,7 +179,7 @@ export function composeDraft(
   const templateExists = getDocumentTypes().some((type) => type.id === input.templateId)
   if (!templateExists) throw new PublicError("unknown templateId")
   // The gate always reads the body being saved, whatever the caller put in preflight.
-  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: input.body })
+  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: input.body }, { recordOverride: true })
   if (!gate.ok) {
     throw new PublicError("preflight blocked drafting")
   }

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { rankOf, rankOfStoredOrMax, type FilingPackage, type SpineStore } from "@/platform/spine/store"
 import { PublicError } from "@/platform/http/publicError"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   runDraftPreflight,
@@ -22,6 +23,12 @@ export class DraftChangedError extends PublicError {
     super("draft changed since the filing package was created; create a new package")
     this.name = "DraftChangedError"
   }
+}
+
+/** Override rows carry the matter's classification (review R1 #7), never a caller-supplied one. */
+function overrideAuditClassification(store: SpineStore, matterId: string): Classification {
+  const label = store.matters.get(matterId)?.classification
+  return isClassification(label) ? label : "privileged-restricted"
 }
 
 /** A draft stays locked while any package referencing it is pending or approved. */
@@ -59,7 +66,7 @@ export function createFilingPackage(
     throw new PublicError("draft classification cannot be lower than matter classification")
   }
   // Module 33: the gate reads the draft being filed, not only the ids the caller lists.
-  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: draft.body })
+  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: draft.body }, { recordOverride: true })
   if (!gate.ok) throw new PublicError("preflight blocked filing package")
   const filingPackage: FilingPackage = {
     id: store.id("pkg"),
@@ -136,8 +143,11 @@ export function decideFilingPackage(
         action: "citation_gate_override",
         actorId: actor.id,
         target: filingPackage.matterId,
-        classification: filingPackage.classification,
+        classification: overrideAuditClassification(store, filingPackage.matterId),
         reason: input.partnerOverride.reason.trim(),
+        overriddenAuthorities: gate.findings
+          .filter((f) => f.status !== "VERIFIED")
+          .map((f) => `${f.ref}:${f.status}`),
       })
     }
   }

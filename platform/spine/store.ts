@@ -105,6 +105,8 @@ export type AuditEntry = {
   target: string
   classification: Classification
   reason?: string
+  /** citation_gate_override rows: the authorities cleared, as "<ref>:<VERIFIED|UNVERIFIED|OVERRULED>". */
+  overriddenAuthorities?: string[]
   authBoundary?: TenancyAuthBoundary
   sessionReferenceId?: string | null
   externalSessionId?: string | null
