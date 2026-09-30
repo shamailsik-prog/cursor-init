@@ -62,6 +62,7 @@ export function uploadDocument(
     firmId: input.firmId,
     jobType: "ocr",
     documentId: id,
+    matterId: input.matterId,
     classification,
     idempotencyKey: input.idempotencyKey,
   })

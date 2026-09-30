@@ -153,9 +153,10 @@ service cloud.firestore {
       allow write: if false; // P6 / Postgres is the system of record; the mirror is read-only
     }
     match /routing_queue/{id}  { allow read: if sameFirm() && role() in ['clerk', 'partner', 'associate']; allow write: if false; }
-    // R-2: a follow-up that carries a matterId is visible to members of that matter only.
+    // R-2: a follow-up is visible to members of its matter only (FollowUp.matterId is required;
+    // a row without it is denied).
     match /follow_ups/{id}     { allow read: if sameFirm() && isStaff()
-      && (!('matterId' in resource.data) || isMember(resource.data.matterId)); allow write: if false; }
+      && isMember(resource.data.matterId); allow write: if false; }
     match /intimation_register/{id} { allow read: if sameFirm() && role() in ['partner', 'associate', 'accounts']; allow write: if false; }
     match /notifications/{id} {
       allow read: if sameFirm() && resource.data.userId == request.auth.uid;
@@ -163,10 +164,11 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
       allow create, delete: if false;
     }
-    // R-2 / L18 §5.2 (jobs carry classification): cleared, and matter-scoped when the job carries a matterId.
+    // R-2 / L18 §5.2 (jobs carry classification): cleared and matter-scoped. Every job carries its
+    // document's matterId (null = loose vault); a row without the field (pre-backfill) is denied.
     match /jobs/{id}           { allow read: if sameFirm() && role() in ['partner', 'associate', 'clerk']
       && cleared(resource.data.classification)
-      && (!('matterId' in resource.data) || canAccessScope(resource.data.matterId)); allow write: if false; }
+      && canAccessScope(resource.data.matterId); allow write: if false; }
     match /api_keys/{id}       { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /audit_log/{id}      { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_session_references/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }

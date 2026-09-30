@@ -504,7 +504,7 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
       await setDoc(doc(db, "entities", "e1"), { firmId: "firmA", canonicalName: "Acme", cnic: "1" })
       await setDoc(doc(db, "entity_aliases", "a1"), { firmId: "firmA", alias: "ACME" })
       await setDoc(doc(db, "merge_events", "x1"), { firmId: "firmA" })
-      await setDoc(doc(db, "follow_ups", "f1"), { firmId: "firmA" })
+      await setDoc(doc(db, "follow_ups", "f1"), { firmId: "firmA", matterId: "r1" })
     })
   })
 
@@ -818,8 +818,16 @@ describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 
       await setDoc(doc(db, "document_versions", "r2dvLoose"), { ...version, matterId: null, classification: "confidential" })
       await setDoc(doc(db, "draft_versions", "r2drv"), { ...version, classification: "internal" })
       await setDoc(doc(db, "follow_ups", "r2fu"), { firmId: "firmA", matterId: "r2m", courtId: "SHC", raw: "CP 1" })
-      await setDoc(doc(db, "jobs", "r2job"), { firmId: "firmA", matterId: "r2m", jobType: "ocr", documentId: "d", classification: "internal" })
-      await setDoc(doc(db, "jobs", "r2jobPriv"), { firmId: "firmA", matterId: "r2m", jobType: "ocr", documentId: "d", classification: "privileged" })
+      // Exactly the writer shape (services/d1-6/uploadDocument.ts -> repos.jobs.create).
+      const job = { firmId: "firmA", jobType: "ocr", documentId: "d", idempotencyKey: "k", matterId: "r2m" }
+      await setDoc(doc(db, "jobs", "r2job"), { ...job, id: "r2job", classification: "internal" })
+      await setDoc(doc(db, "jobs", "r2jobPriv"), { ...job, id: "r2jobPriv", classification: "privileged" })
+      // Legacy row written before jobs carried matterId (pre-backfill).
+      const { matterId: _omit, ...legacy } = job
+      void _omit
+      await setDoc(doc(db, "jobs", "r2jobLegacy"), { ...legacy, id: "r2jobLegacy", classification: "internal" })
+      await setDoc(doc(db, "jobs", "r2jobLoose"), { ...job, id: "r2jobLoose", matterId: null, classification: "confidential" })
+      await setDoc(doc(db, "follow_ups", "r2fuLegacy"), { firmId: "firmA", courtId: "SHC", raw: "CP 2" })
     })
   })
 
@@ -855,6 +863,20 @@ describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 
   it("follow_ups carrying matterId: members only", async () => {
     await assertFails(getDoc(doc(authed("r2-nonmember", ASSOC_NONMEMBER), "follow_ups", "r2fu")))
     await assertSucceeds(getDoc(doc(authed("r2-assoc", ASSOC_MEMBER), "follow_ups", "r2fu")))
+  })
+
+  it("jobs without matterId (legacy rows) are denied to everyone, members included (review R1 #2)", async () => {
+    await assertFails(getDoc(doc(authed("r2-clerk", CLERK_MEMBER), "jobs", "r2jobLegacy")))
+    await assertFails(getDoc(doc(authed("r2-partner", PARTNER_NONMEMBER), "jobs", "r2jobLegacy")))
+  })
+
+  it("loose-vault jobs (matterId null) follow the loose-vault rule", async () => {
+    await assertSucceeds(getDoc(doc(authed("r2-clerk-x", CLERK_NONMEMBER), "jobs", "r2jobLoose")))
+    await assertFails(getDoc(doc(authed("r2-assoc", { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }), "jobs", "r2jobLoose")))
+  })
+
+  it("follow_ups without matterId are denied (the check is unconditional)", async () => {
+    await assertFails(getDoc(doc(authed("r2-assoc", ASSOC_MEMBER), "follow_ups", "r2fuLegacy")))
   })
 
   it("jobs carrying matterId: members with clearance only", async () => {

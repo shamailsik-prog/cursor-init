@@ -3491,6 +3491,7 @@ describe("Firestore repository adapters", () => {
         firmId: "firmA",
         jobType: "ocr",
         documentId: "doc_1",
+        matterId: "mat_1",
         classification: "internal",
         idempotencyKey: "idem-1",
       })

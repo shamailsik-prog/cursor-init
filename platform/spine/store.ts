@@ -52,6 +52,8 @@ export type Job = {
   firmId: string
   jobType: string
   documentId: string
+  /** The document's matter (null = loose vault). R-2: the jobs rule scopes reads by it. */
+  matterId: string | null
   classification: Classification
   idempotencyKey: string
 }
