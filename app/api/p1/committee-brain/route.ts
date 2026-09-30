@@ -65,7 +65,7 @@ function requireActor(actorId: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
   if (!actor) throw new PublicError("unknown actor")
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     throw new PublicError("actor role not allowed for committee brain operations")
   }
   return actor

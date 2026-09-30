@@ -60,7 +60,7 @@ function requireActor(actorId: string, firmId?: string) {
   const actor = store.users.get(actorId)
   if (!actor) throw new PublicError("unknown actor")
   if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     throw new PublicError("actor role not allowed for document ingest")
   }
   return actor
@@ -73,12 +73,14 @@ function canViewDocument(
 ): boolean {
   const user = store.users.get(userId)
   if (!user) return false
+  // L17.6 #41: accounts reads the intimation register only — no matter documents.
+  if (user.role === "accounts") return false
   if (user.firmId !== doc.firmId) return false
   if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) {
     return store.members.has(store.memberKey(doc.matterId, userId))
   }
-  return user.role !== "client" && user.role !== "intern"
+  return user.role !== "client" && user.role !== "intern" && user.role !== "accounts"
 }
 
 export async function GET(request: Request) {

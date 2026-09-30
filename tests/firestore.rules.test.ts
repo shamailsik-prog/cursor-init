@@ -863,3 +863,72 @@ describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 
     await assertFails(getDoc(doc(authed("r2-clerk", CLERK_MEMBER), "jobs", "r2jobPriv")))
   })
 })
+
+describe("L17.6 #41 — accounts reads the intimation register only", () => {
+  const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "accM"), { firmId: "firmA", title: "Acc", classification: "internal" })
+      for (const uid of ["acc1", "acc-assoc"]) {
+        await setDoc(doc(db, "matter_members", `accM_${uid}`), { firmId: "firmA", matterId: "accM", userId: uid })
+      }
+      const base = { firmId: "firmA", classification: "internal" }
+      await setDoc(doc(db, "documents", "accDoc"), { ...base, matterId: "accM", storagePath: "r2://a", contentHash: "a", isImmutable: false })
+      await setDoc(doc(db, "documents", "accLoose"), { ...base, matterId: null, classification: "confidential" })
+      await setDoc(doc(db, "document_versions", "accDv"), { ...base, matterId: "accM", version: 1 })
+      await setDoc(doc(db, "drafts", "accDr"), { ...base, matterId: "accM" })
+      await setDoc(doc(db, "draft_versions", "accDrv"), { ...base, matterId: "accM", version: 1 })
+      await setDoc(doc(db, "evidence_items", "accEv"), { ...base, matterId: "accM" })
+      await setDoc(doc(db, "custody_events", "accCe"), { firmId: "firmA", matterId: "accM" })
+      await setDoc(doc(db, "propositions", "accPr"), { firmId: "firmA", matterId: "accM" })
+      await setDoc(doc(db, "users", "acc1"), { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted", active: true })
+      await setDoc(doc(db, "users", "acc-other"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "clients", "accC"), { firmId: "firmA", name: "Client" })
+      await setDoc(doc(db, "entities", "accE"), { firmId: "firmA", canonicalName: "E" })
+      await setDoc(doc(db, "entity_aliases", "accA"), { firmId: "firmA", alias: "E" })
+      await setDoc(doc(db, "merge_events", "accMe"), { firmId: "firmA" })
+      await setDoc(doc(db, "change_proposals", "accCp"), { firmId: "firmA", status: "pending" })
+      await setDoc(doc(db, "master_versions", "accMv"), { firmId: "firmA" })
+      await setDoc(doc(db, "follow_ups", "accFu"), { firmId: "firmA" })
+      await setDoc(doc(db, "follow_ups", "accFuM"), { firmId: "firmA", matterId: "accM" })
+      await setDoc(doc(db, "intimation_register", "accIr"), { firmId: "firmA", matterId: "accM", status: "asked" })
+    })
+  })
+
+  it.each([
+    ["matters", "accM"],
+    ["matter_members", "accM_acc-assoc"],
+    ["documents", "accDoc"],
+    ["documents", "accLoose"],
+    ["document_versions", "accDv"],
+    ["drafts", "accDr"],
+    ["draft_versions", "accDrv"],
+    ["evidence_items", "accEv"],
+    ["custody_events", "accCe"],
+    ["propositions", "accPr"],
+    ["users", "acc-other"],
+    ["clients", "accC"],
+    ["entities", "accE"],
+    ["entity_aliases", "accA"],
+    ["merge_events", "accMe"],
+    ["change_proposals", "accCp"],
+    ["master_versions", "accMv"],
+    ["follow_ups", "accFu"],
+    ["follow_ups", "accFuM"],
+  ])("accounts (even as a matter member) cannot read %s/%s", async (coll, id) => {
+    await assertFails(getDoc(doc(authed("acc1", ACCOUNTS), coll, id)))
+  })
+
+  it("accounts reads the intimation register and its own user record", async () => {
+    await assertSucceeds(getDoc(doc(authed("acc1", ACCOUNTS), "intimation_register", "accIr")))
+    await assertSucceeds(getDoc(doc(authed("acc1", ACCOUNTS), "users", "acc1")))
+  })
+
+  it("the same rows stay readable to a member associate (control)", async () => {
+    await assertSucceeds(getDoc(doc(authed("acc-assoc", ASSOC), "documents", "accDoc")))
+    await assertSucceeds(getDoc(doc(authed("acc-assoc", ASSOC), "matters", "accM")))
+  })
+})

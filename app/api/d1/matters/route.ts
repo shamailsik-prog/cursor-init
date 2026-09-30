@@ -75,7 +75,7 @@ function ensureActor(actorId: string, firmId?: string) {
   const actor = store.users.get(actorId)
   if (!actor) throw new PublicError("unknown actor")
   if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     throw new PublicError("actor role not allowed for matter operations")
   }
   return actor

@@ -57,7 +57,7 @@ function requireActor(actorId: string, firmId?: string) {
   const actor = store.users.get(actorId)
   if (!actor) throw new PublicError("unknown actor")
   if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     throw new PublicError("actor role not allowed for client registry operations")
   }
   return actor
@@ -82,7 +82,7 @@ async function handleGet(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
-  if (user.role === "client" || user.role === "intern") {
+  if (user.role === "client" || user.role === "intern" || user.role === "accounts") {
     return NextResponse.json({ error: "user role not allowed for client registry reads" }, { status: 403 })
   }
 

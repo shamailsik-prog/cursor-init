@@ -22,10 +22,12 @@ function isUserVisibleForDocument(
   user: User,
   doc: DocumentRecord
 ): boolean {
+  // L17.6 #41: accounts reads the intimation register only — no matter documents.
+  if (user.role === "accounts") return false
   if (doc.firmId !== user.firmId) return false
   if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, user.id))
-  return user.role !== "client" && user.role !== "intern"
+  return user.role !== "client" && user.role !== "intern" && user.role !== "accounts"
 }
 
 export function ensureWorkflowRow(
@@ -53,7 +55,7 @@ function requireActorAndDocument(
 ): { actor: User; doc: DocumentRecord; row: DocumentWorkflow } {
   const actor = store.users.get(actorId)
   if (!actor) throw new PublicError("unknown actor")
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     throw new PublicError("actor role not allowed for workflow actions")
   }
   const doc = store.documents.get(documentId)
@@ -122,7 +124,7 @@ export function assignReviewer(
   const reviewer = store.users.get(input.reviewerId)
   if (!reviewer) throw new PublicError("unknown reviewer")
   if (reviewer.firmId !== doc.firmId) throw new PublicError("cross-firm reviewer denied")
-  if (reviewer.role === "client" || reviewer.role === "intern") {
+  if (reviewer.role === "client" || reviewer.role === "intern" || reviewer.role === "accounts") {
     throw new PublicError("reviewer role not allowed")
   }
   if (rankOf(reviewer.clearanceLevel) < rankOfStoredOrMax(doc.classification)) {

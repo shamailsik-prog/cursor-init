@@ -7,6 +7,12 @@ export type PermissionDecision = {
   reason: string
 }
 
+/** The only actions the accounts role may take (L17.6: getIntimationRegister, recordAccountsEntry). */
+export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set([
+  "intimation_register",
+  "record_accounts_entry",
+])
+
 export function checkPermission(
   store: SpineStore,
   userId: string,
@@ -16,6 +22,19 @@ export function checkPermission(
 ): PermissionDecision {
   const user = store.users.get(userId)
   if (!user) return { allow: false, reason: "no-user" }
+
+  // L17.6 #41: "The accounts role is defined in L4.7 with read access to the intimation
+  // register only — no matter documents." Membership does not widen it.
+  if (user.role === "accounts") {
+    if (!ACCOUNTS_REGISTER_ACTIONS.has(action)) {
+      return { allow: false, reason: "accounts-register-only" }
+    }
+    if (matterId) {
+      const matter = store.matters.get(matterId)
+      if (!matter || matter.firmId !== user.firmId) return { allow: false, reason: "cross-firm" }
+    }
+    return { allow: true, reason: "accounts-register" }
+  }
 
   if (user.role === "intern" && (action === "research" || action === "draft")) {
     return { allow: false, reason: "intern-channel-denied" }

@@ -79,10 +79,12 @@ function canViewWorkflowDocument(
 ): boolean {
   const user = store.users.get(userId)
   if (!user) return false
+  // L17.6 #41: accounts reads the intimation register only — no matter documents.
+  if (user.role === "accounts") return false
   if (user.firmId !== doc.firmId) return false
   if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, userId))
-  return user.role !== "client" && user.role !== "intern"
+  return user.role !== "client" && user.role !== "intern" && user.role !== "accounts"
 }
 
 async function persistWorkflowEventsSince(
