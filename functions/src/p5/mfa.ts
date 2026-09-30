@@ -1,10 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { onCall, type CallableRequest } from "firebase-functions/v2/https"
+import type { UpdateMultiFactorInfoRequest } from "firebase-admin/auth"
 import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { adminAuth, adminDb } from "../admin"
 import { REGION } from "../health"
 import { HttpError } from "../http/errors"
 import { callerFromCallable, hasSecondFactor, type Role } from "./auth"
+import { isKnownClassification, rankOf } from "./classification"
 import {
   CallAudit,
   audited,
@@ -129,20 +131,24 @@ export async function enforceMfaForRoleHandler(
 
 /**
  * generateRecoveryCodes({ firmId }) → { codes }: 10 new codes for the caller,
- * returned only here. Replaces (invalidates) any earlier set. MFA-exempt so a
- * user of an enforced role can get codes while enrolling; but once the user
- * has an enrolled factor, the session must carry a second factor
- * (403 mfa_required), so a stolen password cannot rotate the codes.
+ * returned only here. Replaces (invalidates) any earlier set. Not MFA-exempt,
+ * and it requires an enrolled factor (403 factor_required) and a session
+ * signed in with a second factor (403 mfa_required), so a password alone can
+ * neither plant nor rotate codes. The client flow is enrol, then generate:
+ * the enrolment-finalize token already carries the second factor. The
+ * enrolled factor uids are stored with the hashes, and disableMfa only honours
+ * the codes while one of them is still enrolled.
  */
 export async function generateRecoveryCodesHandler(request: CallableRequest<unknown>): Promise<{ codes: string[] }> {
   const data = dataOf(request)
   const audit = new CallAudit("identity.generateRecoveryCodes", request, "users")
   return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string, { mfaExempt: true })
+    const caller = await callerFromCallable(request.auth, data.firmId as string)
     audit.firmId = caller.firmId
     audit.target = `users/${caller.uid}`
-    const enrolled = (await adminAuth().getUser(caller.uid)).multiFactor?.enrolledFactors ?? []
-    if (enrolled.length > 0 && !hasSecondFactor(request.auth!.token)) throw new HttpError(403, "mfa_required")
+    const factorUids = await enrolledFactorUids(caller.uid)
+    if (factorUids.length === 0) throw new HttpError(403, "factor_required")
+    if (!hasSecondFactor(request.auth!.token)) throw new HttpError(403, "mfa_required")
 
     const salt = randomBytes(SALT_BYTES)
     const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode)
@@ -152,6 +158,7 @@ export async function generateRecoveryCodesHandler(request: CallableRequest<unkn
       tx.set(recoveryRef(caller.uid), {
         recoveryCodeHashes: hashes,
         recoveryCodeSalt: salt.toString("base64"),
+        factorUids,
         generatedAt: FieldValue.serverTimestamp(),
       })
     })
@@ -198,44 +205,92 @@ export async function approveMfaDisableHandler(
   })
 }
 
-/** Number of second factors enrolled on the Auth user; an unknown user has none. */
-async function enrolledFactorCount(uid: string): Promise<number> {
+/** The uids of the Auth user's enrolled second factors; an unknown user has none. */
+async function enrolledFactorUids(uid: string): Promise<string[]> {
   try {
-    return ((await adminAuth().getUser(uid)).multiFactor?.enrolledFactors ?? []).length
+    return ((await adminAuth().getUser(uid)).multiFactor?.enrolledFactors ?? []).map((f) => f.uid)
   } catch (err) {
-    if (errorCode(err) === "auth/user-not-found") return 0
+    if (errorCode(err) === "auth/user-not-found") return []
     throw err
   }
 }
 
+const MAX_FAILED_CODE_ATTEMPTS = 5
+
 /**
- * disableMfa({ firmId, uid, recoveryCode, approvalId }) → { uid, mfaEnabled: false }.
- * Callable by the subject (MFA-exempt: a user who lost the device signs in with
- * the first factor only) or by a partner (403 partner_only otherwise).
+ * Removes exactly `factorUids` from the user's enrolled factors, keeping any
+ * other factor (e.g. one enrolled after the commit). Idempotent. Returns
+ * whether factors remain.
+ */
+async function removeFactors(uid: string, factorUids: readonly string[]): Promise<boolean> {
+  const current = (await adminAuth().getUser(uid)).multiFactor?.enrolledFactors ?? []
+  const keep = current.filter((f) => !factorUids.includes(f.uid))
+  if (keep.length !== current.length) {
+    await adminAuth().updateUser(uid, {
+      multiFactor: {
+        enrolledFactors:
+          keep.length === 0
+            ? null
+            : keep.map((f) => {
+                const phoneNumber = (f as { phoneNumber?: unknown }).phoneNumber
+                return {
+                  uid: f.uid,
+                  factorId: f.factorId,
+                  ...(typeof phoneNumber === "string" ? { phoneNumber } : {}),
+                  ...(f.displayName ? { displayName: f.displayName } : {}),
+                  ...(f.enrollmentTime ? { enrollmentTime: f.enrollmentTime } : {}),
+                }
+              }) as UpdateMultiFactorInfoRequest[],
+      },
+    })
+  }
+  return keep.length > 0
+}
+
+/**
+ * disableMfa({ firmId, uid, recoveryCode, approvalId }) → { uid, mfaEnabled }.
+ * Callable by the subject or by a partner (403 partner_only otherwise). Only
+ * the subject is MFA-exempt (a user who lost the device signs in with the
+ * first factor only); a partner acting for someone else is subject to the
+ * firm's MFA policy like any other call.
  *
- * One transaction checks the approval (exists, same firm and subject,
- * unexpired, approver ≠ subject and ≠ caller, approver still an active partner
- * of the firm; else 403 second_partner_required). An unused approval then
- * needs the recovery code (no match → 403 invalid_code, already used → 409
- * code_used); on success the approval is marked used and every other code is
- * invalidated (only the consumed code's hash is kept, as used), so a new set
- * must be generated after re-enrolling. Failed checks consume nothing.
+ * One transaction checks the approval: it exists, is in the same firm and for
+ * the same subject, and is unexpired; the approver is neither the subject nor
+ * the caller, and is still an active partner of the firm cleared at least as
+ * high as the subject. Otherwise 403 second_partner_required. After
+ * MAX_FAILED_CODE_ATTEMPTS failed codes the approval is void (403
+ * approval_voided).
  *
- * After commit the Auth second factors are removed, the approval is marked
- * `completed`, `users/{uid}.mfaEnabled` is set false and refresh tokens are
- * revoked. If that fails, an extra `mfa_disable_incomplete` deny row is
- * written (the failure itself is logged by `audited`) and the call is
- * resumable: the same caller may retry with the same, already used approval
- * and no code while it is unexpired, not completed, and factors remain
- * enrolled (audited as allow `resume`). Any other reuse → second_partner_required.
+ * An unused approval then needs a recovery code:
+ * - no match, or none of the factors the codes were generated for is still
+ *   enrolled → 403 invalid_code;
+ * - already used → 409 code_used.
+ * Each failure increments `failedAttempts` on the approval in a separate write
+ * (the failed transaction is rolled back) and consumes nothing else.
+ *
+ * On success the approval is marked used and records the factor uids to
+ * remove (those enrolled now). Every other code is invalidated: only the
+ * consumed code's hash is kept, as used.
+ *
+ * After commit these steps run, each idempotent:
+ * 1. remove exactly the recorded factors;
+ * 2. mark the approval `factorsRemovedAt`;
+ * 3. set `users/{uid}.mfaEnabled`;
+ * 4. revoke refresh tokens;
+ * 5. only then mark the approval `completed`.
+ * If any step fails, an extra `mfa_disable_incomplete` deny row is written
+ * (the failure itself is logged by `audited`). The same caller may then retry
+ * with the same approval and no code while it is used by them, not completed
+ * and unexpired (audited as allow `resume`), which re-runs the steps.
  */
 export async function disableMfaHandler(
   request: CallableRequest<unknown>
-): Promise<{ uid: string; mfaEnabled: false }> {
+): Promise<{ uid: string; mfaEnabled: boolean }> {
   const data = dataOf(request)
   const audit = new CallAudit("identity.disableMfa", request, "users")
   return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string, { mfaExempt: true })
+    const isSubject = request.auth !== undefined && data.uid === request.auth.uid
+    const caller = await callerFromCallable(request.auth, data.firmId as string, { mfaExempt: isSubject })
     audit.firmId = caller.firmId
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
@@ -243,62 +298,98 @@ export async function disableMfaHandler(
     const approvalId = data.approvalId
     if (!isSafeDocId(approvalId)) throw new HttpError(403, "second_partner_required")
     const recoveryCode = typeof data.recoveryCode === "string" ? data.recoveryCode : ""
-    const factorsEnrolled = (await enrolledFactorCount(uid)) > 0
+    const enrolledNow = await enrolledFactorUids(uid)
 
     const approvalRef = approvalsRef().doc(approvalId)
-    await adminDb().runTransaction(async (tx) => {
-      await readTargetDoc(tx, caller, uid)
-      const approval = (await tx.get(approvalRef)).data()
-      const approverUid: unknown = approval?.approverUid
-      const valid =
-        approval !== undefined &&
-        approval.firmId === caller.firmId &&
-        approval.subjectUid === uid &&
-        approval.expiresAt instanceof Timestamp &&
-        approval.expiresAt.toMillis() > Date.now() &&
-        isSafeDocId(approverUid) &&
-        approverUid !== uid &&
-        approverUid !== caller.uid
-      if (!valid) throw new HttpError(403, "second_partner_required")
-      const approver = (await tx.get(usersRef().doc(approverUid as string))).data()
-      if (approver?.firmId !== caller.firmId || approver.role !== "partner" || approver.active !== true) {
-        throw new HttpError(403, "second_partner_required")
-      }
+    let factorUids: string[]
+    try {
+      factorUids = await adminDb().runTransaction(async (tx) => {
+        const subject = await readTargetDoc(tx, caller, uid)
+        const approval = (await tx.get(approvalRef)).data()
+        const approverUid: unknown = approval?.approverUid
+        const valid =
+          approval !== undefined &&
+          approval.firmId === caller.firmId &&
+          approval.subjectUid === uid &&
+          approval.expiresAt instanceof Timestamp &&
+          approval.expiresAt.toMillis() > Date.now() &&
+          isSafeDocId(approverUid) &&
+          approverUid !== uid &&
+          approverUid !== caller.uid
+        if (!valid) throw new HttpError(403, "second_partner_required")
+        const approver = (await tx.get(usersRef().doc(approverUid as string))).data()
+        if (
+          approver?.firmId !== caller.firmId ||
+          approver.role !== "partner" ||
+          approver.active !== true ||
+          !isKnownClassification(approver.clearanceLevel) ||
+          rankOf(approver.clearanceLevel) < rankOf(isKnownClassification(subject.clearanceLevel) ? subject.clearanceLevel : "privileged-restricted")
+        ) {
+          throw new HttpError(403, "second_partner_required")
+        }
 
-      if (approval.used !== false) {
-        const resumable =
-          approval.used === true && approval.usedBy === caller.uid && approval.completed !== true && factorsEnrolled
-        if (!resumable) throw new HttpError(403, "second_partner_required")
-        await audit.stage(tx, "allow", "resume")
-        return
-      }
+        if (approval.used !== false) {
+          const resumable = approval.used === true && approval.usedBy === caller.uid && approval.completed !== true
+          if (!resumable) throw new HttpError(403, "second_partner_required")
+          await audit.stage(tx, "allow", "resume")
+          return Array.isArray(approval.factorUids) ? (approval.factorUids as unknown[]).filter(isString) : []
+        }
+        if (typeof approval.failedAttempts === "number" && approval.failedAttempts >= MAX_FAILED_CODE_ATTEMPTS) {
+          throw new HttpError(403, "approval_voided")
+        }
 
-      const recovery = (await tx.get(recoveryRef(uid))).data() ?? {}
-      const index = matchCode(recovery, recoveryCode)
-      if (index === -1) throw new HttpError(403, "invalid_code")
-      const hashes = recovery.recoveryCodeHashes as CodeHash[]
-      if (hashes[index].used !== false) throw new HttpError(409, "code_used")
+        const recovery = (await tx.get(recoveryRef(uid))).data() ?? {}
+        const index = matchCode(recovery, recoveryCode)
+        if (index === -1) throw new CodeRejected(403, "invalid_code")
+        const hashes = recovery.recoveryCodeHashes as CodeHash[]
+        if (hashes[index].used !== false) throw new CodeRejected(409, "code_used")
+        const boundTo: unknown = recovery.factorUids
+        if (!Array.isArray(boundTo) || !boundTo.some((f) => enrolledNow.includes(f as string))) {
+          throw new CodeRejected(403, "invalid_code")
+        }
 
-      await audit.stage(tx, "allow", "ok")
-      tx.update(recoveryRef(uid), {
-        recoveryCodeHashes: [{ ...hashes[index], used: true }],
-        invalidatedAt: FieldValue.serverTimestamp(),
+        await audit.stage(tx, "allow", "ok")
+        tx.update(recoveryRef(uid), {
+          recoveryCodeHashes: [{ ...hashes[index], used: true }],
+          invalidatedAt: FieldValue.serverTimestamp(),
+        })
+        tx.update(approvalRef, {
+          used: true,
+          usedBy: caller.uid,
+          usedAt: FieldValue.serverTimestamp(),
+          factorUids: enrolledNow,
+        })
+        return enrolledNow
       })
-      tx.update(approvalRef, { used: true, usedBy: caller.uid, usedAt: FieldValue.serverTimestamp() })
-    })
+    } catch (err) {
+      if (err instanceof CodeRejected) {
+        // Its own write: the failed transaction was rolled back.
+        await approvalRef.update({ failedAttempts: FieldValue.increment(1) }).catch(() => undefined)
+      }
+      throw err
+    }
     audit.committed()
 
+    let mfaEnabled: boolean
     try {
-      await adminAuth().updateUser(uid, { multiFactor: { enrolledFactors: null } })
-      await approvalRef.update({ completed: true })
-      await usersRef().doc(uid).update({ mfaEnabled: false, mfaDisabledAt: FieldValue.serverTimestamp() })
+      mfaEnabled = await removeFactors(uid, factorUids)
+      await approvalRef.update({ factorsRemovedAt: FieldValue.serverTimestamp() })
+      await usersRef().doc(uid).update({ mfaEnabled, mfaDisabledAt: FieldValue.serverTimestamp() })
       await adminAuth().revokeRefreshTokens(uid)
+      await approvalRef.update({ completed: true, completedAt: FieldValue.serverTimestamp() })
     } catch (err) {
       await audit.incident("mfa_disable_incomplete")
       throw err
     }
-    return { uid, mfaEnabled: false }
+    return { uid, mfaEnabled }
   })
+}
+
+/** A recovery-code rejection: counted against the approval. */
+class CodeRejected extends HttpError {}
+
+function isString(v: unknown): v is string {
+  return typeof v === "string"
 }
 
 /**
@@ -316,7 +407,7 @@ export async function syncMfaStatusHandler(
     const caller = await callerFromCallable(request.auth, data.firmId as string, { mfaExempt: true })
     audit.firmId = caller.firmId
     audit.target = `users/${caller.uid}`
-    const mfaEnabled = (await enrolledFactorCount(caller.uid)) > 0
+    const mfaEnabled = (await enrolledFactorUids(caller.uid)).length > 0
     await adminDb().runTransaction(async (tx) => {
       await audit.stage(tx, "allow", "ok")
       tx.update(usersRef().doc(caller.uid), { mfaEnabled })

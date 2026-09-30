@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
-import { Timestamp } from "firebase-admin/firestore"
+import { DocumentReference, Timestamp } from "firebase-admin/firestore"
 import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
 import { HttpError } from "../src/http/errors"
@@ -61,6 +61,8 @@ const claims = (firmId: string, role: string, clearanceLevel = "privileged-restr
 const firmRef = (firmId: string) => adminDb().collection("firms").doc(firmId)
 const userDoc = async (uid: string) => (await adminDb().collection("users").doc(uid).get()).data() ?? {}
 /** Server-only recovery material (no rules match: client access denied by default). */
+const enrolledUids = async (uid: string) =>
+  ((await adminAuth().getUser(uid)).multiFactor?.enrolledFactors ?? []).map((f) => f.uid)
 const recoveryDoc = async (uid: string) => (await adminDb().collection("mfa_recovery").doc(uid).get()).data()
 
 async function newFirm(enforced: string[] = []): Promise<string> {
@@ -189,9 +191,9 @@ describe.skipIf(!EMULATORS)("enforceMfaForRole", () => {
 describe.skipIf(!EMULATORS)("generateRecoveryCodes", () => {
   const ACTION = "identity.generateRecoveryCodes"
 
-  it("returns 10 distinct codes once; stores only salted HMAC-SHA-256 hashes; audit row has no codes", async () => {
+  it("returns 10 distinct codes once; stores only salted HMAC-SHA-256 hashes bound to the enrolled factors; audit row has no codes", async () => {
     const firmId = await newFirm([])
-    const { uid, token } = await mintIdToken(claims(firmId, "associate", "confidential"))
+    const { uid, token } = await mintMfaIdToken(claims(firmId, "associate", "confidential"))
     const { codes } = (await generateRecoveryCodesHandler(await req(token, { firmId }))) as { codes: string[] }
     expect(codes).toHaveLength(10)
     expect(new Set(codes).size).toBe(10)
@@ -209,6 +211,7 @@ describe.skipIf(!EMULATORS)("generateRecoveryCodes", () => {
       used: false,
     }))
     expect(doc.recoveryCodeHashes).toEqual(expected)
+    expect(doc.factorUids).toEqual(await enrolledUids(uid))
     const stored = JSON.stringify(doc)
     for (const c of codes) {
       expect(stored).not.toContain(c)
@@ -223,7 +226,7 @@ describe.skipIf(!EMULATORS)("generateRecoveryCodes", () => {
 
   it("regenerating invalidates the previous set (new salt, new hashes)", async () => {
     const firmId = await newFirm([])
-    const { uid, token } = await mintIdToken(claims(firmId, "clerk", "internal"))
+    const { uid, token } = await mintMfaIdToken(claims(firmId, "clerk", "internal"))
     const first = (await generateRecoveryCodesHandler(await req(token, { firmId }))) as { codes: string[] }
     const before = (await recoveryDoc(uid)) ?? {}
     const second = (await generateRecoveryCodesHandler(await req(token, { firmId }))) as { codes: string[] }
@@ -233,11 +236,31 @@ describe.skipIf(!EMULATORS)("generateRecoveryCodes", () => {
     expect(after.recoveryCodeHashes).toHaveLength(10)
   })
 
-  it("at enrolment (enforced role, no factor enrolled yet) the first factor is enough", async () => {
+  it("no factor enrolled yet → refused (enforced role: mfa_required; otherwise factor_required); nothing stored", async () => {
+    const enforcedFirm = await newFirm(["associate"])
+    const a = await mintIdToken(claims(enforcedFirm, "associate", "confidential"))
+    expectHttps(
+      await httpsErrorOf(generateRecoveryCodesHandler(await req(a.token, { firmId: enforcedFirm }))),
+      "permission-denied",
+      "mfa_required"
+    )
+    const firmId = await newFirm([])
+    const b = await mintIdToken(claims(firmId, "associate", "confidential"))
+    expectHttps(
+      await httpsErrorOf(generateRecoveryCodesHandler(await req(b.token, { firmId }))),
+      "permission-denied",
+      "factor_required"
+    )
+    expect(await recoveryDoc(a.uid)).toBeUndefined()
+    expect(await recoveryDoc(b.uid)).toBeUndefined()
+  })
+
+  it("P1 regression: a password-only session cannot plant codes before enrolment", async () => {
     const firmId = await newFirm(["associate"])
-    const { token } = await mintIdToken(claims(firmId, "associate", "confidential"))
-    const { codes } = (await generateRecoveryCodesHandler(await req(token, { firmId }))) as { codes: string[] }
-    expect(codes).toHaveLength(10)
+    const victim = await mintIdToken(claims(firmId, "associate", "confidential"), { emailVerified: true })
+    // Attacker with the password only, before the victim enrols.
+    await expect(generateRecoveryCodesHandler(await req(victim.token, { firmId }))).rejects.toBeInstanceOf(HttpsError)
+    expect(await recoveryDoc(victim.uid)).toBeUndefined()
   })
 
   it("once a factor is enrolled, regenerating needs a second-factor session (even if the role is not enforced)", async () => {
@@ -506,7 +529,7 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
     expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual(["allow:ok", "allow:resume", "deny:mfa_disable_incomplete"])
   })
 
-  it("no resume once the factors are gone, once completed (even after re-enrolling), or after expiry", async () => {
+  it("no resume once completed (even after re-enrolling) or after expiry", async () => {
     const { firmId, subject, codes, approve } = await setup()
     const approvalId = await approve()
     await disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId }))
@@ -516,7 +539,7 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
     const again = await callableAuthFor(subject.email)
     const retry = async () =>
       httpsErrorOf(disableMfaHandler({ auth: again, data: { firmId, uid: subject.uid, approvalId } } as never))
-    expectHttps(await retry(), "permission-denied", "second_partner_required") // factors gone
+    expectHttps(await retry(), "permission-denied", "second_partner_required") // completed, factors gone
 
     await adminAuth().updateUser(subject.uid, {
       multiFactor: { enrolledFactors: [{ uid: "f2", phoneNumber: "+15555550101", factorId: "phone" }] },
@@ -526,6 +549,117 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
     await approvals.update({ completed: false, expiresAt: Timestamp.fromMillis(Date.now() - 1000) })
     expectHttps(await retry(), "permission-denied", "second_partner_required") // expired
     expect((await adminAuth().getUser(subject.uid)).multiFactor?.enrolledFactors).toHaveLength(1)
+  })
+
+  it("P1 defence in depth: codes bound to factors that are no longer enrolled → invalid_code", async () => {
+    const { firmId, subject, codes, approve } = await setup()
+    // The factor set the codes were generated for is replaced by another one.
+    await adminAuth().updateUser(subject.uid, {
+      multiFactor: { enrolledFactors: [{ uid: "other-factor", phoneNumber: "+15555550199", factorId: "phone" }] },
+    })
+    const approvalId = await approve()
+    const err = await httpsErrorOf(
+      disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId }))
+    )
+    expectHttps(err, "permission-denied", "invalid_code")
+    expect(await enrolledUids(subject.uid)).toEqual(["other-factor"])
+  })
+
+  it.each(["updateUser", "approvalMark", "usersDoc", "revoke"] as const)(
+    "P2 regression: a failure at %s after commit is resumable by the same caller and completes the job",
+    async (step) => {
+      const { firmId, subject, codes, approve } = await setup()
+      const approvalId = await approve()
+      const factorAtCommit = await enrolledUids(subject.uid)
+      const restore = injectFailure(step)
+      const first = await httpsErrorOf(
+        disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId }))
+      )
+      restore()
+      expectHttps(first, "internal", "internal")
+      const approval = adminDb().collection("mfa_disable_approvals").doc(approvalId)
+      expect((await approval.get()).data()).toMatchObject({ used: true, factorUids: factorAtCommit })
+      expect((await approval.get()).data()?.completed).not.toBe(true)
+
+      const validBefore = (await adminAuth().getUser(subject.uid)).tokensValidAfterTime
+      await sleep(1100)
+      await expect(
+        disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, approvalId }))
+      ).resolves.toEqual({ uid: subject.uid, mfaEnabled: false })
+      const user = await adminAuth().getUser(subject.uid)
+      expect(user.multiFactor?.enrolledFactors ?? []).toHaveLength(0)
+      expect(user.tokensValidAfterTime).not.toBe(validBefore)
+      expect((await userDoc(subject.uid)).mfaEnabled).toBe(false)
+      expect((await approval.get()).data()?.completed).toBe(true)
+      const rows = (await auditRows(subject.uid, ACTION)).map((r) => `${r.decision}:${r.reason}`).sort()
+      expect(rows).toEqual(["allow:ok", "allow:resume", "deny:mfa_disable_incomplete"])
+    }
+  )
+
+  it("a resume never removes a factor enrolled after the commit", async () => {
+    const { firmId, subject, codes, approve } = await setup()
+    const approvalId = await approve()
+    const restore = injectFailure("updateUser")
+    await httpsErrorOf(
+      disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId }))
+    )
+    restore()
+    const old = (await adminAuth().getUser(subject.uid)).multiFactor!.enrolledFactors[0]
+    await adminAuth().updateUser(subject.uid, {
+      multiFactor: {
+        enrolledFactors: [
+          { uid: old.uid, phoneNumber: (old as unknown as { phoneNumber: string }).phoneNumber, factorId: "phone" },
+          { uid: "new-factor", phoneNumber: "+15555550177", factorId: "phone" },
+        ],
+      },
+    })
+    await expect(
+      disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, approvalId }))
+    ).resolves.toEqual({ uid: subject.uid, mfaEnabled: true })
+    expect(await enrolledUids(subject.uid)).toEqual(["new-factor"])
+    expect((await userDoc(subject.uid)).mfaEnabled).toBe(true)
+  })
+
+  it("only the subject is MFA-exempt: a partner acting for someone else needs a second factor when partners are enforced", async () => {
+    const { firmId, subject, codes, approve } = await setup()
+    await firmRef(firmId).update({ mfaEnforcedRoles: ["associate", "partner"] })
+    const partnerC = await mintIdToken(claims(firmId, "partner"))
+    const approvalId = await approve(subject.uid, await mintMfaIdToken(claims(firmId, "partner")))
+    const err = await httpsErrorOf(
+      disableMfaHandler(await req(partnerC.token, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId }))
+    )
+    expectHttps(err, "permission-denied", "mfa_required")
+    // The subject (first factor only, enforced role) still can.
+    await expect(
+      disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId }))
+    ).resolves.toMatchObject({ mfaEnabled: false })
+  })
+
+  it("5 wrong codes void the approval (approval_voided), even for the right code afterwards", async () => {
+    const { firmId, subject, codes, approve } = await setup()
+    const approvalId = await approve()
+    const call = async (recoveryCode: string) =>
+      httpsErrorOf(disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode, approvalId })))
+    for (let i = 0; i < 5; i++) expectHttps(await call("0000-0000-0000-0000"), "permission-denied", "invalid_code")
+    expect((await adminDb().collection("mfa_disable_approvals").doc(approvalId).get()).data()?.failedAttempts).toBe(5)
+    expectHttps(await call(codes[0]), "permission-denied", "approval_voided")
+    expect(await enrolledUids(subject.uid)).toHaveLength(1)
+    // A fresh approval works.
+    await expect(
+      disableMfaHandler(
+        await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId: await approve() })
+      )
+    ).resolves.toMatchObject({ mfaEnabled: false })
+  })
+
+  it("an approver demoted below the subject's clearance after approving → second_partner_required", async () => {
+    const { firmId, subject, codes, partnerB, approve } = await setup()
+    const approvalId = await approve()
+    await adminDb().collection("users").doc(partnerB.uid).update({ clearanceLevel: "internal" })
+    const err = await httpsErrorOf(
+      disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId }))
+    )
+    expectHttps(err, "permission-denied", "second_partner_required")
   })
 
   it("caller neither the subject nor a partner → partner_only", async () => {
@@ -576,3 +710,31 @@ describe.skipIf(!EMULATORS)("syncMfaStatus", () => {
     expectHttps(err, "unauthenticated", "missing_token")
   })
 })
+
+/**
+ * Makes one post-commit step of disableMfa fail once. The Firestore steps are
+ * DocumentReference.update calls in order: approval mark, users doc, completed.
+ */
+function injectFailure(step: "updateUser" | "approvalMark" | "usersDoc" | "revoke"): () => void {
+  const boom = () => Promise.reject(Object.assign(new Error("injected"), { code: "injected" }))
+  if (step === "updateUser") {
+    const spy = vi.spyOn(adminAuth(), "updateUser").mockImplementationOnce(boom)
+    return () => spy.mockRestore()
+  }
+  if (step === "revoke") {
+    const spy = vi.spyOn(adminAuth(), "revokeRefreshTokens").mockImplementationOnce(boom)
+    return () => spy.mockRestore()
+  }
+  const target = step === "approvalMark" ? "mfa_disable_approvals" : "users"
+  const real = DocumentReference.prototype.update
+  let fired = false
+  const impl = function (this: DocumentReference, ...args: unknown[]) {
+    if (!fired && this.parent.id === target) {
+      fired = true
+      return boom()
+    }
+    return (real as (...a: unknown[]) => Promise<unknown>).apply(this, args)
+  }
+  const spy = vi.spyOn(DocumentReference.prototype, "update").mockImplementation(impl as never)
+  return () => spy.mockRestore()
+}

@@ -122,21 +122,23 @@ resumes idempotently and returns the same `firmId` (audited as
 - `enforceMfaForRole({ firmId, role, enforced })` (partner) edits
   `firms/{firmId}.mfaEnforcedRoles`. `requireAuth` and `callerFromCallable`
   refuse an enforced role whose token has no `firebase.sign_in_second_factor`
-  with 403 `mfa_required`. Only `disableMfa` and `generateRecoveryCodes` are
-  exempt, along with `syncMfaStatus`, so a user who lost the device can still
-  recover and a user who is enrolling can finish.
+  with 403 `mfa_required`. The only exemptions are `disableMfa` called by
+  the subject themself (a user who lost the device) and `syncMfaStatus`.
 - `generateRecoveryCodes({ firmId })` returns 10 codes once and replaces any
   earlier set. Only HMAC-SHA-256 hashes with a per-user salt are stored, in
   the server-only `mfa_recovery/{uid}` (no rules match, so clients are denied).
-  After a factor is enrolled, regenerating needs a second-factor session.
+  It needs an enrolled factor (`factor_required`) and a second-factor
+  session (`mfa_required`): enrol first, then generate. The codes are bound
+  to the factor uids enrolled at generation time.
 - `syncMfaStatus({ firmId })` sets `users/{uid}.mfaEnabled` from the Auth
   user's enrolled factors. The client calls it after enrolling.
 - Disabling needs two people: another partner calls
   `approveMfaDisable({ firmId, uid })`, which creates a one-hour, single-use
   `mfa_disable_approvals/{id}`. Then the subject, or a partner who is not the
   approver, calls `disableMfa({ firmId, uid, recoveryCode, approvalId })`.
-  This invalidates all remaining codes. If a step after commit fails, the
-  same caller can retry with the same approval and no code, while the
-  approval is unexpired and factors remain enrolled.
+  This invalidates all remaining codes. It removes only the factors recorded
+  on the approval at commit. If a step after commit fails, the same caller
+  can retry with the same approval and no code until it expires or
+  completes. Five wrong codes void an approval (`approval_voided`).
 - In the emulator tests, `mintMfaIdToken` (test/emu.ts) signs in through the
   Auth emulator's phone MFA flow to get a real second-factor token.
