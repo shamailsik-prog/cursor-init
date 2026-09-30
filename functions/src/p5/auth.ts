@@ -17,7 +17,7 @@ export type Caller = { uid: string; firmId: string; role: Role; clearanceLevel: 
 
 const ROLE_SET: ReadonlySet<string> = new Set<string>(ROLES)
 
-function isRole(value: unknown): value is Role {
+export function isRole(value: unknown): value is Role {
   return typeof value === "string" && ROLE_SET.has(value)
 }
 
@@ -60,16 +60,15 @@ export async function requireAuth(req: { headers: Record<string, string | undefi
 }
 
 /**
- * Callable (onCall) identity. The callable runtime verifies the token but does
- * not check revocation, so this re-checks the user record: revoked sessions
- * → 401 token_revoked, disabled users → 401 user_disabled. Callables must pass
- * an explicit firm (`request.data.firmId`): missing → 400 firm_required,
- * ≠ claims.firmId → 403 firm_mismatch.
+ * Re-checks a callable session against the user record. The callable runtime
+ * verifies the token but does not check revocation, so: no auth → 401
+ * missing_token, disabled user → 401 user_disabled, session older than
+ * tokensValidAfterTime → 401 token_revoked, unreadable user → 401 invalid_token.
  */
-export async function callerFromCallable(auth: CallableRequest["auth"], firmIdHeader: string): Promise<Caller> {
+async function verifyCallableSession(
+  auth: CallableRequest["auth"]
+): Promise<{ claims: Record<string, unknown>; customClaims: Record<string, unknown> }> {
   if (!auth) throw new HttpError(401, "missing_token")
-  if (typeof firmIdHeader !== "string" || firmIdHeader === "") throw new HttpError(400, "firm_required")
-
   const claims = auth.token as unknown as Record<string, unknown>
   const authTime = claims.auth_time
   if (typeof authTime !== "number") throw new HttpError(401, "invalid_token")
@@ -83,6 +82,29 @@ export async function callerFromCallable(auth: CallableRequest["auth"], firmIdHe
   if (user.disabled) throw new HttpError(401, "user_disabled")
   const validAfter = user.tokensValidAfterTime ? Date.parse(user.tokensValidAfterTime) : NaN
   if (!Number.isNaN(validAfter) && authTime * 1000 < validAfter) throw new HttpError(401, "token_revoked")
+  return { claims, customClaims: { ...(user.customClaims ?? {}) } }
+}
 
+/**
+ * Callable (onCall) identity: a revocation/disabled-checked session bound to
+ * an explicit firm (`request.data.firmId`): missing → 400 firm_required,
+ * ≠ claims.firmId → 403 firm_mismatch.
+ */
+export async function callerFromCallable(auth: CallableRequest["auth"], firmIdHeader: string): Promise<Caller> {
+  if (!auth) throw new HttpError(401, "missing_token")
+  if (typeof firmIdHeader !== "string" || firmIdHeader === "") throw new HttpError(400, "firm_required")
+  const { claims } = await verifyCallableSession(auth)
   return callerFromClaims(auth.uid, claims, firmIdHeader)
+}
+
+/**
+ * Callable identity for callers that have no firm yet (firm onboarding):
+ * the same revocation/disabled checks, returning the uid and the user's
+ * *current* custom claims from the user record (not the possibly stale token).
+ */
+export async function callerWithoutFirm(
+  auth: CallableRequest["auth"]
+): Promise<{ uid: string; claims: Record<string, unknown> }> {
+  const { customClaims } = await verifyCallableSession(auth)
+  return { uid: auth!.uid, claims: customClaims }
 }

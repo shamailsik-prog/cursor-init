@@ -4,3 +4,4 @@ import { REGION } from "./health"
 setGlobalOptions({ region: REGION })
 
 export { health } from "./health"
+export { onboardFirm, createFirmUser, setUserClaims, deactivateUser } from "./p5/identity"

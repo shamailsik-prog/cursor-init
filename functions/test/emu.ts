@@ -30,3 +30,9 @@ export async function mintIdToken(claims: Record<string, unknown> | null): Promi
   const body = (await res.json()) as { idToken: string }
   return { uid: user.uid, token: body.idToken }
 }
+
+/** What the onCall runtime hands a handler: a verified (not revocation-checked) token. */
+export async function callableAuth(token: string) {
+  const decoded = await adminAuth().verifyIdToken(token)
+  return { uid: decoded.uid, token: decoded, rawToken: token } as never
+}

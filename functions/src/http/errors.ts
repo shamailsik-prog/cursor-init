@@ -1,3 +1,5 @@
+import { HttpsError, type FunctionsErrorCode } from "firebase-functions/v2/https"
+
 /** An error that maps directly onto an HTTP response: `status` + machine-readable `code`. */
 export class HttpError extends Error {
   readonly status: number
@@ -9,4 +11,30 @@ export class HttpError extends Error {
     this.status = status
     this.code = code
   }
+}
+
+const CALLABLE_CODES: Record<number, FunctionsErrorCode> = {
+  400: "invalid-argument",
+  401: "unauthenticated",
+  403: "permission-denied",
+  404: "not-found",
+  503: "unavailable",
+}
+
+/**
+ * Maps an HttpError onto the callable protocol's HttpsError, carrying the
+ * machine-readable code in `details.code`. 409 maps to `already-exists` for
+ * code "already_exists" and to `failed-precondition` otherwise. Anything
+ * that is not an HttpError becomes a bare `internal` (no message leak).
+ */
+export function toHttpsError(err: unknown): HttpsError {
+  if (err instanceof HttpsError) return err
+  if (!(err instanceof HttpError)) return new HttpsError("internal", "internal", { code: "internal" })
+  const code =
+    err.status === 409
+      ? err.code === "already_exists"
+        ? "already-exists"
+        : "failed-precondition"
+      : (CALLABLE_CODES[err.status] ?? "internal")
+  return new HttpsError(code, err.code, { code: err.code })
 }
