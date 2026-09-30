@@ -19,7 +19,7 @@ export class PersistenceConfigurationError extends Error {
 }
 
 function isTestRunner(): boolean {
-  return process.env.VITEST !== undefined || process.env.NODE_ENV === "test"
+  return process.env.VITEST === "true" && process.env.NODE_ENV !== "production"
 }
 
 export async function getRuntimeRepositories(
@@ -28,6 +28,16 @@ export async function getRuntimeRepositories(
   const raw = process.env.SIKANDER_PERSISTENCE_MODE
   const mode = raw?.trim().toLowerCase() ?? ""
   if (mode === "memory") {
+    if (
+      process.env.NODE_ENV === "production" &&
+      process.env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION !== "true"
+    ) {
+      throw new PersistenceConfigurationError(
+        "SIKANDER_PERSISTENCE_MODE=memory is non-durable (data is lost on restart) and is refused " +
+          "when NODE_ENV=production. Set SIKANDER_ALLOW_MEMORY_IN_PRODUCTION=true to opt in " +
+          "deliberately."
+      )
+    }
     return createMemoryRepositories(store)
   }
   if (mode === "") {

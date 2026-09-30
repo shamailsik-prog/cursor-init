@@ -11,6 +11,7 @@ const saved = {
   mode: env.SIKANDER_PERSISTENCE_MODE,
   nodeEnv: env.NODE_ENV,
   vitest: env.VITEST,
+  allowMemoryInProduction: env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION,
 }
 
 function restore(key: string, value: string | undefined) {
@@ -26,6 +27,7 @@ afterEach(() => {
   restore("SIKANDER_PERSISTENCE_MODE", saved.mode)
   restore("NODE_ENV", saved.nodeEnv)
   restore("VITEST", saved.vitest)
+  restore("SIKANDER_ALLOW_MEMORY_IN_PRODUCTION", saved.allowMemoryInProduction)
   setFirestorePersistenceForTests(null)
 })
 
@@ -87,5 +89,39 @@ describe("runtime repositories fail closed", () => {
     await expect(getRuntimeRepositories(newStore())).rejects.toThrow(
       /SIKANDER_PERSISTENCE_MODE=memory/
     )
+  })
+
+  it.each([
+    ["VITEST unset under NODE_ENV=test", undefined, "test"],
+    ["VITEST=false", "false", "test"],
+    ["VITEST empty", "", "test"],
+    ["VITEST=true but NODE_ENV=production", "true", "production"],
+  ])("fails closed with an unset mode when %s", async (_label, vitest, nodeEnv) => {
+    delete env.SIKANDER_PERSISTENCE_MODE
+    restore("VITEST", vitest)
+    env.NODE_ENV = nodeEnv
+    await expect(getRuntimeRepositories(newStore())).rejects.toBeInstanceOf(
+      PersistenceConfigurationError
+    )
+  })
+
+  it("refuses explicit memory mode in production without the opt-in", async () => {
+    env.SIKANDER_PERSISTENCE_MODE = "memory"
+    env.NODE_ENV = "production"
+    delete env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION
+    await expect(getRuntimeRepositories(newStore())).rejects.toThrow(
+      /SIKANDER_ALLOW_MEMORY_IN_PRODUCTION=true/
+    )
+    env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION = "1"
+    await expect(getRuntimeRepositories(newStore())).rejects.toBeInstanceOf(
+      PersistenceConfigurationError
+    )
+  })
+
+  it("allows explicit memory mode in production only with SIKANDER_ALLOW_MEMORY_IN_PRODUCTION=true", async () => {
+    env.SIKANDER_PERSISTENCE_MODE = "memory"
+    env.NODE_ENV = "production"
+    env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION = "true"
+    await expect(getRuntimeRepositories(newStore())).resolves.toBeDefined()
   })
 })
