@@ -1,16 +1,14 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
-import { onCall, type CallableRequest } from "firebase-functions/v2/https"
+import { onCall } from "firebase-functions/v2/https"
 import type { UpdateMultiFactorInfoRequest } from "firebase-admin/auth"
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import { adminAuth, adminDb } from "../admin"
 import { REGION } from "../health"
 import { HttpError } from "../http/errors"
-import { callerFromCallable, hasSecondFactor, type Role } from "./auth"
+import type { Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 import {
-  CallAudit,
-  audited,
-  dataOf,
+  callableHandler,
   errorCode,
   isSafeDocId,
   parseRole,
@@ -18,6 +16,7 @@ import {
   readTargetDoc,
   requirePartner,
   usersRef,
+  type FirmOperation,
 } from "./common"
 
 /**
@@ -101,13 +100,11 @@ function matchCode(doc: DocumentData, code: string): number {
  * Adds (arrayUnion) or removes (arrayRemove) `role` in `firms/{firmId}.mfaEnforcedRoles`.
  * Lifting enforcement for `partner` is allowed; like every call it is audited.
  */
-export async function enforceMfaForRoleHandler(
-  request: CallableRequest<unknown>
-): Promise<{ firmId: string; role: Role; enforced: boolean }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.enforceMfaForRole", request, "firms")
-  return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string)
+export const enforceMfaForRoleOp: FirmOperation<{ firmId: string; role: Role; enforced: boolean }> = {
+  auth: "firm",
+  action: "identity.enforceMfaForRole",
+  target: "firms",
+  run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     requirePartner(caller)
@@ -126,8 +123,9 @@ export async function enforceMfaForRoleHandler(
     })
     audit.committed()
     return { firmId: caller.firmId, role, enforced }
-  })
+  },
 }
+export const enforceMfaForRoleHandler = callableHandler(enforceMfaForRoleOp)
 
 /**
  * generateRecoveryCodes({ firmId }) → { codes }: 10 new codes for the caller,
@@ -139,16 +137,16 @@ export async function enforceMfaForRoleHandler(
  * enrolled factor uids are stored with the hashes, and disableMfa only honours
  * the codes while one of them is still enrolled.
  */
-export async function generateRecoveryCodesHandler(request: CallableRequest<unknown>): Promise<{ codes: string[] }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.generateRecoveryCodes", request, "users")
-  return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string)
+export const generateRecoveryCodesOp: FirmOperation<{ codes: string[] }> = {
+  auth: "firm",
+  action: "identity.generateRecoveryCodes",
+  target: "users",
+  run: async ({ caller, secondFactor }, _data, audit) => {
     audit.firmId = caller.firmId
     audit.target = `users/${caller.uid}`
     const factorUids = await enrolledFactorUids(caller.uid)
     if (factorUids.length === 0) throw new HttpError(403, "factor_required")
-    if (!hasSecondFactor(request.auth!.token)) throw new HttpError(403, "mfa_required")
+    if (!secondFactor) throw new HttpError(403, "mfa_required")
 
     const salt = randomBytes(SALT_BYTES)
     const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode)
@@ -164,8 +162,9 @@ export async function generateRecoveryCodesHandler(request: CallableRequest<unkn
     })
     audit.committed()
     return { codes }
-  })
+  },
 }
+export const generateRecoveryCodesHandler = callableHandler(generateRecoveryCodesOp)
 
 /**
  * approveMfaDisable({ firmId, uid }) → { approvalId, expiresAt }. A partner
@@ -173,13 +172,11 @@ export async function generateRecoveryCodesHandler(request: CallableRequest<unkn
  * cleared at least as high as the subject, records a one-hour, single-use
  * `mfa_disable_approvals/{id}`. Not MFA-exempt.
  */
-export async function approveMfaDisableHandler(
-  request: CallableRequest<unknown>
-): Promise<{ approvalId: string; expiresAt: string }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.approveMfaDisable", request, "users")
-  return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string)
+export const approveMfaDisableOp: FirmOperation<{ approvalId: string; expiresAt: string }> = {
+  auth: "firm",
+  action: "identity.approveMfaDisable",
+  target: "users",
+  run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
     requirePartner(caller)
     const uid = parseUid(data.uid)
@@ -202,8 +199,9 @@ export async function approveMfaDisableHandler(
     })
     audit.committed()
     return { approvalId: ref.id, expiresAt: expiresAt.toDate().toISOString() }
-  })
+  },
 }
+export const approveMfaDisableHandler = callableHandler(approveMfaDisableOp)
 
 /** The uids of the Auth user's enrolled second factors; an unknown user has none. */
 async function enrolledFactorUids(uid: string): Promise<string[]> {
@@ -293,14 +291,13 @@ async function removeFactors(uid: string, factorUids: readonly string[]): Promis
  * with the same approval and no code while it is used by them, not completed
  * and unexpired (audited as allow `resume`), which re-runs the steps.
  */
-export async function disableMfaHandler(
-  request: CallableRequest<unknown>
-): Promise<{ uid: string; mfaEnabled: boolean }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.disableMfa", request, "users")
-  return audited(audit, async () => {
-    const isSubject = request.auth !== undefined && data.uid === request.auth.uid
-    const caller = await callerFromCallable(request.auth, data.firmId as string, { mfaExempt: isSubject })
+export const disableMfaOp: FirmOperation<{ uid: string; mfaEnabled: boolean }> = {
+  auth: "firm",
+  action: "identity.disableMfa",
+  target: "users",
+  // Only the subject (a user who lost the device) is exempt from the MFA policy.
+  mfaExempt: (uid, data) => data.uid === uid,
+  run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
@@ -380,8 +377,9 @@ export async function disableMfaHandler(
       throw err
     }
     return { uid, mfaEnabled }
-  })
+  },
 }
+export const disableMfaHandler = callableHandler(disableMfaOp)
 
 /**
  * Reserves one code attempt on an unused approval for this firm and subject,
@@ -413,13 +411,12 @@ function isString(v: unknown): v is string {
  * happens client-side, so the client calls this afterwards). MFA-exempt: it
  * only mirrors Auth state, and an enforced user calls it right after enrolling.
  */
-export async function syncMfaStatusHandler(
-  request: CallableRequest<unknown>
-): Promise<{ uid: string; mfaEnabled: boolean }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.syncMfaStatus", request, "users")
-  return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string, { mfaExempt: true })
+export const syncMfaStatusOp: FirmOperation<{ uid: string; mfaEnabled: boolean }> = {
+  auth: "firm",
+  action: "identity.syncMfaStatus",
+  target: "users",
+  mfaExempt: () => true,
+  run: async ({ caller }, _data, audit) => {
     audit.firmId = caller.firmId
     audit.target = `users/${caller.uid}`
     const mfaEnabled = (await enrolledFactorUids(caller.uid)).length > 0
@@ -429,8 +426,9 @@ export async function syncMfaStatusHandler(
     })
     audit.committed()
     return { uid: caller.uid, mfaEnabled }
-  })
+  },
 }
+export const syncMfaStatusHandler = callableHandler(syncMfaStatusOp)
 
 export const enforceMfaForRole = onCall({ region: REGION }, enforceMfaForRoleHandler)
 export const generateRecoveryCodes = onCall({ region: REGION }, generateRecoveryCodesHandler)

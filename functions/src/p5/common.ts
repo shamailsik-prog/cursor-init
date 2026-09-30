@@ -5,13 +5,22 @@ import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { HttpError, toHttpsError } from "../http/errors"
 import { appendAudit } from "./audit"
-import { isRole, type Caller, type Role } from "./auth"
+import {
+  callerFromCallable,
+  callerWithoutFirm,
+  hasSecondFactor,
+  isRole,
+  type Caller,
+  type FirmlessIdentity,
+  type Role,
+} from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 
 /**
- * Shared scaffolding for the P5 callables (identity.ts, mfa.ts): request
- * parsing, the one-audit-row-per-call CallAudit / audited wrapper, and the
- * target-user checks.
+ * Shared scaffolding for the P5 operations (identity.ts, mfa.ts): the
+ * Operation type that both entry points run (the onCall callables here via
+ * `callableHandler`, the HTTP `api` via http/router.ts), request parsing, the
+ * one-audit-row-per-call CallAudit / audited wrapper, and the target-user checks.
  */
 
 export type Data = Record<string, unknown>
@@ -28,13 +37,13 @@ export class CallAudit {
   private readonly actorId: string
   private written = false
 
+  /** `actorId` is the verified uid, or "anonymous" for an unauthenticated call. */
   constructor(
     private readonly action: string,
-    request: CallableRequest<unknown>,
+    actorId: string,
     target: string
   ) {
-    // request.auth is the runtime-verified token; unauthenticated calls are "anonymous".
-    this.actorId = request.auth?.uid ?? "anonymous"
+    this.actorId = actorId
     this.target = target
   }
 
@@ -106,19 +115,71 @@ export function logFailure(message: string, err: unknown, uid?: string): void {
   logger.error(message, uid === undefined ? { code: errorCode(err) } : { uid, code: errorCode(err) })
 }
 
-/** Runs a callable body; any failure without an audit row yet is audited as a deny, then mapped to HttpsError. */
-export async function audited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> {
+/**
+ * Runs an operation body; any failure without an audit row yet is audited as
+ * a deny and rethrown as is (a failed deny write throws 503 audit_unavailable instead).
+ */
+export async function runAudited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> {
   try {
     return await body()
   } catch (err) {
-    if (!(err instanceof HttpError)) logFailure("identity callable failed", err)
-    const reason = err instanceof HttpError ? err.code : "internal"
-    try {
-      await audit.deny(reason)
-    } catch (auditErr) {
-      throw toHttpsError(auditErr)
-    }
+    if (!(err instanceof HttpError)) logFailure("identity operation failed", err)
+    await audit.deny(err instanceof HttpError ? err.code : "internal")
+    throw err
+  }
+}
+
+/** Like `runAudited`, with failures mapped to HttpsError for the callable protocol. */
+export async function audited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> {
+  try {
+    return await runAudited(audit, body)
+  } catch (err) {
     throw toHttpsError(err)
+  }
+}
+
+/** A firm-bound, authenticated session: the Caller and whether the token has a second factor. */
+export type Session = { caller: Caller; secondFactor: boolean }
+
+export type { FirmlessIdentity }
+
+/**
+ * One P5 operation, independent of its transport. The entry point
+ * authenticates (firm-bound or firmless), creates the CallAudit for
+ * `action` / `target` and runs `run` inside `runAudited`, so the callable and
+ * the HTTP route share one implementation. `mfaExempt(uid, data)` exempts the
+ * call from the firm's MFA policy (see requireAuth / callerFromCallable).
+ */
+export type FirmOperation<T = unknown> = {
+  auth: "firm"
+  action: string
+  target: string
+  mfaExempt?: (uid: string, data: Data) => boolean
+  run: (session: Session, data: Data, audit: CallAudit) => Promise<T>
+}
+export type FirmlessOperation<T = unknown> = {
+  auth: "firmless"
+  action: string
+  target: string
+  run: (who: FirmlessIdentity, data: Data, audit: CallAudit) => Promise<T>
+}
+export type Operation<T = unknown> = FirmOperation<T> | FirmlessOperation<T>
+
+/**
+ * The onCall handler for an operation: the firm comes from `data.firmId`
+ * (callerFromCallable), or the firmless path (callerWithoutFirm).
+ */
+export function callableHandler<T>(op: Operation<T>): (request: CallableRequest<unknown>) => Promise<T> {
+  return async (request) => {
+    const data = dataOf(request)
+    // request.auth is the runtime-verified token; unauthenticated calls are "anonymous".
+    const audit = new CallAudit(op.action, request.auth?.uid ?? "anonymous", op.target)
+    return audited(audit, async () => {
+      if (op.auth === "firmless") return op.run(await callerWithoutFirm(request.auth), data, audit)
+      const mfaExempt = request.auth !== undefined && op.mfaExempt?.(request.auth.uid, data) === true
+      const caller = await callerFromCallable(request.auth, data.firmId as string, { mfaExempt })
+      return op.run({ caller, secondFactor: hasSecondFactor(request.auth!.token) }, data, audit)
+    })
   }
 }
 

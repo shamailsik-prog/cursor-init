@@ -143,3 +143,49 @@ resumes idempotently and returns the same `firmId` (audited as
   (`approval_voided`), even when calls run in parallel.
 - In the emulator tests, `mintMfaIdToken` (test/emu.ts) signs in through the
   Auth emulator's phone MFA flow to get a real second-factor token.
+
+## HTTP API (`api`, L18 §4.1–4.4)
+
+`api` is one `onRequest` function that serves the route table in
+`src/http/router.ts`. Each route runs the same P5 operation as its callable
+(`src/p5/identity.ts`, `src/p5/mfa.ts`), so behaviour and audit rows match.
+
+- **Routes:** `POST /api/platform/identity/{onboardFirm, createFirmUser,
+  setUserClaims, deactivateUser, enforceMfaForRole, approveMfaDisable,
+  disableMfa, generateRecoveryCodes, syncMfaStatus}`. The body is the
+  callable's `data` without `firmId`. The router also accepts the path without
+  the `/api` prefix, as a direct function URL delivers it.
+- **Headers:** `Authorization: Bearer <ID token>`, `X-Firm-Id` (the firm is
+  taken from here, never from the body; `onboardFirm` ignores it), and on
+  POST/PUT `Idempotency-Key: <UUID v4>`.
+- **Order:** route (404 `route_not_found`, 405 `method_not_allowed`), body
+  (413 `payload_too_large` over 1 MB, 415 unless `application/json`, 400
+  `invalid_body` unless an object), auth (401/403), rate limit (429
+  `rate_limited` + `Retry-After`), idempotency, handler. Errors are
+  `{ "error": { "code": "..." } }`.
+- **Rate limits:** fixed one-minute UTC windows per user, counted in
+  `rate_limits/{uid}_{kind}_{yyyyMMddHHmm}`: 60/min `general`, 10/min `p1`.
+  A firm can override them with `firms/{firmId}.rateLimits = { general, p1 }`
+  (integers 1–1000). Requests that fail authentication count against the
+  client IP (first `X-Forwarded-For` hop, else `req.ip`), 60/min; over that they
+  get 429 and no `audit_log` row.
+- **Idempotency:** `idempotency_keys/{firmId}_{key}` (`_nofirm_{key}` for
+  `onboardFirm`) holds the claim and the stored response for 24 h. A replay
+  returns the stored status and body with `reused: true`. The same key with
+  another body, route or user gives 422 `idempotency_key_reused`, and a
+  duplicate while the first is running gives 409 `idempotency_in_progress`.
+  5xx responses are not stored, so a retry runs again. The
+  `generateRecoveryCodes` response is never stored: its replay is
+  `{ redacted: true, reused: true }`, so generate again with a new key if the
+  codes were lost.
+- **TTL policies (set once per project):** both collections carry `expiresAt`.
+  Enable Firestore TTL on it so old docs are purged. Until the purge runs, an
+  expired idempotency key is treated as absent.
+
+  ```bash
+  gcloud firestore fields ttls update expiresAt --collection-group=idempotency_keys --enable-ttl
+  gcloud firestore fields ttls update expiresAt --collection-group=rate_limits --enable-ttl
+  ```
+
+- **Rules:** both collections are server-only. No rule matches them, so the
+  default deny applies.

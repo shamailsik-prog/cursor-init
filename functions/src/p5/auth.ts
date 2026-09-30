@@ -1,4 +1,5 @@
 import type { CallableRequest } from "firebase-functions/v2/https"
+import type { DecodedIdToken } from "firebase-admin/auth"
 import type { Classification } from "@/platform/p1/types"
 import { adminAuth, adminDb } from "../admin"
 import { HttpError } from "../http/errors"
@@ -45,22 +46,62 @@ function callerFromClaims(uid: string, claims: Record<string, unknown>, firmIdHe
   return { uid, firmId, role, clearanceLevel }
 }
 
-/** HTTP (onRequest) identity: verified, revocation-checked Bearer token + X-Firm-Id binding. */
-export async function requireAuth(req: { headers: Record<string, string | undefined> }): Promise<Caller> {
-  const match = /^Bearer\s+(\S+)\s*$/i.exec(header(req.headers, "authorization") ?? "")
-  if (!match) throw new HttpError(401, "missing_token")
+type Headers = Record<string, string | undefined>
 
-  let decoded: Awaited<ReturnType<ReturnType<typeof adminAuth>["verifyIdToken"]>>
+/** HTTP (onRequest) identity: verified, revocation-checked Bearer token + X-Firm-Id binding. */
+export async function requireAuth(req: { headers: Headers }): Promise<Caller> {
+  return (await bindHttpSession(await verifyBearer(req.headers), req.headers, { mfaExempt: false })).caller
+}
+
+/**
+ * HTTP step 1: verifies the `Authorization: Bearer` ID token, revocation-checked.
+ * No header → 401 missing_token; revoked → token_revoked; disabled → user_disabled;
+ * anything else → invalid_token.
+ */
+export async function verifyBearer(headers: Headers): Promise<DecodedIdToken> {
+  const match = /^Bearer\s+(\S+)\s*$/i.exec(header(headers, "authorization") ?? "")
+  if (!match) throw new HttpError(401, "missing_token")
   try {
-    decoded = await adminAuth().verifyIdToken(match[1], true)
+    return await adminAuth().verifyIdToken(match[1], true)
   } catch (err) {
     const code = (err as { code?: unknown })?.code
     if (code === "auth/id-token-revoked") throw new HttpError(401, "token_revoked")
     if (code === "auth/user-disabled") throw new HttpError(401, "user_disabled")
     throw new HttpError(401, "invalid_token")
   }
-  const caller = callerFromClaims(decoded.uid, decoded, header(req.headers, "x-firm-id"))
-  return bindToUserDoc(caller, { secondFactor: hasSecondFactor(decoded), mfaExempt: false })
+}
+
+/**
+ * HTTP step 2: binds a verified token to `X-Firm-Id` and the authoritative
+ * users doc (see bindToUserDoc), applying the firm's MFA policy unless
+ * `mfaExempt`. Also returns whether the token has a second factor and the
+ * firm doc read for the binding (for per-firm settings such as rate limits).
+ */
+export async function bindHttpSession(
+  decoded: DecodedIdToken,
+  headers: Headers,
+  opts: { mfaExempt: boolean }
+): Promise<{ caller: Caller; secondFactor: boolean; firm: Record<string, unknown> | undefined }> {
+  const secondFactor = hasSecondFactor(decoded)
+  const caller = callerFromClaims(decoded.uid, decoded, header(headers, "x-firm-id"))
+  return { ...(await bindToUserDoc(caller, { secondFactor, mfaExempt: opts.mfaExempt })), secondFactor }
+}
+
+/**
+ * HTTP identity for callers that have no firm yet (firm onboarding), from a
+ * token already checked by verifyBearer: the uid, the user's *current* custom
+ * claims from the user record, and the token's email when it is verified.
+ * An unreadable user record → 401 invalid_token.
+ */
+export async function firmlessFromToken(decoded: DecodedIdToken): Promise<FirmlessIdentity> {
+  let customClaims: Record<string, unknown>
+  try {
+    customClaims = { ...((await adminAuth().getUser(decoded.uid)).customClaims ?? {}) }
+  } catch {
+    throw new HttpError(401, "invalid_token")
+  }
+  const verifiedEmail = decoded.email_verified === true && typeof decoded.email === "string" ? decoded.email : undefined
+  return { uid: decoded.uid, claims: customClaims, verifiedEmail }
 }
 
 /** True when the verified token records a second-factor sign-in (`firebase.sign_in_second_factor`). */
@@ -83,7 +124,10 @@ type MfaContext = { secondFactor: boolean; mfaExempt: boolean }
  * 403 mfa_required, unless the caller is an MFA-recovery callable (`mfaExempt`).
  * Unreadable users or firm doc → 503 store_unavailable.
  */
-async function bindToUserDoc(caller: Caller, mfa: MfaContext): Promise<Caller> {
+async function bindToUserDoc(
+  caller: Caller,
+  mfa: MfaContext
+): Promise<{ caller: Caller; firm: Record<string, unknown> | undefined }> {
   let doc: Record<string, unknown> | undefined
   let firm: Record<string, unknown> | undefined
   try {
@@ -101,7 +145,7 @@ async function bindToUserDoc(caller: Caller, mfa: MfaContext): Promise<Caller> {
   if (!mfa.mfaExempt && !mfa.secondFactor && isMfaEnforced(firm, doc.role)) throw new HttpError(403, "mfa_required")
   const clearanceLevel =
     rankOf(doc.clearanceLevel) < rankOf(caller.clearanceLevel) ? doc.clearanceLevel : caller.clearanceLevel
-  return { ...caller, clearanceLevel }
+  return { caller: { ...caller, clearanceLevel }, firm }
 }
 
 function isMfaEnforced(firm: Record<string, unknown> | undefined, role: Role): boolean {
@@ -152,8 +196,11 @@ export async function callerFromCallable(
   if (typeof firmIdHeader !== "string" || firmIdHeader === "") throw new HttpError(400, "firm_required")
   const { claims } = await verifyCallableSession(auth)
   const caller = callerFromClaims(auth.uid, claims, firmIdHeader)
-  return bindToUserDoc(caller, { secondFactor: hasSecondFactor(claims), mfaExempt: opts.mfaExempt === true })
+  return (await bindToUserDoc(caller, { secondFactor: hasSecondFactor(claims), mfaExempt: opts.mfaExempt === true })).caller
 }
+
+/** A caller without a firm yet (onboarding): uid, current custom claims, verified email if any. */
+export type FirmlessIdentity = { uid: string; claims: Record<string, unknown>; verifiedEmail?: string }
 
 /**
  * Callable identity for callers that have no firm yet (firm onboarding):
@@ -161,9 +208,7 @@ export async function callerFromCallable(
  * *current* custom claims from the user record (not the possibly stale token)
  * and the token's email when it is verified.
  */
-export async function callerWithoutFirm(
-  auth: CallableRequest["auth"]
-): Promise<{ uid: string; claims: Record<string, unknown>; verifiedEmail?: string }> {
+export async function callerWithoutFirm(auth: CallableRequest["auth"]): Promise<FirmlessIdentity> {
   const { claims, customClaims } = await verifyCallableSession(auth)
   const verifiedEmail = claims.email_verified === true && typeof claims.email === "string" ? claims.email : undefined
   return { uid: auth!.uid, claims: customClaims, verifiedEmail }

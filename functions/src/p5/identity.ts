@@ -1,15 +1,13 @@
-import { onCall, type CallableRequest } from "firebase-functions/v2/https"
+import { onCall } from "firebase-functions/v2/https"
 import { FieldValue, type DocumentData, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminAuth, adminDb } from "../admin"
 import { REGION } from "../health"
 import { HttpError } from "../http/errors"
-import { callerFromCallable, callerWithoutFirm, isRole, type Caller, type Role } from "./auth"
+import { isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 import {
-  CallAudit,
-  audited,
-  dataOf,
+  callableHandler,
   errorCode,
   isSafeDocId,
   logFailure,
@@ -18,7 +16,10 @@ import {
   readTargetDoc,
   requirePartner,
   usersRef,
+  type CallAudit,
   type Data,
+  type FirmOperation,
+  type FirmlessOperation,
 } from "./common"
 
 /**
@@ -199,11 +200,11 @@ async function emailTaken(email: string): Promise<boolean> {
  * first bootstrap on SIKANDER_BOOTSTRAP_FOUNDER_EMAIL, so a stranger cannot
  * win the race on a fresh deploy. The platformAdmin path is unaffected.
  */
-export async function onboardFirmHandler(request: CallableRequest<unknown>): Promise<{ firmId: string }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.onboardFirm", request, "platform/bootstrap")
-  return audited(audit, async () => {
-    const { uid, claims, verifiedEmail } = await callerWithoutFirm(request.auth)
+export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
+  auth: "firmless",
+  action: "identity.onboardFirm",
+  target: "platform/bootstrap",
+  run: async ({ uid, claims, verifiedEmail }, data, audit) => {
     const name = typeof data.name === "string" ? data.name.trim() : ""
     if (name === "" || name.length > MAX_FIRM_NAME) throw new HttpError(400, "invalid_name")
     if (claims.firmId !== undefined) throw new HttpError(409, "already_onboarded")
@@ -257,18 +258,19 @@ export async function onboardFirmHandler(request: CallableRequest<unknown>): Pro
 
     await adminAuth().setCustomUserClaims(uid, { ...claims, firmId: outcome.firmId, ...FOUNDER })
     return { firmId: outcome.firmId }
-  })
+  },
 }
+export const onboardFirmHandler = callableHandler(onboardFirmOp)
 
 /**
  * createFirmUser({ firmId, email, role, clearanceLevel }) → { uid }. Partner only.
  * The new user's clearance may not exceed the caller's; `platformAdmin` can never be set.
  */
-export async function createFirmUserHandler(request: CallableRequest<unknown>): Promise<{ uid: string }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.createFirmUser", request, "users")
-  return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string)
+export const createFirmUserOp: FirmOperation<{ uid: string }> = {
+  auth: "firm",
+  action: "identity.createFirmUser",
+  target: "users",
+  run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
     requirePartner(caller)
     forbidPlatformAdmin(data)
@@ -306,8 +308,9 @@ export async function createFirmUserHandler(request: CallableRequest<unknown>): 
       throw err
     }
     return { uid }
-  })
+  },
 }
+export const createFirmUserHandler = callableHandler(createFirmUserOp)
 
 /**
  * setUserClaims({ firmId, uid, role?, clearanceLevel? }). Partner only, same firm, never self.
@@ -323,13 +326,11 @@ export async function createFirmUserHandler(request: CallableRequest<unknown>): 
  * reverted to its prior role/clearance, but only while `claimsVersion` is
  * still ours (a newer change stays authoritative), and the error is returned.
  */
-export async function setUserClaimsHandler(
-  request: CallableRequest<unknown>
-): Promise<{ uid: string; role: Role; clearanceLevel: Classification }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.setUserClaims", request, "users")
-  return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string)
+export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearanceLevel: Classification }> = {
+  auth: "firm",
+  action: "identity.setUserClaims",
+  target: "users",
+  run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
     requirePartner(caller)
     forbidPlatformAdmin(data)
@@ -373,8 +374,9 @@ export async function setUserClaimsHandler(
     }
     await adminAuth().revokeRefreshTokens(uid)
     return { uid, role: change.result.role, clearanceLevel: change.result.clearanceLevel }
-  })
+  },
 }
+export const setUserClaimsHandler = callableHandler(setUserClaimsOp)
 
 /** Writes a ClaimsResult to the users doc and its server-only claims_sync record in one transaction. */
 function writeClaimsState(tx: Transaction, uid: string, r: ClaimsResult): void {
@@ -465,11 +467,11 @@ async function revertIfStillOurs(
  * matters: if the account is re-enabled, pre-deactivation tokens stay invalid
  * (`token_revoked`).
  */
-export async function deactivateUserHandler(request: CallableRequest<unknown>): Promise<{ uid: string; active: false }> {
-  const data = dataOf(request)
-  const audit = new CallAudit("identity.deactivateUser", request, "users")
-  return audited(audit, async () => {
-    const caller = await callerFromCallable(request.auth, data.firmId as string)
+export const deactivateUserOp: FirmOperation<{ uid: string; active: false }> = {
+  auth: "firm",
+  action: "identity.deactivateUser",
+  target: "users",
+  run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
     requirePartner(caller)
     const uid = parseUid(data.uid)
@@ -490,8 +492,9 @@ export async function deactivateUserHandler(request: CallableRequest<unknown>): 
     await adminAuth().updateUser(uid, { disabled: true })
     await adminAuth().revokeRefreshTokens(uid)
     return { uid, active: false }
-  })
+  },
 }
+export const deactivateUserHandler = callableHandler(deactivateUserOp)
 
 export const onboardFirm = onCall({ region: REGION }, onboardFirmHandler)
 export const createFirmUser = onCall({ region: REGION }, createFirmUserHandler)
