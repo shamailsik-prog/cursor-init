@@ -7,7 +7,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { checkPermission } from "@/platform/p5/checkPermission"
-import { classificationField, idField, parseBody, textField } from "@/platform/http/validation"
+import { classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
@@ -159,13 +159,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let raw: unknown
-  try {
-    raw = await request.json()
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body", code: "invalid_request" }, { status: 400 })
-  }
-  const body = parseBody(BodySchema, raw)
+  const raw = await readJsonLimited(request)
+  if (!raw.ok) return raw.response
+  const body = parseBody(BodySchema, raw.data)
   if (!body.ok) return body.response
   const parsed: Body = body.data
 

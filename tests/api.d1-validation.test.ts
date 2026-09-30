@@ -4,7 +4,12 @@ import { POST as mattersPost } from "@/app/api/d1/matters/route"
 import { POST as documentsPost } from "@/app/api/d1/documents/route"
 import { POST as clientsPost } from "@/app/api/d1/clients/route"
 import { POST as workflowPost } from "@/app/api/d1/document-workflow/route"
-import { DEFAULT_MAX_UPLOAD_BYTES, maxUploadBytes } from "@/platform/http/validation"
+import {
+  DEFAULT_JSON_BODY_BYTES,
+  DEFAULT_MAX_UPLOAD_BYTES,
+  fingerprintOf,
+  maxUploadBytes,
+} from "@/platform/http/validation"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 
@@ -166,5 +171,90 @@ describe("M3 — document upload size limit", () => {
       })
     )
     expect(res.status).toBe(413)
+  })
+})
+
+function chunkedRequest(path: string, totalBytes: number) {
+  const chunk = new TextEncoder().encode("a".repeat(64 * 1024))
+  let sent = 0
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= totalBytes) {
+        controller.close()
+        return
+      }
+      controller.enqueue(chunk)
+      sent += chunk.length
+    },
+  })
+  return new Request(`http://127.0.0.1${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+    body: stream,
+    duplex: "half",
+  } as RequestInit)
+}
+
+describe("review round 1 — streamed body limits (#2)", () => {
+  it("documents: a chunked body with no Content-Length above the cap gets 413", async () => {
+    vi.stubEnv("SIKANDER_MAX_UPLOAD_BYTES", "16")
+    const req = chunkedRequest("/api/d1/documents", 512 * 1024)
+    expect(req.headers.get("content-length")).toBeNull()
+    const res = await documentsPost(req)
+    expect(res.status).toBe(413)
+    expect(((await res.json()) as { code: string }).code).toBe("payload_too_large")
+  })
+
+  it("other d1 POSTs cap JSON bodies at 1 MB by default", async () => {
+    expect(DEFAULT_JSON_BODY_BYTES).toBe(1024 * 1024)
+    for (const [path, handler] of [
+      ["/api/d1/matters", mattersPost],
+      ["/api/d1/clients", clientsPost],
+      ["/api/d1/document-workflow", workflowPost],
+    ] as const) {
+      const res = await handler(chunkedRequest(path, 2 * 1024 * 1024))
+      expect(res.status, path).toBe(413)
+    }
+  })
+})
+
+describe("review round 1 — base64 normalisation (#11)", () => {
+  it("accepts whitespace/newline-wrapped (MIME) base64 and stores the decoded bytes", async () => {
+    const matterId = seedMatter()
+    const content = Buffer.from("%PDF-wrapped-content-for-mime-test%").toString("base64")
+    const wrapped = content.replace(/(.{8})/g, "$1\r\n ")
+    const res = await post(documentsPost, "/api/d1/documents", {
+      action: "ingest",
+      actorId: "partner_a",
+      firmId: "firmA",
+      matterId,
+      contentBase64: wrapped,
+      sourceChannel: "whatsapp",
+      classification: "internal",
+    })
+    expect(res.status).toBe(200)
+  })
+
+  it("rejects base64 whose length is 1 mod 4", async () => {
+    await expectInvalid(
+      await post(documentsPost, "/api/d1/documents", {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        contentBase64: "QUJDR",
+        sourceChannel: "web",
+        classification: "internal",
+      })
+    )
+  })
+})
+
+describe("review round 1 — idempotency fingerprint (#10)", () => {
+  it("fingerprints are fixed-size sha256 digests, not the payload", () => {
+    const big = { body: "x".repeat(100_000) }
+    const fp = fingerprintOf(big)
+    expect(fp).toMatch(/^[0-9a-f]{64}$/)
+    expect(fingerprintOf({ body: "x".repeat(100_000) })).toBe(fp)
+    expect(fingerprintOf({ body: "y" })).not.toBe(fp)
   })
 })

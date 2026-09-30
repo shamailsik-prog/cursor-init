@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
-import { classificationField, idField, parseBody, textField } from "@/platform/http/validation"
+import { classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -108,13 +108,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let raw: unknown
-  try {
-    raw = await request.json()
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body", code: "invalid_request" }, { status: 400 })
-  }
-  const body = parseBody(BodySchema, raw)
+  const raw = await readJsonLimited(request)
+  if (!raw.ok) return raw.response
+  const body = parseBody(BodySchema, raw.data)
   if (!body.ok) return body.response
   const parsed: Body = body.data
 

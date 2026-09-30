@@ -5,7 +5,6 @@ import {
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
-import { isClassification } from "@/platform/p1/types"
 import {
   base64DecodedLength,
   base64Field,
@@ -13,8 +12,10 @@ import {
   idField,
   maxUploadBytes,
   maxUploadRequestBytes,
+  fingerprintOf,
   parseBody,
   payloadTooLarge,
+  readJsonLimited,
 } from "@/platform/http/validation"
 import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
@@ -24,8 +25,6 @@ import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrou
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
-
-type SourceChannel = "web" | "team_portal" | "whatsapp" | "bulk"
 
 const BodySchema = z.discriminatedUnion("action", [
   z.object({
@@ -51,15 +50,6 @@ function parseCursor(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 0
   if (!Number.isFinite(parsed) || parsed < 0) return 0
   return parsed
-}
-
-function isSourceChannel(value: unknown): value is SourceChannel {
-  return (
-    value === "web" ||
-    value === "team_portal" ||
-    value === "whatsapp" ||
-    value === "bulk"
-  )
 }
 
 function requireActor(actorId: string, firmId?: string) {
@@ -144,45 +134,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  const declaredLength = Number(request.headers.get("content-length") ?? "")
-  if (Number.isFinite(declaredLength) && declaredLength > maxUploadRequestBytes()) {
-    return payloadTooLarge(maxUploadBytes())
-  }
-
-  let raw: unknown
-  try {
-    raw = await request.json()
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body", code: "invalid_request" }, { status: 400 })
-  }
-  const body = parseBody(BodySchema, raw)
+  const uploadLimit = maxUploadBytes()
+  const raw = await readJsonLimited(request, maxUploadRequestBytes(), uploadLimit)
+  if (!raw.ok) return raw.response
+  const body = parseBody(BodySchema, raw.data)
   if (!body.ok) return body.response
   const parsed: Body = body.data
-  const uploadLimit = maxUploadBytes()
   if (base64DecodedLength(parsed.contentBase64) > uploadLimit) {
     return payloadTooLarge(uploadLimit)
   }
 
-  if (parsed.action !== "ingest") {
-    return NextResponse.json({ error: "unknown action" }, { status: 400 })
-  }
-  if (!parsed.actorId || !parsed.firmId || !parsed.contentBase64) {
-    return NextResponse.json(
-      { error: "actorId, firmId, and contentBase64 are required" },
-      { status: 400 }
-    )
-  }
-  if (!isClassification(parsed.classification)) {
-    return NextResponse.json(
-      { error: "classification must be a rank-0–4 label" },
-      { status: 400 }
-    )
-  }
-  if (!isSourceChannel(parsed.sourceChannel)) {
-    return NextResponse.json({ error: "sourceChannel is invalid" }, { status: 400 })
-  }
-
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/documents",
     action: parsed.action,
     body: parsed,

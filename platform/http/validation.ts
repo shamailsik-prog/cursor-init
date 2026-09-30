@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { NextResponse } from "next/server"
 import { z } from "zod"
 import { CLASSIFICATION_RANKS, type Classification } from "@/platform/p1/types"
@@ -7,6 +8,8 @@ export const INVALID_REQUEST = "invalid_request"
 export const PAYLOAD_TOO_LARGE = "payload_too_large"
 
 export const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+/** Default cap on a non-upload JSON request body. */
+export const DEFAULT_JSON_BODY_BYTES = 1024 * 1024
 
 /** Maximum decoded upload size; `SIKANDER_MAX_UPLOAD_BYTES` overrides the 25 MB default. */
 export function maxUploadBytes(): number {
@@ -41,6 +44,48 @@ export function payloadTooLarge(limit: number) {
   )
 }
 
+/**
+ * Read and JSON-parse a request body without ever buffering more than `limitBytes`.
+ * Rejects early on a declared Content-Length above the limit, and counts streamed bytes
+ * so chunked bodies (no Content-Length) are cut off too: 413 payload_too_large.
+ * Malformed JSON: 400 invalid_request.
+ */
+export async function readJsonLimited(
+  request: Request,
+  limitBytes: number = DEFAULT_JSON_BODY_BYTES,
+  reportedLimit: number = limitBytes
+): Promise<{ ok: true; data: unknown } | { ok: false; response: NextResponse }> {
+  const declared = Number(request.headers.get("content-length") ?? "")
+  if (Number.isFinite(declared) && declared > limitBytes) {
+    return { ok: false, response: payloadTooLarge(reportedLimit) }
+  }
+  const chunks: Uint8Array[] = []
+  let total = 0
+  if (request.body) {
+    const reader = request.body.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > limitBytes) {
+        await reader.cancel().catch(() => undefined)
+        return { ok: false, response: payloadTooLarge(reportedLimit) }
+      }
+      chunks.push(value)
+    }
+  }
+  try {
+    return { ok: true, data: JSON.parse(Buffer.concat(chunks, total).toString("utf8")) }
+  } catch {
+    return { ok: false, response: invalidRequest("invalid JSON body") }
+  }
+}
+
+/** Fixed-size idempotency fingerprint, so replay caches never retain request payloads. */
+export function fingerprintOf(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex")
+}
+
 export function parseBody<S extends z.ZodType>(
   schema: S,
   raw: unknown
@@ -60,8 +105,12 @@ export const textField = (max: number) => z.string().min(1).max(max)
 export const classificationField = z.enum(
   Object.keys(CLASSIFICATION_RANKS) as [Classification, ...Classification[]]
 )
-/** Standard or URL-safe base64, no whitespace. */
-export const base64Field = z
-  .string()
-  .min(1)
-  .regex(/^[A-Za-z0-9+/_-]+={0,2}$/, "must be base64")
+/** Standard or URL-safe base64; whitespace/newlines (MIME wrapping) are stripped first. */
+export const base64Field = z.preprocess(
+  (value) => (typeof value === "string" ? value.replace(/\s+/g, "") : value),
+  z
+    .string()
+    .min(1)
+    .regex(/^[A-Za-z0-9+/_-]+={0,2}$/, "must be base64")
+    .refine((value) => value.length % 4 !== 1, "must be base64")
+)
