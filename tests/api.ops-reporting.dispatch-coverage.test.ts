@@ -15,6 +15,7 @@ import {
   OPS_POST_ACTIONS,
   opsReportingDiagnostics,
 } from "@/app/api/d2/ops-reporting/dispatch"
+import { IdempotencyCache } from "@/platform/http/idempotency"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { POST as workflowPost } from "@/app/api/d1/document-workflow/route"
 import { addMember, createMatter } from "@/services/d1-2/matters"
@@ -133,6 +134,35 @@ describe("ops-reporting dispatch tables", () => {
       new Request("http://127.0.0.1/api/d2/ops-reporting?view=not_a_real_ops_view&actorId=associate_a")
     )
     expect(res.status).toBe(400)
+  })
+})
+
+// Canary for the crash detection above: if a merge drops the catch-all's
+// `opsReportingDiagnostics.onError(err)` call, every crash assertion would silently pass.
+describe("POST /api/d2/ops-reporting: handler crashes reach the onError hook", () => {
+  let matterId = ""
+  beforeAll(async () => {
+    matterId = await seedMatter("ops-dispatch-onerror-canary")
+  })
+
+  it("reports a TypeError thrown inside a handler to opsReportingDiagnostics.onError", async () => {
+    const canary = new TypeError("dispatch-coverage canary")
+    const injected = vi.spyOn(IdempotencyCache.prototype, "set").mockImplementationOnce(() => {
+      throw canary
+    })
+    let injectedCalls = 0
+    let reported: unknown[] = []
+    try {
+      const { res } = await postAction("acknowledge_workflow_ops_alert_digest", matterId)
+      expect(res.status).toBeGreaterThanOrEqual(400)
+    } finally {
+      injectedCalls = injected.mock.calls.length
+      injected.mockRestore()
+      reported = onError.mock.calls.map(([err]) => err)
+      onError.mockClear() // the canary is expected; don't let afterEach count it as a crash
+    }
+    expect(injectedCalls).toBe(1)
+    expect(reported).toEqual([canary])
   })
 })
 
