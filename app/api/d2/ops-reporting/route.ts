@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { DEFAULT_JSON_BODY_BYTES } from "@/platform/http/validation"
-import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
+import { REQUEST_FAILED_CODE, errorResponse, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -30393,6 +30393,13 @@ if (
         parsed.reason,
         "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged"
       )
+      if (!currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliation) {
+        return errorResponse(
+          409,
+          "parent_missing",
+          "the parent row for this action is missing"
+        )
+      }
       const nextAck =
         buildWorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow(
           {
@@ -30599,6 +30606,13 @@ if (
         parsed.reason,
         "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged"
       )
+      if (!currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliation) {
+        return errorResponse(
+          409,
+          "parent_missing",
+          "the parent row for this action is missing"
+        )
+      }
       const nextAck =
         buildWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow(
           {
@@ -32450,6 +32464,13 @@ if (
           "partner delivery transport boundary receipt reconciliation finalized",
         "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_finalized"
       )
+      if (!currentTbAckReconPdFreezeSeal507WaiverPartnerDeliveryReceiptFreezeOverrideSealVerification) {
+        return errorResponse(
+          409,
+          "parent_missing",
+          "the parent row for this action is missing"
+        )
+      }
       const nextTransportBoundaryReceiptReconciliation =
         buildTbAckReconPdFreezeSeal509WaiverRow(
           {
@@ -32621,6 +32642,13 @@ if (
         parsed.reason ?? transportBoundaryReceiptReconciliationClosureAttestationReference,
         "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_closure_attested"
       )
+      if (!currentTbAckReconPdFreezeSeal508VariancePartnerDeliveryReceiptFreezeOverrideSealVerification) {
+        return errorResponse(
+          409,
+          "parent_missing",
+          "the parent row for this action is missing"
+        )
+      }
       const nextTransportBoundaryReceiptReconciliation =
         buildTbAckReconPdFreezeSeal510VarianceRow(
           {
@@ -32830,6 +32858,13 @@ if (
         parsed.reason,
         "waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged"
       )
+      if (!currentTbAckReconPdFreezeSeal509WaiverTransportBoundaryReceiptReconciliation) {
+        return errorResponse(
+          409,
+          "parent_missing",
+          "the parent row for this action is missing"
+        )
+      }
       const nextAck =
         buildTbAckReconPdFreezeSeal511WaiverAckRow(
           {
@@ -33036,6 +33071,13 @@ if (
         parsed.reason,
         "variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged"
       )
+      if (!currentTbAckReconPdFreezeSeal510VarianceTransportBoundaryReceiptReconciliation) {
+        return errorResponse(
+          409,
+          "parent_missing",
+          "the parent row for this action is missing"
+        )
+      }
       const nextAck =
         buildTbAckReconPdFreezeSeal512VarianceAckRow(
           {

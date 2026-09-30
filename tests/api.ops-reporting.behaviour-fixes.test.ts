@@ -188,3 +188,76 @@ describe("535/536 GET status filters match the rows' own status field", () => {
     expect(body.items.map((row) => row.id)).toContain(rows[0]!.id)
   })
 })
+
+// Finalize / acknowledge actions checked the existing child row but not the parent row
+// their builder dereferences, so a missing parent crashed the handler (TypeError ->
+// generic 400). The POST preamble rebuilds the parent chain through the governance seed
+// before these lookups, so a missing parent cannot be produced through the API in memory
+// mode (it can in Firestore mode, where the repository read may miss); the six actions are
+// checked on the source: each guards its parent before the builder and answers 409
+// parent_missing. `tsc` (strictNullChecks, enforced in CI) rejects any other unguarded parent.
+const PARENT_GUARDED_ACTIONS = [
+  {
+    action:
+      "acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt",
+    parent:
+      "currentWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliation",
+  },
+  {
+    action:
+      "acknowledge_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt",
+    parent:
+      "currentRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliation",
+  },
+  {
+    action:
+      "control_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_finalization",
+    parent:
+      "currentTbAckReconPdFreezeSeal507WaiverPartnerDeliveryReceiptFreezeOverrideSealVerification",
+  },
+  {
+    action:
+      "attest_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_closure",
+    parent:
+      "currentTbAckReconPdFreezeSeal508VariancePartnerDeliveryReceiptFreezeOverrideSealVerification",
+  },
+  {
+    action:
+      "acknowledge_workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt",
+    parent:
+      "currentTbAckReconPdFreezeSeal509WaiverTransportBoundaryReceiptReconciliation",
+  },
+  {
+    action:
+      "acknowledge_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt",
+    parent:
+      "currentTbAckReconPdFreezeSeal510VarianceTransportBoundaryReceiptReconciliation",
+  },
+] as const
+
+describe("finalize/acknowledge actions guard their parent row", () => {
+  it.each(PARENT_GUARDED_ACTIONS.map((c, i) => ({ ...c, i })))("action $i answers 409 parent_missing before dereferencing its parent", (c) => {
+    const text = readFileSync(ROUTE, "utf8")
+    const sf = ts.createSourceFile(ROUTE, text, ts.ScriptTarget.Latest, true)
+    let branch: ts.IfStatement | undefined
+    const walk = (n: ts.Node) => {
+      if (
+        !branch &&
+        ts.isIfStatement(n) &&
+        ts.isBinaryExpression(n.expression) &&
+        n.expression.left.getText(sf) === "parsed.action" &&
+        ts.isStringLiteral(n.expression.right) &&
+        n.expression.right.text === c.action
+      )
+        branch = n
+      ts.forEachChild(n, walk)
+    }
+    walk(sf)
+    if (!branch) throw new Error(`branch ${c.i} not found`)
+    const body = branch.thenStatement.getText(sf)
+    const guard = body.search(new RegExp(`if \\(!${c.parent}\\) \\{\\s*return errorResponse\\(\\s*409,\\s*"parent_missing"`))
+    const use = body.search(new RegExp(`:\\s*${c.parent},`))
+    expect(guard).toBeGreaterThanOrEqual(0)
+    expect(use).toBeGreaterThan(guard)
+  })
+})
