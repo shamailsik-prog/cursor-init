@@ -27,11 +27,12 @@ export function base64DecodedLength(value: string): number {
 
 /**
  * Upper bound on a JSON request carrying a base64 upload of `maxUploadBytes()` decoded
- * bytes: base64 inflation (4/3), 3% for line-wrapped (MIME-style) base64, plus a fixed
+ * bytes: base64 inflation (4/3), 6% for line-wrapped base64 (JSON-escaped CRLF every 76 chars
+ * is ~5.3%), plus a fixed
  * allowance for the other JSON fields. The decoded-size check is the authoritative cap.
  */
 export function maxUploadRequestBytes(): number {
-  return Math.ceil(((maxUploadBytes() * 4) / 3) * 1.03) + 64 * 1024
+  return Math.ceil(((maxUploadBytes() * 4) / 3) * 1.06) + 64 * 1024
 }
 
 export function invalidRequest(error: string, issues?: { path: string; message: string }[]) {

@@ -313,9 +313,37 @@ describe("review round 2 — readJsonLimited edges (N1)", () => {
 })
 
 describe("review round 2 — documents wire allowance (N2)", () => {
-  it("allowance is ceil(cap*4/3*1.03) + 64KB", () => {
+  it("allowance is ceil(cap*4/3*1.06) + 64KB", () => {
     vi.stubEnv("SIKANDER_MAX_UPLOAD_BYTES", "3000000")
-    expect(maxUploadRequestBytes()).toBe(Math.ceil(((3_000_000 * 4) / 3) * 1.03) + 64 * 1024)
+    expect(maxUploadRequestBytes()).toBe(Math.ceil(((3_000_000 * 4) / 3) * 1.06) + 64 * 1024)
+  })
+
+  it("accepts CRLF-wrapped base64 (JSON-escaped \\r\\n, ~5.3% overhead) exactly at the decoded cap", async () => {
+    const cap = 3 * 1024 * 1024
+    vi.stubEnv("SIKANDER_MAX_UPLOAD_BYTES", String(cap))
+    const matterId = seedMatter()
+    const bytes = Buffer.alloc(cap)
+    for (let i = 0; i < cap; i++) bytes[i] = (i * 17 + 3) & 0xff
+    const wrapped = bytes.toString("base64").replace(/(.{76})/g, "$1\r\n")
+    const body = JSON.stringify({
+      action: "ingest",
+      actorId: "partner_a",
+      firmId: "firmA",
+      matterId,
+      contentBase64: wrapped,
+      sourceChannel: "bulk",
+      classification: "internal",
+    })
+    // A 3% allowance is too small for JSON-escaped CRLF wrapping.
+    expect(body.length).toBeGreaterThan(Math.ceil(((cap * 4) / 3) * 1.03) + 64 * 1024)
+    const res = await documentsPost(
+      new Request("http://127.0.0.1/api/d1/documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+        body,
+      })
+    )
+    expect(res.status).toBe(200)
   })
 
   it("accepts a line-wrapped base64 upload exactly at the decoded cap", async () => {
