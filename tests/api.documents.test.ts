@@ -230,6 +230,39 @@ describe("POST/GET /api/d1/documents", () => {
     expect(three.result.doc.classification).toBe("internal")
   })
 
+  it("floors client-sourced uploads (whatsapp) at privileged even with an explicit lower label (review R1 #9)", async () => {
+    const matterId = seedMatter("internal")
+    const viaWhatsapp = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: b64("%PDF-client-voice-note%"),
+        sourceChannel: "whatsapp",
+        classification: "internal",
+      },
+      "5d6e7f80-91a2-43b4-8c5d-6e7f8091a2b4"
+    )
+    expect(viaWhatsapp.status).toBe(200)
+    const w = (await viaWhatsapp.json()) as { result: { doc: { classification: string } } }
+    expect(w.result.doc.classification).toBe("privileged")
+    const viaWeb = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: b64("%PDF-staff-note%"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      "6e7f8091-a2b3-44c5-9d6e-7f8091a2b3c5"
+    )
+    const web = (await viaWeb.json()) as { result: { doc: { classification: string } } }
+    expect(web.result.doc.classification).toBe("internal")
+  })
+
   it("enforces matter classification floor and firm/member boundaries", async () => {
     const privilegedMatter = seedMatter("privileged")
     const tooLow = await post(

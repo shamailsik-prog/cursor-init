@@ -32,6 +32,17 @@ service cloud.firestore {
     }
     // Matter-bound staff roles that may read matter-derived rows (client and accounts never do).
     function isMatterStaff() { return role() in ['partner', 'associate', 'clerk', 'intern']; }
+    // R1 #9: a matter-bound write is never below the matter's own classification.
+    function atOrAboveMatter(matterId) {
+      return matterId == null
+        || rank(request.resource.data.classification)
+           >= rank(get(/databases/$(database)/documents/matters/$(matterId)).data.classification);
+    }
+    // R1 #9 / L17.3: client-sourced material (the WhatsApp channel) is privileged at minimum.
+    function clientSourcedFloor() {
+      return request.resource.data.get('sourceChannel', '') != 'whatsapp'
+        || rank(request.resource.data.classification) >= 3;
+    }
     function authorNew() { return sameFirmNew() && isAuthor() && clearedNew() && canAccessScope(request.resource.data.matterId); }
 
     match /firms/{firmId} {
@@ -80,7 +91,7 @@ service cloud.firestore {
       allow read: if sameFirm() && cleared(resource.data.classification)
         && (resource.data.matterId != null ? memberReader(resource.data.matterId)
             : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2);   // loose vault (L4.5); intern denied
-      allow create: if authorNew();
+      allow create: if authorNew() && atOrAboveMatter(request.resource.data.matterId) && clientSourcedFloor();
       allow update: if sameFirm() && firmIdUnchanged() && monotonic()
         && isAuthor() && cleared(resource.data.classification) && clearedNew()
         && canAccessScope(resource.data.matterId)
@@ -91,7 +102,7 @@ service cloud.firestore {
       // R-2: same scope as documents — matter membership (or the loose-vault rule) plus clearance.
       allow read: if sameFirm() && isMatterStaff() && cleared(resource.data.classification)
         && canAccessScope(resource.data.matterId);
-      allow create: if authorNew();
+      allow create: if authorNew() && atOrAboveMatter(request.resource.data.matterId) && clientSourcedFloor();
       allow update, delete: if false; // append-only
     }
     match /entities/{id} {

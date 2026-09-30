@@ -1060,3 +1060,29 @@ describe("Review R1 #6 — every matter-bound collection requires membership (R-
     })
   })
 })
+
+describe("Review R1 #9 — documents create: matter floor and client-sourced floor in the rules", () => {
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "flPriv"), { firmId: "firmA", title: "P", classification: "privileged" })
+      await setDoc(doc(db, "matters", "flInt"), { firmId: "firmA", title: "I", classification: "internal" })
+      for (const m of ["flPriv", "flInt"]) {
+        await setDoc(doc(db, "matter_members", `${m}_fl-assoc`), { firmId: "firmA", matterId: m, userId: "fl-assoc" })
+      }
+    })
+  })
+
+  it("a member cannot create a document below the matter's classification", async () => {
+    await assertFails(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flLow"), { firmId: "firmA", matterId: "flPriv", classification: "public" }))
+    await assertSucceeds(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flAt"), { firmId: "firmA", matterId: "flPriv", classification: "privileged" }))
+  })
+
+  it("a whatsapp (client-sourced) document below privileged is refused", async () => {
+    await assertFails(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flWa"), { firmId: "firmA", matterId: "flInt", classification: "internal", sourceChannel: "whatsapp" }))
+    await assertSucceeds(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flWa2"), { firmId: "firmA", matterId: "flInt", classification: "privileged", sourceChannel: "whatsapp" }))
+    await assertSucceeds(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flWeb"), { firmId: "firmA", matterId: "flInt", classification: "internal", sourceChannel: "web" }))
+  })
+})

@@ -71,6 +71,15 @@ function requireActor(actorId: string, firmId?: string) {
 
 const DEFAULT_INGEST_CLASSIFICATION: Classification = "privileged"
 
+/**
+ * Client-sourced ingest channels (L17.3 "default privileged for client-sourced material").
+ * Review R1 #9: these are floored at privileged even when the uploader labels them lower.
+ * The spec's client portal was dropped in favour of L8.1 WhatsApp self-service and §4 lists no
+ * email intake channel, so WhatsApp is the only one today; team_portal is the staff upload
+ * portal (L18 §10.1 "Team Upload Portal"). Add any new client-facing channel here.
+ */
+export const CLIENT_SOURCED_CHANNELS: ReadonlySet<string> = new Set(["whatsapp"])
+
 /** max(privileged, matter classification); an unreadable matter label floors at the most restrictive. */
 function defaultIngestClassification(matterClassification: unknown): Classification {
   if (matterClassification === undefined) return DEFAULT_INGEST_CLASSIFICATION
@@ -200,8 +209,14 @@ async function handlePost(request: Request) {
     // L17.3 Human control: "Initial classification set at ingest (default privileged for
     // client-sourced material)". Material arriving without a label is treated as
     // client-sourced; the default is floored at the matter's classification.
-    const classification: Classification =
+    let classification: Classification =
       parsed.classification ?? defaultIngestClassification(matterForDefault?.classification)
+    if (
+      CLIENT_SOURCED_CHANNELS.has(parsed.sourceChannel) &&
+      rankOf(classification) < rankOf(DEFAULT_INGEST_CLASSIFICATION)
+    ) {
+      classification = DEFAULT_INGEST_CLASSIFICATION
+    }
     if (rankOf(actor.clearanceLevel) < rankOf(classification)) {
       return NextResponse.json(
         { error: "actor clearance is below requested document classification" },
