@@ -758,13 +758,122 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
       const target = await member(firmId)
       const users = adminDb().collection("users")
       vi.spyOn(adminAuth(), "setCustomUserClaims").mockImplementationOnce(async () => {
-        // A newer change lands between our commit and our claims write, which then fails.
+        // A newer server-side change lands between our commit and our claims write, which then fails.
         await users.doc(target.uid).update({ role: "intern", claimsVersion: 2 })
+        await adminDb()
+          .collection("claims_sync")
+          .doc(target.uid)
+          .set({ version: 2, firmId, role: "intern", clearanceLevel: "confidential" })
         throw new Error("injected claims failure")
       })
       const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
       expectHttps(err, "internal", "internal")
       expect((await users.doc(target.uid).get()).data()).toMatchObject({ role: "intern", claimsVersion: 2 })
+    })
+
+    it("N1: users doc tampered between commit and sync → Auth claims are exactly the transaction's result", async () => {
+      const firmId = uniq("firm")
+      const partner = await mintIdToken(partnerClaims(firmId, "confidential"))
+      const target = await member(firmId)
+      const users = adminDb().collection("users")
+      const realTx = Firestore.prototype.runTransaction
+      vi.spyOn(Firestore.prototype, "runTransaction").mockImplementationOnce(async function (this: Firestore, fn, opts) {
+        const out = await realTx.call(this, fn as never, opts as never)
+        // A client write (e.g. via lax rules) right after commit: escalate and jump the version.
+        await users.doc(target.uid).update({ role: "partner", clearanceLevel: "privileged-restricted", claimsVersion: 99 })
+        return out
+      })
+      await expect(
+        setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
+      ).resolves.toEqual({ uid: target.uid, role: "clerk", clearanceLevel: "confidential" })
+      expect((await adminAuth().getUser(target.uid)).customClaims).toEqual({
+        firmId,
+        role: "clerk",
+        clearanceLevel: "confidential",
+        claimsVersion: 1,
+      })
+    })
+
+    it("N1: a client-bumped users.claimsVersion does not suppress the revert", async () => {
+      const firmId = uniq("firm")
+      const partner = await mintIdToken(partnerClaims(firmId))
+      const target = await member(firmId)
+      const users = adminDb().collection("users")
+      vi.spyOn(adminAuth(), "setCustomUserClaims").mockImplementationOnce(async () => {
+        await users.doc(target.uid).update({ claimsVersion: 50 })
+        throw new Error("injected claims failure")
+      })
+      await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
+      expect((await users.doc(target.uid).get()).data()?.role).toBe("associate")
+    })
+
+    it("N2: partial sync (claims written, then a later step fails) → doc reverted and claims re-synced to match it", async () => {
+      const firmId = uniq("firm")
+      const partner = await mintIdToken(partnerClaims(firmId))
+      const target = await member(firmId)
+      const auth = adminAuth()
+      const realSet = auth.setCustomUserClaims.bind(auth)
+      const getUser = vi.spyOn(auth, "getUser")
+      vi.spyOn(auth, "setCustomUserClaims").mockImplementationOnce(async (uid, claims) => {
+        await realSet(uid, claims)
+        getUser.mockRejectedValueOnce(new Error("injected read failure"))
+      })
+      const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
+      expectHttps(err, "internal", "internal")
+      const doc = (await adminDb().collection("users").doc(target.uid).get()).data()
+      expect(doc).toMatchObject({ role: "associate", claimsVersion: 2 })
+      expect((await auth.getUser(target.uid)).customClaims).toEqual({
+        firmId,
+        role: "associate",
+        clearanceLevel: "confidential",
+        claimsVersion: 2,
+      })
+    })
+
+    it("N2: sync attempts exhausted → failed-precondition claims_sync_failed, doc reverted, audited", async () => {
+      const firmId = uniq("firm")
+      const partner = await mintIdToken(partnerClaims(firmId))
+      const target = await member(firmId)
+      const revoke = vi.spyOn(adminAuth(), "revokeRefreshTokens")
+      // Claims writes "succeed" but never take effect, so the sync can never confirm.
+      vi.spyOn(adminAuth(), "setCustomUserClaims").mockResolvedValue(undefined)
+      const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
+      expectHttps(err, "failed-precondition", "claims_sync_failed")
+      expect(revoke).not.toHaveBeenCalled()
+      expect((await adminDb().collection("users").doc(target.uid).get()).data()).toMatchObject({
+        role: "associate",
+        claimsVersion: 2,
+      })
+      const rows = await auditRows(partner.uid, ACTION)
+      expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual(["allow:ok", "deny:claims_sync_failed"])
+    })
+
+    it("N3: a revert that would demote the last active partner keeps the role, reverts the rest, and is audited", async () => {
+      const firmId = uniq("firm")
+      const partner = await mintIdToken(partnerClaims(firmId))
+      const target = await member(firmId)
+      const users = adminDb().collection("users")
+      vi.spyOn(adminAuth(), "setCustomUserClaims").mockImplementationOnce(async () => {
+        // Meanwhile the promoting partner is removed: the target is now the only active partner.
+        await users.doc(partner.uid).update({ active: false })
+        throw new Error("injected claims failure")
+      })
+      const err = await httpsErrorOf(
+        setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "partner", clearanceLevel: "internal" }))
+      )
+      expectHttps(err, "internal", "internal")
+      expect((await users.doc(target.uid).get()).data()).toMatchObject({
+        role: "partner",
+        clearanceLevel: "confidential",
+        claimsVersion: 2,
+      })
+      expect((await adminAuth().getUser(target.uid)).customClaims).toMatchObject({
+        role: "partner",
+        clearanceLevel: "confidential",
+        claimsVersion: 2,
+      })
+      const rows = await auditRows(partner.uid, ACTION)
+      expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual(["allow:ok", "deny:revert_blocked_last_partner"])
     })
   })
 

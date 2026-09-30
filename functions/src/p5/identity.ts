@@ -68,6 +68,18 @@ class CallAudit {
     this.written = true
   }
 
+  /**
+   * Records a post-commit incident (e.g. a failed claims sync) as an extra deny
+   * row, after this call's decision row. Best effort: a failure is logged.
+   */
+  async incident(reason: string): Promise<void> {
+    try {
+      await appendAudit(this.row("deny", reason))
+    } catch (err) {
+      logFailure("identity incident audit failed", err)
+    }
+  }
+
   private async write(decision: "allow" | "deny", reason: string): Promise<void> {
     try {
       await appendAudit(this.row(decision, reason))
@@ -217,26 +229,76 @@ function claimsVersionOf(doc: DocumentData | undefined): number {
   return typeof v === "number" && Number.isInteger(v) ? v : 0
 }
 
+/** The claims a transaction decided for a user; `version` is its claimsVersion. */
+type ClaimsResult = { firmId: string; role: Role; clearanceLevel: Classification; version: number }
+
 /**
- * Makes the Auth claims mirror `users/{uid}` (role, clearanceLevel, firmId,
- * claimsVersion), keeping unrelated claims. Re-reads the doc after each write
- * and repeats if a newer version committed meanwhile, so concurrent writers
- * converge on the latest doc state.
+ * `claims_sync/{uid}` records the latest committed ClaimsResult. It is written
+ * only by the Admin SDK in the same transaction as the users doc (the rules'
+ * default deny covers it), so unlike `users/{uid}.claimsVersion` a client
+ * cannot tamper with it; versions and reverts are keyed on it.
  */
-async function syncClaimsFromDoc(uid: string): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const doc = (await usersRef().doc(uid).get()).data()
-    if (!doc) throw new HttpError(404, "not_found")
+const claimsSyncRef = (uid: string) => adminDb().collection("claims_sync").doc(uid)
+
+const MAX_SYNC_ATTEMPTS = 5
+
+/** The committed version for a user: the claims_sync record, falling back to the users doc for older docs. */
+function committedVersion(syncDoc: DocumentData | undefined, userDoc: DocumentData | undefined): number {
+  const v: unknown = syncDoc?.version
+  return typeof v === "number" && Number.isInteger(v) ? v : claimsVersionOf(userDoc)
+}
+
+/** Defence in depth: a ClaimsResult is only ever written to Auth if it is well formed and in the expected firm. */
+function checkedResult(value: unknown, firmId: string): ClaimsResult {
+  const r = (value ?? {}) as Record<string, unknown>
+  if (
+    r.firmId !== firmId ||
+    !isRole(r.role) ||
+    !isKnownClassification(r.clearanceLevel) ||
+    typeof r.version !== "number" ||
+    !Number.isInteger(r.version)
+  ) {
+    throw new HttpError(409, "claims_sync_failed")
+  }
+  return { firmId, role: r.role, clearanceLevel: r.clearanceLevel, version: r.version }
+}
+
+function claimsMatch(claims: Record<string, unknown>, r: ClaimsResult): boolean {
+  return (
+    claims.firmId === r.firmId &&
+    claims.role === r.role &&
+    claims.clearanceLevel === r.clearanceLevel &&
+    claims.claimsVersion === r.version
+  )
+}
+
+/**
+ * Writes a transaction's own ClaimsResult to the Auth claims (keeping
+ * unrelated claims), never values re-read from the client-reachable users doc.
+ * It then confirms: if `claims_sync` shows a newer committed version, that
+ * server-written result is adopted (validated, same firm) so concurrent writers
+ * converge; otherwise the Auth claims must read back as the result. Gives up
+ * after MAX_SYNC_ATTEMPTS with 409 claims_sync_failed.
+ */
+async function syncClaims(uid: string, result: ClaimsResult): Promise<void> {
+  let target = checkedResult(result, result.firmId)
+  for (let attempt = 0; attempt < MAX_SYNC_ATTEMPTS; attempt++) {
     const existing = (await adminAuth().getUser(uid)).customClaims ?? {}
     await adminAuth().setCustomUserClaims(uid, {
       ...existing,
-      firmId: doc.firmId,
-      role: doc.role,
-      clearanceLevel: doc.clearanceLevel,
-      claimsVersion: claimsVersionOf(doc),
+      firmId: target.firmId,
+      role: target.role,
+      clearanceLevel: target.clearanceLevel,
+      claimsVersion: target.version,
     })
-    if (claimsVersionOf((await usersRef().doc(uid).get()).data()) === claimsVersionOf(doc)) return
+    const latest = (await claimsSyncRef(uid).get()).data()
+    if (typeof latest?.version === "number" && latest.version > target.version) {
+      target = checkedResult(latest, target.firmId)
+      continue
+    }
+    if (claimsMatch((await adminAuth().getUser(uid)).customClaims ?? {}, target)) return
   }
+  throw new HttpError(409, "claims_sync_failed")
 }
 
 /** True when running as a deployed function (not tests/emulated scripts). */
@@ -431,49 +493,108 @@ export async function setUserClaimsHandler(
     const userRef = usersRef().doc(uid)
     const change = await adminDb().runTransaction(async (tx) => {
       const current = await readTargetDoc(tx, caller, uid)
+      const syncDoc = (await tx.get(claimsSyncRef(uid))).data()
       const nextRole: unknown = role ?? current.role
       const nextClearance: unknown = clearanceLevel ?? current.clearanceLevel
       if (!isRole(nextRole) || !isKnownClassification(nextClearance)) throw new HttpError(409, "target_state_invalid")
       if (current.role === "partner" && current.active === true && nextRole !== "partner") {
         await requireAnotherActivePartner(tx, caller.firmId, uid)
       }
-      const version = claimsVersionOf(current) + 1
-      await audit.stage(tx, "allow", "ok")
-      tx.update(userRef, {
+      const result: ClaimsResult = {
+        firmId: caller.firmId,
         role: nextRole,
         clearanceLevel: nextClearance,
-        claimsVersion: version,
-        updatedAt: FieldValue.serverTimestamp(),
-      })
-      return { version, role: nextRole, clearanceLevel: nextClearance, before: { role: current.role, clearanceLevel: current.clearanceLevel } }
+        version: Math.max(committedVersion(syncDoc, current), claimsVersionOf(current)) + 1,
+      }
+      await audit.stage(tx, "allow", "ok")
+      writeClaimsState(tx, uid, result)
+      return { result, before: { role: current.role, clearanceLevel: current.clearanceLevel } }
     })
     audit.committed()
 
     try {
-      await syncClaimsFromDoc(uid)
+      await syncClaims(uid, change.result)
     } catch (err) {
-      await revertIfStillOurs(uid, change.version, change.before).catch((revertErr: unknown) =>
-        logFailure("setUserClaims revert failed", revertErr, uid)
-      )
+      await recoverFailedSync(audit, uid, change.result, change.before)
+      if (err instanceof HttpError && err.code === "claims_sync_failed") await audit.incident("claims_sync_failed")
       throw err
     }
     await adminAuth().revokeRefreshTokens(uid)
-    return { uid, role: change.role, clearanceLevel: change.clearanceLevel }
+    return { uid, role: change.result.role, clearanceLevel: change.result.clearanceLevel }
   })
 }
 
-/** Restores the users doc's prior role/clearance (as a new version) if `version` is still the latest. */
-async function revertIfStillOurs(uid: string, version: number, before: { role: unknown; clearanceLevel: unknown }): Promise<void> {
-  const userRef = usersRef().doc(uid)
-  await adminDb().runTransaction(async (tx) => {
-    const doc = (await tx.get(userRef)).data()
-    if (!doc || claimsVersionOf(doc) !== version) return
-    tx.update(userRef, {
-      role: before.role,
-      clearanceLevel: before.clearanceLevel,
-      claimsVersion: version + 1,
-      updatedAt: FieldValue.serverTimestamp(),
-    })
+/** Writes a ClaimsResult to the users doc and its server-only claims_sync record in one transaction. */
+function writeClaimsState(tx: Transaction, uid: string, r: ClaimsResult): void {
+  tx.update(usersRef().doc(uid), {
+    role: r.role,
+    clearanceLevel: r.clearanceLevel,
+    claimsVersion: r.version,
+    updatedAt: FieldValue.serverTimestamp(),
+  })
+  tx.set(claimsSyncRef(uid), { ...r, at: FieldValue.serverTimestamp() })
+}
+
+/**
+ * After a failed claims sync: revert the doc (if our version is still the
+ * committed one) and re-sync the Auth claims from the reverted result, so doc
+ * and claims agree again. Failures here are logged; the caller rethrows the
+ * original error.
+ */
+async function recoverFailedSync(
+  audit: CallAudit,
+  uid: string,
+  ours: ClaimsResult,
+  before: { role: unknown; clearanceLevel: unknown }
+): Promise<void> {
+  let reverted: { result: ClaimsResult; blocked: boolean } | undefined
+  try {
+    reverted = await revertIfStillOurs(uid, ours, before)
+  } catch (err) {
+    logFailure("setUserClaims revert failed", err, uid)
+    return
+  }
+  if (!reverted) return
+  if (reverted.blocked) await audit.incident("revert_blocked_last_partner")
+  try {
+    await syncClaims(uid, reverted.result)
+  } catch (err) {
+    logFailure("setUserClaims re-sync after revert failed", err, uid)
+  }
+}
+
+/**
+ * Restores the prior role/clearance as a new version, only while `ours` is
+ * still the committed version (per claims_sync, which clients cannot write).
+ * If restoring the role would demote the firm's last active partner, the role
+ * is kept and only the clearance is restored (`blocked: true`).
+ */
+async function revertIfStillOurs(
+  uid: string,
+  ours: ClaimsResult,
+  before: { role: unknown; clearanceLevel: unknown }
+): Promise<{ result: ClaimsResult; blocked: boolean } | undefined> {
+  return adminDb().runTransaction(async (tx) => {
+    const doc = (await tx.get(usersRef().doc(uid))).data()
+    const syncDoc = (await tx.get(claimsSyncRef(uid))).data()
+    if (!doc || committedVersion(syncDoc, doc) !== ours.version) return undefined
+    let role: unknown = before.role
+    let blocked = false
+    if (doc.role === "partner" && doc.active === true && role !== "partner") {
+      try {
+        await requireAnotherActivePartner(tx, ours.firmId, uid)
+      } catch (err) {
+        if (!(err instanceof HttpError && err.code === "last_partner")) throw err
+        role = doc.role
+        blocked = true
+      }
+    }
+    const result = checkedResult(
+      { firmId: ours.firmId, role, clearanceLevel: before.clearanceLevel, version: ours.version + 1 },
+      ours.firmId
+    )
+    writeClaimsState(tx, uid, result)
+    return { result, blocked }
   })
 }
 
