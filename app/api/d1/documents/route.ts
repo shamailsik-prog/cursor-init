@@ -21,6 +21,7 @@ import {
   readJsonLimited,
 } from "@/platform/http/validation"
 import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -37,7 +38,8 @@ const BodySchema = z.discriminatedUnion("action", [
     matterId: idField.nullable().optional(),
     contentBase64: base64Field,
     sourceChannel: z.enum(["web", "team_portal", "whatsapp", "bulk"]),
-    classification: classificationField,
+    // Optional: an unlabelled upload defaults to privileged (L17.3), floored at the matter.
+    classification: classificationField.optional(),
   }),
 ])
 
@@ -64,6 +66,17 @@ function requireActor(actorId: string, firmId?: string) {
     throw new PublicError("actor role not allowed for document ingest")
   }
   return actor
+}
+
+const DEFAULT_INGEST_CLASSIFICATION: Classification = "privileged"
+
+/** max(privileged, matter classification); an unreadable matter label floors at the most restrictive. */
+function defaultIngestClassification(matterClassification: unknown): Classification {
+  if (matterClassification === undefined) return DEFAULT_INGEST_CLASSIFICATION
+  if (!isClassification(matterClassification)) return "privileged-restricted"
+  return rankOf(matterClassification) > rankOf(DEFAULT_INGEST_CLASSIFICATION)
+    ? matterClassification
+    : DEFAULT_INGEST_CLASSIFICATION
 }
 
 function canViewDocument(
@@ -188,13 +201,19 @@ async function handlePost(request: Request) {
     const priorAuditCount = store.audit.length
     const actor = requireActor(parsed.actorId, parsed.firmId)
     await syncFirmMembers(store, repos, actor.firmId)
-    if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification)) {
+    const matterId = parsed.matterId ?? null
+    const matterForDefault = matterId ? store.matters.get(matterId) : undefined
+    // L17.3 Human control: "Initial classification set at ingest (default privileged for
+    // client-sourced material)". Material arriving without a label is treated as
+    // client-sourced; the default is floored at the matter's classification.
+    const classification: Classification =
+      parsed.classification ?? defaultIngestClassification(matterForDefault?.classification)
+    if (rankOf(actor.clearanceLevel) < rankOf(classification)) {
       return NextResponse.json(
         { error: "actor clearance is below requested document classification" },
         { status: 403 }
       )
     }
-    const matterId = parsed.matterId ?? null
     if (matterId) {
       const matter = store.matters.get(matterId)
       if (!matter) return NextResponse.json({ error: "unknown matter" }, { status: 404 })
@@ -207,7 +226,7 @@ async function handlePost(request: Request) {
           { status: 403 }
         )
       }
-      if (rankOf(parsed.classification) < rankOfStoredOrMax(matter.classification)) {
+      if (rankOf(classification) < rankOfStoredOrMax(matter.classification)) {
         return NextResponse.json(
           { error: "document classification cannot be lower than matter classification" },
           { status: 400 }
@@ -224,7 +243,7 @@ async function handlePost(request: Request) {
       matterId,
       bytes,
       sourceChannel: parsed.sourceChannel,
-      classification: parsed.classification,
+      classification,
       idempotencyKey: key,
     })
 

@@ -173,6 +173,63 @@ describe("POST/GET /api/d1/documents", () => {
     expect(b.status).toBe(409)
   })
 
+  it("defaults an unlabelled upload to privileged, floored at the matter's classification (L17.3)", async () => {
+    const internalMatter = seedMatter("internal")
+    const unlabelled = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId: internalMatter,
+        contentBase64: b64("%PDF-client-letter%"),
+        sourceChannel: "whatsapp",
+      },
+      "2a3b4c5d-6e7f-4081-9a2b-3c4d5e6f7a81"
+    )
+    expect(unlabelled.status).toBe(200)
+    const one = (await unlabelled.json()) as { result: { doc: { classification: string } } }
+    expect(one.result.doc.classification).toBe("privileged")
+
+    const store = getRuntimeStore()
+    const restricted = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Partner-only",
+      courtId: "SHC",
+      classification: "privileged-restricted",
+    })
+    addMember(store, restricted.id, "partner_a", "firmA")
+    const floored = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId: restricted.id,
+        contentBase64: b64("%PDF-restricted%"),
+        sourceChannel: "web",
+      },
+      "3b4c5d6e-7f80-4192-8b3c-4d5e6f7a8b92"
+    )
+    expect(floored.status).toBe(200)
+    const two = (await floored.json()) as { result: { doc: { classification: string } } }
+    expect(two.result.doc.classification).toBe("privileged-restricted")
+
+    const explicit = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId: internalMatter,
+        contentBase64: b64("%PDF-public-order%"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      "4c5d6e7f-8091-42a3-9c4d-5e6f7a8b9ca3"
+    )
+    const three = (await explicit.json()) as { result: { doc: { classification: string } } }
+    expect(three.result.doc.classification).toBe("internal")
+  })
+
   it("enforces matter classification floor and firm/member boundaries", async () => {
     const privilegedMatter = seedMatter("privileged")
     const tooLow = await post(
