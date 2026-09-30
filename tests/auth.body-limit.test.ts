@@ -18,6 +18,7 @@ vi.mock("firebase-admin/auth", () => ({
 
 import { POST as mattersPost } from "@/app/api/d1/matters/route"
 import { POST as documentsPost } from "@/app/api/d1/documents/route"
+import { POST as opsReportingPost } from "@/app/api/d2/ops-reporting/route"
 import { withSession } from "@/platform/http/withSession"
 import { DEFAULT_JSON_BODY_BYTES, readJsonLimited } from "@/platform/http/validation"
 import { resetSessionStateForTests } from "@/platform/p5/session"
@@ -101,6 +102,29 @@ describe("session boundary enforces the d1 body caps (auth x rules)", () => {
     )
     expect(res.status).toBe(401)
     expect(pulled()).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it("caps the ops-reporting POST at 1 MB like the d1 JSON routes", async () => {
+    const skeleton = JSON.stringify({ action: "x", matterId: "m", note: "" })
+    const atCap = JSON.stringify({
+      action: "x",
+      matterId: "m",
+      note: "x".repeat(DEFAULT_JSON_BODY_BYTES - Buffer.byteLength(skeleton)),
+    })
+    // At the cap the body gets past the size check (and fails on the unknown action).
+    const ok = await opsReportingPost(authedPost("http://127.0.0.1/api/d2/ops-reporting", atCap))
+    expect(ok.status).not.toBe(413)
+    const { stream, pulled } = countingStream(8 * DEFAULT_JSON_BODY_BYTES)
+    const res = await opsReportingPost(authedPost("http://127.0.0.1/api/d2/ops-reporting", stream))
+    expect(res.status).toBe(413)
+    expect(((await res.json()) as { code: string }).code).toBe("payload_too_large")
+    expect(pulled()).toBeLessThan(2 * DEFAULT_JSON_BODY_BYTES)
+    const declared = await opsReportingPost(
+      authedPost("http://127.0.0.1/api/d2/ops-reporting", atCap + " ", {
+        "Content-Length": String(DEFAULT_JSON_BODY_BYTES + 1),
+      })
+    )
+    expect(declared.status).toBe(413)
   })
 
   it("uses the upload cap (not 1 MB) for documents ingest", async () => {

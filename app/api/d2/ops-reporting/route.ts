@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
+import { DEFAULT_JSON_BODY_BYTES } from "@/platform/http/validation"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
@@ -17375,7 +17376,7 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
 }
 
 export async function POST(request: Request) {
-  return withSession(request, handlePost)
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
 }
 
 async function handlePost(request: Request) {
