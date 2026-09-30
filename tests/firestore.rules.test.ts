@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { afterAll, beforeAll, describe, it, vi } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 
 /** PR315-M2: `npm run test:rules` co-runs persistence.runtime-mode mega tests; harden bundle timeouts. */
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 })
@@ -10,6 +10,7 @@ import {
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
 import {
+  deleteDoc,
   doc,
   getDoc,
   setDoc,
@@ -728,5 +729,68 @@ describe("Round 3 — users/{uid} is the authoritative identity record", () => {
   it("client SDK cannot create users docs (self or partner)", async () => {
     await assertFails(setDoc(doc(authed("r3-new", ASSOC), "users", "r3-new"), seed("associate")))
     await assertFails(setDoc(doc(authed("r3-partner", PARTNER), "users", "r3-created"), seed("associate")))
+  })
+})
+
+describe("Round 4 — firms are Cloud Functions-owned; identity side collections default-deny", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "firms", "firmA"), {
+        name: "Firm A",
+        mfaEnforcedRoles: ["partner"],
+        dataResidency: "pk",
+        plan: "standard",
+      })
+      await setDoc(doc(db, "mfa_recovery", "r4-partner"), { firmId: "firmA", codes: ["x"] })
+      await setDoc(doc(db, "mfa_disable_approvals", "a1"), { firmId: "firmA", userId: "r4-partner" })
+      await setDoc(doc(db, "platform", "config"), { firmId: "firmA", flag: true })
+      await setDoc(doc(db, "claims_sync", "r4-partner"), { firmId: "firmA", claimsVersion: 1 })
+    })
+  })
+
+  it("same-firm users can still read their firm", async () => {
+    await assertSucceeds(getDoc(doc(authed("r4-partner", PARTNER), "firms", "firmA")))
+    await assertSucceeds(getDoc(doc(authed("r4-assoc", ASSOC), "firms", "firmA")))
+  })
+
+  it.each([
+    ["mfaEnforcedRoles", []],
+    ["dataResidency", "us"],
+    ["plan", "enterprise"],
+    ["name", "Renamed"],
+  ])("partner cannot update firm %s", async (field, value) => {
+    await assertFails(updateDoc(doc(authed("r4-partner", PARTNER), "firms", "firmA"), { [field]: value }))
+  })
+
+  it("partner cannot create, overwrite or delete firm records", async () => {
+    const db = authed("r4-partner", PARTNER)
+    await assertFails(setDoc(doc(db, "firms", "firmA"), { name: "Overwritten", mfaEnforcedRoles: [] }))
+    await assertFails(setDoc(doc(authed("r4-newfirm", { ...PARTNER, firmId: "firmNew" }), "firms", "firmNew"), { name: "New" }))
+    await assertFails(deleteDoc(doc(db, "firms", "firmA")))
+  })
+
+  it.each([
+    ["mfa_recovery", "r4-partner"],
+    ["mfa_disable_approvals", "a1"],
+    ["platform", "config"],
+    ["claims_sync", "r4-partner"],
+  ])("%s/{id} has no match: default deny for read and write", async (coll, id) => {
+    for (const [uid, claims] of [["r4-partner", PARTNER], ["r4-assoc", ASSOC]] as const) {
+      const db = authed(uid, claims)
+      await assertFails(getDoc(doc(db, coll, id)))
+      await assertFails(setDoc(doc(db, coll, id), { firmId: "firmA", x: 1 }))
+      await assertFails(setDoc(doc(db, coll, `${id}-new`), { firmId: "firmA", x: 1 }))
+      await assertFails(deleteDoc(doc(db, coll, id)))
+    }
+  })
+
+  it("no explicit match block exists for the default-deny collections", () => {
+    for (const coll of ["mfa_recovery", "mfa_disable_approvals", "platform", "claims_sync"]) {
+      expect(RULES).not.toMatch(new RegExp(`match /${coll}/`))
+    }
   })
 })
