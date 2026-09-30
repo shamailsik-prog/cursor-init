@@ -15935,7 +15935,7 @@ async function handleGet(request: Request) {
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
-          ? row.outboundRegistryAttestationLedgerStatus ===
+          ? row.externalDistributionAuditLedgerReconciliationStatus ===
             waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationStatus
           : true
       )
@@ -16007,7 +16007,7 @@ async function handleGet(request: Request) {
       .filter((row) => (matterId ? row.matterId === matterId : true))
       .filter((row) =>
         ackReconOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
-          ? row.outboundRegistryAttestationLedgerStatus ===
+          ? row.partnerHandoffAttestationAcknowledgementStatus ===
             ackReconOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementStatus
           : true
       )
