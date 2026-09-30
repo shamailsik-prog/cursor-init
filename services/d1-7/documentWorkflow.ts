@@ -1,4 +1,5 @@
 import { declassify } from "@/platform/classification/declassify"
+import { canReadDocument } from "@/platform/p5/documentAccess"
 import { PublicError } from "@/platform/http/publicError"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
@@ -22,12 +23,7 @@ function isUserVisibleForDocument(
   user: User,
   doc: DocumentRecord
 ): boolean {
-  // L17.6 #41: accounts reads the intimation register only — no matter documents.
-  if (user.role === "accounts") return false
-  if (doc.firmId !== user.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
-  if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, user.id))
-  return user.role !== "client" && user.role !== "intern" && user.role !== "accounts"
+  return canReadDocument(store, user, doc)
 }
 
 export function ensureWorkflowRow(
@@ -132,6 +128,9 @@ export function assignReviewer(
   }
   if (doc.matterId && !store.members.has(store.memberKey(doc.matterId, reviewer.id))) {
     throw new PublicError("reviewer is not a member of this matter")
+  }
+  if (!canReadDocument(store, reviewer, doc)) {
+    throw new PublicError("reviewer not permitted for this document")
   }
   row.reviewerId = reviewer.id
   row.updatedAt = Date.now()

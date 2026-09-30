@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { canReadDocument } from "@/platform/p5/documentAccess"
 import { z } from "zod"
 import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
@@ -10,7 +11,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { type Classification } from "@/platform/p1/types"
-import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -79,12 +80,7 @@ function canViewWorkflowDocument(
 ): boolean {
   const user = store.users.get(userId)
   if (!user) return false
-  // L17.6 #41: accounts reads the intimation register only — no matter documents.
-  if (user.role === "accounts") return false
-  if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
-  if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, userId))
-  return user.role !== "client" && user.role !== "intern" && user.role !== "accounts"
+  return canReadDocument(store, user, doc)
 }
 
 async function persistWorkflowEventsSince(

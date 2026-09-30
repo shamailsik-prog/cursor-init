@@ -27,6 +27,7 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
+import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
@@ -86,14 +87,7 @@ function canViewDocument(
 ): boolean {
   const user = store.users.get(userId)
   if (!user) return false
-  // L17.6 #41: accounts reads the intimation register only — no matter documents.
-  if (user.role === "accounts") return false
-  if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
-  if (doc.matterId) {
-    return store.members.has(store.memberKey(doc.matterId, userId))
-  }
-  return user.role !== "client" && user.role !== "intern" && user.role !== "accounts"
+  return canReadDocument(store, user, doc)
 }
 
 export async function GET(request: Request) {
@@ -211,6 +205,13 @@ async function handlePost(request: Request) {
     if (rankOf(actor.clearanceLevel) < rankOf(classification)) {
       return NextResponse.json(
         { error: "actor clearance is below requested document classification" },
+        { status: 403 }
+      )
+    }
+    if (!matterId && !canUseLooseVault(actor)) {
+      // E-18: loose vault is clerk/partner with clearance >= confidential (as the rules' authorNew()).
+      return NextResponse.json(
+        { error: "loose vault is limited to clerk and partner roles with confidential clearance" },
         { status: 403 }
       )
     }
