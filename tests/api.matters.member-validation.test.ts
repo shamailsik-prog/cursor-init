@@ -50,8 +50,8 @@ describe("POST /api/d1/matters validates members before persisting", () => {
     )
     expect(res.status).toBe(400)
     const json = (await res.json()) as { error: string }
-    expect(json.error).toMatch(/unknown member user/)
-    expect(json.error).toContain("ghost_user")
+    expect(json.error).toBe("unknown member user")
+    expect(json.error).not.toContain("ghost_user")
     expect(snapshot()).toEqual(before)
   })
 
@@ -63,7 +63,23 @@ describe("POST /api/d1/matters validates members before persisting", () => {
     )
     expect(res.status).toBe(400)
     const json = (await res.json()) as { error: string }
-    expect(json.error).toMatch(/cross-firm membership rejected/)
+    // Indistinguishable from a nonexistent id: no cross-firm existence oracle.
+    expect(json.error).toBe("unknown member user")
+    expect(snapshot()).toEqual(before)
+  })
+
+  it("gives a cross-firm member id and a nonexistent id identical responses", async () => {
+    const before = snapshot()
+    const crossFirm = await post(
+      createBody({ memberUserIds: ["partner_b"] }),
+      "6d4f1f0e-4b1c-4f59-9d2c-2f5b0d1f7a05"
+    )
+    const missing = await post(
+      createBody({ memberUserIds: ["ghost_user"] }),
+      "6d4f1f0e-4b1c-4f59-9d2c-2f5b0d1f7a06"
+    )
+    expect(crossFirm.status).toBe(missing.status)
+    expect(await crossFirm.text()).toBe(await missing.text())
     expect(snapshot()).toEqual(before)
   })
 

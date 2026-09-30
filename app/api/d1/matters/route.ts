@@ -85,8 +85,9 @@ function ensureMemberUsersInFirm(userIds: Iterable<string>, firmId: string) {
   const store = getRuntimeStore()
   for (const userId of userIds) {
     const user = store.users.get(userId)
-    if (!user) throw new PublicError(`unknown member user: ${userId}`)
-    if (user.firmId !== firmId) throw new PublicError("cross-firm membership rejected")
+    // A cross-firm user is reported exactly like a nonexistent one (no id echoed), so
+    // the response is not an oracle for which ids exist in other firms.
+    if (!user || user.firmId !== firmId) throw new PublicError("unknown member user")
   }
 }
 
