@@ -1,4 +1,8 @@
 import { NextResponse } from "next/server"
+import { z } from "zod"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
   IdempotencyCache,
@@ -6,7 +10,8 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { checkPermission } from "@/platform/p5/checkPermission"
-import { rankOf } from "@/platform/spine/store"
+import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -21,33 +26,33 @@ import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-type CreateBody = {
-  action: "create"
-  actorId?: string
-  firmId?: string
-  clientId?: string
-  title?: string
-  courtId?: string
-  classification?: string
-  memberUserIds?: string[]
-}
+const BodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("create"),
+    actorId: idField,
+    firmId: idField,
+    clientId: idField,
+    title: textField(1000),
+    courtId: idField,
+    classification: classificationField,
+    memberUserIds: z.array(idField).max(200).optional(),
+  }),
+  z.object({
+    action: z.literal("confirm_engagement"),
+    actorId: idField,
+    matterId: idField,
+    atMs: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    action: z.literal("record_case_number"),
+    actorId: idField,
+    matterId: idField,
+    raw: textField(500),
+    courtId: idField,
+  }),
+])
 
-type ConfirmBody = {
-  action: "confirm_engagement"
-  actorId?: string
-  matterId?: string
-  atMs?: number
-}
-
-type CaseBody = {
-  action: "record_case_number"
-  actorId?: string
-  matterId?: string
-  raw?: string
-  courtId?: string
-}
-
-type Body = CreateBody | ConfirmBody | CaseBody
+type Body = z.infer<typeof BodySchema>
 
 function deny(message: string, status = 403) {
   return NextResponse.json({ error: message }, { status })
@@ -68,23 +73,33 @@ function parseCursor(value: string | null): number {
 function ensureActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for matter operations")
+    throw new PublicError("actor role not allowed for matter operations")
   }
   return actor
+}
+
+function ensureMemberUsersInFirm(userIds: Iterable<string>, firmId: string) {
+  const store = getRuntimeStore()
+  for (const userId of userIds) {
+    const user = store.users.get(userId)
+    // A cross-firm user is reported exactly like a nonexistent one (no id echoed), so
+    // the response is not an oracle for which ids exist in other firms.
+    if (!user || user.firmId !== firmId) throw new PublicError("unknown member user")
+  }
 }
 
 function ensureClientIdentityInFirm(clientId: string, firmId: string) {
   const store = getRuntimeStore()
   const client = store.users.get(clientId)
-  if (!client) return
+  if (!client) throw new PublicError("unknown client")
   if (client.firmId !== firmId) {
-    throw new Error("cross-firm client denied")
+    throw new PublicError("cross-firm client denied")
   }
   if (client.role !== "client") {
-    throw new Error("clientId must reference a client user")
+    throw new PublicError("clientId must reference a client user")
   }
 }
 
@@ -96,19 +111,23 @@ async function ensureMatterAccess(
   const store = getRuntimeStore()
   const actor = ensureActor(actorId)
   const matter = store.matters.get(matterId) ?? (await repos.matters.get(matterId))
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   store.matters.set(matter.id, matter)
-  if (matter.firmId !== actor.firmId) throw new Error("cross-firm access denied")
+  if (matter.firmId !== actor.firmId) throw new PublicError("cross-firm access denied")
   if (!store.members.has(store.memberKey(matterId, actorId))) {
-    throw new Error("actor is not a member of this matter")
+    throw new PublicError("actor is not a member of this matter")
   }
-  if (rankOf(actor.clearanceLevel) < rankOf(matter.classification)) {
-    throw new Error("actor clearance is below matter classification")
+  if (rankOf(actor.clearanceLevel) < rankOfStoredOrMax(matter.classification)) {
+    throw new PublicError("actor clearance is below matter classification")
   }
   return { actor, matter }
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repo = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -146,6 +165,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repo = await getRuntimeRepositories(store)
   let key: string
@@ -157,16 +180,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
-  try {
-    parsed = (await request.json()) as Body
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
-  }
-
-  if (!parsed.action) {
-    return NextResponse.json({ error: "action is required" }, { status: 400 })
-  }
+  const raw = await readJsonLimited(request)
+  if (!raw.ok) return raw.response
+  const body = parseBody(BodySchema, raw.data)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
 
   const fingerprint = JSON.stringify({
     route: "/api/d1/matters",
@@ -203,6 +221,10 @@ export async function POST(request: Request) {
         return deny("actor clearance is below requested matter classification")
       }
       ensureClientIdentityInFirm(parsed.clientId, parsed.firmId)
+      // Validate every member before anything is persisted, so a bad member id cannot
+      // leave an orphaned matter behind.
+      const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
+      ensureMemberUsersInFirm(memberIds, parsed.firmId)
       const priorAuditCount = store.audit.length
       const matter = {
         id: store.id("mat"),
@@ -219,7 +241,6 @@ export async function POST(request: Request) {
       await repo.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
       // Keep in-memory mirror in sync for flows that still read the spine directly.
       store.matters.set(matter.id, matter)
-      const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
       for (const userId of memberIds) {
         addMember(store, matter.id, userId, parsed.firmId)
         await repo.members.upsert({ matterId: matter.id, userId, firmId: parsed.firmId })
@@ -321,7 +342,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "matter operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "matter operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

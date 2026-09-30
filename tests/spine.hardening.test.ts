@@ -123,6 +123,12 @@ describe("G-1 spine hardening", () => {
 
   it("L4.10 silence follow-up is idempotent across repeated escalations", () => {
     const store = newStore()
+    seedUser(store, {
+      id: "clerk1",
+      firmId: "firmA",
+      role: "clerk",
+      clearanceLevel: "confidential",
+    })
     const matter = createMatter(store, {
       firmId: "firmA",
       clientId: "c1",

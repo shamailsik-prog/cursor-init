@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server"
+import { z } from "zod"
+import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification, type Classification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmEntities } from "@/platform/persistence/entitySync"
@@ -15,24 +20,25 @@ import { conflictCheck, createClient } from "@/services/d1-1/clients"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-type CreateBody = {
-  action: "create"
-  actorId?: string
-  firmId?: string
-  canonicalName?: string
-  cnic?: string
-  phone?: string
-  classification?: string
-}
+const BodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("create"),
+    actorId: idField,
+    firmId: idField,
+    canonicalName: textField(500),
+    cnic: textField(64),
+    phone: textField(64),
+    classification: classificationField,
+  }),
+  z.object({
+    action: z.literal("conflict_check"),
+    actorId: idField,
+    firmId: idField,
+    entityId: idField,
+  }),
+])
 
-type ConflictBody = {
-  action: "conflict_check"
-  actorId?: string
-  firmId?: string
-  entityId?: string
-}
-
-type Body = CreateBody | ConflictBody
+type Body = z.infer<typeof BodySchema>
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -49,15 +55,19 @@ function parseCursor(value: string | null): number {
 function requireActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for client registry operations")
+    throw new PublicError("actor role not allowed for client registry operations")
   }
   return actor
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -79,7 +89,7 @@ export async function GET(request: Request) {
   await syncFirmEntities(store, repos, user.firmId)
   const all = [...store.entities.values()]
     .filter((row) => row.firmId === user.firmId)
-    .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .sort((a, b) => a.id.localeCompare(b.id))
   const items = all.slice(cursor, cursor + limit)
   const nextCursor = cursor + items.length < all.length ? String(cursor + items.length) : null
@@ -94,6 +104,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -105,15 +119,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
-  try {
-    parsed = (await request.json()) as Body
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
-  }
-  if (!parsed.action) {
-    return NextResponse.json({ error: "action is required" }, { status: 400 })
-  }
+  const raw = await readJsonLimited(request)
+  if (!raw.ok) return raw.response
+  const body = parseBody(BodySchema, raw.data)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
 
   const fingerprint = JSON.stringify({
     route: "/api/d1/clients",
@@ -209,7 +219,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "client operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "client operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

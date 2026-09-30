@@ -91,7 +91,8 @@ describe("GET/POST /api/p5/tenancy", () => {
         firmId: "firmB",
       })
     )
-    expect(crossFirmRefDenied.status).toBe(400)
+    // Foreign / cross-firm references answer like unknown ones (no existence oracle).
+    expect(crossFirmRefDenied.status).toBe(404)
   })
 
   it("lists users and memberships for partner admins with pagination", async () => {

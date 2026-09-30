@@ -1,11 +1,26 @@
 import { NextResponse } from "next/server"
+import { z } from "zod"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
-import { isClassification } from "@/platform/p1/types"
-import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import {
+  base64DecodedLength,
+  base64Field,
+  classificationField,
+  idField,
+  maxUploadBytes,
+  maxUploadRequestBytes,
+  fingerprintOf,
+  parseBody,
+  payloadTooLarge,
+  readJsonLimited,
+} from "@/platform/http/validation"
+import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -14,19 +29,19 @@ import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-type SourceChannel = "web" | "team_portal" | "whatsapp" | "bulk"
+const BodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("ingest"),
+    actorId: idField,
+    firmId: idField,
+    matterId: idField.nullable().optional(),
+    contentBase64: base64Field,
+    sourceChannel: z.enum(["web", "team_portal", "whatsapp", "bulk"]),
+    classification: classificationField,
+  }),
+])
 
-type IngestBody = {
-  action: "ingest"
-  actorId?: string
-  firmId?: string
-  matterId?: string | null
-  contentBase64?: string
-  sourceChannel?: SourceChannel
-  classification?: string
-}
-
-type Body = IngestBody
+type Body = z.infer<typeof BodySchema>
 
 function parseLimit(value: string | null): number {
   const parsed = value ? Number.parseInt(value, 10) : 25
@@ -40,22 +55,13 @@ function parseCursor(value: string | null): number {
   return parsed
 }
 
-function isSourceChannel(value: unknown): value is SourceChannel {
-  return (
-    value === "web" ||
-    value === "team_portal" ||
-    value === "whatsapp" ||
-    value === "bulk"
-  )
-}
-
 function requireActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
   if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for document ingest")
+    throw new PublicError("actor role not allowed for document ingest")
   }
   return actor
 }
@@ -68,7 +74,7 @@ function canViewDocument(
   const user = store.users.get(userId)
   if (!user) return false
   if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
+  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) {
     return store.members.has(store.memberKey(doc.matterId, userId))
   }
@@ -76,6 +82,10 @@ function canViewDocument(
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -119,7 +129,22 @@ export async function GET(request: Request) {
   })
 }
 
+// The boundary reads the (large) upload body once, under the same wire cap as the
+// handler. Getters so SIKANDER_MAX_UPLOAD_BYTES is read per request, as the handler does.
+const uploadBodyLimits: SessionRouteOptions = {
+  get maxBodyBytes() {
+    return maxUploadRequestBytes()
+  },
+  get reportedBodyLimit() {
+    return maxUploadBytes()
+  },
+}
+
 export async function POST(request: Request) {
+  return withSession(request, handlePost, uploadBodyLimits)
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -131,33 +156,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
-  try {
-    parsed = (await request.json()) as Body
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
+  const uploadLimit = maxUploadBytes()
+  const raw = await readJsonLimited(request, maxUploadRequestBytes(), uploadLimit)
+  if (!raw.ok) return raw.response
+  const body = parseBody(BodySchema, raw.data)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
+  if (base64DecodedLength(parsed.contentBase64) > uploadLimit) {
+    return payloadTooLarge(uploadLimit)
   }
 
-  if (parsed.action !== "ingest") {
-    return NextResponse.json({ error: "unknown action" }, { status: 400 })
-  }
-  if (!parsed.actorId || !parsed.firmId || !parsed.contentBase64) {
-    return NextResponse.json(
-      { error: "actorId, firmId, and contentBase64 are required" },
-      { status: 400 }
-    )
-  }
-  if (!isClassification(parsed.classification)) {
-    return NextResponse.json(
-      { error: "classification must be a rank-0–4 label" },
-      { status: 400 }
-    )
-  }
-  if (!isSourceChannel(parsed.sourceChannel)) {
-    return NextResponse.json({ error: "sourceChannel is invalid" }, { status: 400 })
-  }
-
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/documents",
     action: parsed.action,
     body: parsed,
@@ -196,7 +205,7 @@ export async function POST(request: Request) {
           { status: 403 }
         )
       }
-      if (rankOf(parsed.classification) < rankOf(matter.classification)) {
+      if (rankOf(parsed.classification) < rankOfStoredOrMax(matter.classification)) {
         return NextResponse.json(
           { error: "document classification cannot be lower than matter classification" },
           { status: 400 }
@@ -259,7 +268,7 @@ export async function POST(request: Request) {
     idempotency.set(key, payload, fingerprint)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "document ingest failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "document ingest failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

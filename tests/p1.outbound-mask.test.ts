@@ -205,7 +205,7 @@ describe("Job F — P1 outbound mask", () => {
     expect(captured!.body.startsWith("public")).toBe(false)
   })
 
-  it("blocks internal content without DPA — internal opinions are client-identifying", async () => {
+  it("L18 §4.6: blocks confidential content when the provider has no executed DPA", async () => {
     let sent = false
     setTransportForTests({
       async send() {
@@ -214,14 +214,34 @@ describe("Job F — P1 outbound mask", () => {
       },
     })
     const result = await callCommitteeBrain({
-      body: "Internal opinion for the client",
-      classification: "internal",
+      body: "Confidential opinion for the client",
+      classification: "confidential",
       provider: "openai",
       purpose: "summarise",
     })
     expect(result.blocked).toBe(true)
     expect(sent).toBe(false)
-    expect(result.reason).toMatch(/internal\+/)
+    expect(result.reason).toMatch(/executed DPA/)
+  })
+
+  it("L18 §4.6: internal content goes to any configured provider, masked", async () => {
+    const cnic = "42101-1234567-1"
+    let body = ""
+    setTransportForTests({
+      async send(request) {
+        body = request.body
+        return { text: "ok" }
+      },
+    })
+    const result = await callCommitteeBrain({
+      body: `Internal opinion, CNIC ${cnic}`,
+      classification: "internal",
+      provider: "openai",
+      purpose: "summarise",
+    })
+    expect(result.blocked).toBe(false)
+    expect(body).toContain("[CNIC]")
+    expect(body).not.toContain(cnic)
   })
 
   it("masks CNIC in the provider response before returning it", async () => {

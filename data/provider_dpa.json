@@ -1,4 +1,4 @@
 {
-  "comment": "TODO(firm): DPA status per provider is a firm decision. Until a row is recorded as executed, P1 blocks internal and above (client-identifying). Public may leave. Do not invent DPA status.",
+  "comment": "TODO(firm): DPA status and residency per provider are firm decisions. Unrecorded means dpaExecuted=false, inRegion=false. L18 \u00a74.6: public/internal may go to any configured provider; confidential and privileged need dpaExecuted; privileged-restricted needs inRegion. Do not invent values.",
   "providers": {}
 }

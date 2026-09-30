@@ -5,6 +5,9 @@ import {
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
 import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
+import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
+import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { newStore } from "@/platform/spine/store"
 
 const RULES = readFileSync("firestore.rules", "utf8")
 
@@ -3235,7 +3238,7 @@ describe("Firestore repository adapters", () => {
               )
             )!,
             ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
-              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_finalized",
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_finalized",
           },
           actorId: "partner_a",
           reason: "ops_closure_ack_recon_tb_partner_handoff_attestation_492_seed",
@@ -3373,13 +3376,15 @@ describe("Firestore repository adapters", () => {
       } = await import(
         "@/platform/persistence/workflowOpsAckReconTbSealVerificationsOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentGovernance"
       )
+      // Seeded parent carries an extra backlog counter the builder does not read.
+      const repoCustodyAckReconTbPdFreezeSealTbExtAck499Parent = {
+        ...repoCustodyAckReconTbPdFreezeSealTbRecon497,
+        partnerDeliveryTransportBoundaryReceiptReconciliationStatus:
+          "partner_delivery_transport_boundary_receipt_reconciliation_finalized" as const,
+        partnerDeliveryTransportBoundaryReceiptReconciliationBacklogCount: 0,
+      }
       const repoCustodyAckReconTbPdFreezeSealTbExtAck499 = buildRepoCustodyAckReconTbPdFreezeSealTbExtAck499Row({
-        partnerDeliveryTransportBoundaryReceiptReconciliation: {
-          ...repoCustodyAckReconTbPdFreezeSealTbRecon497,
-          partnerDeliveryTransportBoundaryReceiptReconciliationStatus:
-            "partner_delivery_transport_boundary_receipt_reconciliation_finalized",
-          partnerDeliveryTransportBoundaryReceiptReconciliationBacklogCount: 0,
-        },
+        partnerDeliveryTransportBoundaryReceiptReconciliation: repoCustodyAckReconTbPdFreezeSealTbExtAck499Parent,
         actorId: "partner_a",
         reason: "ops_custody_ack_recon_tb_pd_freeze_seal_tb_ext_ack_499_seed",
         now: 126,
@@ -3387,13 +3392,15 @@ describe("Firestore repository adapters", () => {
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.upsert(
         repoCustodyAckReconTbPdFreezeSealTbExtAck499
       )
+      // Seeded parent carries an extra backlog counter the builder does not read.
+      const repoClosureAckReconTbPdFreezeSealTbExtAck500Parent = {
+        ...repoClosureAckReconTbPdFreezeSealTbRecon498,
+        partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus:
+          "transport_boundary_receipt_reconciliation_closure_attested" as const,
+        partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationBacklogCount: 0,
+      }
       const repoClosureAckReconTbPdFreezeSealTbExtAck500 = buildRepoClosureAckReconTbPdFreezeSealTbExtAck500Row({
-        partnerDeliveryTransportBoundaryReceiptReconciliation: {
-          ...repoClosureAckReconTbPdFreezeSealTbRecon498,
-          partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus:
-            "transport_boundary_receipt_reconciliation_closure_attested",
-          partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationBacklogCount: 0,
-        },
+        partnerDeliveryTransportBoundaryReceiptReconciliation: repoClosureAckReconTbPdFreezeSealTbExtAck500Parent,
         actorId: "partner_a",
         reason: "ops_closure_ack_recon_tb_pd_freeze_seal_tb_ext_ack_500_seed",
         now: 127,
@@ -5023,4 +5030,56 @@ describe("Firestore repository adapters", () => {
       expect(closureQueueReentryComplianceByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   }, 10_000)
+
+  it("audit_log append is insert-only: an existing audit id is never overwritten (emulator)", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      const repos = createFirestoreRepositories(
+        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
+      )
+      const original = {
+        id: "aud_insert_only_1",
+        firmId: "firmA",
+        action: "matter_create",
+        actorId: "partner_a",
+        target: "mat_audit_1",
+        classification: "internal" as const,
+        at: 1,
+      }
+      await repos.audit.append(original)
+      await expect(
+        repos.audit.append({ ...original, action: "matter_delete", target: "mat_other" })
+      ).rejects.toBeInstanceOf(AuditAppendConflictError)
+      // Identical re-append (retry / overlapping write-through) is an idempotent no-op.
+      await expect(repos.audit.append({ ...original })).resolves.toBeUndefined()
+      const rows = (await repos.audit.listByFirm("firmA")).filter(
+        (row) => row.id === "aud_insert_only_1"
+      )
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.action).toBe("matter_create")
+      expect(rows[0]?.target).toBe("mat_audit_1")
+
+      // Overlapping write-through ranges (two in-flight requests) persist each row once.
+      const runtime = newStore()
+      const entry = (target: string) => ({
+        firmId: "firmA",
+        action: "matter_update",
+        actorId: "partner_a",
+        target,
+        classification: "internal" as const,
+      })
+      runtime.audit.push(entry("mat_overlap_a"))
+      const priorB = runtime.audit.length
+      runtime.audit.push(entry("mat_overlap_b"))
+      await persistAuditEntriesSince(runtime, repos, 0)
+      await expect(persistAuditEntriesSince(runtime, repos, priorB)).resolves.toBeUndefined()
+      const overlapRows = (await repos.audit.listByFirm("firmA")).filter((row) =>
+        row.target.startsWith("mat_overlap_")
+      )
+      expect(overlapRows.map((row) => row.target).sort()).toEqual([
+        "mat_overlap_a",
+        "mat_overlap_b",
+      ])
+    })
+  })
 })
