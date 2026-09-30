@@ -15,9 +15,11 @@
     "firebase-functions": "^6.0.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
     "@types/express": "^4.17.25",
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.0",
+    "firebase": "^11.10.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   }

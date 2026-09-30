@@ -1,0 +1,413 @@
+import { randomUUID } from "node:crypto"
+import { readFileSync, writeFileSync } from "node:fs"
+import path from "node:path"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { Timestamp } from "firebase-admin/firestore"
+import { HttpsError } from "firebase-functions/v2/https"
+import {
+  assertFails,
+  assertSucceeds,
+  initializeTestEnvironment,
+  type RulesTestEnvironment,
+} from "@firebase/rules-unit-testing"
+import { collection, doc, getDoc, getDocs, query, setDoc, where } from "firebase/firestore"
+import { adminAuth, adminDb } from "../src/admin"
+import * as index from "../src/index"
+import * as identity from "../src/p5/identity"
+import * as mfa from "../src/p5/mfa"
+import * as gates from "../src/p5/gates"
+import { ROUTES, createRouter } from "../src/http/router"
+import type { Operation } from "../src/p5/common"
+import { EMULATORS, callableAuth, mintIdToken, uniq } from "./emu"
+
+/**
+ * Gate G-2 (L18 §10, functions side): two firms are seeded; every P5 identity
+ * callable and every HTTP `api` route is attempted by each firm-B role against
+ * firm A (the firm taken from firm A, or a firm-A user as the target), and
+ * every tenant collection in firestore.rules is read cross-firm. All must deny,
+ * leak no firm-A data, and leave firm A unchanged.
+ *
+ * The lists are derived, not hand-copied: the callables are src/index.ts's
+ * exports, the routes are ROUTES, the collections are the `match` blocks of
+ * firestore.rules. A new callable, route or collection without a probe fails
+ * this suite. `G2_COVERAGE_OUT` (set by ci_gates/gate_g2.sh) receives the
+ * coverage rows as JSON.
+ */
+
+const ROLES = ["partner", "associate", "clerk", "intern", "accounts", "client"] as const
+type Role = (typeof ROLES)[number]
+const MAX_CLEARANCE = "privileged-restricted"
+
+type Row = { suite: string; service: string; channel: string; path: string; status: string; attempts: number; allowed: number; note?: string }
+const rows: Row[] = []
+
+afterAll(() => {
+  const out = process.env.G2_COVERAGE_OUT
+  if (out) writeFileSync(out, JSON.stringify({ suite: "functions", rows }, null, 2))
+})
+
+/** Non-endpoint exports of src/index.ts (deploy entries that are not identity reads). */
+const NOT_TENANT_ENDPOINTS: Record<string, string> = { health: "health probe, no tenant data", api: "HTTP router, probed route by route" }
+
+/**
+ * Every callable, how to aim it at firm A. `target`: the op names a user (the
+ * firm-A victim is put in the payload); otherwise only the firm binding can be
+ * aimed at firm A. `firmless`: the op takes no firm (onboarding, platform).
+ */
+type Probe = { data: (a: FirmA) => Record<string, unknown>; target: boolean; firmless?: boolean }
+const PROBES: Record<string, Probe> = {
+  onboardFirm: { data: () => ({ name: "G2 probe firm" }), target: false, firmless: true },
+  recordGatePass: { data: () => ({ gate: "G-2", evidence: { summary: "forged by a firm user" } }), target: false, firmless: true },
+  createFirmUser: { data: () => ({ email: `${uniq("g2probe")}@example.test`, role: "clerk", clearanceLevel: "internal" }), target: false },
+  setUserClaims: { data: (a) => ({ uid: a.victim, role: "clerk" }), target: true },
+  deactivateUser: { data: (a) => ({ uid: a.victim }), target: true },
+  enforceMfaForRole: { data: () => ({ role: "associate", enforced: true }), target: false },
+  approveMfaDisable: { data: (a) => ({ uid: a.victim }), target: true },
+  disableMfa: { data: (a) => ({ uid: a.victim, approvalId: a.approvalId, recoveryCode: "AAAA-BBBB-CCCC" }), target: true },
+  generateRecoveryCodes: { data: () => ({}), target: false },
+  syncMfaStatus: { data: () => ({}), target: false },
+}
+
+type Handler = (request: never) => Promise<unknown>
+const HANDLER_MODULES = [identity, mfa, gates] as unknown as Record<string, unknown>[]
+function handlerFor(name: string): Handler | undefined {
+  for (const mod of HANDLER_MODULES) {
+    const h = mod[`${name}Handler`]
+    if (typeof h === "function") return h as Handler
+  }
+  return undefined
+}
+function opFor(name: string): Operation | undefined {
+  for (const mod of HANDLER_MODULES) {
+    const op = mod[`${name}Op`] as Operation | undefined
+    if (op && typeof op === "object" && "run" in op) return op
+  }
+  return undefined
+}
+
+const CALLABLES = Object.keys(index)
+  .filter((n) => !(n in NOT_TENANT_ENDPOINTS))
+  .sort()
+
+type Member = { uid: string; token: string; email: string }
+type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[] }
+type FirmB = { firmId: string; members: Record<Role, Member> }
+
+async function seedFirm(firmId: string, name: string): Promise<Record<Role, Member>> {
+  await adminDb().collection("firms").doc(firmId).set({ name, dataResidency: "PK", plan: "internal" })
+  const members = {} as Record<Role, Member>
+  for (const role of ROLES) {
+    members[role] = await mintIdToken({ firmId, role, clearanceLevel: MAX_CLEARANCE }, { emailVerified: true })
+  }
+  return members
+}
+
+/** Firm A's observable state: users docs, Auth claims/disabled, firm doc, the approval, recovery docs. */
+async function snapshotFirmA(a: FirmA): Promise<unknown> {
+  const users = await Promise.all(
+    a.users.map(async (uid) => {
+      const d = (await adminDb().collection("users").doc(uid).get()).data() ?? {}
+      const au = await adminAuth().getUser(uid)
+      return {
+        uid,
+        doc: { role: d.role, clearanceLevel: d.clearanceLevel, active: d.active, mfaEnabled: d.mfaEnabled, claimsVersion: d.claimsVersion },
+        claims: au.customClaims,
+        disabled: au.disabled,
+        factors: au.multiFactor?.enrolledFactors.length ?? 0,
+        recovery: (await adminDb().collection("mfa_recovery").doc(uid).get()).exists,
+      }
+    })
+  )
+  const firm = (await adminDb().collection("firms").doc(a.firmId).get()).data()
+  const approval = (await adminDb().collection("mfa_disable_approvals").doc(a.approvalId).get()).data()
+  const firmUsers = (await adminDb().collection("users").where("firmId", "==", a.firmId).count().get()).data().count
+  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers }
+}
+
+/** Every identifier and name of firm A that must never appear in a firm-B response. */
+function firmATokens(a: FirmA): string[] {
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, "G2 Alpha Chambers"]
+}
+
+function leaked(body: unknown, tokens: string[]): string[] {
+  const text = JSON.stringify(body ?? null)
+  return tokens.filter((t) => text.includes(t))
+}
+
+function mockRes() {
+  const out = { status: 0, body: undefined as unknown }
+  const res = {
+    status(n: number) {
+      out.status = n
+      return res
+    },
+    set() {
+      return res
+    },
+    json(b: unknown) {
+      out.body = b
+      return res
+    },
+  }
+  return { res, out }
+}
+
+describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: P5 callables and the HTTP api", () => {
+  let A: FirmA
+  let B: FirmB
+  let before: unknown
+
+  beforeAll(async () => {
+    const firmA = uniq("g2-firm-a")
+    const aMembers = await seedFirm(firmA, "G2 Alpha Chambers")
+    // The victim sits below every firm-B caller's clearance, so only the firm boundary can refuse.
+    const victim = await mintIdToken({ firmId: firmA, role: "associate", clearanceLevel: "internal" }, { emailVerified: true })
+    const approval = adminDb().collection("mfa_disable_approvals").doc()
+    await approval.set({
+      firmId: firmA,
+      subjectUid: victim.uid,
+      approverUid: aMembers.partner.uid,
+      createdAt: Timestamp.now(),
+      expiresAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
+      used: false,
+    })
+    A = {
+      firmId: firmA,
+      partner: aMembers.partner,
+      victim: victim.uid,
+      victimEmail: victim.email,
+      approvalId: approval.id,
+      users: [...Object.values(aMembers).map((m) => m.uid), victim.uid],
+    }
+    const firmB = uniq("g2-firm-b")
+    B = { firmId: firmB, members: await seedFirm(firmB, "G2 Beta Associates") }
+    before = await snapshotFirmA(A)
+  })
+
+  it("every deployed callable has a cross-firm probe, and every HTTP route runs one of them", () => {
+    expect(CALLABLES).toEqual(Object.keys(PROBES).sort())
+    for (const name of CALLABLES) {
+      expect([name, typeof handlerFor(name)]).toEqual([name, "function"])
+      expect([name, opFor(name) !== undefined]).toEqual([name, true])
+    }
+    for (const route of ROUTES) {
+      const name = route.path.split("/").pop()!
+      expect([route.path, opFor(name) === route.handler]).toEqual([route.path, true])
+    }
+  })
+
+  it("callables: each firm-B role aiming each callable at firm A is denied, leaks nothing", async () => {
+    const tokens = firmATokens(A)
+    const failures: string[] = []
+    for (const name of CALLABLES) {
+      const probe = PROBES[name]
+      const handler = handlerFor(name)!
+      let attempts = 0
+      let allowed = 0
+      for (const role of ROLES) {
+        const caller = B.members[role]
+        const variants: Array<[string, Record<string, unknown>]> = [["firmId=A", { ...probe.data(A), firmId: A.firmId }]]
+        if (probe.target) variants.push(["own firm, firm-A target", { ...probe.data(A), firmId: B.firmId }])
+        for (const [label, data] of variants) {
+          attempts++
+          try {
+            const result = await handler({ auth: await callableAuth(caller.token), data } as never)
+            allowed++
+            failures.push(`${name} ${role} ${label}: ALLOWED ${JSON.stringify(result)}`)
+          } catch (err) {
+            if (!(err instanceof HttpsError) || err.code === "internal") {
+              failures.push(`${name} ${role} ${label}: not a deny (${String(err)})`)
+              continue
+            }
+            const leak = leaked({ message: err.message, details: err.details }, tokens)
+            if (leak.length) failures.push(`${name} ${role} ${label}: leaked ${leak.join(",")}`)
+          }
+        }
+      }
+      rows.push({ suite: "functions", service: "P5", channel: "callable", path: name, status: "tested", attempts, allowed })
+    }
+    expect(failures).toEqual([])
+  })
+
+  it("HTTP api: each firm-B role on each route with X-Firm-Id=A, or with a firm-A target, is denied, leaks nothing", async () => {
+    const tokens = firmATokens(A)
+    const router = createRouter(ROUTES)
+    const failures: string[] = []
+    for (const route of ROUTES) {
+      const name = route.path.split("/").pop()!
+      const probe = PROBES[name]
+      let attempts = 0
+      let allowed = 0
+      for (const [i, role] of ROLES.entries()) {
+        const caller = B.members[role]
+        const variants: Array<[string, string]> = [["X-Firm-Id=A", A.firmId]]
+        if (probe.target) variants.push(["X-Firm-Id=B, firm-A target", B.firmId])
+        for (const [label, firmHeader] of variants) {
+          attempts++
+          const body = probe.data(A)
+          const { res, out } = mockRes()
+          await router(
+            {
+              method: route.method,
+              path: route.path,
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${caller.token}`,
+                "x-firm-id": firmHeader,
+                "idempotency-key": randomUUID(),
+                // One client IP per role: auth refusals count against the per-IP limit.
+                "x-forwarded-for": `10.0.0.1, 10.62.${i}.${attempts}`,
+              },
+              body,
+              rawBody: Buffer.from(JSON.stringify(body)),
+              ip: "127.0.0.1",
+            } as never,
+            res as never
+          )
+          if (out.status < 400 || out.status >= 500) {
+            if (out.status < 400) allowed++
+            failures.push(`${route.path} ${role} ${label}: status ${out.status} ${JSON.stringify(out.body)}`)
+          }
+          const leak = leaked(out.body, tokens)
+          if (leak.length) failures.push(`${route.path} ${role} ${label}: leaked ${leak.join(",")}`)
+        }
+      }
+      rows.push({ suite: "functions", service: "P5", channel: "http", path: `${route.method} ${route.path}`, status: "tested", attempts, allowed })
+    }
+    expect(failures).toEqual([])
+  })
+
+  it("firm A is unchanged, and no firm-B actor holds an allow audit row on firm A", async () => {
+    expect(await snapshotFirmA(A)).toEqual(before)
+    const bUids = new Set(Object.values(B.members).map((m) => m.uid))
+    const allowRows = (await adminDb().collection("audit_log").where("decision", "==", "allow").get()).docs
+      .map((d) => d.data())
+      .filter((r) => bUids.has(r.actorId as string))
+      .filter((r) => r.firmId === A.firmId || A.users.some((uid) => String(r.target).includes(uid)))
+    expect(allowRows).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Firestore rules: every tenant collection read cross-firm.
+// ---------------------------------------------------------------------------
+
+const RULES_PATH = path.resolve(__dirname, "../../firestore.rules")
+const RULES = readFileSync(RULES_PATH, "utf8")
+
+/** `match /<collection>/{<id>} { ... }` blocks of firestore.rules (not the `/databases/{database}/documents` root, not the catch-all). */
+function ruleCollections(rules: string): Array<{ name: string; block: string }> {
+  const re = /^\s*match \/([A-Za-z0-9_]+)\/\{\w+\}(?!\/)/gm
+  const starts = [...rules.matchAll(re)]
+  return starts.map((m, i) => ({
+    name: m[1],
+    block: rules.slice(m.index, i + 1 < starts.length ? starts[i + 1].index : rules.length),
+  }))
+}
+
+/** A collection whose read rule never consults the caller's firm is platform-global (not tenant data). */
+function isGlobal(block: string): boolean {
+  return !/sameFirm\(\)|tok\(\)\.firmId/.test(block)
+}
+
+const COLLECTIONS = ruleCollections(RULES)
+/** Platform-global collections, reviewed: feature flags carry no tenant data. Anything new here fails the gate. */
+const REVIEWED_GLOBAL = ["feature_flags"]
+
+function emulatorHostPort(): { host: string; port: number } {
+  const [host, port] = (process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080").split(":")
+  return { host, port: Number(port) }
+}
+
+describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every tenant collection", () => {
+  const FIRM_A = "g2-rules-firm-a"
+  const FIRM_B = "g2-rules-firm-b"
+  const MATTER_A = "g2-matter-a"
+  const A_PARTNER = "g2-a-partner"
+  const bUid = (role: Role) => `g2-b-${role}`
+  let env: RulesTestEnvironment
+
+  const docIdFor = (name: string) => (name === "firms" ? FIRM_A : name === "matters" ? MATTER_A : "g2-a-doc")
+  const seedFor = () => ({
+    firmId: FIRM_A,
+    classification: "public",
+    matterId: MATTER_A,
+    userId: A_PARTNER,
+    name: "G2-ALPHA-SECRET",
+  })
+
+  beforeAll(async () => {
+    env = await initializeTestEnvironment({ projectId: "demo-g2-rules", firestore: { rules: RULES, ...emulatorHostPort() } })
+    await env.clearFirestore()
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      for (const { name } of COLLECTIONS) await setDoc(doc(db, name, docIdFor(name)), seedFor())
+      // Firm A's partner is a member of the matter (positive control). Every firm-B user also
+      // holds a forged membership doc on the firm-A matter: the firm check alone must refuse.
+      await setDoc(doc(db, "matter_members", `${MATTER_A}_${A_PARTNER}`), { firmId: FIRM_A, matterId: MATTER_A, userId: A_PARTNER })
+      for (const role of ROLES) {
+        await setDoc(doc(db, "matter_members", `${MATTER_A}_${bUid(role)}`), { firmId: FIRM_A, matterId: MATTER_A, userId: bUid(role) })
+      }
+    })
+  })
+
+  afterAll(async () => {
+    await env?.cleanup()
+  })
+
+  it("the rules declare tenant collections, and the only platform-global ones are the reviewed list", () => {
+    expect(COLLECTIONS.length).toBeGreaterThan(20)
+    expect(COLLECTIONS.filter((c) => isGlobal(c.block)).map((c) => c.name)).toEqual(REVIEWED_GLOBAL)
+    for (const name of REVIEWED_GLOBAL) {
+      rows.push({ suite: "functions", service: "rules", channel: "rules", path: name, status: "global", attempts: 0, allowed: 0, note: "platform-global (no tenant data)" })
+    }
+  })
+
+  it("control: firm A's partner (a matter member) can read the seeded doc in every tenant collection", async () => {
+    const db = env.authenticatedContext(A_PARTNER, { firmId: FIRM_A, role: "partner", clearanceLevel: MAX_CLEARANCE }).firestore()
+    const failures: string[] = []
+    for (const { name, block } of COLLECTIONS) {
+      if (isGlobal(block)) continue
+      await assertSucceeds(getDoc(doc(db, name, docIdFor(name)))).catch((err: unknown) => failures.push(`${name}: ${String(err)}`))
+    }
+    expect(failures).toEqual([])
+  })
+
+  it("every firm-B role (max clearance, forged membership) is denied get and list on every tenant collection", async () => {
+    const failures: string[] = []
+    const tenant = COLLECTIONS.filter((c) => !isGlobal(c.block))
+    const dbs = ROLES.map((role) => [role, env.authenticatedContext(bUid(role), { firmId: FIRM_B, role, clearanceLevel: MAX_CLEARANCE }).firestore()] as const)
+    for (const { name } of tenant) {
+      const results = await Promise.all(
+        dbs.flatMap(([role, db]) => [
+          assertFails(getDoc(doc(db, name, docIdFor(name)))).then(
+            () => null,
+            () => `${name} get by ${role}: ALLOWED`
+          ),
+          assertFails(getDocs(query(collection(db, name), where("firmId", "==", FIRM_A)))).then(
+            () => null,
+            () => `${name} list firmId==A by ${role}: ALLOWED`
+          ),
+        ])
+      )
+      const bad = results.filter((r): r is string => r !== null)
+      failures.push(...bad)
+      rows.push({ suite: "functions", service: "rules", channel: "rules", path: name, status: "tested", attempts: results.length, allowed: bad.length })
+    }
+    expect(failures).toEqual([])
+  })
+
+  it("platform/gates and gate_passes are server-only: no client (either firm) can read or write them", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "platform", "gates"), { g2PassedAt: "seeded" })
+      await setDoc(doc(ctx.firestore(), "gate_passes", "p1"), { gate: "G-2" })
+    })
+    for (const [uid, firmId] of [[A_PARTNER, FIRM_A], [bUid("partner"), FIRM_B]] as const) {
+      const db = env.authenticatedContext(uid, { firmId, role: "partner", clearanceLevel: MAX_CLEARANCE, platformAdmin: true }).firestore()
+      await assertFails(getDoc(doc(db, "platform", "gates")))
+      await assertFails(setDoc(doc(db, "platform", "gates"), { g2PassedAt: new Date() }))
+      await assertFails(getDoc(doc(db, "gate_passes", "p1")))
+      await assertFails(setDoc(doc(db, "gate_passes", "forged"), { gate: "G-2" }))
+    }
+  })
+})
