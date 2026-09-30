@@ -23,13 +23,13 @@ const MAX_EMAIL = 254
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const FOUNDER = { role: "partner", clearanceLevel: "privileged-restricted" } as const
 
-function dataOf(request: CallableRequest<unknown>): Data {
+export function dataOf(request: CallableRequest<unknown>): Data {
   const d = request.data
   return d !== null && typeof d === "object" && !Array.isArray(d) ? (d as Data) : {}
 }
 
 /** Collects the audit context of one call and writes its single row. */
-class CallAudit {
+export class CallAudit {
   firmId = ""
   target: string
   private readonly actorId: string
@@ -109,12 +109,12 @@ function errorCode(err: unknown): string {
 }
 
 /** Logs a failure with a generic message, its code and (optionally) a uid; no raw error text. */
-function logFailure(message: string, err: unknown, uid?: string): void {
+export function logFailure(message: string, err: unknown, uid?: string): void {
   logger.error(message, uid === undefined ? { code: errorCode(err) } : { uid, code: errorCode(err) })
 }
 
 /** Runs a callable body; any failure without an audit row yet is audited as a deny, then mapped to HttpsError. */
-async function audited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> {
+export async function audited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> {
   try {
     return await body()
   } catch (err) {
@@ -129,7 +129,7 @@ async function audited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> 
   }
 }
 
-function requirePartner(caller: Caller): void {
+export function requirePartner(caller: Caller): void {
   if (caller.role !== "partner") throw new HttpError(403, "partner_only")
 }
 
@@ -138,7 +138,7 @@ function forbidPlatformAdmin(data: Data): void {
 }
 
 /** A safe single Firestore document id: non-empty, ≤128 chars, no "/", not "." / "..", not reserved `__*__`. */
-function isSafeDocId(value: unknown): value is string {
+export function isSafeDocId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value !== "" &&
@@ -151,7 +151,7 @@ function isSafeDocId(value: unknown): value is string {
 }
 
 /** A user id that is also a safe single Firestore document id. */
-function parseUid(value: unknown): string {
+export function parseUid(value: unknown): string {
   if (!isSafeDocId(value)) throw new HttpError(400, "invalid_uid")
   return value
 }
@@ -162,7 +162,7 @@ function parseEmail(value: unknown): string {
   return email
 }
 
-function parseRole(value: unknown): Role {
+export function parseRole(value: unknown): Role {
   if (!isRole(value)) throw new HttpError(400, "invalid_role")
   return value
 }
@@ -204,7 +204,7 @@ const usersRef = () => adminDb().collection("users")
  * target checks: missing → 404 not_found, other firm → 403 cross_firm,
  * clearance above the caller's → 403 exceeds_own_clearance.
  */
-async function readTargetDoc(tx: Transaction, caller: Caller, uid: string): Promise<DocumentData> {
+export async function readTargetDoc(tx: Transaction, caller: Caller, uid: string): Promise<DocumentData> {
   const doc = (await tx.get(usersRef().doc(uid))).data()
   if (!doc) throw new HttpError(404, "not_found")
   if (doc.firmId !== caller.firmId) throw new HttpError(403, "cross_firm")

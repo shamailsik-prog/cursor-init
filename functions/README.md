@@ -116,3 +116,21 @@ resumes idempotently and returns the same `firmId` (audited as
 - Every identity call writes one `audit_log` decision row. If a claims sync
   fails after commit, extra `deny` rows record it: `claims_sync_failed` and
   `revert_blocked_last_partner`.
+
+## MFA policy and recovery (P5, E-19)
+
+- `enforceMfaForRole({ firmId, role, enforced })` (partner) edits
+  `firms/{firmId}.mfaEnforcedRoles`. `requireAuth` and `callerFromCallable`
+  refuse an enforced role whose token has no `firebase.sign_in_second_factor`
+  with 403 `mfa_required`. Only `disableMfa` and `generateRecoveryCodes` are
+  exempt, so a user who lost the device can still recover.
+- `generateRecoveryCodes({ firmId })` returns 10 codes once and replaces any
+  earlier set. Only HMAC-SHA-256 hashes with a per-user salt are stored
+  (`users/{uid}.recoveryCodeHashes`, `recoveryCodeSalt`). After a factor is
+  enrolled, regenerating needs a second-factor session.
+- Disabling needs two people: another partner calls
+  `approveMfaDisable({ firmId, uid })`, which creates a one-hour, single-use
+  `mfa_disable_approvals/{id}`. Then the subject, or a partner who is not the
+  approver, calls `disableMfa({ firmId, uid, recoveryCode, approvalId })`.
+- In the emulator tests, `mintMfaIdToken` (test/emu.ts) signs in through the
+  Auth emulator's phone MFA flow to get a real second-factor token.

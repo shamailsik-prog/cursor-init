@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { adminAuth, adminDb } from "../src/admin"
+import { adminApp, adminAuth, adminDb } from "../src/admin"
 
 /** True when both Auth and Firestore emulators are wired (via `npm run test:emu`). */
 export const EMULATORS =
@@ -44,4 +44,57 @@ export async function mintIdToken(
 export async function callableAuth(token: string) {
   const decoded = await adminAuth().verifyIdToken(token)
   return { uid: decoded.uid, token: decoded, rawToken: token } as never
+}
+
+const MFA_PHONE = "+15555550100"
+
+async function emulatorPost(path: string, body: unknown): Promise<Record<string, unknown>> {
+  const res = await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/${path}?key=fake-api-key`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`emulator ${path} failed: ${res.status} ${await res.text()}`)
+  return (await res.json()) as Record<string, unknown>
+}
+
+/**
+ * Like `mintIdToken`, then enrols a phone second factor (Admin SDK) and signs
+ * in through the emulator's real MFA flow (password → mfaSignIn start/finalize
+ * with the emulator's SMS code). Returns both tokens: `firstFactorToken` was
+ * minted before enrolment (no `firebase.sign_in_second_factor`), `token`
+ * carries `sign_in_second_factor: "phone"`.
+ */
+export async function mintMfaIdToken(
+  claims: Record<string, unknown> | null,
+  opts: { userDoc?: boolean } = {}
+): Promise<{ uid: string; token: string; firstFactorToken: string; email: string }> {
+  const first = await mintIdToken(claims, { ...opts, emailVerified: true })
+  await adminAuth().updateUser(first.uid, {
+    multiFactor: { enrolledFactors: [{ uid: randomUUID(), phoneNumber: MFA_PHONE, factorId: "phone" }] },
+  })
+  const signIn = await emulatorPost("v1/accounts:signInWithPassword", {
+    email: first.email,
+    password: "emulator-pass-123",
+    returnSecureToken: true,
+  })
+  const pending = signIn.mfaPendingCredential as string
+  const enrollmentId = (signIn.mfaInfo as { mfaEnrollmentId: string }[])[0].mfaEnrollmentId
+  const start = await emulatorPost("v2/accounts/mfaSignIn:start", {
+    mfaPendingCredential: pending,
+    mfaEnrollmentId: enrollmentId,
+    phoneSignInInfo: { recaptchaToken: "emulator" },
+  })
+  const sessionInfo = (start.phoneResponseInfo as { sessionInfo: string }).sessionInfo
+  const codesRes = await fetch(
+    `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/emulator/v1/projects/${adminApp().options.projectId ?? process.env.GCLOUD_PROJECT}/verificationCodes`
+  )
+  const { verificationCodes } = (await codesRes.json()) as { verificationCodes: { sessionInfo: string; code: string }[] }
+  const code = verificationCodes.find((c) => c.sessionInfo === sessionInfo)?.code
+  if (!code) throw new Error("emulator MFA code not found")
+  const done = await emulatorPost("v2/accounts/mfaSignIn:finalize", {
+    mfaPendingCredential: pending,
+    phoneVerificationInfo: { sessionInfo, code },
+  })
+  return { uid: first.uid, token: done.idToken as string, firstFactorToken: first.token, email: first.email }
 }

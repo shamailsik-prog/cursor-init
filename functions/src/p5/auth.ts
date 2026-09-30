@@ -59,8 +59,18 @@ export async function requireAuth(req: { headers: Record<string, string | undefi
     if (code === "auth/user-disabled") throw new HttpError(401, "user_disabled")
     throw new HttpError(401, "invalid_token")
   }
-  return bindToUserDoc(callerFromClaims(decoded.uid, decoded, header(req.headers, "x-firm-id")))
+  const caller = callerFromClaims(decoded.uid, decoded, header(req.headers, "x-firm-id"))
+  return bindToUserDoc(caller, { secondFactor: hasSecondFactor(decoded), mfaExempt: false })
 }
+
+/** True when the verified token records a second-factor sign-in (`firebase.sign_in_second_factor`). */
+export function hasSecondFactor(claims: object): boolean {
+  const firebase = (claims as { firebase?: { sign_in_second_factor?: unknown } }).firebase
+  return typeof firebase?.sign_in_second_factor === "string" && firebase.sign_in_second_factor !== ""
+}
+
+/** How a session relates to the firm's MFA policy (`firms/{firmId}.mfaEnforcedRoles`). */
+type MfaContext = { secondFactor: boolean; mfaExempt: boolean }
 
 /**
  * Applies the authoritative `users/{uid}` doc to a token-derived Caller:
@@ -68,12 +78,19 @@ export async function requireAuth(req: { headers: Record<string, string | undefi
  * 403 firm_mismatch; malformed doc role/clearance → 403 no_claims; doc role ≠
  * token role → 401 claims_stale (refresh the token). Clearance is the lower of
  * the doc's and the token's, so a demotion takes effect before revocation does.
- * Unreadable doc → 503 store_unavailable.
+ * Then the firm's MFA policy (E-19): if the doc role is listed in
+ * `firms/{firmId}.mfaEnforcedRoles` and the session has no second factor →
+ * 403 mfa_required, unless the caller is an MFA-recovery callable (`mfaExempt`).
+ * Unreadable users or firm doc → 503 store_unavailable.
  */
-async function bindToUserDoc(caller: Caller): Promise<Caller> {
+async function bindToUserDoc(caller: Caller, mfa: MfaContext): Promise<Caller> {
   let doc: Record<string, unknown> | undefined
+  let firm: Record<string, unknown> | undefined
   try {
-    doc = (await adminDb().collection("users").doc(caller.uid).get()).data()
+    const db = adminDb()
+    const [userSnap, firmSnap] = await db.getAll(db.collection("users").doc(caller.uid), db.collection("firms").doc(caller.firmId))
+    doc = userSnap.data()
+    firm = firmSnap.data()
   } catch {
     throw new HttpError(503, "store_unavailable")
   }
@@ -81,9 +98,15 @@ async function bindToUserDoc(caller: Caller): Promise<Caller> {
   if (doc.firmId !== caller.firmId) throw new HttpError(403, "firm_mismatch")
   if (!isRole(doc.role) || !isKnownClassification(doc.clearanceLevel)) throw new HttpError(403, "no_claims")
   if (doc.role !== caller.role) throw new HttpError(401, "claims_stale")
+  if (!mfa.mfaExempt && !mfa.secondFactor && isMfaEnforced(firm, doc.role)) throw new HttpError(403, "mfa_required")
   const clearanceLevel =
     rankOf(doc.clearanceLevel) < rankOf(caller.clearanceLevel) ? doc.clearanceLevel : caller.clearanceLevel
   return { ...caller, clearanceLevel }
+}
+
+function isMfaEnforced(firm: Record<string, unknown> | undefined, role: Role): boolean {
+  const enforced = firm?.mfaEnforcedRoles
+  return Array.isArray(enforced) && enforced.includes(role)
 }
 
 /**
@@ -115,13 +138,21 @@ async function verifyCallableSession(
 /**
  * Callable (onCall) identity: a revocation/disabled-checked session bound to
  * an explicit firm (`request.data.firmId`): missing → 400 firm_required,
- * ≠ claims.firmId → 403 firm_mismatch.
+ * ≠ claims.firmId → 403 firm_mismatch. The firm's MFA policy applies
+ * (403 mfa_required); `mfaExempt` is only for the MFA-recovery callables
+ * (disableMfa, generateRecoveryCodes), which a user who lost their device
+ * must reach with the first factor alone.
  */
-export async function callerFromCallable(auth: CallableRequest["auth"], firmIdHeader: string): Promise<Caller> {
+export async function callerFromCallable(
+  auth: CallableRequest["auth"],
+  firmIdHeader: string,
+  opts: { mfaExempt?: boolean } = {}
+): Promise<Caller> {
   if (!auth) throw new HttpError(401, "missing_token")
   if (typeof firmIdHeader !== "string" || firmIdHeader === "") throw new HttpError(400, "firm_required")
   const { claims } = await verifyCallableSession(auth)
-  return bindToUserDoc(callerFromClaims(auth.uid, claims, firmIdHeader))
+  const caller = callerFromClaims(auth.uid, claims, firmIdHeader)
+  return bindToUserDoc(caller, { secondFactor: hasSecondFactor(claims), mfaExempt: opts.mfaExempt === true })
 }
 
 /**
