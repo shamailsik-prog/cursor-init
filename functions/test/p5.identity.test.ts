@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { DocumentReference } from "firebase-admin/firestore"
+import { logger } from "firebase-functions"
 import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
 import { HttpError, toHttpsError } from "../src/http/errors"
@@ -111,6 +113,7 @@ describe.skipIf(!EMULATORS)("onboardFirm", () => {
 
     const marker = (await bootstrapRef().get()).data()
     expect(marker?.firstFirmId).toBe(res.firmId)
+    expect(marker?.founderUid).toBe(uid)
     expect(marker?.at).toBeDefined()
 
     const user = await adminAuth().getUser(uid)
@@ -192,6 +195,66 @@ describe.skipIf(!EMULATORS)("onboardFirm", () => {
     expectHttps(err, "invalid-argument", "invalid_name")
     expect(await bootstrapRef().get()).toMatchObject({ exists: false })
     expect(await auditCount(uid, ACTION)).toBe(1)
+  })
+
+  it("stranded founder (claims write failed after commit) can resume: same firmId, bootstrap_resume row", async () => {
+    const { uid, token } = await mintIdToken(null)
+    const spy = vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("injected claims failure"))
+    const log = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    try {
+      const err = await httpsErrorOf(onboardFirmHandler(await req(token, { name: "Stranded" })))
+      expectHttps(err, "internal", "internal")
+      expect(log).toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+      log.mockRestore()
+    }
+    expect((await adminAuth().getUser(uid)).customClaims ?? {}).toEqual({})
+    const firstFirmId = (await bootstrapRef().get()).data()?.firstFirmId as string
+
+    // Simulate a lost users doc too: resume must re-apply it idempotently.
+    await adminDb().collection("users").doc(uid).delete()
+    const res = (await onboardFirmHandler(await req(token, { name: "Ignored on resume" }))) as { firmId: string }
+    expect(res.firmId).toBe(firstFirmId)
+    expect((await adminAuth().getUser(uid)).customClaims).toEqual({
+      firmId: firstFirmId,
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+    })
+    expect((await adminDb().collection("users").doc(uid).get()).data()).toMatchObject({
+      firmId: firstFirmId,
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+      active: true,
+    })
+    expect((await adminDb().collection("firms").doc(firstFirmId).get()).data()?.name).toBe("Stranded")
+    const firmsNamed = await adminDb().collection("firms").where("name", "==", "Ignored on resume").get()
+    expect(firmsNamed.size).toBe(0)
+
+    const rows = await auditRows(uid, ACTION)
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.reason).sort()).toEqual(["bootstrap_resume", "ok"])
+    expect(rows.find((r) => r.reason === "bootstrap_resume")).toMatchObject({
+      decision: "allow",
+      firmId: firstFirmId,
+      target: `firms/${firstFirmId}`,
+    })
+  })
+
+  it("founderUid match but the firm doc is missing → no resume (bootstrap_closed)", async () => {
+    const { uid, token } = await mintIdToken(null)
+    await bootstrapRef().set({ firstFirmId: uniq("gone"), founderUid: uid, at: new Date() })
+    const err = await httpsErrorOf(onboardFirmHandler(await req(token, { name: "X" })))
+    expectHttps(err, "permission-denied", "bootstrap_closed")
+    expect(await auditCount(uid, ACTION)).toBe(1)
+  })
+
+  it("a different non-admin caller does not get the founder's resume", async () => {
+    const founder = await mintIdToken(null)
+    await onboardFirmHandler(await req(founder.token, { name: "F" }))
+    const other = await mintIdToken(null)
+    const err = await httpsErrorOf(onboardFirmHandler(await req(other.token, { name: "X" })))
+    expectHttps(err, "permission-denied", "bootstrap_closed")
   })
 
   it("a 200-char name is accepted", async () => {
@@ -372,12 +435,68 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
     expect((await adminAuth().getUser(target.uid)).customClaims).toEqual({ firmId, role: "intern", clearanceLevel: "confidential" })
   })
 
-  it("an existing platformAdmin claim on the target is never carried through this path", async () => {
+  it("an existing platformAdmin claim on the target is preserved (a partner can neither set nor strip it)", async () => {
     const firmId = uniq("firm")
     const partner = await mintIdToken(partnerClaims(firmId))
     const target = await member(firmId, { platformAdmin: true })
     await setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
-    expect((await adminAuth().getUser(target.uid)).customClaims).not.toHaveProperty("platformAdmin")
+    expect((await adminAuth().getUser(target.uid)).customClaims).toEqual({
+      firmId,
+      role: "clerk",
+      clearanceLevel: "confidential",
+      platformAdmin: true,
+    })
+  })
+
+  it("target whose current clearance is above the caller's → permission-denied exceeds_own_clearance", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId, "confidential"))
+    const target = await mintIdToken(partnerClaims(firmId, "privileged"))
+    const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, clearanceLevel: "internal" })))
+    expectHttps(err, "permission-denied", "exceeds_own_clearance")
+    expect((await adminAuth().getUser(target.uid)).customClaims?.clearanceLevel).toBe("privileged")
+    expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  describe("failure injection", () => {
+    beforeEach(() => {
+      vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    })
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it("users-doc write fails after the claims changed → claims rolled back, internal, one audit row", async () => {
+      const firmId = uniq("firm")
+      const partner = await mintIdToken(partnerClaims(firmId))
+      const target = await member(firmId, { locale: "ur-PK", platformAdmin: true })
+      const before = (await adminAuth().getUser(target.uid)).customClaims
+      const setClaims = vi.spyOn(adminAuth(), "setCustomUserClaims")
+      const revoke = vi.spyOn(adminAuth(), "revokeRefreshTokens")
+      vi.spyOn(DocumentReference.prototype, "set").mockRejectedValueOnce(new Error("injected users-doc failure"))
+
+      const err = await httpsErrorOf(
+        setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk", clearanceLevel: "internal" }))
+      )
+      expectHttps(err, "internal", "internal")
+      expect(setClaims).toHaveBeenCalledTimes(2) // apply, then roll back
+      expect(revoke).not.toHaveBeenCalled()
+      expect((await adminAuth().getUser(target.uid)).customClaims).toEqual(before)
+      expect((await adminDb().collection("users").doc(target.uid).get()).data()).toMatchObject({ role: "associate" })
+      expect(await auditCount(partner.uid, ACTION)).toBe(1)
+    })
+
+    it("Auth claims write fails → nothing changed, users doc untouched, internal", async () => {
+      const firmId = uniq("firm")
+      const partner = await mintIdToken(partnerClaims(firmId))
+      const target = await member(firmId)
+      vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("injected claims failure"))
+      const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
+      expectHttps(err, "internal", "internal")
+      expect((await adminAuth().getUser(target.uid)).customClaims?.role).toBe("associate")
+      expect((await adminDb().collection("users").doc(target.uid).get()).data()).toMatchObject({ role: "associate" })
+      expect(await auditCount(partner.uid, ACTION)).toBe(1)
+    })
   })
 
   it("partner of firm A on a firm-B user → permission-denied cross_firm; target unchanged", async () => {
@@ -515,6 +634,24 @@ describe.skipIf(!EMULATORS)("deactivateUser", () => {
     expectHttps(err, "permission-denied", "cross_firm")
     expect((await adminAuth().getUser(target.uid)).disabled).toBe(false)
     expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("target whose current clearance is above the caller's → permission-denied exceeds_own_clearance", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId, "confidential"))
+    const target = await mintIdToken(partnerClaims(firmId, "privileged-restricted"))
+    const err = await httpsErrorOf(deactivateUserHandler(await req(partner.token, { firmId, uid: target.uid })))
+    expectHttps(err, "permission-denied", "exceeds_own_clearance")
+    expect((await adminAuth().getUser(target.uid)).disabled).toBe(false)
+    expect(await auditCount(partner.uid, ACTION)).toBe(1)
+  })
+
+  it("target with a malformed clearance claim is treated as the highest rank", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId, "privileged"))
+    const target = await mintIdToken({ firmId, role: "associate", clearanceLevel: "constructor" })
+    const err = await httpsErrorOf(deactivateUserHandler(await req(partner.token, { firmId, uid: target.uid })))
+    expectHttps(err, "permission-denied", "exceeds_own_clearance")
   })
 
   it("associate caller → permission-denied partner_only", async () => {

@@ -111,19 +111,22 @@ function forbidPlatformAdmin(data: Data): void {
   if (Object.hasOwn(data, "platformAdmin")) throw new HttpError(403, "platform_admin_forbidden")
 }
 
+/** A safe single Firestore document id: non-empty, ≤128 chars, no "/", not "." / "..", not reserved `__*__`. */
+function isSafeDocId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    value.length <= 128 &&
+    !value.includes("/") &&
+    value !== "." &&
+    value !== ".." &&
+    !/^__.*__$/.test(value)
+  )
+}
+
 /** A user id that is also a safe single Firestore document id. */
 function parseUid(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value === "" ||
-    value.length > 128 ||
-    value.includes("/") ||
-    value === "." ||
-    value === ".." ||
-    /^__.*__$/.test(value)
-  ) {
-    throw new HttpError(400, "invalid_uid")
-  }
+  if (!isSafeDocId(value)) throw new HttpError(400, "invalid_uid")
   return value
 }
 
@@ -145,6 +148,16 @@ function parseClearance(value: unknown): Classification {
 
 function requireWithinOwnClearance(caller: Caller, clearance: Classification): void {
   if (!(rankOf(clearance) <= rankOf(caller.clearanceLevel))) throw new HttpError(403, "exceeds_own_clearance")
+}
+
+/**
+ * The caller may only act on users cleared no higher than themselves. A target
+ * whose clearance claim is missing or malformed is treated as the highest rank.
+ */
+function requireTargetWithinOwnClearance(caller: Caller, target: UserRecord): void {
+  const raw: unknown = target.customClaims?.clearanceLevel
+  const targetRank = rankOf(isKnownClassification(raw) ? raw : "privileged-restricted")
+  if (!(targetRank <= rankOf(caller.clearanceLevel))) throw new HttpError(403, "exceeds_own_clearance")
 }
 
 /** The target user, if it belongs to the caller's firm (per its current custom claims). Unknown → cross_firm too. */
@@ -176,6 +189,13 @@ async function emailTaken(email: string): Promise<boolean> {
  * bootstrapped yet (race-safe: `platform/bootstrap` is read and created in one
  * transaction), or when the caller holds `platformAdmin: true`. Creates the
  * firm and the caller's users doc, then makes the caller its founding partner.
+ *
+ * Recoverable: the claims are set after the transaction commits, so if that
+ * fails the founder is left without claims. `platform/bootstrap.founderUid`
+ * lets that founder call again: when the caller is the founder, has no firmId
+ * claim and `firms/{firstFirmId}` exists, the founder claims and users doc are
+ * re-applied idempotently and the same firmId is returned (audited as
+ * allow `bootstrap_resume`).
  */
 export async function onboardFirmHandler(request: CallableRequest<unknown>): Promise<{ firmId: string }> {
   const data = dataOf(request)
@@ -192,29 +212,48 @@ export async function onboardFirmHandler(request: CallableRequest<unknown>): Pro
     const firmRef = db.collection("firms").doc()
     const firmId = firmRef.id
 
+    const userRef = db.collection("users").doc(uid)
+    const founderDoc = (firmId: string) => ({ firmId, ...FOUNDER, mfaEnabled: false, active: true })
+
     const outcome = await db.runTransaction(async (tx) => {
       const bootstrap = await tx.get(bootstrapRef)
+      const marker = bootstrap.data()
+      if (marker?.founderUid === uid && isSafeDocId(marker.firstFirmId)) {
+        const firstFirmId = marker.firstFirmId
+        const [firm, userDoc] = await Promise.all([
+          tx.get(db.collection("firms").doc(firstFirmId)),
+          tx.get(userRef),
+        ])
+        if (firm.exists) {
+          audit.firmId = firstFirmId
+          audit.target = `firms/${firstFirmId}`
+          await audit.stage(tx, "allow", "bootstrap_resume")
+          if (userDoc.exists) tx.set(userRef, { firmId: firstFirmId, ...FOUNDER, active: true }, { merge: true })
+          else tx.set(userRef, { ...founderDoc(firstFirmId), createdAt: FieldValue.serverTimestamp() })
+          return { kind: "resumed" as const, firmId: firstFirmId }
+        }
+      }
       if (bootstrap.exists && !isPlatformAdmin) {
         // Reset: an earlier attempt of this transaction may have taken the allow branch.
         audit.firmId = ""
         audit.target = "platform/bootstrap"
         await audit.stage(tx, "deny", "bootstrap_closed")
-        return "denied" as const
+        return { kind: "denied" as const }
       }
       audit.firmId = firmId
       audit.target = `firms/${firmId}`
       await audit.stage(tx, "allow", "ok")
       const now = FieldValue.serverTimestamp()
-      if (!bootstrap.exists) tx.create(bootstrapRef, { firstFirmId: firmId, at: now })
+      if (!bootstrap.exists) tx.create(bootstrapRef, { firstFirmId: firmId, founderUid: uid, at: now })
       tx.create(firmRef, { name, dataResidency: "PK", plan: "internal", createdAt: now })
-      tx.set(db.collection("users").doc(uid), { firmId, ...FOUNDER, mfaEnabled: false, active: true, createdAt: now })
-      return "created" as const
+      tx.set(userRef, { ...founderDoc(firmId), createdAt: now })
+      return { kind: "created" as const, firmId }
     })
     audit.committed()
-    if (outcome === "denied") throw new HttpError(403, "bootstrap_closed")
+    if (outcome.kind === "denied") throw new HttpError(403, "bootstrap_closed")
 
-    await adminAuth().setCustomUserClaims(uid, { ...claims, firmId, ...FOUNDER })
-    return { firmId }
+    await adminAuth().setCustomUserClaims(uid, { ...claims, firmId: outcome.firmId, ...FOUNDER })
+    return { firmId: outcome.firmId }
   })
 }
 
@@ -270,9 +309,12 @@ export async function createFirmUserHandler(request: CallableRequest<unknown>): 
 /**
  * setUserClaims({ firmId, uid, role?, clearanceLevel? }). Partner only, same firm, never self.
  * Other existing custom claims are preserved, except `platformAdmin`, which this
- * path never sets or carries through. `users/{uid}` is updated to match, and the
- * user's refresh tokens are revoked so existing sessions end and the next
- * sign-in carries the new claims (callables and requireAuth reject revoked sessions).
+ * path can never set or strip (an existing value is carried through unchanged).
+ * The target's current clearance may not exceed the caller's.
+ * Order: Auth claims → `users/{uid}` → refresh-token revocation. If the users-doc
+ * write fails, the claims are rolled back to their previous value before the
+ * error is returned. Revocation ends existing sessions so the next sign-in
+ * carries the new claims (callables and requireAuth reject revoked sessions).
  */
 export async function setUserClaimsHandler(
   request: CallableRequest<unknown>
@@ -292,18 +334,26 @@ export async function setUserClaimsHandler(
     if (uid === caller.uid) throw new HttpError(403, "self_change_forbidden")
     if (clearanceLevel !== undefined) requireWithinOwnClearance(caller, clearanceLevel)
     const target = await userInFirm(uid, caller.firmId)
+    requireTargetWithinOwnClearance(caller, target)
     await audit.allow()
 
-    const { platformAdmin: _never, ...kept } = target.customClaims ?? {}
-    const next = { ...kept, ...(role && { role }), ...(clearanceLevel && { clearanceLevel }) }
+    const previous = { ...(target.customClaims ?? {}) }
+    const next = { ...previous, ...(role && { role }), ...(clearanceLevel && { clearanceLevel }) }
     await adminAuth().setCustomUserClaims(uid, next)
-    await adminDb()
-      .collection("users")
-      .doc(uid)
-      .set(
-        { firmId: caller.firmId, ...(role && { role }), ...(clearanceLevel && { clearanceLevel }), updatedAt: FieldValue.serverTimestamp() },
-        { merge: true }
-      )
+    try {
+      await adminDb()
+        .collection("users")
+        .doc(uid)
+        .set(
+          { firmId: caller.firmId, ...(role && { role }), ...(clearanceLevel && { clearanceLevel }), updatedAt: FieldValue.serverTimestamp() },
+          { merge: true }
+        )
+    } catch (err) {
+      await adminAuth()
+        .setCustomUserClaims(uid, previous)
+        .catch((rollbackErr: unknown) => logger.error("setUserClaims claims rollback failed", { uid, rollbackErr }))
+      throw err
+    }
     await adminAuth().revokeRefreshTokens(uid)
     return { uid, role: next.role as Role, clearanceLevel: next.clearanceLevel as Classification }
   })
@@ -312,7 +362,14 @@ export async function setUserClaimsHandler(
 /**
  * deactivateUser({ firmId, uid }). Partner only, same firm, never self.
  * Disables the Auth user, revokes its refresh tokens and sets users/{uid}.active=false.
- * Documents the user created are left untouched.
+ * Documents the user created are left untouched. The target's current
+ * clearance may not exceed the caller's.
+ *
+ * Afterwards the user's old token is rejected with 401 `user_disabled`, not
+ * `token_revoked`: both the Admin SDK's verifyIdToken(checkRevoked) and
+ * callerFromCallable check `disabled` before revocation. The revocation still
+ * matters: if the account is re-enabled, pre-deactivation tokens stay invalid
+ * (`token_revoked`).
  */
 export async function deactivateUserHandler(request: CallableRequest<unknown>): Promise<{ uid: string; active: false }> {
   const data = dataOf(request)
@@ -324,7 +381,7 @@ export async function deactivateUserHandler(request: CallableRequest<unknown>): 
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
     if (uid === caller.uid) throw new HttpError(403, "self_change_forbidden")
-    await userInFirm(uid, caller.firmId)
+    requireTargetWithinOwnClearance(caller, await userInFirm(uid, caller.firmId))
     await audit.allow()
 
     await adminAuth().updateUser(uid, { disabled: true })
