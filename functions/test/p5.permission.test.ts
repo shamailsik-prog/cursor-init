@@ -6,6 +6,12 @@ import { checkPermission } from "../src/p5/permission"
 import { EMULATORS, uniq } from "./emu"
 
 // Pass-through spy so individual tests can make the audit write fail.
+// Pass-through spy so a test can make the Firestore handle fail.
+vi.mock("../src/admin", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/admin")>()
+  return { ...real, adminDb: vi.fn(real.adminDb) }
+})
+
 vi.mock("../src/p5/audit", async (importOriginal) => {
   const real = await importOriginal<typeof import("../src/p5/audit")>()
   return { ...real, appendAudit: vi.fn(real.appendAudit) }
@@ -123,11 +129,37 @@ describe.skipIf(!EMULATORS)("checkPermission (Firestore emulator)", () => {
   })
 })
 
-describe.skipIf(!EMULATORS)("checkPermission store failure (Firestore emulator)", () => {
+const PROTO_KEYS = ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]
+
+describe.skipIf(!EMULATORS)("checkPermission hardening (Firestore emulator)", () => {
+  it.each(PROTO_KEYS)("matter classification %j (Object.prototype key) → deny clearance", async (key) => {
+    const c = caller({ clearanceLevel: "privileged-restricted" })
+    const matterId = await seedMatter(c.firmId, key, [c.uid])
+    await expect(checkPermission(c, "read_matter", matterId)).resolves.toEqual({ allow: false, reason: "clearance" })
+    const rows = await auditRowsFor(c.uid)
+    expect(rows).toEqual([expect.objectContaining({ decision: "deny", classification: "privileged-restricted" })])
+  })
+
+  it.each(["", "a/b", "a/b/c", ".", "..", "__x__", "__proto__"])(
+    "invalid matterId %j → deny invalid-matter-id, audited",
+    async (matterId) => {
+      const c = caller()
+      await expect(checkPermission(c, "read_matter", matterId)).resolves.toEqual({
+        allow: false,
+        reason: "invalid-matter-id",
+      })
+      const rows = await auditRowsFor(c.uid)
+      expect(rows).toEqual([expect.objectContaining({ decision: "deny", reason: "invalid-matter-id" })])
+    }
+  )
+
   it("Firestore read error → deny store-unavailable, audit row still written", async () => {
     const c = caller()
-    // An id containing "/" makes matters/{id} a collection path: the read throws.
-    const d = await checkPermission(c, "read_matter", "bad/segment")
+    // Fail the store handle used for the matter/member reads; the audit write uses a fresh, real handle.
+    vi.mocked(adminDb).mockImplementationOnce(() => {
+      throw new Error("firestore unreachable")
+    })
+    const d = await checkPermission(c, "read_matter", uniq("matter"))
     expect(d).toEqual({ allow: false, reason: "store-unavailable" })
     const rows = await auditRowsFor(c.uid)
     expect(rows).toEqual([expect.objectContaining({ decision: "deny", reason: "store-unavailable" })])

@@ -1,7 +1,8 @@
-import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
+import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { appendAudit } from "./audit"
 import type { Caller } from "./auth"
+import { isKnownClassification, rankOf } from "./classification"
 
 export type PermissionDecision = { allow: boolean; reason: string }
 
@@ -10,7 +11,8 @@ type Evaluation = PermissionDecision & { classification: Classification }
 /**
  * Decision table ported from platform/p5/checkPermission.ts (reasons kept identical),
  * reading matters/{id} and matter_members/{matterId}_{uid} from Firestore.
- * Fails closed: a read error denies with "store-unavailable"; every decision is
+ * Fails closed: a malformed matterId denies with "invalid-matter-id", a read
+ * error denies with "store-unavailable"; every decision is
  * audited, and if the audit write fails the result is deny "audit_unavailable".
  */
 export async function checkPermission(
@@ -21,7 +23,10 @@ export async function checkPermission(
 ): Promise<PermissionDecision> {
   let evaluation: Evaluation
   try {
-    evaluation = await evaluate(caller, action, matterId, extra)
+    evaluation =
+      matterId !== undefined && !isValidMatterId(matterId)
+        ? { allow: false, reason: "invalid-matter-id", classification: "internal" }
+        : await evaluate(caller, action, matterId, extra)
   } catch {
     evaluation = { allow: false, reason: "store-unavailable", classification: "internal" }
   }
@@ -31,7 +36,7 @@ export async function checkPermission(
       firmId: caller.firmId,
       actorId: caller.uid,
       action,
-      target: matterId ? `matters/${matterId}` : `firms/${caller.firmId}`,
+      target: matterId !== undefined ? `matters/${matterId}` : `firms/${caller.firmId}`,
       classification: evaluation.classification,
       decision: evaluation.allow ? "allow" : "deny",
       reason: evaluation.reason,
@@ -40,6 +45,11 @@ export async function checkPermission(
     return { allow: false, reason: "audit_unavailable" }
   }
   return { allow: evaluation.allow, reason: evaluation.reason }
+}
+
+/** A single Firestore document id: non-empty, no "/", not "." / "..", not reserved `__*__`. */
+function isValidMatterId(id: string): boolean {
+  return id !== "" && !id.includes("/") && id !== "." && id !== ".." && !/^__.*__$/.test(id)
 }
 
 async function evaluate(
@@ -79,12 +89,12 @@ async function evaluate(
 
     const raw: unknown = matter.classification
     // Unknown classification: cannot prove clearance, so treat as the highest rank.
-    classification = isClassification(raw) ? raw : "privileged-restricted"
+    classification = isKnownClassification(raw) ? raw : "privileged-restricted"
 
     const member = await db.collection("matter_members").doc(`${matterId}_${caller.uid}`).get()
     if (!member.exists) return deny("not-member", classification)
 
-    if (!isClassification(raw) || classificationRank(caller.clearanceLevel) < classificationRank(raw)) {
+    if (!isKnownClassification(raw) || !(rankOf(caller.clearanceLevel) >= rankOf(raw))) {
       return deny("clearance", classification)
     }
   }

@@ -23,6 +23,12 @@ describe("requireAuth (no emulator needed)", () => {
     expect(err.code).toBe("missing_token")
   })
 
+  it("'Bearer ' with no token → 401 missing_token", async () => {
+    const err = await httpErrorOf(requireAuth({ headers: { authorization: "Bearer " } }))
+    expect(err.status).toBe(401)
+    expect(err.code).toBe("missing_token")
+  })
+
   it("non-Bearer Authorization header → 401 missing_token", async () => {
     const err = await httpErrorOf(requireAuth({ headers: { authorization: "Basic abc" } }))
     expect(err.status).toBe(401)
@@ -107,6 +113,37 @@ async function callableAuth(token: string) {
   const decoded = await adminAuth().verifyIdToken(token)
   return { uid: decoded.uid, token: decoded, rawToken: token } as never
 }
+
+describe.skipIf(!EMULATORS)("requireAuth header handling (Auth emulator)", () => {
+  it("capitalised Authorization / X-Firm-Id headers are accepted", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(goodClaims(firmId))
+    const caller = await requireAuth({ headers: { Authorization: `Bearer ${token}`, "X-Firm-Id": firmId } })
+    expect(caller.uid).toBe(uid)
+  })
+
+  it("auth scheme is case-insensitive: 'bearer <valid>' → Caller, 'bearer tok' → 401 invalid_token", async () => {
+    const firmId = uniq("firm")
+    const { uid, token } = await mintIdToken(goodClaims(firmId))
+    await expect(requireAuth({ headers: { authorization: `bearer ${token}`, "x-firm-id": firmId } })).resolves.toMatchObject({
+      uid,
+    })
+    const err = await httpErrorOf(requireAuth({ headers: { authorization: "bearer tok", "x-firm-id": firmId } }))
+    expect(err.status).toBe(401)
+    expect(err.code).toBe("invalid_token")
+  })
+
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"])(
+    "clearanceLevel claim %j (Object.prototype key) → 403 no_claims",
+    async (key) => {
+      const firmId = uniq("firm")
+      const { token } = await mintIdToken({ firmId, role: "partner", clearanceLevel: key })
+      const err = await httpErrorOf(requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } }))
+      expect(err.status).toBe(403)
+      expect(err.code).toBe("no_claims")
+    }
+  )
+})
 
 describe("callerFromCallable (no emulator needed)", () => {
   it("missing auth → 401 missing_token", async () => {

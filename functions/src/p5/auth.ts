@@ -1,7 +1,8 @@
 import type { CallableRequest } from "firebase-functions/v2/https"
-import { isClassification, type Classification } from "@/platform/p1/types"
+import type { Classification } from "@/platform/p1/types"
 import { adminAuth } from "../admin"
 import { HttpError } from "../http/errors"
+import { isKnownClassification } from "./classification"
 
 /**
  * Mirrors `Role` in platform/spine/store.ts (guarded by test/p5.role.test.ts).
@@ -34,7 +35,7 @@ function header(headers: Record<string, string | undefined>, name: string): stri
  */
 function callerFromClaims(uid: string, claims: Record<string, unknown>, firmIdHeader: string | undefined): Caller {
   const { firmId, role, clearanceLevel } = claims
-  if (typeof firmId !== "string" || firmId === "" || !isRole(role) || !isClassification(clearanceLevel)) {
+  if (typeof firmId !== "string" || firmId === "" || !isRole(role) || !isKnownClassification(clearanceLevel)) {
     throw new HttpError(403, "no_claims")
   }
   if (firmIdHeader !== firmId) throw new HttpError(403, "firm_mismatch")
@@ -43,7 +44,7 @@ function callerFromClaims(uid: string, claims: Record<string, unknown>, firmIdHe
 
 /** HTTP (onRequest) identity: verified, revocation-checked Bearer token + X-Firm-Id binding. */
 export async function requireAuth(req: { headers: Record<string, string | undefined> }): Promise<Caller> {
-  const match = /^Bearer\s+(\S+)\s*$/.exec(header(req.headers, "authorization") ?? "")
+  const match = /^Bearer\s+(\S+)\s*$/i.exec(header(req.headers, "authorization") ?? "")
   if (!match) throw new HttpError(401, "missing_token")
 
   let decoded: Awaited<ReturnType<ReturnType<typeof adminAuth>["verifyIdToken"]>>

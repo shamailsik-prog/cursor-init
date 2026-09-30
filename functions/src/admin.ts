@@ -4,7 +4,7 @@ import { getFirestore, type Firestore } from "firebase-admin/firestore"
 
 /** Lazily initialises the default Admin app on first use (no work at import time). */
 export function adminApp(): App {
-  return getApps()[0] ?? initializeApp()
+  return getApps().find((a) => a.name === "[DEFAULT]") ?? initializeApp()
 }
 
 export function adminDb(): Firestore {

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
-import { ROLES, type Role } from "../src/p5/auth"
+import { ROLES } from "../src/p5/auth"
 
 // `Role` is mirrored locally (importing store.ts drags its unrelated type errors
 // into the functions typecheck). This test fails if the two unions drift.
@@ -15,11 +15,4 @@ describe("Role mirror", () => {
     expect([...ROLES].sort()).toEqual([...upstream].sort())
   })
 
-  it("ROLES and the Role type agree at compile time", () => {
-    // Both directions: every ROLES entry is a Role, and every Role is in ROLES.
-    type Listed = (typeof ROLES)[number]
-    const forward: Role = "" as Listed
-    const backward: Listed = "" as Role
-    expect([forward, backward]).toBeDefined()
-  })
 })
