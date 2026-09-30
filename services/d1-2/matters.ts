@@ -42,7 +42,8 @@ export function addMember(
     throw new Error("cross-firm membership rejected")
   }
   const user = store.users.get(userId)
-  if (user && user.firmId !== matter.firmId) {
+  if (!user) throw new Error("unknown user")
+  if (user.firmId !== matter.firmId) {
     throw new Error("cross-firm membership rejected")
   }
   store.members.set(store.memberKey(matterId, userId), {
