@@ -205,6 +205,26 @@ describe("Job E — Firestore rules", () => {
 ] as const
 
   it.each(TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS)(
+    "tb ack-recon pd freeze seal dedicated view collection %s: same-firm cleared partner reads, another firm's partner is denied",
+    async (collectionPath) => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), collectionPath, "row-read"), {
+          firmId: "firmA",
+          classification: "internal",
+        })
+      })
+      const sameFirm = authed("partner1", { firmId: "firmA", role: "partner", clearanceLevel: "privileged" })
+      const otherFirm = authed("partnerB", {
+        firmId: "firmB",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      })
+      await assertSucceeds(getDoc(doc(sameFirm, collectionPath, "row-read")))
+      await assertFails(getDoc(doc(otherFirm, collectionPath, "row-read")))
+    }
+  )
+
+  it.each(TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS)(
     "tb ack-recon pd freeze seal dedicated view collection %s client write = deny",
     async (collectionPath) => {
       const partner = authed("partner1", {
