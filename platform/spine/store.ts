@@ -471,6 +471,8 @@ export type FilingPackage = {
   approvalReason: string | null
   /** sha256 (hex) of the draft body the gate checked at creation; approval requires a match. */
   draftBodySha256?: string
+  /** Judgment ids / citations the caller listed at creation; re-checked at approval (R1 #8). */
+  citedRefs?: string[]
 }
 
 export type FilingPacketArtifactComponent = {

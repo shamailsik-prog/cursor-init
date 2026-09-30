@@ -4,6 +4,7 @@ import { PublicError } from "@/platform/http/publicError"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
+  ownCaseReferenceMatcher,
   runDraftPreflight,
   type DraftPreflightInput,
 } from "@/services/d4-1/drafts"
@@ -82,6 +83,13 @@ export function createFilingPackage(
     approvedBy: null,
     approvalReason: null,
     draftBodySha256: draftBodySha256(draft.body),
+    citedRefs: [
+      ...new Set(
+        (input.preflight.citedJudgmentIds ?? [])
+          .map((ref) => (typeof ref === "string" ? ref.trim() : ""))
+          .filter((ref) => ref.length > 0)
+      ),
+    ],
   }
   store.filingPackages.set(filingPackage.id, filingPackage)
   store.drafts.set(draft.id, { ...draft, locked: true })
@@ -131,7 +139,16 @@ export function decideFilingPackage(
     if (!filingPackage.draftBodySha256 || draftBodySha256(draftBody) !== filingPackage.draftBodySha256) {
       throw new DraftChangedError()
     }
-    const gate = verifyCitations(store, extractCitations(draftBody), input.partnerOverride, {
+    // Body citations (re-extracted) plus the refs listed at creation (review R1 #8).
+    const packageMatter = store.matters.get(filingPackage.matterId)
+    const refs = [
+      ...extractCitations(
+        draftBody,
+        packageMatter ? { isOwnCaseReference: ownCaseReferenceMatcher(packageMatter) } : {}
+      ),
+      ...(filingPackage.citedRefs ?? []),
+    ]
+    const gate = verifyCitations(store, refs, input.partnerOverride, {
       actorId: actor.id,
       firmId: filingPackage.firmId,
     })
