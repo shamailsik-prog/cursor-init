@@ -16,16 +16,27 @@ service cloud.firestore {
     function memberOrPartner(matterId) { return isPartner() || isMember(matterId); }
     function firmIdUnchanged() { return request.resource.data.firmId == resource.data.firmId; }
     function monotonic() { return rank(request.resource.data.classification) >= rank(resource.data.classification); }
+    // Firm staff (platform/spine/store.ts Role minus 'client'). Client-role users never see internal collections.
+    function isStaff() { return role() in ['partner', 'associate', 'clerk', 'intern', 'accounts']; }
+    function isAuthor() { return role() in ['partner', 'associate', 'clerk']; }   // interns/accounts/clients never author
+    function clearedNew() { return cleared(request.resource.data.classification); }
+    // Matter-bound -> membership; loose vault (matterId == null) -> clerk/partner with confidential+ clearance (L4.5).
+    function canAccessScope(matterId) {
+      return matterId != null ? isMember(matterId) : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2;
+    }
+    function authorNew() { return sameFirmNew() && isAuthor() && clearedNew() && canAccessScope(request.resource.data.matterId); }
 
     match /firms/{firmId} {
       allow read: if signedIn() && tok().firmId == firmId;
       allow write: if signedIn() && tok().firmId == firmId && isPartner();
     }
     match /users/{uid} {
-      allow read: if sameFirm();
+      allow read: if sameFirm() && (isStaff() || request.auth.uid == uid);
+      // Partners administer other users only: never above their own clearance (target before and after), roles from the known set.
       allow update: if sameFirm() && firmIdUnchanged() && (request.auth.uid == uid
                       ? !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'active', 'clearanceLevel', 'mfaEnabled', 'firmId'])
-                      : isPartner());
+                      : isPartner() && cleared(resource.data.clearanceLevel) && cleared(request.resource.data.clearanceLevel)
+                        && request.resource.data.role in ['partner', 'associate', 'clerk', 'intern', 'accounts', 'client']);
       allow create, delete: if false; // Admin SDK (P5) only
     }
     match /matter_members/{id} {
@@ -35,14 +46,14 @@ service cloud.firestore {
       allow delete: if sameFirm() && isPartner();
     }
     match /clients/{id} {
-      allow read: if sameFirm() && (!('classification' in resource.data) || cleared(resource.data.classification));
+      allow read: if sameFirm() && isStaff() && (!('classification' in resource.data) || cleared(resource.data.classification));
       allow create: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'];
       allow update: if sameFirm() && firmIdUnchanged() && role() in ['partner', 'associate', 'clerk'];
       allow delete: if false;
     }
     match /matters/{matterId} {
       // Layer 18 §5.3 + Job E: membership is the access source. No role exempt (including partner).
-      allow read: if sameFirm() && isMember(matterId);
+      allow read: if sameFirm() && isMember(matterId) && cleared(resource.data.classification);
       allow create: if sameFirmNew() && role() in ['partner', 'associate'];
       allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate'];
       allow delete: if false;
@@ -51,7 +62,7 @@ service cloud.firestore {
       allow read: if sameFirm() && cleared(resource.data.classification)
         && (resource.data.matterId != null ? isMember(resource.data.matterId)
             : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2);   // loose vault (L4.5); intern denied
-      allow create: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'];
+      allow create: if authorNew();
       allow update: if sameFirm() && firmIdUnchanged() && monotonic()
         && (resource.data.matterId == null
               ? role() in ['clerk', 'partner']
@@ -60,8 +71,8 @@ service cloud.firestore {
       allow delete: if false; // originals are immutable; loose vault never deletes (E-18)
     }
     match /document_versions/{id} {
-      allow read: if sameFirm() && cleared(resource.data.classification);
-      allow create: if sameFirmNew();
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      allow create: if authorNew();
       allow update, delete: if false; // append-only
     }
     match /entities/{id} {
@@ -106,13 +117,13 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /draft_versions/{id} {
-      allow read: if sameFirm() && cleared(resource.data.classification);
-      allow create: if sameFirmNew();
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      allow create: if authorNew();
       allow update, delete: if false; // append-only
     }
     match /change_proposals/{id} {
-      allow read: if sameFirm();
-      allow create: if sameFirmNew();
+      allow read: if sameFirm() && isStaff();
+      allow create: if sameFirmNew() && isAuthor() && clearedNew() && request.resource.data.proposedBy == request.auth.uid;
       allow update: if sameFirm() && isPartner() && firmIdUnchanged()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy', 'decidedAt', 'reason']);
       allow delete: if false;
