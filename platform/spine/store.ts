@@ -414,6 +414,11 @@ export type DraftRecord = {
   createdBy: string
   createdAt: number
   status: "draft"
+  /**
+   * Set server-side while a filing package referencing this draft is pending or approved;
+   * the Firestore rules deny body edits (and any client change to the flag) when true.
+   */
+  locked?: boolean
 }
 
 export type WorkflowStatus =
@@ -462,6 +467,8 @@ export type FilingPackage = {
   createdAt: number
   approvedBy: string | null
   approvalReason: string | null
+  /** sha256 (hex) of the draft body the gate checked at creation; approval requires a match. */
+  draftBodySha256?: string
 }
 
 export type FilingPacketArtifactComponent = {

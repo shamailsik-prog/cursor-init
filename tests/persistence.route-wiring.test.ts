@@ -188,6 +188,7 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       create: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
       listByFirm: vi.fn().mockResolvedValue([]),
+      setLocked: vi.fn(),
     },
     workflow: {
       createOrUpdate: vi.fn(),

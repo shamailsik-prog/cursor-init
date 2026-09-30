@@ -954,3 +954,30 @@ describe("L17.6 #41 — accounts reads the intimation register only", () => {
     await assertSucceeds(getDoc(doc(authed("acc-assoc", ASSOC), "matters", "accM")))
   })
 })
+
+describe("Review R1 #5 — a draft under a filing package is locked against body edits", () => {
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "lkM"), { firmId: "firmA", title: "L", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "lkM_lk-assoc"), { firmId: "firmA", matterId: "lkM", userId: "lk-assoc" })
+      await setDoc(doc(db, "drafts", "lkLocked"), { firmId: "firmA", matterId: "lkM", classification: "internal", body: "clean", locked: true })
+      await setDoc(doc(db, "drafts", "lkOpen"), { firmId: "firmA", matterId: "lkM", classification: "internal", body: "clean", locked: false })
+      await setDoc(doc(db, "drafts", "lkLegacy"), { firmId: "firmA", matterId: "lkM", classification: "internal", body: "clean" })
+    })
+  })
+
+  it("member author cannot edit the body of a locked draft", async () => {
+    await assertFails(updateDoc(doc(authed("lk-assoc", ASSOC), "drafts", "lkLocked"), { body: "Relying on 2019 SCMR 1234" }))
+  })
+  it("nobody can set or clear the lock from the client SDK", async () => {
+    await assertFails(updateDoc(doc(authed("lk-assoc", ASSOC), "drafts", "lkLocked"), { locked: false }))
+    await assertFails(updateDoc(doc(authed("lk-assoc", ASSOC), "drafts", "lkOpen"), { locked: true }))
+  })
+  it("unlocked (or legacy, unflagged) drafts stay editable by a member author", async () => {
+    await assertSucceeds(updateDoc(doc(authed("lk-assoc", ASSOC), "drafts", "lkOpen"), { body: "revised" }))
+    await assertSucceeds(updateDoc(doc(authed("lk-assoc", ASSOC), "drafts", "lkLegacy"), { body: "revised" }))
+  })
+})

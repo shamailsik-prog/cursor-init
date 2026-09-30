@@ -337,6 +337,9 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       async listByFirm(firmId) {
         return listByFirm<DraftRecord>(db, "drafts", firmId)
       },
+      async setLocked(id, locked) {
+        await updateById<DraftRecord>(db, "drafts", id, { locked })
+      },
     },
     workflow: {
       async createOrUpdate(row) {

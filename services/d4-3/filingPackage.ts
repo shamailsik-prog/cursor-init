@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { rankOf, rankOfStoredOrMax, type FilingPackage, type SpineStore } from "@/platform/spine/store"
 import { PublicError } from "@/platform/http/publicError"
 import { checkPermission } from "@/platform/p5/checkPermission"
@@ -8,6 +9,30 @@ import {
 import { extractCitations } from "@/services/d4-2/citations"
 import { verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import type { PartnerOverride } from "@/services/d4-2/partnerOverride"
+
+/** sha256 (hex, UTF-8) of a draft body — pinned on the package at creation. */
+export function draftBodySha256(body: string): string {
+  return createHash("sha256").update(body, "utf8").digest("hex")
+}
+
+/** The draft changed after the package was created (review R1 #5): approval is refused. */
+export class DraftChangedError extends PublicError {
+  readonly code = "draft_changed"
+  constructor() {
+    super("draft changed since the filing package was created; create a new package")
+    this.name = "DraftChangedError"
+  }
+}
+
+/** A draft stays locked while any package referencing it is pending or approved. */
+export function draftShouldBeLocked(store: SpineStore, draftId: string): boolean {
+  for (const pkg of store.filingPackages.values()) {
+    if (pkg.draftId === draftId && (pkg.status === "pending_partner_approval" || pkg.status === "approved")) {
+      return true
+    }
+  }
+  return false
+}
 
 export function createFilingPackage(
   store: SpineStore,
@@ -49,8 +74,10 @@ export function createFilingPackage(
     createdAt: Date.now(),
     approvedBy: null,
     approvalReason: null,
+    draftBodySha256: draftBodySha256(draft.body),
   }
   store.filingPackages.set(filingPackage.id, filingPackage)
+  store.drafts.set(draft.id, { ...draft, locked: true })
   store.audit.push({
     action: "filing_package_create",
     actorId: actor.id,
@@ -67,7 +94,10 @@ export function decideFilingPackage(
     packageId: string
     decision: "approve" | "reject"
     reason: string
-    /** Draft text when the caller loaded it outside the store; defaults to the stored draft. */
+    /**
+     * Draft text loaded from the durable repository by the caller; defaults to the stored draft.
+     * Approval requires sha256(draftBody) to equal the package's pinned draftBodySha256.
+     */
     draftBody?: string
     /** The approving partner's own override of a non-VERIFIED gate result (resolved from the session). */
     partnerOverride?: PartnerOverride
@@ -88,6 +118,11 @@ export function decideFilingPackage(
     const draftBody = input.draftBody ?? store.drafts.get(filingPackage.draftId)?.body
     if (typeof draftBody !== "string") {
       throw new PublicError("preflight blocked approval: draft unavailable for the citation gate")
+    }
+    // The body being approved must be the body the gate checked at creation (fails closed for
+    // a legacy package without a pinned hash).
+    if (!filingPackage.draftBodySha256 || draftBodySha256(draftBody) !== filingPackage.draftBodySha256) {
+      throw new DraftChangedError()
     }
     const gate = verifyCitations(store, extractCitations(draftBody), input.partnerOverride, {
       actorId: actor.id,
@@ -110,6 +145,8 @@ export function decideFilingPackage(
     input.decision === "approve" ? "approved" : "rejected"
   filingPackage.approvedBy = actor.id
   filingPackage.approvalReason = input.reason
+  const draft = store.drafts.get(filingPackage.draftId)
+  if (draft) store.drafts.set(draft.id, { ...draft, locked: draftShouldBeLocked(store, draft.id) })
   store.audit.push({
     action:
       input.decision === "approve"

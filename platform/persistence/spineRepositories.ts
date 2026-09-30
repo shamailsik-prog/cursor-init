@@ -219,6 +219,8 @@ export type DraftRepository = {
   create(row: DraftRecord): Promise<void>
   get(id: string): Promise<DraftRecord | null>
   listByFirm(firmId: string): Promise<DraftRecord[]>
+  /** Server-side filing lock (review R1 #5); a missing draft is a no-op. */
+  setLocked(id: string, locked: boolean): Promise<void>
 }
 
 export type WorkflowRepository = {
@@ -2148,6 +2150,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.drafts.values()].filter((row) => row.firmId === firmId)
+      },
+      async setLocked(id, locked) {
+        const current = store.drafts.get(id)
+        if (current) store.drafts.set(id, { ...current, locked })
       },
     },
     workflow: {

@@ -126,10 +126,15 @@ service cloud.firestore {
     }
     match /drafts/{id} {
       allow read: if sameFirm() && memberReader(resource.data.matterId) && cleared(resource.data.classification);
-      allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
+      allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId)
+        && !('locked' in request.resource.data);
+      // Review R1 #5: `locked` is set server-side while a filing package referencing the draft is
+      // pending or approved; clients may never change it, and a locked draft's body is frozen.
       allow update: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic()
         && cleared(resource.data.classification) && clearedNew()
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'firmId']);
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'firmId', 'locked'])
+        && !(resource.data.get('locked', false) == true
+             && request.resource.data.diff(resource.data).affectedKeys().hasAny(['body']));
       allow delete: if false;
     }
     match /draft_versions/{id} {

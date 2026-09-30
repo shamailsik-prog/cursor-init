@@ -226,6 +226,8 @@ import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   createFilingPackage,
   decideFilingPackage,
+  DraftChangedError,
+  draftShouldBeLocked,
 } from "@/services/d4-3/filingPackage"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -7370,6 +7372,8 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         },
       })
       await repos.filings.create(created.filingPackage)
+      // Review R1 #5: the draft is locked against body edits while the package is live.
+      await repos.drafts.setLocked(created.filingPackage.draftId, true)
       const draft =
         store.drafts.get(created.filingPackage.draftId) ??
         (await repos.drafts.get(created.filingPackage.draftId))
@@ -7411,9 +7415,10 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       // Captured before the decision so its audit rows (approve/reject, gate override) persist.
       const priorAuditCount = store.audit.length
       const pendingPackage = store.filingPackages.get(parsed.packageId)
+      // Review R1 #5: approve against the durable copy of the draft, never a stale in-memory one.
       const pendingDraft = pendingPackage
-        ? (store.drafts.get(pendingPackage.draftId) ??
-          (await repos.drafts.get(pendingPackage.draftId)))
+        ? ((await repos.drafts.get(pendingPackage.draftId)) ??
+          store.drafts.get(pendingPackage.draftId))
         : undefined
       const filingPackage = decideFilingPackage(store, {
         actorId: parsed.actorId,
@@ -7433,6 +7438,10 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       } else {
         await repos.filings.create(filingPackage)
       }
+      await repos.drafts.setLocked(
+        filingPackage.draftId,
+        draftShouldBeLocked(store, filingPackage.draftId)
+      )
       const draft =
         store.drafts.get(filingPackage.draftId) ?? (await repos.drafts.get(filingPackage.draftId))
       const packetArtifact = buildFilingPacketArtifactRow(filingPackage, draft)
@@ -19389,6 +19398,9 @@ async function handlePost(request: Request, session: HandlerSession | null) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
+    if (err instanceof DraftChangedError) {
+      return NextResponse.json({ error: err.message, code: err.code }, { status: 409 })
+    }
     const message = publicErrorMessage(err, "filing package write failed")
     const status = /preflight blocked/.test(message) ? 422 : 400
     return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status })
