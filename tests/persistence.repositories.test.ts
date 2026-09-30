@@ -3238,7 +3238,7 @@ describe("Firestore repository adapters", () => {
               )
             )!,
             ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
-              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_finalized",
+              "ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_finalized",
           },
           actorId: "partner_a",
           reason: "ops_closure_ack_recon_tb_partner_handoff_attestation_492_seed",
@@ -3376,13 +3376,15 @@ describe("Firestore repository adapters", () => {
       } = await import(
         "@/platform/persistence/workflowOpsAckReconTbSealVerificationsOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentGovernance"
       )
+      // Seeded parent carries an extra backlog counter the builder does not read.
+      const repoCustodyAckReconTbPdFreezeSealTbExtAck499Parent = {
+        ...repoCustodyAckReconTbPdFreezeSealTbRecon497,
+        partnerDeliveryTransportBoundaryReceiptReconciliationStatus:
+          "partner_delivery_transport_boundary_receipt_reconciliation_finalized" as const,
+        partnerDeliveryTransportBoundaryReceiptReconciliationBacklogCount: 0,
+      }
       const repoCustodyAckReconTbPdFreezeSealTbExtAck499 = buildRepoCustodyAckReconTbPdFreezeSealTbExtAck499Row({
-        partnerDeliveryTransportBoundaryReceiptReconciliation: {
-          ...repoCustodyAckReconTbPdFreezeSealTbRecon497,
-          partnerDeliveryTransportBoundaryReceiptReconciliationStatus:
-            "partner_delivery_transport_boundary_receipt_reconciliation_finalized",
-          partnerDeliveryTransportBoundaryReceiptReconciliationBacklogCount: 0,
-        },
+        partnerDeliveryTransportBoundaryReceiptReconciliation: repoCustodyAckReconTbPdFreezeSealTbExtAck499Parent,
         actorId: "partner_a",
         reason: "ops_custody_ack_recon_tb_pd_freeze_seal_tb_ext_ack_499_seed",
         now: 126,
@@ -3390,13 +3392,15 @@ describe("Firestore repository adapters", () => {
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.upsert(
         repoCustodyAckReconTbPdFreezeSealTbExtAck499
       )
+      // Seeded parent carries an extra backlog counter the builder does not read.
+      const repoClosureAckReconTbPdFreezeSealTbExtAck500Parent = {
+        ...repoClosureAckReconTbPdFreezeSealTbRecon498,
+        partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus:
+          "transport_boundary_receipt_reconciliation_closure_attested" as const,
+        partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationBacklogCount: 0,
+      }
       const repoClosureAckReconTbPdFreezeSealTbExtAck500 = buildRepoClosureAckReconTbPdFreezeSealTbExtAck500Row({
-        partnerDeliveryTransportBoundaryReceiptReconciliation: {
-          ...repoClosureAckReconTbPdFreezeSealTbRecon498,
-          partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus:
-            "transport_boundary_receipt_reconciliation_closure_attested",
-          partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationBacklogCount: 0,
-        },
+        partnerDeliveryTransportBoundaryReceiptReconciliation: repoClosureAckReconTbPdFreezeSealTbExtAck500Parent,
         actorId: "partner_a",
         reason: "ops_closure_ack_recon_tb_pd_freeze_seal_tb_ext_ack_500_seed",
         now: 127,
