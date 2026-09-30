@@ -5,7 +5,9 @@ import { checkPermission } from "@/platform/p5/checkPermission"
 import {
   checkTemporalConsistency,
   verifyCitations,
+  type CitationFinding,
 } from "@/services/d4-2/draftingIntelligence"
+import { extractCitations } from "@/services/d4-2/citations"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
 export type TemplateSummary = {
@@ -25,14 +27,19 @@ export type DraftPreflightInput = {
   actorId: string
   matterId: string
   classification: Classification
+  /** Judgment ids or citation strings the caller lists; unioned with the draft body's citations. */
   citedJudgmentIds: string[]
   temporalCitations: TemporalCitationInput[]
   partnerOverride?: { partnerId: string; reason: string }
+  /** Draft text; every reported citation in it is extracted and checked (Module 33). */
+  draftBody?: string
 }
 
 export type DraftPreflightResult = {
   ok: boolean
-  citationStatus: "OK" | "OVERRULED"
+  citationStatus: "OK" | "OVERRULED" | "UNVERIFIED"
+  /** Per-authority Module 33 result: VERIFIED / UNVERIFIED / OVERRULED. */
+  citations: CitationFinding[]
   temporal: Array<{ sectionId: string; status: "OK" | "TEMPORAL-MISMATCH" }>
   /** Set when a citation-gate block was cleared by the calling partner's recorded reason. */
   partnerOverride?: { partnerId: string; reason: string }
@@ -88,14 +95,12 @@ export function runDraftPreflight(
   }
 
   const caller = { actorId: input.actorId, firmId: matter.firmId }
-  const unaided = verifyCitations(store, input.citedJudgmentIds)
-  const citation =
-    unaided.status === "OK"
-      ? unaided
-      : verifyCitations(store, input.citedJudgmentIds, input.partnerOverride, caller)
-  const citationStatus = citation.status === "OVERRULED" ? "OVERRULED" : "OK"
+  // Module 33: the gate checks union(extracted from the body, caller-listed), never only the latter.
+  const refs = [...extractCitations(input.draftBody ?? ""), ...(input.citedJudgmentIds ?? [])]
+  const citation = verifyCitations(store, refs, input.partnerOverride, caller)
+  const citationStatus = citation.status
   const overrideApplied =
-    unaided.status !== "OK" && citation.status === "OK" && input.partnerOverride
+    citation.overridden && input.partnerOverride
       ? { partnerId: input.partnerOverride.partnerId, reason: input.partnerOverride.reason.trim() }
       : undefined
   if (overrideApplied && options.recordOverride !== false) {
@@ -125,6 +130,7 @@ export function runDraftPreflight(
   return {
     ok: !citationBlocked && !temporalBlocked,
     citationStatus,
+    citations: citation.findings,
     temporal,
     ...(overrideApplied ? { partnerOverride: overrideApplied } : {}),
   }
@@ -144,7 +150,8 @@ export function composeDraft(
 ): DraftRecord {
   const templateExists = getDocumentTypes().some((type) => type.id === input.templateId)
   if (!templateExists) throw new PublicError("unknown templateId")
-  const gate = runDraftPreflight(store, input.preflight)
+  // The gate always reads the body being saved, whatever the caller put in preflight.
+  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: input.body })
   if (!gate.ok) {
     throw new PublicError("preflight blocked drafting")
   }

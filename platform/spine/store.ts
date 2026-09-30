@@ -383,6 +383,8 @@ export type Judgment = {
   id: string
   title: string
   benchType: "single" | "division" | "full" | "larger"
+  /** Reported citation (e.g. "2019 SCMR 1234"); Module 33 matches extracted citations on it. */
+  citation?: string
 }
 
 export type TreatmentRow = {
@@ -450,7 +452,7 @@ export type FilingPackage = {
   matterId: string
   draftId: string
   classification: Classification
-  citationStatus: "OK" | "OVERRULED"
+  citationStatus: "OK" | "OVERRULED" | "UNVERIFIED"
   temporalAllOk: boolean
   status: "pending_partner_approval" | "approved" | "rejected"
   createdBy: string

@@ -120,6 +120,126 @@ describe("GET/POST /api/d4/filings", () => {
     })
   })
 
+  it("re-runs the citation gate at approval: a newly overruled authority blocks approval unless the approving partner overrides with a reason (E-22)", async () => {
+    const store = getRuntimeStore()
+    seedJudgment(store, "j-cited", "Cited authority", "single", "2019 SCMR 1234")
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Filing matter",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "partner_a", "firmA")
+    addMember(store, matter.id, "associate_a", "firmA")
+    const firstTemplate = getDocumentTypes()[0]
+    if (!firstTemplate) throw new Error("missing template seed")
+    const draft = composeDraft(store, {
+      actorId: "associate_a",
+      matterId: matter.id,
+      templateId: firstTemplate.id,
+      title: "Draft pleading",
+      body: "Relies on 2019 SCMR 1234.",
+      classification: "internal",
+      preflight: {
+        actorId: "associate_a",
+        matterId: matter.id,
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+        draftBody: "Relies on 2019 SCMR 1234.",
+      },
+    })
+    const created = await post(
+      {
+        action: "create_package",
+        actorId: "associate_a",
+        matterId: matter.id,
+        draftId: draft.id,
+        classification: "internal",
+      },
+      "9e3c5a1b-6f8d-4c0e-9a2b-5d4e6f7a8b10"
+    )
+    expect(created.status).toBe(200)
+    const packageId = ((await created.json()) as { result: { filingPackage: { id: string } } })
+      .result.filingPackage.id
+
+    seedJudgment(store, "j-larger", "Larger bench", "larger", "PLD 2026 SC 1")
+    seedTreatment(store, "j-larger", "j-cited", "overruled", "larger")
+
+    const blocked = await post(
+      { action: "decide_package", actorId: "partner_a", packageId, decision: "approve", reason: "Ready" },
+      "af4d6b2c-7a9e-4d1f-8b3c-6e5f7a8b9c11"
+    )
+    expect(blocked.status).toBe(422)
+    expect(store.filingPackages.get(packageId)?.status).toBe("pending_partner_approval")
+
+    const rejected = await post(
+      { action: "decide_package", actorId: "partner_a", packageId, decision: "reject", reason: "Authority overruled" },
+      "b05e7c3d-8b0f-4e2a-9c4d-7f6a8b9c0d12"
+    )
+    expect(rejected.status).toBe(200)
+  })
+
+  it("approval over a non-VERIFIED authority needs the approving partner's own override reason", async () => {
+    const store = getRuntimeStore()
+    seedJudgment(store, "j-cited", "Cited authority", "single", "2019 SCMR 1234")
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Filing matter",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "partner_a", "firmA")
+    addMember(store, matter.id, "associate_a", "firmA")
+    const firstTemplate = getDocumentTypes()[0]
+    if (!firstTemplate) throw new Error("missing template seed")
+    const draft = composeDraft(store, {
+      actorId: "associate_a",
+      matterId: matter.id,
+      templateId: firstTemplate.id,
+      title: "Draft pleading",
+      body: "Relies on 2019 SCMR 1234.",
+      classification: "internal",
+      preflight: {
+        actorId: "associate_a",
+        matterId: matter.id,
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+        draftBody: "Relies on 2019 SCMR 1234.",
+      },
+    })
+    const created = await post(
+      { action: "create_package", actorId: "associate_a", matterId: matter.id, draftId: draft.id, classification: "internal" },
+      "c16f8d4e-9c1a-4f3b-8d5e-8a7b9c0d1e13"
+    )
+    const packageId = ((await created.json()) as { result: { filingPackage: { id: string } } })
+      .result.filingPackage.id
+    seedJudgment(store, "j-larger", "Larger bench", "larger", "PLD 2026 SC 1")
+    seedTreatment(store, "j-larger", "j-cited", "overruled", "larger")
+
+    const approved = await post(
+      {
+        action: "decide_package",
+        actorId: "partner_a",
+        packageId,
+        decision: "approve",
+        reason: "Ready",
+        partnerOverride: { reason: "Overruling judgment distinguished on statute" },
+      },
+      "d2708e5f-0d2b-4a4c-9e6f-9b8c0d1e2f14"
+    )
+    expect(approved.status).toBe(200)
+    expect(store.filingPackages.get(packageId)?.status).toBe("approved")
+    const overrides = store.audit.filter((row) => row.action === "citation_gate_override")
+    expect(overrides.at(-1)).toMatchObject({
+      actorId: "partner_a",
+      reason: "Overruling judgment distinguished on statute",
+    })
+  })
+
   it("creates pending filing package and supports partner approval", async () => {
     const { matterId, draftId } = seedMatterAndDraft()
     const created = await post(

@@ -255,6 +255,10 @@ type DecideBody = {
   packageId?: string
   decision?: "approve" | "reject"
   reason?: string
+  partnerOverride?: {
+    partnerId?: string
+    reason?: string
+  }
 }
 
 type DispatchUpdateBody = {
@@ -7391,18 +7395,34 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           { status: 400 }
         )
       }
-      const filingPackage = decideFilingPackage(store, {
-        actorId: parsed.actorId,
-        packageId: parsed.packageId,
-        decision: parsed.decision,
-        reason: parsed.reason,
-      })
+      const resolvedOverride = resolvePartnerOverride(
+        store,
+        parsed.partnerOverride,
+        session?.userId ?? undefined
+      )
+      if (!resolvedOverride.ok) {
+        return errorResponse(resolvedOverride.status, resolvedOverride.code, resolvedOverride.error)
+      }
       const actor = store.users.get(parsed.actorId)
       if (!actor) {
         return NextResponse.json({ error: "unknown actor" }, { status: 404 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      // Captured before the decision so its audit rows (approve/reject, gate override) persist.
       const priorAuditCount = store.audit.length
+      const pendingPackage = store.filingPackages.get(parsed.packageId)
+      const pendingDraft = pendingPackage
+        ? (store.drafts.get(pendingPackage.draftId) ??
+          (await repos.drafts.get(pendingPackage.draftId)))
+        : undefined
+      const filingPackage = decideFilingPackage(store, {
+        actorId: parsed.actorId,
+        packageId: parsed.packageId,
+        decision: parsed.decision,
+        reason: parsed.reason,
+        ...(pendingDraft ? { draftBody: pendingDraft.body } : {}),
+        ...(resolvedOverride.override ? { partnerOverride: resolvedOverride.override } : {}),
+      })
       const persisted = await repos.filings.get(filingPackage.id)
       if (persisted) {
         await repos.filings.update(filingPackage.id, {

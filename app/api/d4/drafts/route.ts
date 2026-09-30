@@ -43,6 +43,8 @@ type PreflightBody = {
   citedJudgmentIds?: string[]
   temporalCitations?: TemporalCitationInput[]
   partnerOverride?: { partnerId?: string; reason?: string }
+  /** Optional draft text to extract citations from. */
+  body?: string
 }
 
 type ComposeBody = {
@@ -92,6 +94,7 @@ function buildPreflightInput(
     citedJudgmentIds?: string[]
     temporalCitations?: TemporalCitationInput[]
     partnerOverride?: { partnerId?: string; reason?: string }
+    body?: string
   }
 ): DraftPreflightInput | Response {
   if (!parsed.actorId || !parsed.matterId) {
@@ -115,6 +118,7 @@ function buildPreflightInput(
     citedJudgmentIds: parsed.citedJudgmentIds ?? [],
     temporalCitations: parsed.temporalCitations ?? [],
     partnerOverride,
+    ...(typeof parsed.body === "string" ? { draftBody: parsed.body } : {}),
   }
 }
 

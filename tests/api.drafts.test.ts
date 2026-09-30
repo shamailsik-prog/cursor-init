@@ -279,6 +279,88 @@ describe("POST/GET /api/d4/drafts", () => {
     })
   })
 
+  it("extracts citations from the draft body: an overruled authority blocks even when the caller omits it", async () => {
+    const matterId = seedMatter("internal")
+    const store = getRuntimeStore()
+    seedJudgment(store, "j-old", "Old authority", "single", "PLD 2010 Lahore 5")
+    seedJudgment(store, "j-new", "Larger bench", "larger", "PLD 2020 SC 1")
+    seedTreatment(store, "j-new", "j-old", "overruled", "larger")
+
+    const res = await post(
+      {
+        action: "compose",
+        actorId: "associate_a",
+        matterId,
+        templateId: templateId(),
+        title: "Relies on overruled case",
+        body: "The petitioner relies on PLD 2010 Lah. 5 for the proposition.",
+        classification: "internal",
+        citedJudgmentIds: [],
+      },
+      "3b9e1c7d-2a4f-4e6b-9c8d-1f0a2b3c4d06"
+    )
+    expect(res.status).toBe(422)
+    const json = (await res.json()) as {
+      preflight: { citationStatus: string; citations: Array<{ ref: string; status: string }> }
+    }
+    expect(json.preflight.citationStatus).toBe("OVERRULED")
+    expect(json.preflight.citations).toEqual([
+      { ref: "PLD 2010 Lahore 5", judgmentId: "j-old", status: "OVERRULED" },
+    ])
+  })
+
+  it("blocks an unknown authority as UNVERIFIED (E-22) and lets the calling partner override with a reason", async () => {
+    const matterId = seedMatter("internal")
+    const store = getRuntimeStore()
+    seedJudgment(store, "j-good", "Good law", "division", "2019 SCMR 1234")
+
+    const verified = await post(
+      {
+        action: "preflight",
+        actorId: "associate_a",
+        matterId,
+        classification: "internal",
+        body: "See 2019 SCMR 1234.",
+      },
+      "4c0f2d8e-3b5a-4f7c-8d9e-2a1b3c4d5e07"
+    )
+    expect(verified.status).toBe(200)
+    const v = (await verified.json()) as { result: { result: { ok: boolean; citationStatus: string } } }
+    expect(v.result.result).toMatchObject({ ok: true, citationStatus: "OK" })
+
+    const unknown = await post(
+      {
+        action: "compose",
+        actorId: "associate_a",
+        matterId,
+        templateId: templateId(),
+        title: "Cites unknown authority",
+        body: "See 2019 SCMR 1234 and 2001 YLR 999.",
+        classification: "internal",
+      },
+      "5d1a3e9f-4c6b-4a8d-9e0f-3b2c4d5e6f08"
+    )
+    expect(unknown.status).toBe(422)
+    const u = (await unknown.json()) as { preflight: { citationStatus: string } }
+    expect(u.preflight.citationStatus).toBe("UNVERIFIED")
+
+    const overridden = await post(
+      {
+        action: "compose",
+        actorId: "partner_a",
+        matterId,
+        templateId: templateId(),
+        title: "Cites unknown authority",
+        body: "See 2019 SCMR 1234 and 2001 YLR 999.",
+        classification: "internal",
+        partnerOverride: { reason: "Reported copy checked against the printed volume" },
+      },
+      "6e2b4f0a-5d7c-4b9e-8f1a-4c3d5e6f7a09"
+    )
+    expect(overridden.status).toBe(200)
+    expect(store.audit.filter((row) => row.action === "citation_gate_override")).toHaveLength(1)
+  })
+
   it("blocks compose when temporal preflight mismatches statute text", async () => {
     const matterId = seedMatter("internal")
     const store = getRuntimeStore()

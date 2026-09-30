@@ -5,6 +5,9 @@ import {
   runDraftPreflight,
   type DraftPreflightInput,
 } from "@/services/d4-1/drafts"
+import { extractCitations } from "@/services/d4-2/citations"
+import { verifyCitations } from "@/services/d4-2/draftingIntelligence"
+import type { PartnerOverride } from "@/services/d4-2/partnerOverride"
 
 export function createFilingPackage(
   store: SpineStore,
@@ -30,7 +33,8 @@ export function createFilingPackage(
   if (rankOfStoredOrMax(draft.classification) < rankOfStoredOrMax(matter.classification)) {
     throw new PublicError("draft classification cannot be lower than matter classification")
   }
-  const gate = runDraftPreflight(store, input.preflight)
+  // Module 33: the gate reads the draft being filed, not only the ids the caller lists.
+  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: draft.body })
   if (!gate.ok) throw new PublicError("preflight blocked filing package")
   const filingPackage: FilingPackage = {
     id: store.id("pkg"),
@@ -63,6 +67,10 @@ export function decideFilingPackage(
     packageId: string
     decision: "approve" | "reject"
     reason: string
+    /** Draft text when the caller loaded it outside the store; defaults to the stored draft. */
+    draftBody?: string
+    /** The approving partner's own override of a non-VERIFIED gate result (resolved from the session). */
+    partnerOverride?: PartnerOverride
   }
 ): FilingPackage {
   const actor = store.users.get(input.actorId)
@@ -74,6 +82,30 @@ export function decideFilingPackage(
   if (filingPackage.firmId !== actor.firmId) throw new PublicError("cross-firm decision denied")
   const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
   if (!permission.allow) throw new PublicError(`permission denied: ${permission.reason}`)
+  if (input.decision === "approve") {
+    // E-22: approval is blocked on any non-VERIFIED result, re-checked now (treatments can
+    // change between package creation and approval). Fails closed without the draft text.
+    const draftBody = input.draftBody ?? store.drafts.get(filingPackage.draftId)?.body
+    if (typeof draftBody !== "string") {
+      throw new PublicError("preflight blocked approval: draft unavailable for the citation gate")
+    }
+    const gate = verifyCitations(store, extractCitations(draftBody), input.partnerOverride, {
+      actorId: actor.id,
+      firmId: filingPackage.firmId,
+    })
+    if (gate.blocked) {
+      throw new PublicError(`preflight blocked approval: citation gate ${gate.status}`)
+    }
+    if (gate.overridden && input.partnerOverride) {
+      store.audit.push({
+        action: "citation_gate_override",
+        actorId: actor.id,
+        target: filingPackage.matterId,
+        classification: filingPackage.classification,
+        reason: input.partnerOverride.reason.trim(),
+      })
+    }
+  }
   filingPackage.status =
     input.decision === "approve" ? "approved" : "rejected"
   filingPackage.approvedBy = actor.id
