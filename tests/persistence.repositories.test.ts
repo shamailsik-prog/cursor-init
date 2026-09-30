@@ -5,6 +5,7 @@ import {
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
 import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
+import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
 
 const RULES = readFileSync("firestore.rules", "utf8")
 
@@ -5023,4 +5024,35 @@ describe("Firestore repository adapters", () => {
       expect(closureQueueReentryComplianceByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
   }, 10_000)
+
+  it("audit_log append is insert-only: an existing audit id is never overwritten (emulator)", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      const repos = createFirestoreRepositories(
+        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
+      )
+      const original = {
+        id: "aud_insert_only_1",
+        firmId: "firmA",
+        action: "matter_create",
+        actorId: "partner_a",
+        target: "mat_audit_1",
+        classification: "internal" as const,
+        at: 1,
+      }
+      await repos.audit.append(original)
+      await expect(
+        repos.audit.append({ ...original, action: "matter_delete", target: "mat_other" })
+      ).rejects.toBeInstanceOf(AuditAppendConflictError)
+      await expect(repos.audit.append({ ...original })).rejects.toBeInstanceOf(
+        AuditAppendConflictError
+      )
+      const rows = (await repos.audit.listByFirm("firmA")).filter(
+        (row) => row.id === "aud_insert_only_1"
+      )
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.action).toBe("matter_create")
+      expect(rows[0]?.target).toBe("mat_audit_1")
+    })
+  })
 })

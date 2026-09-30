@@ -143,6 +143,9 @@ import type {
   User,
   SpineStore,
 } from "@/platform/spine/store"
+import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
+
+export { AuditAppendConflictError }
 
 export type MatterRepository = {
   create(row: Matter): Promise<void>
@@ -618,6 +621,13 @@ export type IntimationRepository = {
   listByMatter(matterId: string): Promise<Intimation[]>
 }
 
+/**
+ * Insert-only audit log. `append` rejects with `AuditAppendConflictError` when the id
+ * already exists; rows are never replaced.
+ * TODO(audit-tamper-evidence): add a per-firm hash chain (prevHash = sha256 of the previous
+ * row) once a chain-head collection and its firestore.rules block exist; a Firestore chain
+ * needs a transactional per-firm head document, which is out of scope for this repository.
+ */
 export type AuditRepository = {
   append(row: AuditEntry): Promise<void>
   listByFirm(firmId: string): Promise<AuditEntry[]>
@@ -3195,11 +3205,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
     audit: {
       async append(row) {
         if (row.id) {
-          const idx = store.audit.findIndex((entry) => entry.id === row.id)
-          if (idx >= 0) {
-            store.audit[idx] = row
-            return
-          }
+          const existing = store.audit.find((entry) => entry.id === row.id)
+          // In memory mode the runtime store is the backing store, so audit write-through
+          // hands back the very row object already held in store.audit; that is not a
+          // second insert. Any other row reusing the id is rejected, never replaced.
+          if (existing === row) return
+          if (existing) throw new AuditAppendConflictError(row.id)
         }
         store.audit.push(row)
       },

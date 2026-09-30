@@ -3,6 +3,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  runTransaction,
   setDoc,
   updateDoc,
   type Firestore,
@@ -155,6 +156,7 @@ import type {
 } from "@/platform/spine/store"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { createDenyByDefaultWorkflowOpsRepositoryBinder } from "@/platform/persistence/denyByDefaultWorkflowOpsRepository"
+import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
 
 async function setById<T extends { id: string }>(db: Firestore, collectionName: string, row: T) {
   await setDoc(doc(db, collectionName, row.id), row)
@@ -1729,9 +1731,16 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         if (!row.id) {
           throw new Error("audit entry id is required")
         }
+        const auditId = row.id
         const payload: Record<string, unknown> = { ...row }
         if (payload.reason === undefined) delete payload.reason
-        await setDoc(doc(db, "audit_log", row.id), payload)
+        const ref = doc(db, "audit_log", auditId)
+        // Insert-only: never overwrite an existing audit row (setDoc alone would replace it).
+        await runTransaction(db, async (tx) => {
+          const current = await tx.get(ref)
+          if (current.exists()) throw new AuditAppendConflictError(auditId)
+          tx.set(ref, payload)
+        })
       },
       async listByFirm(firmId) {
         return listByFirm<AuditEntry & { firmId: string }>(db, "audit_log", firmId)
