@@ -3,7 +3,10 @@ import ts from "typescript"
 import { describe, expect, it } from "vitest"
 import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
 import { WORKFLOW_OPS_DENY_BY_DEFAULT_FIRESTORE_COLLECTION_BY_SPINE_KEY } from "@/platform/persistence/denyByDefaultWorkflowOpsRepository"
-import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
+import {
+  createMemoryRepositories,
+  type SpineRepositories,
+} from "@/platform/persistence/spineRepositories"
 import { newStore } from "@/platform/spine/store"
 
 /**
@@ -16,6 +19,7 @@ const FILES = [
   "platform/persistence/firestoreSpineRepositories.ts",
   "platform/persistence/denyByDefaultWorkflowOpsRepository.ts",
   "platform/spine/store.ts",
+  "tests/persistence.route-wiring.test.ts",
 ]
 
 function duplicateNames(file: string): string[] {
@@ -51,6 +55,33 @@ function duplicateNames(file: string): string[] {
   return found
 }
 
+/** Member names declared on the SpineRepositories type in spineRepositories.ts. */
+function spineRepositoryInterfaceKeys(): string[] {
+  const file = "platform/persistence/spineRepositories.ts"
+  const src = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true)
+  for (const statement of src.statements) {
+    if (ts.isTypeAliasDeclaration(statement) && statement.name.text === "SpineRepositories") {
+      if (!ts.isTypeLiteralNode(statement.type)) throw new Error("SpineRepositories is not a type literal")
+      return statement.type.members.flatMap((m) => (m.name ? [m.name.getText(src)] : []))
+    }
+    if (ts.isInterfaceDeclaration(statement) && statement.name.text === "SpineRepositories") {
+      return statement.members.flatMap((m) => (m.name ? [m.name.getText(src)] : []))
+    }
+  }
+  throw new Error("SpineRepositories declaration not found")
+}
+
+// Type-level: both adapter factories must produce exactly the SpineRepositories key set.
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
+const memoryKeysMatchInterface: Equal<
+  keyof ReturnType<typeof createMemoryRepositories>,
+  keyof SpineRepositories
+> = true
+const firestoreKeysMatchInterface: Equal<
+  keyof ReturnType<typeof createFirestoreRepositories>,
+  keyof SpineRepositories
+> = true
+
 describe("repository layer has no duplicate keys", () => {
   for (const file of FILES) {
     it(`${file} declares every key once`, () => {
@@ -72,5 +103,16 @@ describe("repository layer has no duplicate keys", () => {
       (key) => !memoryKeys.has(key)
     )
     expect(unknown).toEqual([])
+  })
+
+  it("both adapters implement exactly the keys declared on SpineRepositories", () => {
+    expect(memoryKeysMatchInterface && firestoreKeysMatchInterface).toBe(true)
+    const declared = spineRepositoryInterfaceKeys().sort()
+    const memoryKeys = Object.keys(createMemoryRepositories(newStore())).sort()
+    const firestoreKeys = Object.keys(
+      createFirestoreRepositories({} as Parameters<typeof createFirestoreRepositories>[0])
+    ).sort()
+    expect(memoryKeys).toEqual(declared)
+    expect(firestoreKeys).toEqual(declared)
   })
 })
