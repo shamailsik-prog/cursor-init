@@ -16,12 +16,19 @@ import logging
 import os
 import re
 from functools import lru_cache
+from urllib.parse import unquote, urlsplit
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# Well-known / shipped-in-source database passwords that must never reach production.
+_DEFAULT_DB_PASSWORDS = frozenset(
+    {"legal_scraper_pass", "legal", "postgres", "password", "changeme", "change_me", "admin", "secret"}
+)
 
 
 class Settings(BaseSettings):
@@ -209,8 +216,7 @@ class Settings(BaseSettings):
         Development: auto-generate ephemeral Fernet / placeholder secrets so local boots
         never ship a known shared credential from source.
         """
-        env = str(getattr(self, "ENVIRONMENT", None) or getattr(self, "APP_ENV", "development")).lower()
-        is_prodish = env in ("production", "staging")
+        is_prodish = self.is_prodish()
 
         if not self.ENCRYPTION_KEY:
             if is_prodish:
@@ -233,7 +239,24 @@ class Settings(BaseSettings):
                 raise ValueError("SECRET_KEY must be set via environment in production/staging")
             object.__setattr__(self, "SECRET_KEY", "dev-only-jwt-secret-not-for-production-64chars-xxxx")
 
+        if is_prodish:
+            password = urlsplit(self.DATABASE_URL).password
+            if not password or unquote(password).lower() in _DEFAULT_DB_PASSWORDS:
+                raise ValueError(
+                    "DATABASE_URL must carry a non-default database password in production/staging"
+                )
+
         return self
+
+    def is_prodish(self) -> bool:
+        """
+        Production/staging if ENVIRONMENT says so, or if APP_ENV was explicitly set to it.
+        (APP_ENV's field default is ignored so unconfigured local boots stay development.)
+        """
+        prodish = ("production", "staging")
+        if str(self.ENVIRONMENT).lower() in prodish:
+            return True
+        return "APP_ENV" in self.model_fields_set and str(self.APP_ENV).lower() in prodish
 
     @field_validator("TIMEZONE")
     @classmethod

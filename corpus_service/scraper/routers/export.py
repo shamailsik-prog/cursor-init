@@ -1,10 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 import csv, io, json
+from scraper.auth import require_admin_api_key
 from scraper.database import SessionLocal
 from sqlalchemy import select
 from scraper.models import CaseLawMaster, StatutesMaster
-router = APIRouter(prefix="/export")
+router = APIRouter(prefix="/export", dependencies=[Depends(require_admin_api_key)])
 @router.get("/cases")
 async def export_cases(format: str="csv"):
     async with SessionLocal() as db:
