@@ -37,10 +37,11 @@ describe("Module 33 extractCitations (Pakistani reporters)", () => {
     ])
   })
 
-  it("deduplicates and ignores text that is not a reported citation", () => {
+  it("deduplicates; an unreported case reference is a suspect, not silently ignored (review round 1)", () => {
     expect(
       extractCitations("2019 SCMR 1234 ... 2019  scmr 1234. Suit No. 812 of 2025; section 302 PPC")
-    ).toEqual(["2019 SCMR 1234"])
+    ).toEqual(["2019 SCMR 1234", "UNRECOGNISED: Suit No. 812 of 2025"])
+    expect(extractCitations("The petitioner filed 3 applications in 2019.")).toEqual([])
     expect(extractCitations("")).toEqual([])
   })
 

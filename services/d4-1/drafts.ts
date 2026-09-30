@@ -8,6 +8,26 @@ import {
   type CitationFinding,
 } from "@/services/d4-2/draftingIntelligence"
 import { extractCitations } from "@/services/d4-2/citations"
+import courtsSeed from "@/data/courts.json"
+import { loadCourts, normalise as normaliseCaseNumber } from "@/core/case-number-normaliser"
+
+const courts = loadCourts(courtsSeed)
+
+/** A case reference that normalises to the matter's own recorded case number is not an authority. */
+export function ownCaseReferenceMatcher(matter: {
+  courtId: string
+  caseNumber: string | null
+}): (raw: string) => boolean {
+  return (raw) => {
+    if (!matter.caseNumber) return false
+    try {
+      const result = normaliseCaseNumber(raw, matter.courtId, courts)
+      return result.status !== "REJECT" && result.canonical === matter.caseNumber
+    } catch {
+      return false
+    }
+  }
+}
 import { getDocumentTypes } from "@/lib/foundation-data"
 
 export type TemplateSummary = {
@@ -96,7 +116,10 @@ export function runDraftPreflight(
 
   const caller = { actorId: input.actorId, firmId: matter.firmId }
   // Module 33: the gate checks union(extracted from the body, caller-listed), never only the latter.
-  const refs = [...extractCitations(input.draftBody ?? ""), ...(input.citedJudgmentIds ?? [])]
+  const refs = [
+    ...extractCitations(input.draftBody ?? "", { isOwnCaseReference: ownCaseReferenceMatcher(matter) }),
+    ...(input.citedJudgmentIds ?? []),
+  ]
   const citation = verifyCitations(store, refs, input.partnerOverride, caller)
   const citationStatus = citation.status
   const overrideApplied =

@@ -1,5 +1,5 @@
 import type { Judgment, SpineStore } from "@/platform/spine/store"
-import { normaliseCitation } from "@/services/d4-2/citations"
+import { isUnrecognisedRef, normaliseCitation } from "@/services/d4-2/citations"
 import { isEffectivePartnerOverride, type PartnerOverride } from "@/services/d4-2/partnerOverride"
 
 export type GateResult =
@@ -94,6 +94,13 @@ export function verifyCitations(
   for (const raw of refs) {
     const ref = typeof raw === "string" ? raw.trim() : ""
     if (!ref) continue
+    if (isUnrecognisedRef(ref)) {
+      // A suspected authority the extractor could not read exactly: never resolvable (E-22).
+      if (seen.has(`r:${ref}`)) continue
+      seen.add(`r:${ref}`)
+      findings.push({ ref, judgmentId: null, status: "UNVERIFIED" })
+      continue
+    }
     const judgment = resolveJudgment(store, ref)
     const displayRef = judgment && store.judgments.has(ref) ? ref : (normaliseCitation(ref) ?? ref)
     const key = judgment ? `j:${judgment.id}` : `r:${displayRef}`
