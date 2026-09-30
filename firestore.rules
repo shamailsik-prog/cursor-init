@@ -13,7 +13,6 @@ service cloud.firestore {
     function rank(c) { return {'public': 0, 'internal': 1, 'confidential': 2, 'privileged': 3, 'privileged-restricted': 4}[c]; }
     function cleared(c) { return rank(tok().clearanceLevel) >= rank(c); }
     function isMember(matterId) { return exists(/databases/$(database)/documents/matter_members/$(matterId + '_' + request.auth.uid)); }
-    function memberOrPartner(matterId) { return isPartner() || isMember(matterId); }
     function firmIdUnchanged() { return request.resource.data.firmId == resource.data.firmId; }
     function monotonic() { return rank(request.resource.data.classification) >= rank(resource.data.classification); }
     // Firm staff (platform/spine/store.ts Role minus 'client'). Client-role users never see internal collections.
@@ -24,6 +23,8 @@ service cloud.firestore {
     function canAccessScope(matterId) {
       return matterId != null ? isMember(matterId) : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2;
     }
+    // Matter-bound staff roles that may read matter-derived rows (client and accounts never do).
+    function isMatterStaff() { return role() in ['partner', 'associate', 'clerk', 'intern']; }
     function authorNew() { return sameFirmNew() && isAuthor() && clearedNew() && canAccessScope(request.resource.data.matterId); }
 
     match /firms/{firmId} {
@@ -41,7 +42,8 @@ service cloud.firestore {
       allow create, delete: if false; // Cloud Functions (Admin SDK) only
     }
     match /matter_members/{id} {
-      allow read: if sameFirm() && memberOrPartner(resource.data.matterId);
+      // R-2: no role is exempt, including the founding partner — only members see a matter's membership.
+      allow read: if sameFirm() && isMember(resource.data.matterId);
       // isMember() keys on the doc id, so the id must be bound to the (immutable) matterId/userId fields.
       allow create: if sameFirmNew() && isPartner() && id == request.resource.data.matterId + '_' + request.resource.data.userId;
       allow update: if sameFirm() && isPartner() && firmIdUnchanged()
@@ -75,7 +77,9 @@ service cloud.firestore {
       allow delete: if false; // originals are immutable; loose vault never deletes (E-18)
     }
     match /document_versions/{id} {
-      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      // R-2: same scope as documents — matter membership (or the loose-vault rule) plus clearance.
+      allow read: if sameFirm() && isMatterStaff() && cleared(resource.data.classification)
+        && canAccessScope(resource.data.matterId);
       allow create: if authorNew();
       allow update, delete: if false; // append-only
     }
@@ -125,7 +129,9 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /draft_versions/{id} {
-      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      // R-2: drafts are matter-bound; a version is readable only by a cleared member of that matter.
+      allow read: if sameFirm() && isMatterStaff() && cleared(resource.data.classification)
+        && isMember(resource.data.matterId);
       allow create: if authorNew();
       allow update, delete: if false; // append-only
     }
@@ -143,7 +149,9 @@ service cloud.firestore {
       allow write: if false; // P6 / Postgres is the system of record; the mirror is read-only
     }
     match /routing_queue/{id}  { allow read: if sameFirm() && role() in ['clerk', 'partner', 'associate']; allow write: if false; }
-    match /follow_ups/{id}     { allow read: if sameFirm() && isStaff(); allow write: if false; }
+    // R-2: a follow-up that carries a matterId is visible to members of that matter only.
+    match /follow_ups/{id}     { allow read: if sameFirm() && isStaff()
+      && (!('matterId' in resource.data) || isMember(resource.data.matterId)); allow write: if false; }
     match /intimation_register/{id} { allow read: if sameFirm() && role() in ['partner', 'associate', 'accounts']; allow write: if false; }
     match /notifications/{id} {
       allow read: if sameFirm() && resource.data.userId == request.auth.uid;
@@ -151,7 +159,10 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
       allow create, delete: if false;
     }
-    match /jobs/{id}           { allow read: if sameFirm() && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    // R-2 / L18 §5.2 (jobs carry classification): cleared, and matter-scoped when the job carries a matterId.
+    match /jobs/{id}           { allow read: if sameFirm() && role() in ['partner', 'associate', 'clerk']
+      && cleared(resource.data.classification)
+      && (!('matterId' in resource.data) || canAccessScope(resource.data.matterId)); allow write: if false; }
     match /api_keys/{id}       { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /audit_log/{id}      { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_session_references/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }

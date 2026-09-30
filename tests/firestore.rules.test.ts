@@ -794,3 +794,72 @@ describe("Round 4 — firms are Cloud Functions-owned; identity side collections
     }
   })
 })
+
+describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 R-2)", () => {
+  const PARTNER_NONMEMBER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC_MEMBER = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const ASSOC_NONMEMBER = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const ASSOC_LOW_MEMBER = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const CLERK_MEMBER = { firmId: "firmA", role: "clerk", clearanceLevel: "confidential" }
+  const CLERK_NONMEMBER = { firmId: "firmA", role: "clerk", clearanceLevel: "confidential" }
+  const INTERN_NONMEMBER = { firmId: "firmA", role: "intern", clearanceLevel: "privileged" }
+  const CLIENT_MEMBER = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "r2m"), { firmId: "firmA", title: "R2", classification: "internal" })
+      for (const uid of ["r2-assoc", "r2-assoc-low", "r2-clerk", "r2-client"]) {
+        await setDoc(doc(db, "matter_members", `r2m_${uid}`), { firmId: "firmA", matterId: "r2m", userId: uid })
+      }
+      const version = { firmId: "firmA", matterId: "r2m", version: 1, storagePath: "r2://v", createdBy: "r2-assoc" }
+      await setDoc(doc(db, "document_versions", "r2dv"), { ...version, classification: "internal" })
+      await setDoc(doc(db, "document_versions", "r2dvPriv"), { ...version, classification: "privileged" })
+      await setDoc(doc(db, "document_versions", "r2dvLoose"), { ...version, matterId: null, classification: "confidential" })
+      await setDoc(doc(db, "draft_versions", "r2drv"), { ...version, classification: "internal" })
+      await setDoc(doc(db, "follow_ups", "r2fu"), { firmId: "firmA", matterId: "r2m", courtId: "SHC", raw: "CP 1" })
+      await setDoc(doc(db, "jobs", "r2job"), { firmId: "firmA", matterId: "r2m", jobType: "ocr", documentId: "d", classification: "internal" })
+      await setDoc(doc(db, "jobs", "r2jobPriv"), { firmId: "firmA", matterId: "r2m", jobType: "ocr", documentId: "d", classification: "privileged" })
+    })
+  })
+
+  describe.each(["document_versions", "draft_versions"])("%s read", (coll) => {
+    const id = coll === "document_versions" ? "r2dv" : "r2drv"
+    it("non-member staff cannot read, whatever the role or clearance", async () => {
+      await assertFails(getDoc(doc(authed("r2-nonmember", ASSOC_NONMEMBER), coll, id)))
+      await assertFails(getDoc(doc(authed("r2-intern", INTERN_NONMEMBER), coll, id)))
+      await assertFails(getDoc(doc(authed("r2-partner", PARTNER_NONMEMBER), coll, id)))
+    })
+    it("member with clearance can read; client-role member cannot", async () => {
+      await assertSucceeds(getDoc(doc(authed("r2-assoc", ASSOC_MEMBER), coll, id)))
+      await assertFails(getDoc(doc(authed("r2-client", CLIENT_MEMBER), coll, id)))
+    })
+  })
+
+  it("document_versions: member below the version's classification cannot read", async () => {
+    await assertFails(getDoc(doc(authed("r2-assoc-low", ASSOC_LOW_MEMBER), "document_versions", "r2dvPriv")))
+    await assertSucceeds(getDoc(doc(authed("r2-assoc", ASSOC_MEMBER), "document_versions", "r2dvPriv")))
+  })
+
+  it("document_versions: loose-vault versions follow the loose-vault rule (clerk/partner, confidential+)", async () => {
+    await assertFails(getDoc(doc(authed("r2-assoc", ASSOC_MEMBER), "document_versions", "r2dvLoose")))
+    await assertSucceeds(getDoc(doc(authed("r2-clerk-x", CLERK_NONMEMBER), "document_versions", "r2dvLoose")))
+  })
+
+  it("matter_members: a partner who is not a member cannot read the matter's membership (no role exempt)", async () => {
+    await assertFails(getDoc(doc(authed("r2-partner", PARTNER_NONMEMBER), "matter_members", "r2m_r2-assoc")))
+    await assertFails(getDoc(doc(authed("r2-nonmember", ASSOC_NONMEMBER), "matter_members", "r2m_r2-assoc")))
+    await assertSucceeds(getDoc(doc(authed("r2-clerk", CLERK_MEMBER), "matter_members", "r2m_r2-assoc")))
+  })
+
+  it("follow_ups carrying matterId: members only", async () => {
+    await assertFails(getDoc(doc(authed("r2-nonmember", ASSOC_NONMEMBER), "follow_ups", "r2fu")))
+    await assertSucceeds(getDoc(doc(authed("r2-assoc", ASSOC_MEMBER), "follow_ups", "r2fu")))
+  })
+
+  it("jobs carrying matterId: members with clearance only", async () => {
+    await assertFails(getDoc(doc(authed("r2-clerk-x", CLERK_NONMEMBER), "jobs", "r2job")))
+    await assertSucceeds(getDoc(doc(authed("r2-clerk", CLERK_MEMBER), "jobs", "r2job")))
+    await assertFails(getDoc(doc(authed("r2-clerk", CLERK_MEMBER), "jobs", "r2jobPriv")))
+  })
+})

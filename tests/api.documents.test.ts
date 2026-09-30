@@ -87,6 +87,61 @@ describe("POST/GET /api/d1/documents", () => {
     expect(second.result.ocrJobs).toBe(1)
   })
 
+  it("scopes content-hash dedup to the matter: a non-member re-uploading another matter's file gets a new document in their own matter (R-2)", async () => {
+    const store = getRuntimeStore()
+    const partnerOnly = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Partner-only matter",
+      courtId: "SHC",
+      classification: "privileged",
+    })
+    addMember(store, partnerOnly.id, "partner_a", "firmA")
+    const clerkMatter = seedMatter("internal")
+    const bytes = b64("%PDF-shared-evidence%")
+
+    const original = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId: partnerOnly.id,
+        contentBase64: bytes,
+        sourceChannel: "web",
+        classification: "privileged",
+      },
+      "0d6b7e1f-2a3c-4d5e-8f60-718293a4b5c6"
+    )
+    expect(original.status).toBe(200)
+    const originalDoc = ((await original.json()) as { result: { doc: { id: string } } }).result.doc
+
+    const dup = await post(
+      {
+        action: "ingest",
+        actorId: "clerk_a",
+        firmId: "firmA",
+        matterId: clerkMatter,
+        contentBase64: bytes,
+        sourceChannel: "web",
+        classification: "confidential",
+      },
+      "1e7c8f20-3b4d-4e6f-9071-8293a4b5c6d7"
+    )
+    expect(dup.status).toBe(200)
+    const dupJson = (await dup.json()) as {
+      result: { reused: boolean; ocrJobs: number; doc: { id: string; matterId: string; classification: string } }
+    }
+    expect(dupJson.result.reused).toBe(false)
+    expect(dupJson.result.doc.id).not.toBe(originalDoc.id)
+    expect(dupJson.result.doc.matterId).toBe(clerkMatter)
+    // L17.3: the copy inherits the highest label the same bytes already carry in the firm.
+    expect(dupJson.result.doc.classification).toBe("privileged")
+    expect(dupJson.result.ocrJobs).toBe(1)
+    // The other matter's record is untouched (no classification side effects either way).
+    expect(store.documents.get(originalDoc.id)?.classification).toBe("privileged")
+    expect(store.documents.get(originalDoc.id)?.matterId).toBe(partnerOnly.id)
+  })
+
   it("rejects same key with different payload", async () => {
     const matterId = seedMatter("internal")
     const key = "a47956f0-f9f7-4474-a66c-c533f4b8ecf8"

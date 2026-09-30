@@ -17,7 +17,11 @@ export function uploadDocument(
     throw new PublicError("artefact write omitted classification")
   }
   const hash = store.hashKey(input.firmId, input.bytes)
-  const existingId = store.docsByHash.get(hash)
+  // L18 §4.2: "a duplicate returns the existing docId" — scoped to the same firm AND matter
+  // (loose vault is its own scope). R-2: a duplicate from another matter must never hand the
+  // uploader that matter's record, so it becomes a new document in the uploader's own scope.
+  const dedupKey = `${hash}|${input.matterId ?? "loose-vault"}`
+  const existingId = store.docsByHash.get(dedupKey)
   if (existingId) {
     const existing = store.documents.get(existingId)
     if (
@@ -33,6 +37,16 @@ export function uploadDocument(
     }
     return { docId: existingId, reused: true }
   }
+  // L17.3 monotonic propagation: the same bytes already held elsewhere in the firm keep their
+  // highest label on the new copy ("privilege travels with the words"); nothing else of the
+  // other record (id, matter, metadata) is exposed.
+  let classification: Classification = input.classification
+  for (const doc of store.documents.values()) {
+    if (doc.firmId !== input.firmId || doc.contentHash !== hash) continue
+    if (rankOfStoredOrMax(doc.classification) > rankOf(classification)) {
+      classification = doc.classification
+    }
+  }
   const id = store.id("doc")
   store.documents.set(id, {
     id,
@@ -40,15 +54,15 @@ export function uploadDocument(
     matterId: input.matterId,
     contentHash: hash,
     sourceChannel: input.sourceChannel,
-    classification: input.classification,
+    classification,
   })
-  store.docsByHash.set(hash, id)
+  store.docsByHash.set(dedupKey, id)
   store.jobs.push({
     id: store.id("job"),
     firmId: input.firmId,
     jobType: "ocr",
     documentId: id,
-    classification: input.classification,
+    classification,
     idempotencyKey: input.idempotencyKey,
   })
   return { docId: id, reused: false }
