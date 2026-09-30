@@ -16,66 +16,81 @@ service cloud.firestore {
     function memberOrPartner(matterId) { return isPartner() || isMember(matterId); }
     function firmIdUnchanged() { return request.resource.data.firmId == resource.data.firmId; }
     function monotonic() { return rank(request.resource.data.classification) >= rank(resource.data.classification); }
+    // Firm staff (platform/spine/store.ts Role minus 'client'). Client-role users never see internal collections.
+    function isStaff() { return role() in ['partner', 'associate', 'clerk', 'intern', 'accounts']; }
+    function isAuthor() { return role() in ['partner', 'associate', 'clerk']; }   // interns/accounts/clients never author
+    function clearedNew() { return cleared(request.resource.data.classification); }
+    // Matter-bound -> membership; loose vault (matterId == null) -> clerk/partner with confidential+ clearance (L4.5).
+    function canAccessScope(matterId) {
+      return matterId != null ? isMember(matterId) : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2;
+    }
+    function authorNew() { return sameFirmNew() && isAuthor() && clearedNew() && canAccessScope(request.resource.data.matterId); }
 
     match /firms/{firmId} {
       allow read: if signedIn() && tok().firmId == firmId;
       allow write: if signedIn() && tok().firmId == firmId && isPartner();
     }
     match /users/{uid} {
-      allow read: if sameFirm();
+      allow read: if sameFirm() && (isStaff() || request.auth.uid == uid);
+      // Partners administer other users only: never above their own clearance (target before and after), roles from the known set.
       allow update: if sameFirm() && firmIdUnchanged() && (request.auth.uid == uid
                       ? !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'active', 'clearanceLevel', 'mfaEnabled', 'firmId'])
-                      : isPartner());
+                      : isPartner() && cleared(resource.data.clearanceLevel) && cleared(request.resource.data.clearanceLevel)
+                        && request.resource.data.role in ['partner', 'associate', 'clerk', 'intern', 'accounts', 'client']
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'clearanceLevel', 'displayName', 'active']));  // mfaEnabled: self-service/Admin SDK only
       allow create, delete: if false; // Admin SDK (P5) only
     }
     match /matter_members/{id} {
       allow read: if sameFirm() && memberOrPartner(resource.data.matterId);
-      allow create: if sameFirmNew() && isPartner();
-      allow update: if sameFirm() && isPartner() && firmIdUnchanged();
+      // isMember() keys on the doc id, so the id must be bound to the (immutable) matterId/userId fields.
+      allow create: if sameFirmNew() && isPartner() && id == request.resource.data.matterId + '_' + request.resource.data.userId;
+      allow update: if sameFirm() && isPartner() && firmIdUnchanged()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId']);
       allow delete: if sameFirm() && isPartner();
     }
     match /clients/{id} {
-      allow read: if sameFirm() && (!('classification' in resource.data) || cleared(resource.data.classification));
+      allow read: if sameFirm() && isStaff() && (!('classification' in resource.data) || cleared(resource.data.classification));
       allow create: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'];
       allow update: if sameFirm() && firmIdUnchanged() && role() in ['partner', 'associate', 'clerk'];
       allow delete: if false;
     }
     match /matters/{matterId} {
       // Layer 18 §5.3 + Job E: membership is the access source. No role exempt (including partner).
-      allow read: if sameFirm() && isMember(matterId);
-      allow create: if sameFirmNew() && role() in ['partner', 'associate'];
-      allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate'];
+      // Missing classification fails closed (rank() of an absent field errors -> deny); every writer sets it.
+      allow read: if sameFirm() && isMember(matterId) && cleared(resource.data.classification);
+      allow create: if sameFirmNew() && role() in ['partner', 'associate'] && clearedNew();
+      allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate']
+        && cleared(resource.data.classification) && clearedNew() && monotonic();
       allow delete: if false;
     }
     match /documents/{docId} {
       allow read: if sameFirm() && cleared(resource.data.classification)
         && (resource.data.matterId != null ? isMember(resource.data.matterId)
             : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2);   // loose vault (L4.5); intern denied
-      allow create: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'];
+      allow create: if authorNew();
       allow update: if sameFirm() && firmIdUnchanged() && monotonic()
-        && (resource.data.matterId == null
-              ? role() in ['clerk', 'partner']
-              : isMember(resource.data.matterId))
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['storagePath', 'contentHash', 'isImmutable']);
+        && isAuthor() && cleared(resource.data.classification) && clearedNew()
+        && canAccessScope(resource.data.matterId)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['storagePath', 'contentHash', 'isImmutable', 'matterId', 'firmId']);
       allow delete: if false; // originals are immutable; loose vault never deletes (E-18)
     }
     match /document_versions/{id} {
-      allow read: if sameFirm() && cleared(resource.data.classification);
-      allow create: if sameFirmNew();
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      allow create: if authorNew();
       allow update, delete: if false; // append-only
     }
     match /entities/{id} {
-      allow read: if sameFirm();
+      allow read: if sameFirm() && isStaff();
       allow create, update: if sameFirmNew() && role() in ['partner', 'associate'] && (resource == null || firmIdUnchanged());
       allow delete: if false;
     }
     match /entity_aliases/{id} {
-      allow read: if sameFirm();
+      allow read: if sameFirm() && isStaff();
       allow create, update: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'] && (resource == null || firmIdUnchanged());
       allow delete: if false;
     }
     match /merge_events/{id} {
-      allow read: if sameFirm();
+      allow read: if sameFirm() && isStaff();
       allow create: if sameFirmNew() && role() in ['partner', 'associate'];
       allow update: if sameFirm() && isPartner() && firmIdUnchanged()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reverted', 'revertedBy', 'revertedAt']);
@@ -83,13 +98,15 @@ service cloud.firestore {
     }
     match /evidence_items/{id} {
       allow read: if sameFirm() && isMember(resource.data.matterId) && cleared(resource.data.classification);
-      allow create: if sameFirmNew() && isMember(request.resource.data.matterId) && role() in ['partner', 'associate', 'clerk'];
-      allow update: if sameFirm() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic();
+      allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
+      allow update: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic()
+        && cleared(resource.data.classification) && clearedNew()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'firmId']);
       allow delete: if false;
     }
     match /custody_events/{id} {
       allow read: if sameFirm() && isMember(resource.data.matterId);
-      allow create: if sameFirmNew() && isMember(request.resource.data.matterId);
+      allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
       allow update, delete: if false; // append-only
     }
     match /propositions/{id} {
@@ -101,28 +118,32 @@ service cloud.firestore {
     }
     match /drafts/{id} {
       allow read: if sameFirm() && isMember(resource.data.matterId) && cleared(resource.data.classification);
-      allow create: if sameFirmNew() && isMember(request.resource.data.matterId);
-      allow update: if sameFirm() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic();
+      allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
+      allow update: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic()
+        && cleared(resource.data.classification) && clearedNew()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'firmId']);
       allow delete: if false;
     }
     match /draft_versions/{id} {
-      allow read: if sameFirm() && cleared(resource.data.classification);
-      allow create: if sameFirmNew();
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      allow create: if authorNew();
       allow update, delete: if false; // append-only
     }
     match /change_proposals/{id} {
-      allow read: if sameFirm();
-      allow create: if sameFirmNew();
+      allow read: if sameFirm() && isStaff();
+      allow create: if sameFirmNew() && isAuthor() && clearedNew() && request.resource.data.proposedBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && !request.resource.data.keys().hasAny(['decidedBy', 'decidedAt', 'reason']);   // partner approval is the only way out of pending
       allow update: if sameFirm() && isPartner() && firmIdUnchanged()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedBy', 'decidedAt', 'reason']);
       allow delete: if false;
     }
     match /master_versions/{id} {
-      allow read: if sameFirm();
+      allow read: if sameFirm() && isStaff();
       allow write: if false; // P6 / Postgres is the system of record; the mirror is read-only
     }
     match /routing_queue/{id}  { allow read: if sameFirm() && role() in ['clerk', 'partner', 'associate']; allow write: if false; }
-    match /follow_ups/{id}     { allow read: if sameFirm(); allow write: if false; }
+    match /follow_ups/{id}     { allow read: if sameFirm() && isStaff(); allow write: if false; }
     match /intimation_register/{id} { allow read: if sameFirm() && role() in ['partner', 'associate', 'accounts']; allow write: if false; }
     match /notifications/{id} {
       allow read: if sameFirm() && resource.data.userId == request.auth.uid;

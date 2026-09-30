@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { z } from "zod"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
   IdempotencyCache,
@@ -6,6 +7,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { checkPermission } from "@/platform/p5/checkPermission"
+import { classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
 import { rankOf } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
@@ -21,33 +23,33 @@ import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-type CreateBody = {
-  action: "create"
-  actorId?: string
-  firmId?: string
-  clientId?: string
-  title?: string
-  courtId?: string
-  classification?: string
-  memberUserIds?: string[]
-}
+const BodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("create"),
+    actorId: idField,
+    firmId: idField,
+    clientId: idField,
+    title: textField(1000),
+    courtId: idField,
+    classification: classificationField,
+    memberUserIds: z.array(idField).max(200).optional(),
+  }),
+  z.object({
+    action: z.literal("confirm_engagement"),
+    actorId: idField,
+    matterId: idField,
+    atMs: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    action: z.literal("record_case_number"),
+    actorId: idField,
+    matterId: idField,
+    raw: textField(500),
+    courtId: idField,
+  }),
+])
 
-type ConfirmBody = {
-  action: "confirm_engagement"
-  actorId?: string
-  matterId?: string
-  atMs?: number
-}
-
-type CaseBody = {
-  action: "record_case_number"
-  actorId?: string
-  matterId?: string
-  raw?: string
-  courtId?: string
-}
-
-type Body = CreateBody | ConfirmBody | CaseBody
+type Body = z.infer<typeof BodySchema>
 
 function deny(message: string, status = 403) {
   return NextResponse.json({ error: message }, { status })
@@ -166,16 +168,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
-  try {
-    parsed = (await request.json()) as Body
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
-  }
-
-  if (!parsed.action) {
-    return NextResponse.json({ error: "action is required" }, { status: 400 })
-  }
+  const raw = await readJsonLimited(request)
+  if (!raw.ok) return raw.response
+  const body = parseBody(BodySchema, raw.data)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
 
   const fingerprint = JSON.stringify({
     route: "/api/d1/matters",
