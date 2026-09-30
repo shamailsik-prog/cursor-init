@@ -134,8 +134,8 @@ describe("POST/GET /api/d1/documents", () => {
     expect(dupJson.result.reused).toBe(false)
     expect(dupJson.result.doc.id).not.toBe(originalDoc.id)
     expect(dupJson.result.doc.matterId).toBe(clerkMatter)
-    // L17.3: the copy inherits the highest label the same bytes already carry in the firm.
-    expect(dupJson.result.doc.classification).toBe("privileged")
+    // Review R1 #3 / E-30: the caller's own label; other matters are never consulted.
+    expect(dupJson.result.doc.classification).toBe("confidential")
     expect(dupJson.result.ocrJobs).toBe(1)
     // The other matter's record is untouched (no classification side effects either way).
     expect(store.documents.get(originalDoc.id)?.classification).toBe("privileged")

@@ -17,9 +17,9 @@ export function uploadDocument(
     throw new PublicError("artefact write omitted classification")
   }
   const hash = store.hashKey(input.firmId, input.bytes)
-  // L18 §4.2: "a duplicate returns the existing docId" — scoped to the same firm AND matter
-  // (loose vault is its own scope). R-2: a duplicate from another matter must never hand the
-  // uploader that matter's record, so it becomes a new document in the uploader's own scope.
+  // L18 §4.2: "a duplicate returns the existing docId" — scoped to (firmId, matterId), the
+  // loose vault being its own scope (E-30). R-2: a duplicate from another matter must never
+  // hand the uploader that matter's record, so it becomes a new document in the caller's scope.
   const dedupKey = `${hash}|${input.matterId ?? "loose-vault"}`
   const existingId = store.docsByHash.get(dedupKey)
   if (existingId) {
@@ -37,15 +37,15 @@ export function uploadDocument(
     }
     return { docId: existingId, reused: true }
   }
-  // L17.3 monotonic propagation: the same bytes already held elsewhere in the firm keep their
-  // highest label on the new copy ("privilege travels with the words"); nothing else of the
-  // other record (id, matter, metadata) is exposed.
+  // Review R1 #3 / erratum E-30 (§4.2 vs R-2 resolved for isolation): the label is
+  // max(caller label, matter floor). Copies of the same bytes in other matters are never
+  // consulted — doing so turned the §4.2 dedup key into a cross-matter existence oracle.
   let classification: Classification = input.classification
-  for (const doc of store.documents.values()) {
-    if (doc.firmId !== input.firmId || doc.contentHash !== hash) continue
-    if (rankOfStoredOrMax(doc.classification) > rankOf(classification)) {
-      classification = doc.classification
-    }
+  const matter = input.matterId ? store.matters.get(input.matterId) : undefined
+  if (matter && rankOfStoredOrMax(matter.classification) > rankOf(classification)) {
+    classification = isClassification(matter.classification)
+      ? matter.classification
+      : "privileged-restricted"
   }
   const id = store.id("doc")
   store.documents.set(id, {

@@ -116,7 +116,7 @@ describe("N1 caller free text is floored at internal (L18 §4.6: internal may go
     expect(sent).toBe(1)
   })
 
-  it("re-ingesting privileged bytes with a lower label keeps the higher label", async () => {
+  it("re-ingesting privileged bytes with a lower label keeps the higher label (same matter scope)", async () => {
     const store = getRuntimeStore()
     store.matters.set("mat_priv", {
       id: "mat_priv",
@@ -142,9 +142,24 @@ describe("N1 caller free text is floored at internal (L18 §4.6: internal may go
       matterId: "mat_priv",
       contentBase64: content,
       sourceChannel: "web",
-      classification: "privileged",
+      classification: "privileged-restricted",
     })
     expect(a.status).toBe(200)
+    // Same scope: the duplicate returns the existing docId and never lowers its label.
+    const b = await post(documentsPost, "http://127.0.0.1/api/d1/documents", {
+      action: "ingest",
+      actorId: "partner_a",
+      firmId: "firmA",
+      matterId: "mat_priv",
+      contentBase64: content,
+      sourceChannel: "web",
+      classification: "privileged",
+    })
+    const bj = (await b.json()) as { result: { reused: boolean; doc: { classification: string } } }
+    expect(bj.result.reused).toBe(true)
+    expect(bj.result.doc.classification).toBe("privileged-restricted")
+    // Another scope (loose vault) is a different document: its label is the caller's, and the
+    // matter copy is untouched (review R1 #3: no cross-matter oracle, E-30).
     await post(documentsPost, "http://127.0.0.1/api/d1/documents", {
       action: "ingest",
       actorId: "clerk_a",
@@ -153,8 +168,9 @@ describe("N1 caller free text is floored at internal (L18 §4.6: internal may go
       sourceChannel: "web",
       classification: "public",
     })
-    const labels = [...store.documents.values()].map((d) => d.classification)
-    expect(labels).not.toContain("public")
+    const labels = [...store.documents.values()].map((d) => [d.matterId, d.classification])
+    expect(labels).toContainEqual(["mat_priv", "privileged-restricted"])
+    expect(labels).toContainEqual([null, "public"])
   })
 })
 
