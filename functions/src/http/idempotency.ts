@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import { Timestamp, type DocumentReference } from "firebase-admin/firestore"
 import { adminDb } from "../admin"
+import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { logFailure } from "../log"
 import { HttpError } from "./errors"
 
@@ -19,6 +20,38 @@ import { HttpError } from "./errors"
 export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
 /** How long an in_progress claim holds its key before the same request may take it over. */
 export const IDEMPOTENCY_LEASE_MS = 5 * 60 * 1000
+
+// A live request must never be taken over: the lease has to outlive the function timeout.
+if (!(IDEMPOTENCY_LEASE_MS > FUNCTION_TIMEOUT_SECONDS * 1000)) {
+  throw new Error(`idempotency lease (${IDEMPOTENCY_LEASE_MS} ms) must exceed the function timeout (${FUNCTION_TIMEOUT_SECONDS} s)`)
+}
+
+/**
+ * 409 codes that are business conflicts: the request is refused by the
+ * state it names and a same-key retry should get the same answer. Other 409s
+ * are contention (claims_sync_failed, idempotency_in_progress) or
+ * configuration (bootstrap_not_configured) and are released. New 409 codes are
+ * released until they are added here.
+ */
+const STORED_409_CODES: ReadonlySet<string> = new Set(["already_exists", "already_onboarded", "last_partner", "code_used"])
+
+/**
+ * Which results are stored and replayed for their key (an explicit allowlist):
+ * 2xx; the deterministic client errors 400, 404 and 422; and 409 business
+ * conflicts (STORED_409_CODES). Everything else releases the claim so a
+ * same-key retry runs again: 401/403 (session-dependent: a refreshed token or
+ * a step-up may succeed), 409 contention codes, 429 and 5xx.
+ */
+export function isStorableResult(result: HttpResult): boolean {
+  const { status } = result
+  if (status >= 200 && status < 300) return true
+  if (status === 400 || status === 404 || status === 422) return true
+  if (status === 409) {
+    const code = (result.body.error as { code?: unknown } | undefined)?.code
+    return typeof code === "string" && STORED_409_CODES.has(code)
+  }
+  return false
+}
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -81,8 +114,9 @@ function claimedAtMs(doc: Record<string, unknown>): number {
  * `reused: true`; the same key with another body, route or user → 422
  * idempotency_key_reused; a duplicate while the first is running → 409
  * idempotency_in_progress, until the claim is over IDEMPOTENCY_LEASE_MS old,
- * then the duplicate takes the claim over and runs. 2xx and 4xx results are stored; a 5xx result or a
- * throw releases the claim so a retry can run.
+ * then the duplicate takes the claim over and runs. Results allowed by
+ * isStorableResult are stored; any other result, or a throw, releases the
+ * claim so a retry can run.
  */
 export async function withIdempotency(scope: IdempotencyScope, handler: () => Promise<HttpResult>): Promise<HttpResult> {
   if (!isUuidV4(scope.key)) throw new HttpError(400, "idempotency_key_required")
@@ -134,7 +168,7 @@ export async function withIdempotency(scope: IdempotencyScope, handler: () => Pr
     await settle(ref, claimId, undefined)
     throw err
   }
-  if (result.status >= 500) {
+  if (!isStorableResult(result)) {
     await settle(ref, claimId, undefined)
   } else {
     const stored = scope.redact && result.status < 300 ? { redacted: true } : result.body
@@ -144,19 +178,31 @@ export async function withIdempotency(scope: IdempotencyScope, handler: () => Pr
   return result
 }
 
+const SETTLE_RETRIES = 3
+const SETTLE_BACKOFF_MS = 100
+
 /**
  * Completes our claim with `response`, or deletes it when `response` is
- * undefined, only while the doc still holds our claimId. Best effort: a
- * failure is logged (a claim left in_progress answers 409 until its lease ends).
+ * undefined, only while the doc still holds our claimId. Retried
+ * SETTLE_RETRIES times with exponential backoff (100/200/400 ms): a lost
+ * "done" write is the one path, besides a crash, to a re-run after the lease.
+ * Then best effort: the failure is logged, and the claim answers 409 until its lease ends.
  */
 async function settle(ref: DocumentReference, claimId: string, response: HttpResult | undefined): Promise<void> {
-  try {
-    await adminDb().runTransaction(async (tx) => {
-      if ((await tx.get(ref)).data()?.claimId !== claimId) return
-      if (response) tx.update(ref, { status: "done", response })
-      else tx.delete(ref)
-    })
-  } catch (err) {
-    logFailure(response ? "idempotency complete failed" : "idempotency release failed", err)
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await adminDb().runTransaction(async (tx) => {
+        if ((await tx.get(ref)).data()?.claimId !== claimId) return
+        if (response) tx.update(ref, { status: "done", response })
+        else tx.delete(ref)
+      })
+      return
+    } catch (err) {
+      if (attempt >= SETTLE_RETRIES) {
+        logFailure(response ? "idempotency complete failed" : "idempotency release failed", err)
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_BACKOFF_MS * 2 ** attempt))
+    }
   }
 }

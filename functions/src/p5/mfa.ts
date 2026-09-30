@@ -3,7 +3,7 @@ import { onCall } from "firebase-functions/v2/https"
 import type { UpdateMultiFactorInfoRequest } from "firebase-admin/auth"
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import { adminAuth, adminDb } from "../admin"
-import { REGION } from "../health"
+import { FUNCTION_TIMEOUT_SECONDS, REGION } from "../health"
 import { HttpError } from "../http/errors"
 import type { Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
@@ -435,8 +435,8 @@ export const syncMfaStatusOp: FirmOperation<{ uid: string; mfaEnabled: boolean }
 }
 export const syncMfaStatusHandler = callableHandler(syncMfaStatusOp)
 
-export const enforceMfaForRole = onCall({ region: REGION }, enforceMfaForRoleHandler)
-export const generateRecoveryCodes = onCall({ region: REGION }, generateRecoveryCodesHandler)
-export const approveMfaDisable = onCall({ region: REGION }, approveMfaDisableHandler)
-export const disableMfa = onCall({ region: REGION }, disableMfaHandler)
-export const syncMfaStatus = onCall({ region: REGION }, syncMfaStatusHandler)
+export const enforceMfaForRole = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, enforceMfaForRoleHandler)
+export const generateRecoveryCodes = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, generateRecoveryCodesHandler)
+export const approveMfaDisable = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, approveMfaDisableHandler)
+export const disableMfa = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, disableMfaHandler)
+export const syncMfaStatus = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, syncMfaStatusHandler)

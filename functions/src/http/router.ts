@@ -1,8 +1,17 @@
 import { onRequest, type Request } from "firebase-functions/v2/https"
 import type { Response } from "express"
-import { REGION } from "../health"
-import { bindHttpSession, firmlessFromToken, verifyBearer } from "../p5/auth"
-import { CallAudit, runAudited, type Data, type FirmlessIdentity, type Operation, type Session } from "../p5/common"
+import { FUNCTION_TIMEOUT_SECONDS, REGION } from "../health"
+import { TokenRejectedError, bindHttpSession, firmlessFromToken, verifyBearer } from "../p5/auth"
+import {
+  CallAudit,
+  header,
+  runAudited,
+  type Data,
+  type FirmlessIdentity,
+  type Headers,
+  type Operation,
+  type Session,
+} from "../p5/common"
 import {
   approveMfaDisableOp,
   disableMfaOp,
@@ -26,7 +35,8 @@ import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKin
  * unsupported_media_type unless JSON, 400 invalid_body unless an object) →
  * auth (401/403; a failure is audited as a deny unless the client IP is over
  * its per-minute limit, then 429) → per-user rate limit (429 + Retry-After) →
- * idempotency for POST/PUT (400 / 409 / 422 / replay) → handler.
+ * idempotency for POST/PUT (400 / 409 / 422, each audited as a deny; a replay
+ * is not audited) → handler.
  *
  * Responses: 2xx → the operation's JSON result; errors → `{ error: { code } }`.
  * Pagination (§4.3) has no list GET yet (follow-up).
@@ -82,7 +92,6 @@ export function buildRouteTable(routes: readonly Route[]): RouteTable {
   return table
 }
 
-type Headers = Record<string, string | undefined>
 type ApiRequest = Pick<Request, "method" | "path" | "headers" | "body" | "ip"> & { rawBody?: Buffer }
 type Authenticated =
   | { kind: "firm"; session: Session; firm: Record<string, unknown> | undefined }
@@ -94,11 +103,6 @@ function send(res: Response, result: HttpResult, headers: Record<string, string>
   res.status(result.status)
   for (const [name, value] of Object.entries(headers)) res.set(name, value)
   res.json(result.body)
-}
-
-function header(headers: Headers, name: string): string | undefined {
-  const v: unknown = headers[name]
-  return typeof v === "string" ? v : Array.isArray(v) ? (v[0] as string | undefined) : undefined
 }
 
 /** A direct function URL may arrive without the `/api` prefix; trailing slashes are ignored. */
@@ -118,7 +122,8 @@ function isObject(value: unknown): value is Data {
 /** Verifies the token, then binds it the way the route's operation needs (firm-bound or firmless). */
 async function authenticate(op: Operation, headers: Headers, body: Data): Promise<Authenticated> {
   const decoded = await verifyBearer(headers).catch((err: unknown) => {
-    throw new AuthFailure(err, "anonymous")
+    // A revoked or disabled token names its (signature-verified) uid for the audit row; see verifyBearer.
+    throw new AuthFailure(err, (err instanceof TokenRejectedError && err.uid) || "anonymous")
   })
   try {
     if (op.auth === "firmless") return { kind: "firmless", who: await firmlessFromToken(decoded) }
@@ -149,6 +154,27 @@ async function authFailed(op: Operation, req: ApiRequest, failure: AuthFailure, 
   await rateLimitAnonymous(clientIp(req), now)
   await new CallAudit(op.action, failure.actorId, op.target).deny(failure.cause.code)
   throw failure.cause
+}
+
+/** Idempotency refusals that are new decisions about the request, so each gets a deny row. */
+const IDEMPOTENCY_REFUSALS: ReadonlySet<string> = new Set([
+  "idempotency_key_required",
+  "idempotency_in_progress",
+  "idempotency_key_reused",
+])
+
+/**
+ * Audits an idempotency refusal (400 / 409 / 422) as a deny under the route's
+ * action, then rethrows it. A replay is deliberately *not* audited: it is not
+ * a new decision, only the stored answer to one that already has its row.
+ */
+async function auditRefusal(op: Operation, uid: string, firmId: string, err: unknown): Promise<never> {
+  if (err instanceof HttpError && IDEMPOTENCY_REFUSALS.has(err.code)) {
+    const audit = new CallAudit(op.action, uid, op.target)
+    audit.firmId = firmId
+    await audit.deny(err.code)
+  }
+  throw err
 }
 
 /** Runs the operation with its one audit row; errors become their HTTP result. */
@@ -207,19 +233,12 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       await rateLimit({ uid }, route.kind, { firm: auth.kind === "firm" ? auth.firm : undefined, now })
 
       const run = () => execute(op, auth, body)
+      const firmId = auth.kind === "firm" ? auth.session.caller.firmId : ""
       const result = hasBody
         ? await withIdempotency(
-            {
-              firmId: auth.kind === "firm" ? auth.session.caller.firmId : "",
-              uid,
-              route: `${route.method} ${route.path}`,
-              key: header(headers, "idempotency-key"),
-              body,
-              now,
-              redact: route.redactReplay,
-            },
+            { firmId, uid, route: `${route.method} ${route.path}`, key: header(headers, "idempotency-key"), body, now, redact: route.redactReplay },
             run
-          )
+          ).catch((err: unknown) => auditRefusal(op, uid, firmId, err))
         : await run()
       send(res, result)
     } catch (err) {
@@ -236,4 +255,4 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
 /** Built at module load, so a duplicate route fails the deploy bundle's first import. */
 const router = createRouter(ROUTES)
 
-export const api = onRequest({ region: REGION }, router)
+export const api = onRequest({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, router)

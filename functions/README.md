@@ -170,9 +170,16 @@ resumes idempotently and returns the same `firmId` (audited as
   on the doc. This never admits more than the limit. A firm can override the
   limits with `firms/{firmId}.rateLimits = { general, p1 }` (integers 1–1000).
   Requests that fail authentication count against the client IP, 60/min.
-  Over that they get 429 and no `audit_log` row. The client IP is the *last*
-  `X-Forwarded-For` hop, which Google's front end appends; earlier hops are
-  client-supplied. Without the header, `req.ip` is used.
+  Over that they get 429 and no `audit_log` row. The client IP comes from
+  `X-Forwarded-For`. Google's front end appends the connecting address, and
+  every hop to its left is client-supplied. With `TRUSTED_PROXY_HOPS=N` the
+  key is the entry N+1 from the right. The default is 0, the last hop, which
+  is right for direct `*.cloudfunctions.net` / `*.run.app` URLs. If the header
+  has fewer entries than that, or none, `req.ip` is used.
+- **Fixed-window boundary burst:** windows are whole UTC minutes, so a user
+  can get up to 2× the limit in about a second across a minute boundary (the
+  last moment of one window and the first of the next). This is accepted for
+  the fixed window. A sliding window would be the fix if it matters.
 - **Callables share the limits.** `callableHandler` applies the same per-IP
   limit (from `request.rawRequest`) and the same per-user counters, using the
   operation's `kind`. The HTTP route uses the same kind. A refused call gets
@@ -188,6 +195,21 @@ resumes idempotently and returns the same `firmId` (audited as
   `generateRecoveryCodes` response is never stored: its replay is
   `{ redacted: true, reused: true }`, so generate again with a new key if the
   codes were lost.
+- **Audit:** a replay is not audited. It is the stored answer to a decision
+  that already has its row. The idempotency refusals (400
+  `idempotency_key_required`, 409 `idempotency_in_progress`, 422
+  `idempotency_key_reused`) are audited as denies under the route's action.
+  Rate-limit refusals are not audited.
+- **Stored results:** only 2xx, 400, 404, 422 and business-conflict 409s
+  (`already_exists`, `already_onboarded`, `last_partner`, `code_used`) are
+  stored and replayed. 401/403 (a refreshed token or a step-up may succeed),
+  contention 409s (`claims_sync_failed`, …), 429 and 5xx release the key, so a
+  retry with the same key runs again. See `isStorableResult`.
+- **Timeouts:** `api` and every callable pin `timeoutSeconds: 120`
+  (`FUNCTION_TIMEOUT_SECONDS`). The 5-minute idempotency lease must be longer,
+  and `idempotency.ts` throws at load if it is not.
+- **Build check:** `npm run build` loads the route table and fails on a
+  duplicate method + path before bundling.
 - **TTL policies (set once per project):** both collections carry `expiresAt`.
   Enable Firestore TTL on it so old docs are purged. Until the purge runs, an
   expired idempotency key is treated as absent.
@@ -197,5 +219,13 @@ resumes idempotently and returns the same `firmId` (audited as
   gcloud firestore fields ttls update expiresAt --collection-group=rate_limits --enable-ttl
   ```
 
+- **Deploy note, proxies:** set `TRUSTED_PROXY_HOPS` when `api` is served
+  through a proxy of ours that appends to `X-Forwarded-For`. For an external
+  Application Load Balancer with a serverless NEG, it appends
+  `<client>, <lb-ip>`, so set `1`. For a Firebase Hosting rewrite, Hosting's
+  CDN adds its own hop, so set `1` after confirming the header shape on a
+  test request. If this is left at 0 behind a proxy, every failed-auth request
+  shares the proxy's single 60/min bucket, and one attacker can turn everyone
+  else's 401 into 429. Set it in `functions/.env.<projectId>`.
 - **Rules:** both collections are server-only. No rule matches them, so the
   default deny applies.

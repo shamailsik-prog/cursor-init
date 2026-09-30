@@ -2,7 +2,7 @@ import { onCall } from "firebase-functions/v2/https"
 import { FieldValue, type DocumentData, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminAuth, adminDb } from "../admin"
-import { REGION } from "../health"
+import { FUNCTION_TIMEOUT_SECONDS, REGION } from "../health"
 import { HttpError } from "../http/errors"
 import { isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
@@ -500,7 +500,7 @@ export const deactivateUserOp: FirmOperation<{ uid: string; active: false }> = {
 }
 export const deactivateUserHandler = callableHandler(deactivateUserOp)
 
-export const onboardFirm = onCall({ region: REGION }, onboardFirmHandler)
-export const createFirmUser = onCall({ region: REGION }, createFirmUserHandler)
-export const setUserClaims = onCall({ region: REGION }, setUserClaimsHandler)
-export const deactivateUser = onCall({ region: REGION }, deactivateUserHandler)
+export const onboardFirm = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, onboardFirmHandler)
+export const createFirmUser = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, createFirmUserHandler)
+export const setUserClaims = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, setUserClaimsHandler)
+export const deactivateUser = onCall({ region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS }, deactivateUserHandler)

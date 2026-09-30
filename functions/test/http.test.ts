@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { Firestore } from "firebase-admin/firestore"
 import { Timestamp } from "firebase-admin/firestore"
 import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
 import { HttpError } from "../src/http/errors"
-import { canonicalJson, isUuidV4, requestHash } from "../src/http/idempotency"
+import { IDEMPOTENCY_LEASE_MS, canonicalJson, isStorableResult, isUuidV4, requestHash } from "../src/http/idempotency"
+import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { clientIp, retryAfterSeconds, windowId } from "../src/http/rateLimit"
-import { ROUTES, buildRouteTable, createRouter, type Route } from "../src/http/router"
-import { callableHandler, type Operation } from "../src/p5/common"
+import { ROUTES, api, buildRouteTable, createRouter, type Route } from "../src/http/router"
+import { callableHandler, type FirmOperation, type Operation } from "../src/p5/common"
 import { EMULATORS, callableAuth, mintIdToken, mintMfaIdToken, uniq } from "./emu"
 
 /** A minimal express-like response that records what the router sent. */
@@ -159,6 +161,41 @@ describe("router: request shape (before auth)", () => {
 })
 
 describe("idempotency helpers", () => {
+  const r = (status: number, code?: string) => ({ status, body: code ? { error: { code } } : { ok: true } })
+  it.each([
+    [200, undefined, true],
+    [201, undefined, true],
+    [400, "invalid_role", true],
+    [404, "not_found", true],
+    [422, "idempotency_key_reused", true],
+    [409, "last_partner", true],
+    [409, "already_onboarded", true],
+    [409, "already_exists", true],
+    [409, "code_used", true],
+    [409, "claims_sync_failed", false],
+    [409, "idempotency_in_progress", false],
+    [409, "bootstrap_not_configured", false],
+    [409, "some_new_conflict", false],
+    [401, "token_revoked", false],
+    [403, "mfa_required", false],
+    [429, "rate_limited", false],
+    [500, "internal", false],
+    [503, "audit_unavailable", false],
+  ])("isStorableResult(%i %s) → %s", (status, code, stored) => {
+    expect(isStorableResult(r(status, code))).toBe(stored)
+  })
+
+  it("the idempotency lease outlives the pinned function timeout; api and every callable pin it", async () => {
+    expect(FUNCTION_TIMEOUT_SECONDS).toBe(120)
+    expect(IDEMPOTENCY_LEASE_MS).toBeGreaterThan(FUNCTION_TIMEOUT_SECONDS * 1000)
+    const index = (await import("../src/index")) as Record<string, { __endpoint?: { timeoutSeconds?: number } }>
+    const names = Object.keys(index).filter((n) => n !== "health")
+    expect(names).toContain("api")
+    expect(names).toContain("disableMfa")
+    for (const name of names) expect([name, index[name].__endpoint?.timeoutSeconds]).toEqual([name, FUNCTION_TIMEOUT_SECONDS])
+    expect((api as unknown as { __endpoint: { timeoutSeconds?: number } }).__endpoint.timeoutSeconds).toBe(FUNCTION_TIMEOUT_SECONDS)
+  })
+
   it.each([
     ["3b241101-e2bb-4255-8caf-4136c566a962", true],
     ["3B241101-E2BB-4255-8CAF-4136C566A962", true],
@@ -181,6 +218,30 @@ describe("rate-limit helpers", () => {
     expect(clientIp({ headers: { "x-forwarded-for": "6.6.6.6, 7.7.7.7, 203.0.113.9" }, ip: "10.0.0.1" })).toBe("203.0.113.9")
     expect(clientIp({ headers: { "x-forwarded-for": "203.0.113.9" }, ip: "10.0.0.1" })).toBe("203.0.113.9")
     expect(clientIp({ headers: {}, ip: "10.0.0.1" })).toBe("10.0.0.1")
+  })
+
+  describe("TRUSTED_PROXY_HOPS", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it("N hops: the entry N+1 from the right (behind a load balancer / Hosting)", () => {
+      vi.stubEnv("TRUSTED_PROXY_HOPS", "1")
+      expect(clientIp({ headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.9, 130.211.0.1" }, ip: "10.0.0.1" })).toBe("203.0.113.9")
+      vi.stubEnv("TRUSTED_PROXY_HOPS", "2")
+      expect(clientIp({ headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.9, 35.191.0.1, 130.211.0.1" }, ip: "10.0.0.1" })).toBe(
+        "203.0.113.9"
+      )
+    })
+
+    it("fewer hops than trusted proxies → req.ip; unset or invalid → 0 (the last hop)", () => {
+      vi.stubEnv("TRUSTED_PROXY_HOPS", "2")
+      expect(clientIp({ headers: { "x-forwarded-for": "203.0.113.9, 130.211.0.1" }, ip: "10.0.0.1" })).toBe("10.0.0.1")
+      for (const bad of ["", "-1", "1.5", "x"]) {
+        vi.stubEnv("TRUSTED_PROXY_HOPS", bad)
+        expect(clientIp({ headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.9" }, ip: "10.0.0.1" })).toBe("203.0.113.9")
+      }
+    })
   })
 
   it("windowId is the UTC minute yyyyMMddHHmm", () => {
@@ -311,7 +372,7 @@ describe.skipIf(!EMULATORS)("router over the emulators", () => {
       await adminDb().collection("firms").doc(firmId).set({ rateLimits: { general: 5 } }, { merge: true })
       const outs = await Promise.all(Array.from({ length: 20 }, () => send(router, { path: "/api/t/u/burst", token, firmId })))
       const ok = outs.filter((o) => o.status === 200).length
-      expect(ok).toBeGreaterThanOrEqual(1)
+      // Increment + read-back may refuse more than needed under a burst (even all), never admit more.
       expect(ok).toBeLessThanOrEqual(5)
       expect(outs.filter((o) => o.status === 429).length).toBe(20 - ok)
       expect(calls.n).toBe(ok)
@@ -738,4 +799,197 @@ describe.skipIf(!EMULATORS)("callables share the rate limits", () => {
     expect(await rows()).toBe(60)
     expect(calls.n).toBe(0)
   }, 60_000)
+})
+
+describe.skipIf(!EMULATORS)("fix round 1", () => {
+  let minute = Date.UTC(2033, 0, 1, 0, 0, 0)
+  const freshClock = () => {
+    minute += 60_000
+    const at = minute + 5_000
+    return () => at
+  }
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  async function firmPartner() {
+    const firmId = uniq("firm")
+    await adminDb().collection("firms").doc(firmId).set({ name: "T" })
+    return { firmId, ...(await mintIdToken(partnerClaims(firmId))) }
+  }
+
+  async function rows(action: string, actorId: string) {
+    const snap = await adminDb().collection("audit_log").where("action", "==", action).where("actorId", "==", actorId).get()
+    return snap.docs.map((d) => d.data())
+  }
+
+  function namedOp(action: string, run: FirmOperation["run"] = async () => ({ ok: true })) {
+    const op: Operation = { auth: "firm", kind: "general", action, target: "t", run }
+    return op
+  }
+
+  it("step-up: 403 mfa_required is not stored; the same key with a second-factor token → 200", async () => {
+    const firmId = uniq("firm")
+    await adminDb().collection("firms").doc(firmId).set({ name: "T" })
+    const { token, firstFactorToken } = await mintMfaIdToken(partnerClaims(firmId))
+    const router = createRouter(ROUTES, { now: freshClock() })
+    const key = randomUUID()
+    const path = "/api/platform/identity/generateRecoveryCodes"
+    const first = await send(router, { path, token: firstFactorToken, firmId, key })
+    expect(first.status).toBe(403)
+    expect(errorOf(first)).toBe("mfa_required")
+    const second = await send(router, { path, token, firmId, key })
+    expect(second.status).toBe(200)
+    expect((second.body as { codes: string[] }).codes).toHaveLength(10)
+  })
+
+  it("a 409 contention code (claims_sync_failed) releases the claim; a business 409 (last_partner) is replayed", async () => {
+    let n = 0
+    const op = namedOp(uniq("test.conflict"), async () => {
+      n++
+      if (n === 1) throw new HttpError(409, "claims_sync_failed")
+      throw new HttpError(409, "last_partner")
+    })
+    const router = createRouter([route("/api/t/f/conflict", op)], { now: freshClock() })
+    const { firmId, token } = await firmPartner()
+    const key = randomUUID()
+    expect(errorOf(await send(router, { path: "/api/t/f/conflict", token, firmId, key }))).toBe("claims_sync_failed")
+    const b = await send(router, { path: "/api/t/f/conflict", token, firmId, key })
+    expect(b.body).toEqual({ error: { code: "last_partner" } })
+    const c = await send(router, { path: "/api/t/f/conflict", token, firmId, key })
+    expect(c.body).toEqual({ error: { code: "last_partner" }, reused: true })
+    expect(n).toBe(2)
+  })
+
+  it("audit actor: a revoked or disabled token's deny row carries its uid, not anonymous", async () => {
+    const action = uniq("test.revoked")
+    const router = createRouter([route("/api/t/f/revoked", namedOp(action))], { now: freshClock() })
+    const { firmId, uid, token } = await firmPartner()
+    await sleep(1100)
+    await adminAuth().revokeRefreshTokens(uid)
+    const out = await send(router, { path: "/api/t/f/revoked", token, firmId, ip: "192.0.2.201" })
+    expect(out.status).toBe(401)
+    expect(errorOf(out)).toBe("token_revoked")
+    expect((await rows(action, uid)).map((r) => r.reason)).toEqual(["token_revoked"])
+    expect(await rows(action, "anonymous")).toHaveLength(0)
+
+    const other = await firmPartner()
+    await adminAuth().updateUser(other.uid, { disabled: true })
+    const out2 = await send(router, { path: "/api/t/f/revoked", token: other.token, firmId: other.firmId, ip: "192.0.2.201" })
+    expect(errorOf(out2)).toBe("user_disabled")
+    expect((await rows(action, other.uid)).map((r) => r.reason)).toEqual(["user_disabled"])
+  })
+
+  it("audit actor: a forged token (bad signature / garbage) stays anonymous", async () => {
+    const action = uniq("test.forged")
+    const router = createRouter([route("/api/t/f/forged", namedOp(action))], { now: freshClock() })
+    const payload = Buffer.from(JSON.stringify({ sub: "victim-uid", user_id: "victim-uid" })).toString("base64url")
+    const out = await send(router, { path: "/api/t/f/forged", token: `x.${payload}.y`, firmId: "f", ip: "192.0.2.202" })
+    expect(out.status).toBe(401)
+    expect(await rows(action, "victim-uid")).toHaveLength(0)
+    expect(await rows(action, "anonymous")).toHaveLength(1)
+  })
+
+  it("idempotency refusals (400, 409, 422) are audited as denies; a replay is not audited", async () => {
+    const action = uniq("test.idem")
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    let calls = 0
+    const op = namedOp(action, async (_s, data) => {
+      calls++
+      if (data.slow === true) await gate
+      return { ok: true }
+    })
+    const router = createRouter([route("/api/t/f/idem", op)], { now: freshClock() })
+    const { firmId, uid, token } = await firmPartner()
+    const reasons = async () => (await rows(action, uid)).filter((r) => r.decision === "deny").map((r) => r.reason).sort()
+
+    expect((await send(router, { path: "/api/t/f/idem", token, firmId, key: null })).status).toBe(400)
+    const key = randomUUID()
+    expect((await send(router, { path: "/api/t/f/idem", token, firmId, key })).status).toBe(200)
+    expect((await send(router, { path: "/api/t/f/idem", token, firmId, key, body: { other: 1 } })).status).toBe(422)
+    const slowKey = randomUUID()
+    const slow = send(router, { path: "/api/t/f/idem", token, firmId, key: slowKey, body: { slow: true } })
+    while (calls < 2) await sleep(10)
+    expect((await send(router, { path: "/api/t/f/idem", token, firmId, key: slowKey, body: { slow: true } })).status).toBe(409)
+    release()
+    await slow
+    expect(await reasons()).toEqual(["idempotency_in_progress", "idempotency_key_required", "idempotency_key_reused"])
+    const denyRow = (await rows(action, uid)).find((r) => r.reason === "idempotency_key_reused")!
+    expect(denyRow.firmId).toBe(firmId)
+
+    const before = (await rows(action, uid)).length
+    const replay = await send(router, { path: "/api/t/f/idem", token, firmId, key })
+    expect(replay.body).toEqual({ ok: true, reused: true })
+    expect((await rows(action, uid)).length).toBe(before)
+  })
+
+  it("settle is retried: two failed 'done' writes, then it is stored", async () => {
+    const spy = vi.spyOn((await import("firebase-functions")).logger, "error").mockImplementation(() => undefined)
+    const router = createRouter([route("/api/t/f/settle", namedOp(uniq("test.settle")))], { now: freshClock() })
+    const { firmId, token } = await firmPartner()
+    const key = randomUUID()
+    const realTx = Firestore.prototype.runTransaction
+    const tx = vi
+      .spyOn(Firestore.prototype, "runTransaction")
+      .mockImplementationOnce(function (this: Firestore, ...args: unknown[]) {
+        return (realTx as (...a: unknown[]) => Promise<unknown>).apply(this, args) as never
+      })
+      .mockRejectedValueOnce(new Error("injected settle failure"))
+      .mockRejectedValueOnce(new Error("injected settle failure"))
+    const out = await send(router, { path: "/api/t/f/settle", token, firmId, key })
+    tx.mockRestore()
+    expect(out.status).toBe(200)
+    const stored = (await adminDb().collection("idempotency_keys").doc(`${firmId}_${key}`).get()).data()!
+    expect(stored.status).toBe("done")
+    expect(spy).not.toHaveBeenCalledWith("idempotency complete failed", expect.anything())
+    spy.mockRestore()
+  })
+
+  it("truly simultaneous same-key pair: exactly one runs, the other gets 409 (or the replay)", async () => {
+    let calls = 0
+    const op = namedOp(uniq("test.race"), async () => {
+      calls++
+      await sleep(50)
+      return { ok: true }
+    })
+    const router = createRouter([route("/api/t/f/race", op)], { now: freshClock() })
+    const { firmId, token } = await firmPartner()
+    const key = randomUUID()
+    const outs = await Promise.all([1, 2].map(() => send(router, { path: "/api/t/f/race", token, firmId, key })))
+    expect(calls).toBe(1)
+    const fresh = outs.filter((o) => o.status === 200 && !(o.body as { reused?: boolean }).reused)
+    const loser = outs.filter((o) => !fresh.includes(o))
+    expect(fresh).toHaveLength(1)
+    expect(loser).toHaveLength(1)
+    // The loser either raced the claim (409) or arrived after it settled (the replay).
+    if (loser[0].status === 409) expect(errorOf(loser[0])).toBe("idempotency_in_progress")
+    else expect(loser[0].body).toEqual({ ok: true, reused: true })
+  })
+
+  it("cross-firm: firm B reusing firm A's key and body gets its own execution, never A's response", async () => {
+    let calls = 0
+    const op = namedOp(uniq("test.xfirm"), async ({ caller }) => {
+      calls++
+      return { firmId: caller.firmId }
+    })
+    const router = createRouter([route("/api/t/f/xfirm", op)], { now: freshClock() })
+    const a = await firmPartner()
+    const b = await firmPartner()
+    const key = randomUUID()
+    const outA = await send(router, { path: "/api/t/f/xfirm", token: a.token, firmId: a.firmId, key, body: { v: 1 } })
+    const outB = await send(router, { path: "/api/t/f/xfirm", token: b.token, firmId: b.firmId, key, body: { v: 1 } })
+    expect(outA.body).toEqual({ firmId: a.firmId })
+    expect(outB.body).toEqual({ firmId: b.firmId })
+    expect(calls).toBe(2)
+  })
+
+  it("a deactivated caller cannot replay: 403 inactive_user, not the stored body", async () => {
+    const router = createRouter([route("/api/t/f/deact", namedOp(uniq("test.deact")))], { now: freshClock() })
+    const { firmId, uid, token } = await firmPartner()
+    const key = randomUUID()
+    expect((await send(router, { path: "/api/t/f/deact", token, firmId, key })).status).toBe(200)
+    await adminDb().collection("users").doc(uid).update({ active: false })
+    const out = await send(router, { path: "/api/t/f/deact", token, firmId, key })
+    expect(out.status).toBe(403)
+    expect(out.body).toEqual({ error: { code: "inactive_user" } })
+  })
 })

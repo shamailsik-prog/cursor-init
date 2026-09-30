@@ -101,18 +101,30 @@ export async function rateLimit(
 }
 
 /**
- * The client IP for the per-IP limit: the *last* `X-Forwarded-For` hop, else `req.ip`.
- * Google's front end (Cloud Run / Cloud Functions) appends the address of the
- * connection it received to X-Forwarded-For; every earlier hop is whatever the
- * client sent, so keying on the first hop would let a caller pick a fresh key
- * per request. If a load balancer or proxy of our own is ever put in front of
- * `api`, this must move to the hop that proxy appends.
+ * `TRUSTED_PROXY_HOPS`: how many proxies of our own sit in front of Google's
+ * front end and append to X-Forwarded-For (external Application Load Balancer,
+ * Firebase Hosting rewrite, ...). Default 0: direct function / run.app URLs.
+ * Anything but a non-negative integer counts as 0.
+ */
+function trustedProxyHops(): number {
+  const raw = process.env.TRUSTED_PROXY_HOPS ?? ""
+  return /^\d+$/.test(raw) ? Number(raw) : 0
+}
+
+/**
+ * The client IP for the per-IP limit: with TRUSTED_PROXY_HOPS = N, the entry
+ * N+1 from the right of X-Forwarded-For (N = 0: the last hop); else `req.ip`.
+ * Google's front end appends the address of the connection it received, and
+ * each trusted proxy appends its own after that; every hop to the left of the
+ * client's is whatever the client sent, so keying on it would let a caller
+ * pick a fresh key per request. A header with fewer hops than expected did not
+ * come through the trusted proxies, so `req.ip` is used.
  */
 export function clientIp(req: { headers: Record<string, unknown>; ip?: string }): string {
   const raw = req.headers["x-forwarded-for"]
   const value = Array.isArray(raw) ? raw.join(",") : typeof raw === "string" ? raw : ""
   const hops = value.split(",").map((h) => h.trim()).filter((h) => h !== "")
-  return hops[hops.length - 1] ?? req.ip ?? "unknown"
+  return hops[hops.length - 1 - trustedProxyHops()] ?? req.ip ?? "unknown"
 }
 
 /** Per-IP limit for requests that failed authentication: `rate_limits/ip:{ip}_anon_{yyyyMMddHHmm}`. */

@@ -4,6 +4,7 @@ import type { Classification } from "@/platform/p1/types"
 import { adminAuth, adminDb } from "../admin"
 import { HttpError } from "../http/errors"
 import { isKnownClassification, rankOf } from "./classification"
+import { header, type Headers } from "./common"
 
 /**
  * Mirrors `Role` in platform/spine/store.ts (guarded by test/p5.role.test.ts).
@@ -25,13 +26,6 @@ export function isRole(value: unknown): value is Role {
   return typeof value === "string" && ROLE_SET.has(value)
 }
 
-function header(headers: Record<string, string | undefined>, name: string): string | undefined {
-  const wanted = name.toLowerCase()
-  for (const [k, v] of Object.entries(headers)) {
-    if (k.toLowerCase() === wanted) return v
-  }
-  return undefined
-}
 
 /**
  * Builds a Caller from verified token claims and binds it to the requested firm.
@@ -46,28 +40,57 @@ function callerFromClaims(uid: string, claims: Record<string, unknown>, firmIdHe
   return { uid, firmId, role, clearanceLevel }
 }
 
-type Headers = Record<string, string | undefined>
-
 /** HTTP (onRequest) identity: verified, revocation-checked Bearer token + X-Firm-Id binding. */
 export async function requireAuth(req: { headers: Headers }): Promise<Caller> {
   return (await bindHttpSession(await verifyBearer(req.headers), req.headers, { mfaExempt: false })).caller
 }
 
 /**
+ * A token refused by verifyBearer. `uid` is set only for token_revoked /
+ * user_disabled, for the audit row's actor (see tokenSubject); it is never
+ * used to authorise anything.
+ */
+export class TokenRejectedError extends HttpError {
+  constructor(
+    code: string,
+    readonly uid?: string
+  ) {
+    super(401, code)
+    this.name = "TokenRejectedError"
+  }
+}
+
+/**
+ * The `sub` claim of a JWT, decoded without verification. Only called after
+ * the Admin SDK rejected the token as revoked or disabled: it reports those
+ * only once the signature and expiry have been verified (and the user looked
+ * up), so the subject is genuine. A forged token fails earlier with
+ * invalid_token and stays anonymous.
+ */
+function tokenSubject(token: string): string | undefined {
+  try {
+    const sub: unknown = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")).sub
+    return typeof sub === "string" && sub !== "" && sub.length <= 128 ? sub : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * HTTP step 1: verifies the `Authorization: Bearer` ID token, revocation-checked.
- * No header → 401 missing_token; revoked → token_revoked; disabled → user_disabled;
- * anything else → invalid_token.
+ * No header → 401 missing_token; revoked → token_revoked; disabled → user_disabled
+ * (both carry the token's uid for the audit row); anything else → invalid_token.
  */
 export async function verifyBearer(headers: Headers): Promise<DecodedIdToken> {
   const match = /^Bearer\s+(\S+)\s*$/i.exec(header(headers, "authorization") ?? "")
-  if (!match) throw new HttpError(401, "missing_token")
+  if (!match) throw new TokenRejectedError("missing_token")
   try {
     return await adminAuth().verifyIdToken(match[1], true)
   } catch (err) {
     const code = (err as { code?: unknown })?.code
-    if (code === "auth/id-token-revoked") throw new HttpError(401, "token_revoked")
-    if (code === "auth/user-disabled") throw new HttpError(401, "user_disabled")
-    throw new HttpError(401, "invalid_token")
+    if (code === "auth/id-token-revoked") throw new TokenRejectedError("token_revoked", tokenSubject(match[1]))
+    if (code === "auth/user-disabled") throw new TokenRejectedError("user_disabled", tokenSubject(match[1]))
+    throw new TokenRejectedError("invalid_token")
   }
 }
 
