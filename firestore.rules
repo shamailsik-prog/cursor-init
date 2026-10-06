@@ -210,6 +210,8 @@ service cloud.firestore {
       && canAccessScope(resource.data.matterId); allow write: if false; }
     match /api_keys/{id}       { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /audit_log/{id}      { allow read: if sameFirm() && isPartner(); allow write: if false; }
+    // R3 N13: full rows that could not be persisted; written by the server (Admin SDK) only.
+    match /audit_dead_letter/{id} { allow read, write: if false; }
     match /tenancy_session_references/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_lineage_dispute_attestations/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_lineage_reconciliation_digests/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }

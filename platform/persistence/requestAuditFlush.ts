@@ -1,6 +1,9 @@
-import type { AuditEntry } from "@/platform/spine/store"
+import type { AuditEntry, SpineStore } from "@/platform/spine/store"
 import {
+  beginAuditFlight,
+  endAuditFlight,
   isAuditRowDeadLettered,
+  isAuditRowInFlight,
   isAuditRowPersisted,
   markAuditRowPersisted,
   type AuditLog,
@@ -23,16 +26,58 @@ export function setRequestAuditSinkForTests(sink: AuditSink | null): void {
  * repositories anyway. A failed row goes back on the retry queue (dead-lettered after
  * MAX_FLUSH_ATTEMPTS). Throws when any of *this request's* rows could not be persisted, so the
  * request answers 503 AUDIT_UNAVAILABLE; failures of older retried rows do not fail it.
+ *
+ * R3 N13: a row being sent by one flush is in flight and every concurrent flush skips it, a
+ * failed row waits out an exponential backoff window before its next attempt (so attempts are
+ * counted per window, not per concurrent request), and dead-letters are written with the full
+ * row to the durable, server-only audit_dead_letter repository.
  */
 export async function flushRequestAudit(rows: readonly AuditEntry[]): Promise<void> {
   const { getRuntimeStore } = await import("@/platform/spine/runtimeStore")
   const store = getRuntimeStore()
   const log = store.audit as Partial<AuditLog> & AuditEntry[]
-  const retries = typeof log.pendingRetries === "function" ? log.pendingRetries() : []
+  const retries = typeof log.pendingRetries === "function" ? log.pendingRetries(Date.now()) : []
   const own = new Set(rows)
-  let pending = [...new Set([...retries, ...rows])].filter(
-    (row) => !isAuditRowPersisted(row) && !isAuditRowDeadLettered(row)
+  const pending = [...new Set([...retries, ...rows])].filter(
+    (row) => !isAuditRowPersisted(row) && !isAuditRowDeadLettered(row) && !isAuditRowInFlight(row)
   )
+  beginAuditFlight(pending)
+  try {
+    await sendRows(store, log, own, pending)
+  } finally {
+    endAuditFlight(pending)
+    await storeDeadLetters(store, log)
+  }
+}
+
+async function storeDeadLetters(
+  store: SpineStore,
+  log: Partial<AuditLog>
+): Promise<void> {
+  if (typeof log.takeDeadLetters !== "function") return
+  const letters = log.takeDeadLetters()
+  if (letters.length === 0) return
+  const unwritten = [...letters]
+  try {
+    const { getRuntimeRepositories } = await import("@/platform/persistence/runtimeRepositories")
+    const repos = await getRuntimeRepositories(store)
+    while (unwritten.length > 0) {
+      await repos.auditDeadLetter.append(unwritten[0]!)
+      unwritten.shift()
+    }
+  } catch (err) {
+    console.error("[audit] dead-letter repository unavailable; will retry", String(err).slice(0, 200))
+    log.requeueDeadLetters?.(unwritten)
+  }
+}
+
+async function sendRows(
+  store: SpineStore,
+  log: Partial<AuditLog> & AuditEntry[],
+  own: ReadonlySet<AuditEntry>,
+  initial: AuditEntry[]
+): Promise<void> {
+  let pending = initial
   if (pending.length === 0) return
   // A handler may replace a row in the log with an enriched copy under the same id and persist
   // that copy (p5/tenancy does); the superseded original is not re-appended.
@@ -65,7 +110,7 @@ export async function flushRequestAudit(rows: readonly AuditEntry[]): Promise<vo
     }
   }
   const fail = (row: AuditEntry, err: unknown) => {
-    if (log.recordFailure) log.recordFailure(row, err)
+    if (log.recordFailure) log.recordFailure(row, err, Date.now())
     if (own.has(row)) ownFailed = ownFailed ?? err
   }
   if (sinkForTests) {

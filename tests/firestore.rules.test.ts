@@ -1261,3 +1261,19 @@ describe("Review R2 probes (secrev2/rules2.probe.test.ts) pinned as regressions"
     await assertFails(setDoc(doc(authed("p2-pm", PARTNER), "matter_members", "p2m1_victim"), { firmId: "firmA", matterId: "p2m1", userId: "p2-x1" }))
   })
 })
+
+describe("review round 3 N13 — audit_dead_letter is server-only", () => {
+  const P = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+  it("no client can read or write a dead-lettered audit row, not even a same-firm partner", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "audit_dead_letter", "dl1"), {
+        row: { firmId: "firmA", action: "x", reason: "full reason" }, reason: "failed 5 persist attempts", deadLetteredAt: 1,
+      })
+    })
+    const db = authed("r3-partner", P)
+    await assertFails(getDoc(doc(db, "audit_dead_letter", "dl1")))
+    await assertFails(setDoc(doc(db, "audit_dead_letter", "dl2"), { row: { firmId: "firmA" }, reason: "r", deadLetteredAt: 2 }))
+    await assertFails(updateDoc(doc(db, "audit_dead_letter", "dl1"), { reason: "erased" }))
+    await assertFails(deleteDoc(doc(db, "audit_dead_letter", "dl1")))
+  })
+})

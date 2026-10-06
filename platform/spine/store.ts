@@ -1,4 +1,4 @@
-import { AuditLog } from "@/platform/audit/requestAudit"
+import { AuditLog, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import { createHash, randomUUID } from "node:crypto"
 import type { Classification } from "@/platform/p1/types"
 import { classificationRank, isClassification } from "@/platform/p1/types"
@@ -5618,6 +5618,8 @@ export class SpineStore {
    * `audit.replaceAll(rows)` to change its contents.
    */
   readonly audit: AuditLog = new AuditLog()
+  /** In-memory audit_dead_letter repository (R3 N13): full rows that could not be persisted. */
+  auditDeadLetters: AuditDeadLetter[] = []
   sectionVersions: StatuteSectionVersion[] = []
   judgments = new Map<string, Judgment>()
   treatments: TreatmentRow[] = []

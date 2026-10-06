@@ -1,4 +1,4 @@
-import { markAuditRowPersisted } from "@/platform/audit/requestAudit"
+import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import type {
   DocumentRecord,
   DraftRecord,
@@ -672,6 +672,12 @@ export type WorkflowOpsLatticeViewRepository<TRow> = {
 export type AuditRepository = {
   append(row: AuditEntry): Promise<void>
   listByFirm(firmId: string): Promise<AuditEntry[]>
+}
+
+/** Durable store for audit rows that could not be persisted (R3 N13); server-only. */
+export type AuditDeadLetterRepository = {
+  append(letter: AuditDeadLetter): Promise<void>
+  list(): Promise<AuditDeadLetter[]>
 }
 
 export type CommitteeBrainOutputRepository = {
@@ -1842,6 +1848,7 @@ export type SpineRepositories = {
   members: MatterMemberRepository
   documents: DocumentRepository
   drafts: DraftRepository
+  auditDeadLetter: AuditDeadLetterRepository
   workflow: WorkflowRepository
   filings: FilingRepository
   filingPacketArtifacts: FilingPacketArtifactRepository
@@ -3249,6 +3256,14 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByMatter(matterId) {
         return store.intimations.filter((row) => row.matterId === matterId)
+      },
+    },
+    auditDeadLetter: {
+      async append(letter) {
+        store.auditDeadLetters.push(letter)
+      },
+      async list() {
+        return [...store.auditDeadLetters]
       },
     },
     audit: {

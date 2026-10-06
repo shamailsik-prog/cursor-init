@@ -5,6 +5,8 @@ import { GET as FILINGS_GET } from "@/app/api/d4/filings/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import {
+  AUDIT_RETRY_BACKOFF_BASE_MS,
+  AUDIT_RETRY_BACKOFF_MAX_MS,
   AuditLog,
   MAX_FLUSH_ATTEMPTS,
   isAuditRowDeadLettered,
@@ -17,6 +19,7 @@ import type { AuditEntry } from "@/platform/spine/store"
 afterEach(() => {
   setRequestAuditSinkForTests(null)
   resetRuntimeStoreForTests()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -51,6 +54,7 @@ describe("bounded audit log with a retry queue", () => {
   })
 
   it("rows of a failed flush are retried by the next request's flush", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
     seed()
     setRequestAuditSinkForTests(async () => {
       throw new Error("audit store down")
@@ -59,6 +63,8 @@ describe("bounded audit log with a retry queue", () => {
     expect(failed.status).toBe(503)
     const owed = [...getRuntimeStore().audit.retryQueue]
     expect(owed.length).toBeGreaterThan(0)
+    // R3 N13: a failed row waits out its backoff window before the next attempt
+    vi.setSystemTime(Date.now() + AUDIT_RETRY_BACKOFF_BASE_MS)
     const flushed: AuditEntry[] = []
     setRequestAuditSinkForTests(async (rows) => {
       flushed.push(...rows)
@@ -80,7 +86,11 @@ describe("bounded audit log with a retry queue", () => {
     setRequestAuditSinkForTests(async (rows) => {
       if (rows.includes(poison)) throw new Error("conflict")
     })
-    for (let i = 0; i < MAX_FLUSH_ATTEMPTS; i += 1) await flushRequestAudit([]).catch(() => {})
+    vi.useFakeTimers({ toFake: ["Date"] })
+    for (let i = 0; i < MAX_FLUSH_ATTEMPTS; i += 1) {
+      await flushRequestAudit([]).catch(() => {})
+      vi.setSystemTime(Date.now() + AUDIT_RETRY_BACKOFF_MAX_MS) // one attempt per backoff window (R3 N13)
+    }
     expect(isAuditRowDeadLettered(poison)).toBe(true)
     expect(store.audit.retryQueue).not.toContain(poison)
     expect(errors.mock.calls.some((c) => String(c[0]).includes("dead-letter"))).toBe(true)

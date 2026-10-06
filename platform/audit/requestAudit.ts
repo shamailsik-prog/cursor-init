@@ -51,7 +51,28 @@ export const MAX_FLUSH_ATTEMPTS = 5
 /** Unpersisted rows waiting for a retry; overflow is dead-lettered (logged), never kept. */
 export const RETRY_QUEUE_CAPACITY = 1_000
 
+/** First retry after this long; doubles per attempt up to AUDIT_RETRY_BACKOFF_MAX_MS (R3 N13). */
+export const AUDIT_RETRY_BACKOFF_BASE_MS = 1_000
+export const AUDIT_RETRY_BACKOFF_MAX_MS = 5 * 60_000
+
 const deadLettered = new WeakSet<object>()
+/** Rows a flush is sending right now: other concurrent flushes skip them (R3 N13). */
+const inFlight = new WeakSet<object>()
+
+export function isAuditRowInFlight(row: AuditEntry): boolean {
+  return inFlight.has(row)
+}
+
+export function beginAuditFlight(rows: readonly AuditEntry[]): void {
+  for (const row of rows) inFlight.add(row)
+}
+
+export function endAuditFlight(rows: readonly AuditEntry[]): void {
+  for (const row of rows) inFlight.delete(row)
+}
+
+/** A dead-lettered row with why and when; written to the durable audit_dead_letter repository. */
+export type AuditDeadLetter = { row: AuditEntry; reason: string; deadLetteredAt: number }
 
 export function isAuditRowDeadLettered(row: AuditEntry): boolean {
   return deadLettered.has(row)
@@ -73,6 +94,9 @@ export class AuditLog extends Array<AuditEntry> {
   /** Unpersisted rows owed to the repository, oldest first (drained by every request flush). */
   readonly retryQueue: AuditEntry[] = []
   private readonly attempts = new WeakMap<object, number>()
+  private readonly nextAttemptAt = new WeakMap<object, number>()
+  /** Dead-letters not yet written to the durable repository (drained by the next flush). */
+  private readonly pendingDeadLetters: AuditDeadLetter[] = []
 
   constructor(
     private readonly capacity: number = AUDIT_LOG_CAPACITY,
@@ -114,10 +138,13 @@ export class AuditLog extends Array<AuditEntry> {
     }
   }
 
-  /** Rows to re-send now: the queue minus anything persisted or dead-lettered meanwhile. */
-  pendingRetries(): AuditEntry[] {
+  /**
+   * Rows to re-send now: queued, not persisted or dead-lettered meanwhile, not being sent by
+   * another flush, and past their backoff window (R3 N13).
+   */
+  pendingRetries(now: number = Date.now()): AuditEntry[] {
     this.dequeue((row) => persisted.has(row) || deadLettered.has(row))
-    return [...this.retryQueue]
+    return this.retryQueue.filter((row) => !inFlight.has(row) && (this.nextAttemptAt.get(row) ?? 0) <= now)
   }
 
   /** A row was persisted: it leaves the queue. */
@@ -125,8 +152,12 @@ export class AuditLog extends Array<AuditEntry> {
     this.dequeue((queued) => queued === row)
   }
 
-  /** A persist attempt failed: retry later, or dead-letter after MAX_FLUSH_ATTEMPTS. */
-  recordFailure(row: AuditEntry, error: unknown): void {
+  /**
+   * A persist attempt failed. One attempt per backoff window (the in-flight set guarantees a row
+   * is sent by one flush at a time, and pendingRetries withholds it until the window passes);
+   * after MAX_FLUSH_ATTEMPTS windows it is dead-lettered.
+   */
+  recordFailure(row: AuditEntry, error: unknown, now: number = Date.now()): void {
     const attempts = (this.attempts.get(row) ?? 0) + 1
     this.attempts.set(row, attempts)
     if (attempts >= MAX_FLUSH_ATTEMPTS) {
@@ -134,14 +165,30 @@ export class AuditLog extends Array<AuditEntry> {
       this.deadLetter(row, `failed ${attempts} persist attempts: ${String(error).slice(0, 200)}`)
       return
     }
+    const backoff = Math.min(AUDIT_RETRY_BACKOFF_BASE_MS * 2 ** (attempts - 1), AUDIT_RETRY_BACKOFF_MAX_MS)
+    this.nextAttemptAt.set(row, now + backoff)
     this.enqueueForRetry([row])
+  }
+
+  /** Dead-letters awaiting the durable write; the caller re-queues any it could not write. */
+  takeDeadLetters(): AuditDeadLetter[] {
+    return this.pendingDeadLetters.splice(0, this.pendingDeadLetters.length)
+  }
+
+  requeueDeadLetters(letters: readonly AuditDeadLetter[]): void {
+    this.pendingDeadLetters.unshift(...letters)
+    // bounded like the retry queue: the oldest unwritten dead-letters are only logged
+    while (this.pendingDeadLetters.length > this.retryCapacity) {
+      const dropped = this.pendingDeadLetters.pop()
+      if (dropped) console.error("[audit] dead-letter could not be stored durably", JSON.stringify(dropped))
+    }
   }
 
   /** Permanently unpersistable: logged (the dead-letter), then free to be trimmed. */
   deadLetter(row: AuditEntry, reason: string): void {
     if (deadLettered.has(row)) return
     deadLettered.add(row)
-    console.error("[audit] dead-letter: audit row could not be persisted", {
+    console.error("[audit] dead-letter: audit row could not be persisted (full row -> audit_dead_letter)", {
       reason,
       id: row.id ?? null,
       firmId: row.firmId ?? null,
@@ -150,6 +197,7 @@ export class AuditLog extends Array<AuditEntry> {
       target: row.target,
       at: row.at ?? null,
     })
+    this.pendingDeadLetters.push({ row, reason, deadLetteredAt: Date.now() })
     this.trim()
   }
 
