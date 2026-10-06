@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
+import { gateByFlag } from "@/platform/flags/routeGate"
 import { DEFAULT_JSON_BODY_BYTES } from "@/platform/http/validation"
 import { REQUEST_FAILED_CODE, errorResponse, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -12048,8 +12049,12 @@ type Body =
   | ControlWorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationFinalizationBody
 ;
 
+// Frozen by Erratum E-24 (L18 §9.1 rule 4): live only while LEGACY_GOVERNANCE_CHAINS is on.
+// The gate runs inside withSession, so auth and identity binding apply first.
+const handleGetGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handleGet)
+
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGetGated)
 }
 
 async function handleGet(request: Request) {
@@ -17361,8 +17366,12 @@ if (view === "alert_variance_remediation_sla_breach_resolution_checkpoint_expiry
   return NextResponse.json({ error: "unknown view" }, { status: 400 })
 }
 
+// Frozen by Erratum E-24 (L18 §9.1 rule 4): live only while LEGACY_GOVERNANCE_CHAINS is on.
+// The gate runs inside withSession, so auth and identity binding apply first.
+const handlePostGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handlePost)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+  return withSession(request, handlePostGated, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
 }
 
 async function handlePost(request: Request) {

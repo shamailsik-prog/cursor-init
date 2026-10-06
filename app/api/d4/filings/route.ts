@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
+import { gateByFlag, isFilingsCoreRequest } from "@/platform/flags/routeGate"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
@@ -3700,8 +3701,12 @@ async function recomputeClosureComplianceState(
   }
 }
 
+// Erratum E-24 (L18 §9.1 rule 4): only the core package path (isFilingsCoreRequest) stays live
+// while LEGACY_GOVERNANCE_CHAINS is off. The gate runs inside withSession, so auth applies first.
+const handleGetGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handleGet, isFilingsCoreRequest)
+
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGetGated)
 }
 
 async function handleGet(request: Request) {
@@ -7280,8 +7285,12 @@ async function handleGet(request: Request) {
   }
 }
 
+// Erratum E-24 (L18 §9.1 rule 4): only the core package path (isFilingsCoreRequest) stays live
+// while LEGACY_GOVERNANCE_CHAINS is off. The gate runs inside withSession, so auth applies first.
+const handlePostGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handlePost, isFilingsCoreRequest)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost)
+  return withSession(request, handlePostGated)
 }
 
 async function handlePost(request: Request) {
