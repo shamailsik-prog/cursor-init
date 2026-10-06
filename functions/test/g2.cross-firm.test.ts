@@ -10,7 +10,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
-import { collection, doc, getDoc, getDocs, query, setDoc, where } from "firebase/firestore"
+import { collection, doc, getDoc, getDocs, query, setDoc, setLogLevel, where } from "firebase/firestore"
 import { adminAuth, adminDb } from "../src/admin"
 import * as index from "../src/index"
 import * as identity from "../src/p5/identity"
@@ -18,7 +18,7 @@ import * as mfa from "../src/p5/mfa"
 import * as gates from "../src/p5/gates"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
-import { EMULATORS, callableAuth, mintIdToken, uniq } from "./emu"
+import { EMULATORS, callableAuth, mintIdToken, mockRes, uniq } from "./emu"
 
 /**
  * Gate G-2 (L18 §10, functions side): two firms are seeded; every P5 identity
@@ -57,7 +57,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = { health: "health probe, no
 type Probe = { data: (a: FirmA) => Record<string, unknown>; target: boolean; firmless?: boolean }
 const PROBES: Record<string, Probe> = {
   onboardFirm: { data: () => ({ name: "G2 probe firm" }), target: false, firmless: true },
-  recordGatePass: { data: () => ({ gate: "G-2", evidence: { summary: "forged by a firm user" } }), target: false, firmless: true },
+  recordGatePass: { data: () => ({ gate: "G-2", evidence: { summary: "forged by a firm user", commitSha: "6e66bf1", runUrl: "https://example.test/run/1", counts: { tested: 1, notBuilt: 0, outOfScope: 0, global: 0, allowed: 0 } } }), target: false, firmless: true },
   createFirmUser: { data: () => ({ email: `${uniq("g2probe")}@example.test`, role: "clerk", clearanceLevel: "internal" }), target: false },
   setUserClaims: { data: (a) => ({ uid: a.victim, role: "clerk" }), target: true },
   deactivateUser: { data: (a) => ({ uid: a.victim }), target: true },
@@ -132,24 +132,6 @@ function firmATokens(a: FirmA): string[] {
 function leaked(body: unknown, tokens: string[]): string[] {
   const text = JSON.stringify(body ?? null)
   return tokens.filter((t) => text.includes(t))
-}
-
-function mockRes() {
-  const out = { status: 0, body: undefined as unknown }
-  const res = {
-    status(n: number) {
-      out.status = n
-      return res
-    },
-    set() {
-      return res
-    },
-    json(b: unknown) {
-      out.body = b
-      return res
-    },
-  }
-  return { res, out }
 }
 
 describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: P5 callables and the HTTP api", () => {
@@ -297,7 +279,7 @@ const RULES = readFileSync(RULES_PATH, "utf8")
 
 /** `match /<collection>/{<id>} { ... }` blocks of firestore.rules (not the `/databases/{database}/documents` root, not the catch-all). */
 function ruleCollections(rules: string): Array<{ name: string; block: string }> {
-  const re = /^\s*match \/([A-Za-z0-9_]+)\/\{\w+\}(?!\/)/gm
+  const re = /match \/([A-Za-z0-9_]+)\/\{\w+\}(?!\/)/g
   const starts = [...rules.matchAll(re)]
   return starts.map((m, i) => ({
     name: m[1],
@@ -337,6 +319,8 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
   })
 
   beforeAll(async () => {
+    // The client SDK logs every expected PERMISSION_DENIED write stream error; the assertions carry the result.
+    setLogLevel("silent")
     env = await initializeTestEnvironment({ projectId: "demo-g2-rules", firestore: { rules: RULES, ...emulatorHostPort() } })
     await env.clearFirestore()
     await env.withSecurityRulesDisabled(async (ctx) => {
@@ -355,8 +339,10 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
     await env?.cleanup()
   })
 
-  it("the rules declare tenant collections, and the only platform-global ones are the reviewed list", () => {
-    expect(COLLECTIONS.length).toBeGreaterThan(20)
+  it("every collection match in firestore.rules is swept (one per line), and the only platform-global ones are the reviewed list", () => {
+    // Every `match /` is a collection except the /databases/{database}/documents root and the {document=**} catch-all.
+    expect(COLLECTIONS.length).toBe(RULES.split("match /").length - 1 - 2)
+    expect(RULES.split("\n").filter((line) => line.split("match /").length > 2)).toEqual([])
     expect(COLLECTIONS.filter((c) => isGlobal(c.block)).map((c) => c.name)).toEqual(REVIEWED_GLOBAL)
     for (const name of REVIEWED_GLOBAL) {
       rows.push({ suite: "functions", service: "rules", channel: "rules", path: name, status: "global", attempts: 0, allowed: 0, note: "platform-global (no tenant data)" })
