@@ -79,6 +79,7 @@ const RE_ARABIC_LETTER = /^(?=\p{L})\p{Script=Arabic}$/u
 const RE_LATIN_LETTER = /^(?=\p{L})\p{Script=Latin}$/u
 const RE_LETTER = /^\p{L}$/u
 const RE_SYMBOL_OR_PUNCT = /^[\p{S}\p{P}]$/u
+const RUN_SPLIT = /^[()[\]{}/\\"\u201c\u201d\u00ab\u00bb\u2018]$/u
 // Intra-word marks that are ordinary in Latin text: dashes (\p{Pd}) and the curly apostrophes.
 const INTRA_WORD_MARKS = new Set(["\u2018", "\u2019", "\u02bc"])
 /**
@@ -199,24 +200,37 @@ export function checkDraftCharset(rawBody: string): CharsetCheck {
     if (ch !== undefined && !/^\s$/u.test(ch)) continue
     if (i > start) {
       const token = cps.slice(start, i)
-      let latin = false
-      let otherLetter = false
-      for (const t of token) {
-        if (isLatinLike(t)) latin = true
-        else if (RE_LETTER.test(t)) otherLetter = true
-      }
-      if (latin && otherLetter) {
-        token.forEach((t, k) => {
-          if (RE_LETTER.test(t) && !isLatinLike(t)) flag(start + k, "token mixes Latin and non-Latin letters")
-        })
-      }
+      // R4 FP6: the mixed-script and confusable rules apply per letter run — the token split at
+      // brackets, slashes and double quotes ("ضمانت(bail)", "دفعہ/Section", "\"بیعانہ\"(earnest").
+      // Apostrophes do not split (they sit inside English words).
+      const runOf: number[] = []
+      let run = 0
+      token.forEach((t) => {
+        if (RUN_SPLIT.test(t)) run += 1
+        runOf.push(run)
+      })
+      const latinRuns = new Set<number>()
+      const otherRuns = new Set<number>()
+      token.forEach((t, k) => {
+        if (isLatinLike(t)) latinRuns.add(runOf[k] ?? 0)
+        else if (RE_LETTER.test(t)) otherRuns.add(runOf[k] ?? 0)
+      })
+      token.forEach((t, k) => {
+        const r = runOf[k] ?? 0
+        if (latinRuns.has(r) && otherRuns.has(r) && RE_LETTER.test(t) && !isLatinLike(t)) {
+          flag(start + k, "token mixes Latin and non-Latin letters")
+        }
+      })
+      const latin = latinRuns.size > 0
       // R4-1: a non-ASCII symbol or punctuation mark directly between two letters of a token
       // that has ASCII letters ("S\u2201MR", "S\u00a9MR") splits a reporter for the gate while
       // reading as one word. Ordinary intra-word marks (dashes, ’ ‘) stay allowed.
       if (token.some((t) => /^[A-Za-z]$/.test(t))) {
         token.forEach((t, k) => {
           if ((t.codePointAt(0) ?? 0) < 0x80 || !RE_SYMBOL_OR_PUNCT.test(t) || INTRA_WORD_MARKS.has(t) || /^\p{Pd}$/u.test(t)) return
-          if (RE_LETTER.test(token[k - 1] ?? "") && RE_LETTER.test(token[k + 1] ?? "")) {
+          // both neighbours Latin(-like): a mark between an Arabic and a Latin letter (“مقدمہ”case)
+          // splits no Latin word
+          if (isLatinLike(token[k - 1] ?? "") && isLatinLike(token[k + 1] ?? "")) {
             flag(start + k, "symbol or punctuation between two letters of a word")
           }
         })
@@ -225,6 +239,8 @@ export function checkDraftCharset(rawBody: string): CharsetCheck {
         token.forEach((t, k) => {
           const cp = t.codePointAt(0) ?? 0
           if (cp < 0x80 || COMPAT_ALLOWED.has(t)) return
+          // only inside a Latin run (an Arabic run beside "(bail)" is not a Latin look-alike)
+          if (!latinRuns.has(runOf[k] ?? 0)) return
           // Common-script look-alikes inside a Latin token (e.g. "∣SCMR∣") count too.
           const problem = RE_LATIN_LETTER.test(t)
             ? latinLetterProblem(t)

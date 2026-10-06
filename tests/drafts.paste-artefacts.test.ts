@@ -43,3 +43,23 @@ describe("FP5: paste artefacts", () => {
     }
   })
 })
+
+describe("FP6: the mixed-script rule applies per letter run (split at brackets, slashes and quotes)", () => {
+  it.each([
+    "ملزم نے ضمانت(bail) کی درخواست دائر کی۔",
+    "دفعہ/Section 497 کے تحت",
+    'The term "بیعانہ"(earnest money) was paid.',
+    "ضمانت[bail] and “مقدمہ”case",
+  ])("%j is accepted and is not a gate suspect", async (text) => {
+    expect(checkDraftCharset(text).ok).toBe(true)
+    const { extractCitations } = await import("@/services/d4-2/citations")
+    expect(extractCitations(text)).toEqual([])
+  })
+  it("a run mixing Latin and Arabic letters is still refused (and a gate suspect)", async () => {
+    for (const text of ["SCMRا 1234", "(SCمR) 1234", "2019 SسMR/1234"]) {
+      expect(checkDraftCharset(text).ok, text).toBe(false)
+    }
+    const { extractCitations } = await import("@/services/d4-2/citations")
+    expect(extractCitations("2019 SCمR 1234").length).toBeGreaterThan(0)
+  })
+})

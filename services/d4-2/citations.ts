@@ -295,7 +295,8 @@ function strictHits(folded: FoldedText, ambiguous: Array<Span & { raw: string }>
 
 function mixedScriptTokens(text: string): Array<Span & { raw: string }> {
   const out: Array<Span & { raw: string }> = []
-  for (const m of text.matchAll(/\S+/gu)) {
+  // R4 FP6: per letter run — split at blanks, brackets, slashes and double quotes (not apostrophes)
+  for (const m of text.matchAll(/[^\s()[\]{}/\\"\u201c\u201d\u00ab\u00bb\u2018]+/gu)) {
     const token = m[0]
     let latin = false
     let other = false
