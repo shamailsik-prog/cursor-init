@@ -46,3 +46,27 @@ describe("N8: plain-text '<' and '>' never hide a citation (raw and markup-strip
     else expect(refs.every(isSuspect)).toBe(true)
   })
 })
+
+describe("N10: script-agnostic shape detector (year, 1-6 short letter tokens, number)", () => {
+  it.each([
+    "2019 ꜱᴄᴍʀ 1234",
+    "2019 ꮪꮯꮇꭱ 1234",
+    "2019 ǀSCMRǀ 1234",
+    "2019 SCMRǃ 1234",
+    "۲۰۱۹ ایس سی ایم آر ۱۲۳۴",
+    "2019 ZQX 77",
+    "1999 A.B.C. 5",
+  ])("%j is an UNVERIFIED suspect", (text) => {
+    const refs = extractCitations(text)
+    expect(refs.length, text).toBeGreaterThan(0)
+    expect(refs.every(isSuspect), JSON.stringify(refs)).toBe(true)
+  })
+  it.each([
+    "In 2019 he paid 5 lakh rupees.",
+    "In 2019 the court held 3 hearings.",
+    "On 12.03.2019 FIR No. 45 was registered.",
+    "The 2019 budget allocated 300 million.",
+  ])("ordinary prose %j is not a suspect", (text) => {
+    expect(extractCitations(text)).toEqual([])
+  })
+})

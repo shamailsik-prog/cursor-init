@@ -375,6 +375,52 @@ const CASE_REFERENCE_GENERIC = new RegExp(
 )
 const STATUTE_WORDS = /(?<![\p{L}])(?:Act|Ordinance|Order|Notification|Regulations?|Rules|S\.?\s?R\.?\s?O\.?|Bill|Circular|Gazette)(?![\p{L}])/iu
 
+// ---- script-agnostic shape detector (R3 N10) ----------------------------------------------
+// A year (folded, so any digit script), then 1-6 short letter tokens of any script, then a
+// number. "Short letter token": for Latin, abbreviation-like (capitals, dotted letters, single
+// letters, "Lah.") or containing any non-ASCII letter (small capitals, clicks…); for scripts
+// without case (Urdu), at most 6 letters. Ordinary lowercase Latin words and "No."/"Nos."
+// break the shape, so "In 2019 he paid 5 …" and "2019 FIR No. 45" are not suspects.
+const SHAPE_MAX_TOKENS = 6
+const RE_YEAR_TOKEN = /^[(\[]?(?:19|20)\d{2}[)\],.:;]?$/u
+const RE_NUMBER_TOKEN = /^[(\[]?\d+/u
+function isShortLetterToken(raw: string): boolean {
+  const token = raw.replace(/^[(\[{"'\u201c\u2018]+|[)\]},;:"'\u201d\u2019]+$/gu, "")
+  if (!token || /\d/.test(token)) return false
+  if (/^nos?\.?$/iu.test(token)) return false
+  const letters = [...token].filter((ch) => /\p{L}/u.test(ch))
+  if (letters.length === 0) return false
+  if (letters.some((ch) => /\p{Script=Latin}/u.test(ch))) {
+    if (letters.some((ch) => (ch.codePointAt(0) ?? 0) >= 0x80)) return true
+    if (/^[A-Z][A-Z&.]*\.?$/u.test(token) && letters.length <= 6) return true // SCMR, AJ&K, S.C.
+    if (/^(?:[A-Za-z]\.){1,6}$/u.test(token)) return true // s.c.m.r.
+    if (/^[A-Za-z]$/u.test(token)) return true // spaced letters
+    if (/^[A-Z][a-z]{1,3}\.$/u.test(token)) return true // Lah., Pesh.
+    if (/^[A-Z][A-Za-z]*[A-Z][A-Za-z]*$/u.test(token) && letters.length <= 6) return true // PCrLJ
+    return false
+  }
+  return letters.length <= 6
+}
+
+function shapeSuspects(folded: FoldedText): Array<Span & { raw: string }> {
+  const text = folded.text
+  const tokens = [...text.matchAll(/\S+/gu)].map((m) => ({ raw: m[0], start: m.index ?? 0 }))
+  const out: Array<Span & { raw: string }> = []
+  for (let i = 0; i < tokens.length; i += 1) {
+    const year = tokens[i]
+    if (!year || !RE_YEAR_TOKEN.test(year.raw)) continue
+    let j = i + 1
+    while (j < tokens.length && j - i - 1 < SHAPE_MAX_TOKENS && isShortLetterToken(tokens[j]?.raw ?? "")) j += 1
+    const count = j - i - 1
+    const number = tokens[j]
+    if (count >= 1 && number && RE_NUMBER_TOKEN.test(number.raw)) {
+      const end = number.start + number.raw.length
+      out.push({ start: year.start, end, raw: text.slice(year.start, end) })
+    }
+  }
+  return out
+}
+
 /** The generic pattern may include leading capitalised prose ("In C.P. No. …"): try each word suffix. */
 function isOwnCase(raw: string, options: AnalyseOptions): boolean {
   if (!options.isOwnCaseReference) return false
@@ -420,6 +466,7 @@ function analyse(
     }
   }
   for (const hit of reporterFallback(folded)) addSuspect(hit.start, hit.end, hit.raw)
+  for (const hit of shapeSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
   // Mixed-script tokens are suspects even beside a strict hit: never map confusables.
   for (const token of mixedScriptTokens(text)) {
     if (!suspects.some((s) => overlaps(s, token))) suspects.push(token)
