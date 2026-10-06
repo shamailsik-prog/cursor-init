@@ -96,6 +96,7 @@ function buildPreflightInput(
     temporalCitations?: TemporalCitationInput[]
     partnerOverride?: { partnerId?: string; reason?: string }
     body?: string
+    title?: string
   }
 ): DraftPreflightInput | Response {
   if (!parsed.actorId || !parsed.matterId) {
@@ -120,6 +121,8 @@ function buildPreflightInput(
     temporalCitations: parsed.temporalCitations ?? [],
     partnerOverride,
     ...(typeof parsed.body === "string" ? { draftBody: parsed.body } : {}),
+    // R4-2: the title is gated with the body
+    ...(typeof parsed.title === "string" ? { draftTitle: parsed.title } : {}),
   }
 }
 

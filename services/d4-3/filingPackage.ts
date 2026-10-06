@@ -4,6 +4,7 @@ import { PublicError } from "@/platform/http/publicError"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
+  gatedDraftText,
   ownCaseReferenceMatcher,
   runDraftPreflight,
   type DraftPreflightInput,
@@ -68,7 +69,11 @@ export function createFilingPackage(
     throw new PublicError("draft classification cannot be lower than matter classification")
   }
   // Module 33: the gate reads the draft being filed, not only the ids the caller lists.
-  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: draft.body }, { recordOverride: true })
+  const gate = runDraftPreflight(
+    store,
+    { ...input.preflight, draftBody: draft.body, draftTitle: draft.title },
+    { recordOverride: true }
+  )
   if (!gate.ok) throw new PublicError("preflight blocked filing package")
   const filingPackage: FilingPackage = {
     id: store.id("pkg"),
@@ -115,6 +120,8 @@ export function decideFilingPackage(
      * Approval requires sha256(draftBody) to equal the package's pinned draftBodySha256.
      */
     draftBody?: string
+    /** Draft title from the durable repository (R4-2); defaults to the stored draft's title. */
+    draftTitle?: string
     /** The approving partner's own override of a non-VERIFIED gate result (resolved from the session). */
     partnerOverride?: PartnerOverride
   }
@@ -135,8 +142,10 @@ export function decideFilingPackage(
     if (typeof draftBody !== "string") {
       throw new PublicError("preflight blocked approval: draft unavailable for the citation gate")
     }
-    // Review round 3: a body with disguising characters is refused before anything else.
+    // Review round 3: a body with disguising characters is refused before anything else; so is a
+    // title (R4-2: client-SDK title edits are allowed on locked drafts, so it is re-read here).
     requireSupportedDraftBody(draftBody)
+    const draftTitle = requireSupportedDraftBody(input.draftTitle ?? store.drafts.get(filingPackage.draftId)?.title ?? "")
     // The body being approved must be the body the gate checked at creation (fails closed for
     // a legacy package without a pinned hash).
     if (!filingPackage.draftBodySha256 || draftBodySha256(draftBody) !== filingPackage.draftBodySha256) {
@@ -146,7 +155,7 @@ export function decideFilingPackage(
     const packageMatter = store.matters.get(filingPackage.matterId)
     const refs = [
       ...extractCitations(
-        draftBody,
+        gatedDraftText(draftTitle, requireSupportedDraftBody(draftBody)),
         packageMatter ? { isOwnCaseReference: ownCaseReferenceMatcher(packageMatter) } : {}
       ),
       ...(filingPackage.citedRefs ?? []),

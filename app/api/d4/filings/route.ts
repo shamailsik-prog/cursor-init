@@ -7266,7 +7266,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         packageId: parsed.packageId,
         decision: parsed.decision,
         reason: parsed.reason,
-        ...(pendingDraft ? { draftBody: pendingDraft.body } : {}),
+        ...(pendingDraft ? { draftBody: pendingDraft.body, draftTitle: pendingDraft.title } : {}),
         ...(resolvedOverride.override ? { partnerOverride: resolvedOverride.override } : {}),
       })
       const persisted = await repos.filings.get(filingPackage.id)

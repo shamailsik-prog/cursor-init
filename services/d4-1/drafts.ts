@@ -54,6 +54,13 @@ export type DraftPreflightInput = {
   partnerOverride?: { partnerId: string; reason: string }
   /** Draft text; every reported citation in it is extracted and checked (Module 33). */
   draftBody?: string
+  /** Draft title (R4-2): charset-checked and gated together with the body. */
+  draftTitle?: string
+}
+
+/** The text the gate reads for a draft (R4-2): the normalised title, a newline, the normalised body. */
+export function gatedDraftText(title: string, body: string): string {
+  return title ? `${title}\n${body}` : body
 }
 
 export type DraftPreflightResult = {
@@ -118,10 +125,12 @@ export function runDraftPreflight(
   // Review round 3: refuse (422 unsupported_characters) any body containing characters that can
   // disguise text; analyse the normalised body (NFC, ASCII digits/dashes).
   const body = input.draftBody === undefined ? "" : requireSupportedDraftBody(input.draftBody)
+  // R4-2: the title is court-facing text too — same refusal, same gate.
+  const title = input.draftTitle === undefined ? "" : requireSupportedDraftBody(input.draftTitle)
   const caller = { actorId: input.actorId, firmId: matter.firmId }
   // Module 33: the gate checks union(extracted from the body, caller-listed), never only the latter.
   const refs = [
-    ...extractCitations(body, { isOwnCaseReference: ownCaseReferenceMatcher(matter) }),
+    ...extractCitations(gatedDraftText(title, body), { isOwnCaseReference: ownCaseReferenceMatcher(matter) }),
     ...(input.citedJudgmentIds ?? []),
   ]
   const citation = verifyCitations(store, refs, input.partnerOverride, caller)
@@ -185,8 +194,9 @@ export function composeDraft(
   // The stored body is exactly the analysed body: refused if it has disguising characters,
   // otherwise normalised (NFC, ASCII digits/dashes) before the gate reads it and it is saved.
   const body = requireSupportedDraftBody(input.body)
-  // The gate always reads the body being saved, whatever the caller put in preflight.
-  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: body }, { recordOverride: true })
+  const title = requireSupportedDraftBody(input.title)
+  // The gate always reads the title and body being saved, whatever the caller put in preflight.
+  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: body, draftTitle: title }, { recordOverride: true })
   if (!gate.ok) {
     throw new PublicError("preflight blocked drafting")
   }
@@ -197,7 +207,7 @@ export function composeDraft(
     firmId: matter.firmId,
     matterId: input.matterId,
     templateId: input.templateId,
-    title: input.title,
+    title,
     body,
     classification: input.classification,
     createdBy: input.actorId,
