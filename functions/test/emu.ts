@@ -98,3 +98,23 @@ export async function mintMfaIdToken(
   })
   return { uid: first.uid, token: done.idToken as string, firstFactorToken: first.token, email: first.email }
 }
+
+/** A minimal express-like response that records what a handler sent (status, headers lower-cased, JSON body). */
+export function mockRes() {
+  const out = { status: 0, headers: {} as Record<string, string>, body: undefined as unknown }
+  const res = {
+    status(n: number) {
+      out.status = n
+      return res
+    },
+    set(name: string, value: string) {
+      out.headers[name.toLowerCase()] = value
+      return res
+    },
+    json(body: unknown) {
+      out.body = body
+      return res
+    },
+  }
+  return { res, out }
+}

@@ -111,12 +111,24 @@ resumes idempotently and returns the same `firmId` (audited as
   cross-tenant test. Once `platform/bootstrap` exists, `onboardFirm` on the
   platformAdmin path fails with `failed-precondition` / `second_firm_forbidden`
   (HTTP 409, audited as a deny) unless `platform/gates.g2PassedAt` is set.
-- Run `npm run gate:g2` (repo root). On a green run a platform admin calls
-  `recordGatePass({ gate: "G-2", evidence: { summary, commitSha?, runUrl? } })`.
-  It is refused with `platform_admin_only` for anyone without
-  `platformAdmin: true`. In one transaction it writes the allow audit row,
-  `platform/gates` (`g2PassedAt`, `g2PassedBy`, `g2Evidence`, `g2PassId`) and
-  an append-only `gate_passes/{id}`. Both are server-only (no rules match).
+- Run `npm run gate:g2` (repo root). On a green run it prints an evidence
+  line: `{ summary, commitSha, runUrl, counts: { tested, notBuilt, outOfScope,
+  global, allowed } }` (it also writes it to `G2_EVIDENCE_OUT` when set). A
+  platform admin passes that object as `recordGatePass({ gate: "G-2", evidence })`.
+  `commitSha`, an https `runUrl` and the counts are required, and the counts
+  must be green: `tested` > 0 and `allowed` = 0, otherwise `invalid_evidence`.
+  Anyone without `platformAdmin: true` is refused with `platform_admin_only`.
+  In one transaction the call writes the allow audit row, `platform/gates`
+  (`g2PassedAt`, `g2PassedBy`, `g2Evidence`, `g2PassId`) and an append-only
+  `gate_passes/{id}`. Both are server-only (no rules match).
+- **Re-run obligation.** A pass covers the code at its `commitSha`. Re-run
+  `gate:g2` and record a new pass when the tenant surface changes shape: when
+  the D2-1 WhatsApp webhook (phone-number to user binding) lands, when D5-1
+  web research reads land, and when the Postgres migration puts matters and
+  documents behind RLS (L18 §10: "after the Postgres migration the same suite
+  runs against RLS"). Until then the gate lists those reads as not built.
+- The G-2 functions suite (`test/g2.cross-firm.test.ts`) runs only inside
+  `gate:g2` (`G2_GATE=1`); `npm test` and `test:emu` skip it, so CI runs it once.
 - The emulator suites share singleton docs (`platform/bootstrap`,
   `platform/gates`), so `vitest.config.ts` runs test files one at a time.
 

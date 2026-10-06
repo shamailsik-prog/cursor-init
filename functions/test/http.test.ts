@@ -10,27 +10,7 @@ import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { clientIp, retryAfterSeconds, windowId } from "../src/http/rateLimit"
 import { ROUTES, api, buildRouteTable, createRouter, type Route } from "../src/http/router"
 import { callableHandler, type FirmOperation, type Operation } from "../src/p5/common"
-import { EMULATORS, callableAuth, mintIdToken, mintMfaIdToken, uniq } from "./emu"
-
-/** A minimal express-like response that records what the router sent. */
-function mockRes() {
-  const out = { status: 0, headers: {} as Record<string, string>, body: undefined as unknown }
-  const res = {
-    status(n: number) {
-      out.status = n
-      return res
-    },
-    set(name: string, value: string) {
-      out.headers[name.toLowerCase()] = value
-      return res
-    },
-    json(body: unknown) {
-      out.body = body
-      return res
-    },
-  }
-  return { res, out }
-}
+import { EMULATORS, callableAuth, mintIdToken, mintMfaIdToken, mockRes, uniq } from "./emu"
 
 type ReqInit = {
   method?: string

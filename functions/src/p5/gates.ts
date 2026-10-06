@@ -12,8 +12,15 @@ import { callableHandler, type Data, type FirmlessOperation } from "./common"
  * every recorded pass with its evidence (server-only as well).
  *
  * R-5: no second firm is onboarded until tenant isolation has passed a live
- * cross-tenant test (Gate G-2). onboardFirm reads `requireG2Passed` in its
+ * cross-tenant test (Gate G-2). onboardFirm reads `g2Passed` in its
  * transaction before creating any firm after the first.
+ *
+ * A pass covers the code it was run on. Re-run `npm run gate:g2` and record a
+ * new pass whenever the tenant surface changes shape, in particular when the
+ * D2-1 WhatsApp webhook (phone-number to user binding) lands, when D5-1 web
+ * research reads land, and when the Postgres migration moves matters and
+ * documents behind RLS (L18 §10: "after the Postgres migration the same suite
+ * runs against RLS"). The stored commitSha and counts show what was covered.
  */
 
 export const GATES = ["G-2"] as const
@@ -22,9 +29,13 @@ export type Gate = (typeof GATES)[number]
 const MAX_SUMMARY = 2000
 const MAX_URL = 500
 const SHA_RE = /^[0-9a-f]{7,40}$/
-const EVIDENCE_KEYS: ReadonlySet<string> = new Set(["summary", "commitSha", "runUrl"])
+const EVIDENCE_KEYS: ReadonlySet<string> = new Set(["summary", "commitSha", "runUrl", "counts"])
+const COUNT_KEYS = ["tested", "notBuilt", "outOfScope", "global", "allowed"] as const
 
-export type GateEvidence = { summary: string; commitSha?: string; runUrl?: string }
+/** The gate run's coverage counts, as `npm run gate:g2` prints them. */
+export type GateCounts = Record<(typeof COUNT_KEYS)[number], number>
+/** What a pass records: the run (commit and CI run URL), its counts, and a summary. */
+export type GateEvidence = { summary: string; commitSha: string; runUrl: string; counts: GateCounts }
 
 export const gatesRef = () => adminDb().collection("platform").doc("gates")
 
@@ -41,24 +52,31 @@ function isHttpsUrl(value: string): boolean {
   }
 }
 
-/** `{ summary, commitSha?, runUrl? }` and nothing else; 400 invalid_evidence otherwise. */
+const isRecord = (value: unknown): value is Data => value !== null && typeof value === "object" && !Array.isArray(value)
+
+/**
+ * `{ summary, commitSha, runUrl, counts: { tested, notBuilt, outOfScope, global, allowed } }`
+ * and nothing else (400 invalid_evidence otherwise). The counts must be those of a
+ * green run: at least one path tested and none allowed.
+ */
 function parseEvidence(value: unknown): GateEvidence {
   const bad = () => new HttpError(400, "invalid_evidence")
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw bad()
-  const raw = value as Data
-  if (Object.keys(raw).some((k) => !EVIDENCE_KEYS.has(k))) throw bad()
-  const summary = typeof raw.summary === "string" ? raw.summary.trim() : ""
+  if (!isRecord(value)) throw bad()
+  if (Object.keys(value).some((k) => !EVIDENCE_KEYS.has(k))) throw bad()
+  const summary = typeof value.summary === "string" ? value.summary.trim() : ""
   if (summary === "" || summary.length > MAX_SUMMARY) throw bad()
-  const evidence: GateEvidence = { summary }
-  if (raw.commitSha !== undefined) {
-    if (typeof raw.commitSha !== "string" || !SHA_RE.test(raw.commitSha)) throw bad()
-    evidence.commitSha = raw.commitSha
+  const { commitSha, runUrl, counts } = value
+  if (typeof commitSha !== "string" || !SHA_RE.test(commitSha)) throw bad()
+  if (typeof runUrl !== "string" || runUrl.length > MAX_URL || !isHttpsUrl(runUrl)) throw bad()
+  if (!isRecord(counts) || Object.keys(counts).length !== COUNT_KEYS.length) throw bad()
+  const parsed = {} as GateCounts
+  for (const k of COUNT_KEYS) {
+    const n = counts[k]
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 0) throw bad()
+    parsed[k] = n
   }
-  if (raw.runUrl !== undefined) {
-    if (typeof raw.runUrl !== "string" || raw.runUrl.length > MAX_URL || !isHttpsUrl(raw.runUrl)) throw bad()
-    evidence.runUrl = raw.runUrl
-  }
-  return evidence
+  if (parsed.tested === 0 || parsed.allowed !== 0) throw bad()
+  return { summary, commitSha, runUrl, counts: parsed }
 }
 
 /** True once a platform admin has recorded a G-2 pass (a server-written Timestamp; anything else is not a pass). */
@@ -67,7 +85,8 @@ export async function g2Passed(tx: Transaction): Promise<boolean> {
 }
 
 /**
- * recordGatePass({ gate: "G-2", evidence }) → { gate, passId }. Platform admin
+ * recordGatePass({ gate: "G-2", evidence: { summary, commitSha, runUrl, counts } })
+ * → { gate, passId }. The evidence is the line `npm run gate:g2` prints. Platform admin
  * only (`platformAdmin: true` in the caller's current custom claims; 403
  * platform_admin_only otherwise). In one transaction: the allow audit row,
  * `platform/gates` (g2PassedAt, g2PassedBy, g2Evidence, g2PassId) and an

@@ -5,7 +5,7 @@ import { adminAuth, adminDb } from "../src/admin"
 import { createRouter, ROUTES } from "../src/http/router"
 import { onboardFirmHandler } from "../src/p5/identity"
 import { recordGatePassHandler } from "../src/p5/gates"
-import { EMULATORS, callableAuth, mintIdToken } from "./emu"
+import { EMULATORS, callableAuth, mintIdToken, mockRes } from "./emu"
 
 /**
  * R-5 (L18 R-5, v19 line 6724): no second firm is onboarded until tenant
@@ -39,7 +39,14 @@ async function auditRows(actorId: string, action: string) {
 
 const bootstrapRef = () => adminDb().collection("platform").doc("bootstrap")
 const gatesRef = () => adminDb().collection("platform").doc("gates")
-const EVIDENCE = { summary: "gate:g2 green: 0 allows over every implemented read path", commitSha: "6e66bf1" }
+/** What `npm run gate:g2` prints as its evidence line (ci_gates/gate_g2.sh). */
+const COUNTS = { tested: 285, notBuilt: 10, outOfScope: 9, global: 1, allowed: 0 }
+const EVIDENCE = {
+  summary: "gate:g2 PASS: 0 allowed over every implemented read path",
+  commitSha: "6e66bf1",
+  runUrl: "https://github.com/o/r/actions/runs/1",
+  counts: COUNTS,
+}
 
 /** A platform with its first firm already onboarded (so the next onboardFirm is a second firm). */
 async function firstFirmExists(): Promise<void> {
@@ -99,21 +106,30 @@ describe.skipIf(!EMULATORS)("recordGatePass (platform admin records a gate pass 
   it.each([
     ["missing", undefined],
     ["a string", "passed"],
-    ["empty summary", { summary: "  " }],
-    ["summary too long", { summary: "x".repeat(2001) }],
-    ["bad commitSha", { summary: "ok", commitSha: "not-a-sha" }],
-    ["non-https runUrl", { summary: "ok", runUrl: "http://example.test/run/1" }],
-    ["unknown key", { summary: "ok", extra: true }],
+    ["empty summary", { ...EVIDENCE, summary: "  " }],
+    ["summary too long", { ...EVIDENCE, summary: "x".repeat(2001) }],
+    ["no commitSha", { ...EVIDENCE, commitSha: undefined }],
+    ["bad commitSha", { ...EVIDENCE, commitSha: "not-a-sha" }],
+    ["no runUrl", { ...EVIDENCE, runUrl: undefined }],
+    ["non-https runUrl", { ...EVIDENCE, runUrl: "http://example.test/run/1" }],
+    ["unknown key", { ...EVIDENCE, extra: true }],
+    ["no counts", { ...EVIDENCE, counts: undefined }],
+    ["counts with an allowed attempt (a failing run)", { ...EVIDENCE, counts: { ...COUNTS, allowed: 1 } }],
+    ["counts with nothing tested", { ...EVIDENCE, counts: { ...COUNTS, tested: 0 } }],
+    ["counts missing notBuilt", { ...EVIDENCE, counts: { tested: 1, outOfScope: 0, global: 0, allowed: 0 } }],
+    ["non-integer count", { ...EVIDENCE, counts: { ...COUNTS, notBuilt: 1.5 } }],
+    ["negative count", { ...EVIDENCE, counts: { ...COUNTS, global: -1 } }],
+    ["unknown count", { ...EVIDENCE, counts: { ...COUNTS, extra: 1 } }],
   ])("evidence %s → invalid-argument invalid_evidence", async (_label, evidence) => {
     const admin = await mintIdToken({ platformAdmin: true })
-    const err = await httpsErrorOf(recordGatePassHandler(await req(admin.token, { gate: "G-2", evidence })))
+    const err = await httpsErrorOf(recordGatePassHandler(await req(admin.token, { gate: "G-2", evidence: JSON.parse(JSON.stringify(evidence ?? null)) ?? undefined })))
     expectHttps(err, "invalid-argument", "invalid_evidence")
     expect((await gatesRef().get()).exists).toBe(false)
   })
 
-  it("accepts an https runUrl and a 40-char commitSha", async () => {
+  it("accepts a 40-char commitSha and stores the gate's counts with the pass", async () => {
     const admin = await mintIdToken({ platformAdmin: true })
-    const evidence = { summary: "ok", commitSha: "a".repeat(40), runUrl: "https://github.com/o/r/actions/runs/1" }
+    const evidence = { ...EVIDENCE, commitSha: "a".repeat(40) }
     await recordGatePassHandler(await req(admin.token, { gate: "G-2", evidence }))
     expect((await gatesRef().get()).data()?.g2Evidence).toEqual(evidence)
   })
@@ -170,20 +186,7 @@ describe.skipIf(!EMULATORS)("onboardFirm under R-5 (second firm needs a recorded
   it("HTTP api: POST onboardFirm as platformAdmin without a G-2 pass → 409 second_firm_forbidden", async () => {
     await firstFirmExists()
     const { token } = await mintIdToken({ platformAdmin: true })
-    const out = { status: 0, body: undefined as unknown }
-    const res = {
-      status(n: number) {
-        out.status = n
-        return res
-      },
-      set() {
-        return res
-      },
-      json(b: unknown) {
-        out.body = b
-        return res
-      },
-    }
+    const { res, out } = mockRes()
     const body = { name: "Second via HTTP" }
     await createRouter(ROUTES)(
       {
@@ -201,7 +204,7 @@ describe.skipIf(!EMULATORS)("onboardFirm under R-5 (second firm needs a recorded
       } as never,
       res as never
     )
-    expect(out).toEqual({ status: 409, body: { error: { code: "second_firm_forbidden" } } })
+    expect({ status: out.status, body: out.body }).toEqual({ status: 409, body: { error: { code: "second_firm_forbidden" } } })
   })
 
   it("a founder resume is not a second firm (bootstrap_resume still works without a G-2 pass)", async () => {
