@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { gateByFlag, isFilingsCoreRequest } from "@/platform/flags/routeGate"
+import { isFeatureEnabled } from "@/platform/flags/featureFlags"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
@@ -7423,8 +7424,14 @@ async function handlePost(request: Request) {
       const packetArtifact = buildFilingPacketArtifactRow(filingPackage, draft)
       await repos.filingPacketArtifacts.upsert(packetArtifact)
       store.filingPacketArtifacts.set(packetArtifact.id, packetArtifact)
+      // Erratum E-24: the filing-transport pipeline (dispatch queue, annexures) is frozen behind
+      // LEGACY_GOVERNANCE_CHAINS. With the flag off an approval stops at filing readiness: no
+      // dispatch-queue or annexure row is written and neither field is returned.
+      const transportLive = isFeatureEnabled("LEGACY_GOVERNANCE_CHAINS", actor.firmId)
       const dispatchQueueRow =
-        filingPackage.status === "approved" ? buildFilingDispatchQueueRow(filingPackage) : null
+        transportLive && filingPackage.status === "approved"
+          ? buildFilingDispatchQueueRow(filingPackage)
+          : null
       const annexureRow =
         dispatchQueueRow && dispatchQueueRow.status !== "blocked"
           ? buildFilingAnnexureRow(filingPackage, dispatchQueueRow)
@@ -7442,10 +7449,15 @@ async function handlePost(request: Request) {
         action: "decide_package",
         filingPackage: (await repos.filings.get(filingPackage.id)) ?? filingPackage,
         packetArtifact: (await repos.filingPacketArtifacts.get(packetArtifact.id)) ?? packetArtifact,
-        dispatchQueue:
-          dispatchQueueRow &&
-          ((await repos.filingDispatchQueue.get(dispatchQueueRow.id)) ?? dispatchQueueRow),
-        annexure: annexureRow && ((await repos.filingAnnexures.get(annexureRow.id)) ?? annexureRow),
+        ...(transportLive
+          ? {
+              dispatchQueue:
+                dispatchQueueRow &&
+                ((await repos.filingDispatchQueue.get(dispatchQueueRow.id)) ?? dispatchQueueRow),
+              annexure:
+                annexureRow && ((await repos.filingAnnexures.get(annexureRow.id)) ?? annexureRow),
+            }
+          : {}),
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

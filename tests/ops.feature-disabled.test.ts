@@ -3,6 +3,7 @@ import {
   FeatureDisabledError,
   apiCallError,
   runApiCallAllowingStatuses,
+  stepFailureOutcome,
 } from "@/app/ops/api-call-helpers"
 
 const DISABLED_BODY = { error: "feature_disabled", flag: "LEGACY_GOVERNANCE_CHAINS" }
@@ -33,10 +34,17 @@ describe("/ops console: calls into a frozen layer", () => {
     ).rejects.toBeInstanceOf(FeatureDisabledError)
   })
 
-  it("console shows a disabled notice instead of an error for frozen steps", async () => {
-    const { readFileSync } = await import("node:fs")
-    const source = readFileSync("app/ops/operator-audit-console.tsx", "utf8")
-    expect(source).toContain("err instanceof FeatureDisabledError")
-    expect(source).toContain("throw apiCallError(options.step, result.status, result.body)")
+  it("maps a failed console step: frozen layer -> notice, anything else -> error", () => {
+    expect(
+      stepFailureOutcome("Read ops", apiCallError("Read ops", 404, DISABLED_BODY))
+    ).toEqual({ kind: "notice", message: "Read ops: disabled (LEGACY_GOVERNANCE_CHAINS is off)" })
+    expect(stepFailureOutcome("Seed matter", new Error("unknown actor"))).toEqual({
+      kind: "error",
+      message: "unknown actor",
+    })
+    expect(stepFailureOutcome("Seed matter", "thrown string")).toEqual({
+      kind: "error",
+      message: "Seed matter failed",
+    })
   })
 })

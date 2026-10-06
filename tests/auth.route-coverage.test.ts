@@ -76,7 +76,7 @@ describe("app/api routes reject unauthenticated calls (behavioural)", () => {
 
   for (const file of files) {
     it(`${file}: every exported method returns 401 without a token`, { timeout: 120_000 }, async () => {
-      const mod = (await import(`@/${file.replace(/\.tsx?$/, "")}`)) as Record<string, unknown>
+      const mod = (await import(/* @vite-ignore */ path.join(root, file))) as Record<string, unknown>
       const exported = METHODS.filter((m) => typeof mod[m] === "function")
       expect(exported.length).toBeGreaterThan(0)
       for (const method of exported) {

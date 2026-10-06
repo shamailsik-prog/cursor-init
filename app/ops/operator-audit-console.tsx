@@ -9,9 +9,9 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
-  FeatureDisabledError,
   apiCallError,
   runApiCallAllowingStatuses as runApiCallAllowingStatusesImpl,
+  stepFailureOutcome,
   type ApiCallResult,
 } from "@/app/ops/api-call-helpers"
 
@@ -191,8 +191,9 @@ export function OperatorAuditConsole() {
       setNotice(name)
     } catch (err) {
       // A frozen layer (Erratum E-24) is a disabled state, not a failure.
-      if (err instanceof FeatureDisabledError) setNotice(err.message)
-      else setError(err instanceof Error ? err.message : `${name} failed`)
+      const outcome = stepFailureOutcome(name, err)
+      if (outcome.kind === "notice") setNotice(outcome.message)
+      else setError(outcome.message)
     } finally {
       setBusy(false)
     }

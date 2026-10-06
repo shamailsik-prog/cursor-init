@@ -10,7 +10,7 @@
  * mismatched caller gets the same 401/403 as anywhere else and cannot use the
  * 404 to probe which layers exist. An authenticated call into a disabled layer
  * gets 404 `{ error: "feature_disabled", flag }` (no data, no handler code run)
- * and is recorded in the audit log as `feature_disabled`. Nothing is deleted:
+ * and is recorded in the audit log as `feature_disabled` (deduped, see below). Nothing is deleted:
  * the handler and its data are untouched and come back when the flag is on.
  */
 import type { HandlerSession, RouteHandler } from "@/platform/http/withSession"
@@ -21,7 +21,34 @@ import { featureDisabledResponse, isFeatureEnabled, type FeatureFlag } from "@/p
 /** Says whether a request belongs to the core that stays live while the flag is off. */
 export type CoreRequestPredicate = (request: Request) => boolean | Promise<boolean>
 
+/**
+ * Refusal audit dedupe: at most one `feature_disabled` row per (firm, user, method + path, flag)
+ * per REFUSAL_AUDIT_TTL_MS, so a client polling a frozen route cannot grow the audit log without
+ * bound. In-memory and per process (a cold start or another instance may write one more row);
+ * expired keys are swept on insert once the map passes REFUSAL_AUDIT_SWEEP_AT entries.
+ */
+const REFUSAL_AUDIT_TTL_MS = 60_000
+const REFUSAL_AUDIT_SWEEP_AT = 1_000
+const recentRefusals = new Map<string, number>()
+
+function shouldAuditRefusal(key: string, now: number): boolean {
+  const until = recentRefusals.get(key)
+  if (until !== undefined && until > now) return false
+  if (recentRefusals.size >= REFUSAL_AUDIT_SWEEP_AT) {
+    for (const [k, expiry] of recentRefusals) if (expiry <= now) recentRefusals.delete(k)
+  }
+  recentRefusals.set(key, now + REFUSAL_AUDIT_TTL_MS)
+  return true
+}
+
+export function resetRefusalAuditDedupeForTests(): void {
+  recentRefusals.clear()
+}
+
 async function auditRefusal(request: Request, session: HandlerSession, flag: FeatureFlag) {
+  const target = `${request.method.toUpperCase()} ${new URL(request.url).pathname}`
+  const now = Date.now()
+  if (!shouldAuditRefusal(`${session.firmId}|${session.userId}|${target}|${flag}`, now)) return
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   await repos.audit.append({
@@ -29,10 +56,10 @@ async function auditRefusal(request: Request, session: HandlerSession, flag: Fea
     firmId: session.firmId,
     action: "feature_disabled",
     actorId: session.userId,
-    target: `${request.method.toUpperCase()} ${new URL(request.url).pathname}`,
+    target,
     classification: "internal",
     reason: flag,
-    at: Date.now(),
+    at: now,
   })
 }
 

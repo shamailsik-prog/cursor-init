@@ -9,7 +9,9 @@ import {
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import { composeDraft } from "@/services/d4-1/drafts"
-import { getDocumentTypes } from "@/lib/foundation-data"
+import { readFileSync } from "node:fs"
+import { FEATURE_FLAGS, getDocumentTypes } from "@/lib/foundation-data"
+import { resetRefusalAuditDedupeForTests } from "@/platform/flags/routeGate"
 
 const FLAG_ENV = "SIKANDER_FLAG_LEGACY_GOVERNANCE_CHAINS"
 const DISABLED = { error: "feature_disabled", flag: "LEGACY_GOVERNANCE_CHAINS" }
@@ -81,7 +83,8 @@ async function createAndApprovePackage() {
     reason: "Partner approved for court filing",
   })
   expect(decided.status).toBe(200)
-  return { matterId, packageId }
+  const decision = (await decided.json()) as { result: Record<string, unknown> }
+  return { matterId, packageId, decision: decision.result }
 }
 
 beforeEach(() => {
@@ -90,8 +93,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllEnvs()
   resetRuntimeStoreForTests()
+  resetRefusalAuditDedupeForTests()
 })
 
 describe("feature flag registry", () => {
@@ -108,6 +113,33 @@ describe("feature flag registry", () => {
     expect(isFeatureEnabled("LEGACY_GOVERNANCE_CHAINS")).toBe(false)
     vi.stubEnv(FLAG_ENV, "yes-please")
     expect(isFeatureEnabled("LEGACY_GOVERNANCE_CHAINS")).toBe(false)
+  })
+
+  it("parses the override case-insensitively and fails closed on anything else", () => {
+    for (const on of ["TRUE", " true "]) {
+      vi.stubEnv(FLAG_ENV, on)
+      expect(isFeatureEnabled("LEGACY_GOVERNANCE_CHAINS"), JSON.stringify(on)).toBe(true)
+    }
+    for (const off of ["1", ""]) {
+      vi.stubEnv(FLAG_ENV, off)
+      expect(isFeatureEnabled("LEGACY_GOVERNANCE_CHAINS"), JSON.stringify(off)).toBe(false)
+    }
+  })
+
+  it("agrees with the feature_flags seed DDL and foundation-data on name and default", () => {
+    const ddl = readFileSync("postgres/ddl/002_platform.sql", "utf8")
+    const seeded = new Map(
+      [...ddl.matchAll(/\('([A-Z0-9_]+)','[^']*',(true|false),'[^']*'\)/g)].map((m) => [
+        m[1],
+        m[2] === "true",
+      ])
+    )
+    expect(seeded.size).toBeGreaterThan(0)
+    const listed = new Map<string, boolean>(FEATURE_FLAGS.map((f) => [f.flag, f.defaultEnabled]))
+    for (const [flag, entry] of Object.entries(FLAG_REGISTRY)) {
+      expect(seeded.get(flag), `${flag} in 002_platform.sql`).toBe(entry.defaultEnabled)
+      expect(listed.get(flag), `${flag} in lib/foundation-data.ts`).toBe(entry.defaultEnabled)
+    }
   })
 
   it("documents every flag with owner, spec reference and default", () => {
@@ -222,6 +254,38 @@ describe("LEGACY_GOVERNANCE_CHAINS off (default)", () => {
     })
   })
 
+  it("collapses repeated refusals to one audit row per user, route and flag per minute", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-10-06T10:00:00Z"))
+    const store = getRuntimeStore()
+    const before = store.audit.length
+    const refused = () =>
+      get(opsGet, "/api/d2/ops-reporting", { actorId: "partner_a", view: "alert_waiver_expiry_disputes" })
+    expect((await refused()).status).toBe(404)
+    expect((await refused()).status).toBe(404)
+    // A different route is a different key.
+    const filings = await get(filingsGet, "/api/d4/filings", { userId: "partner_a", view: "dispatch" })
+    expect(filings.status).toBe(404)
+    expect(store.audit.slice(before).map((row) => row.target)).toEqual([
+      "GET /api/d2/ops-reporting",
+      "GET /api/d4/filings",
+    ])
+    vi.setSystemTime(new Date("2026-10-06T10:01:00.001Z"))
+    expect((await refused()).status).toBe(404)
+    expect(store.audit.slice(before)).toHaveLength(3)
+  })
+
+  it("approval stops at filing readiness: no dispatch-queue or annexure rows or fields", async () => {
+    const { packageId, decision } = await createAndApprovePackage()
+    const store = getRuntimeStore()
+    expect((decision.filingPackage as { status: string }).status).toBe("approved")
+    expect((decision.packetArtifact as { readiness: string }).readiness).toBe("ready")
+    expect(decision).not.toHaveProperty("dispatchQueue")
+    expect(decision).not.toHaveProperty("annexure")
+    expect([...store.filingDispatchQueue.values()].some((r) => r.packageId === packageId)).toBe(false)
+    expect([...store.filingAnnexures.values()].some((r) => r.packageId === packageId)).toBe(false)
+  })
+
   it("still lets the route's own validation answer a POST with no action", async () => {
     const response = await post(filingsPost, "/api/d4/filings", { actorId: "partner_a" })
     expect(response.status).toBe(400)
@@ -229,6 +293,16 @@ describe("LEGACY_GOVERNANCE_CHAINS off (default)", () => {
 })
 
 describe("LEGACY_GOVERNANCE_CHAINS on", () => {
+  it("approval still seeds the dispatch queue and annexure and returns them", async () => {
+    vi.stubEnv(FLAG_ENV, "true")
+    const { packageId, decision } = await createAndApprovePackage()
+    const store = getRuntimeStore()
+    expect(decision.dispatchQueue).toMatchObject({ packageId })
+    expect(decision.annexure).toMatchObject({ packageId })
+    expect([...store.filingDispatchQueue.values()].some((r) => r.packageId === packageId)).toBe(true)
+    expect([...store.filingAnnexures.values()].some((r) => r.packageId === packageId)).toBe(true)
+  })
+
   it("restores the frozen views and actions", async () => {
     vi.stubEnv(FLAG_ENV, "true")
     const { packageId } = await createAndApprovePackage()

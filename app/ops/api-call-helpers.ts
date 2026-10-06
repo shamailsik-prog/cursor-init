@@ -54,6 +54,15 @@ export function apiCallError(step: string, status: number, body: unknown): Error
   return new Error(formatApiErrorMessage(step, status, body))
 }
 
+/** How the /ops console reports a failed step: a frozen layer is a disabled notice, not an error. */
+export function stepFailureOutcome(
+  step: string,
+  err: unknown
+): { kind: "notice" | "error"; message: string } {
+  if (err instanceof FeatureDisabledError) return { kind: "notice", message: err.message }
+  return { kind: "error", message: err instanceof Error ? err.message : `${step} failed` }
+}
+
 export async function runApiCallAllowingStatuses(
   options: StatusTolerantApiCallOptions
 ): Promise<ApiCallResult> {

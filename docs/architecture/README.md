@@ -49,14 +49,15 @@ In practice, for this repository:
 
 Code with no basis in the set is frozen behind a feature flag rather than deleted (Layer 18 §9.1 rule 4; proposed
 Erratum E-24). Frozen means the routes answer `404 { "error": "feature_disabled", "flag": "<FLAG>" }` while the flag
-is off, after authentication (an anonymous caller still gets 401) and with a `feature_disabled` audit entry; the
+is off, after authentication (an anonymous caller still gets 401) and with a `feature_disabled` audit entry (at most
+one per user, route and flag per minute); the
 handlers, collections and stored records are untouched and come back when the flag is turned on. The registry,
 with owner, spec reference and default for each flag, is `FLAG_REGISTRY` in `platform/flags/featureFlags.ts`
-(mirrored in `postgres/ddl/002_platform.sql`); the route gate is `platform/flags/routeGate.ts`.
+(a subset of the `feature_flags` seed in `postgres/ddl/002_platform.sql`, checked by test); the route gate is `platform/flags/routeGate.ts`.
 
 | Flag | Default | Freezes | Stays live |
 |---|---|---|---|
-| `LEGACY_GOVERNANCE_CHAINS` | off | Every view and action of `/api/d2/ops-reporting` (the governance / attestation / adjudication / seal-verification / lattice chains). Every view and action of `/api/d4/filings` outside the core: dispatch queue, annexures, submission receipts / reconciliation / exceptions, transport execution, escalation, closure and settlement chains. | `/api/d4/filings` POST `create_package` (citation gate, `partnerOverride`) and `decide_package` (partner approval), and GET of the package list (no `view`, or `view=packages`). |
+| `LEGACY_GOVERNANCE_CHAINS` | off | Every view and action of `/api/d2/ops-reporting` (the governance / attestation / adjudication / seal-verification / lattice chains). Every view and action of `/api/d4/filings` outside the core: dispatch queue, annexures, submission receipts / reconciliation / exceptions, transport execution, escalation, closure and settlement chains. | `/api/d4/filings` POST `create_package` (citation gate, `partnerOverride`) and `decide_package` (partner approval; with the flag off an approval stops at filing readiness and writes no dispatch-queue or annexure row), and GET of the package list (no `view`, or `view=packages`). |
 
 Re-enabling:
 
