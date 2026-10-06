@@ -48,19 +48,26 @@ export function resetRefusalAuditDedupeForTests(): void {
 async function auditRefusal(request: Request, session: HandlerSession, flag: FeatureFlag) {
   const target = `${request.method.toUpperCase()} ${new URL(request.url).pathname}`
   const now = Date.now()
-  if (!shouldAuditRefusal(`${session.firmId}|${session.userId}|${target}|${flag}`, now)) return
-  const store = getRuntimeStore()
-  const repos = await getRuntimeRepositories(store)
-  await repos.audit.append({
-    id: store.id("aud"),
-    firmId: session.firmId,
-    action: "feature_disabled",
-    actorId: session.userId,
-    target,
-    classification: "internal",
-    reason: flag,
-    at: now,
-  })
+  const key = `${session.firmId}|${session.userId}|${target}|${flag}`
+  if (!shouldAuditRefusal(key, now)) return
+  try {
+    const store = getRuntimeStore()
+    const repos = await getRuntimeRepositories(store)
+    await repos.audit.append({
+      id: store.id("aud"),
+      firmId: session.firmId,
+      action: "feature_disabled",
+      actorId: session.userId,
+      target,
+      classification: "internal",
+      reason: flag,
+      at: now,
+    })
+  } catch (error) {
+    // The minute was claimed before the write; release it so the next refusal is audited.
+    recentRefusals.delete(key)
+    throw error
+  }
 }
 
 export function gateByFlag(

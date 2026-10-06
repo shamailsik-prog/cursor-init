@@ -275,6 +275,22 @@ describe("LEGACY_GOVERNANCE_CHAINS off (default)", () => {
     expect(store.audit.slice(before)).toHaveLength(3)
   })
 
+  it("does not suppress the next refusal's audit row when the audit write fails", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-10-06T11:00:00Z"))
+    const store = getRuntimeStore()
+    const before = store.audit.length
+    const refused = () =>
+      get(opsGet, "/api/d2/ops-reporting", { actorId: "partner_a", view: "alert_waiver_expiry_disputes" })
+    // An unknown persistence mode makes the repository lookup, and so the audit write, fail.
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "broken-for-test")
+    expect((await refused()).status).toBe(500)
+    expect(store.audit.slice(before)).toHaveLength(0)
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "memory")
+    expect((await refused()).status).toBe(404)
+    expect(store.audit.slice(before).map((row) => row.action)).toEqual(["feature_disabled"])
+  })
+
   it("approval stops at filing readiness: no dispatch-queue or annexure rows or fields", async () => {
     const { packageId, decision } = await createAndApprovePackage()
     const store = getRuntimeStore()
