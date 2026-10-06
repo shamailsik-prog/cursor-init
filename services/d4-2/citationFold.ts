@@ -21,11 +21,19 @@
 export type FoldedText = { text: string; taint: boolean[] }
 
 // Generic markup, matched on already-folded text: an HTML comment of any length (unterminated
-// = to the end, as a browser hides it), any short "<…>" tag (whatever junk sits inside), any
+// = to the end, as a browser hides it), any short "<…>" tag that opens like one in the HTML
+// tokenizer ("<" + letter, "/", "!" or "?" — whatever junk sits inside; a bare "<" in prose
+// such as "< 5%" never opens a tag, so it can never pair with a later ">" — fuzz, R3), any
 // "&…;" character-reference-like run, numeric references without the ";" and the legacy named
 // references a browser also decodes without it ("&#83CMR", "&nbspSCMR"), and Markdown emphasis.
 const MARKUP =
-  /<!--[\s\S]*?(?:-->|$)|<[^<>]{1,80}>|&[#A-Za-z0-9 -]{1,14};|&#[0-9]{1,7}(?![0-9])|&#[xX][0-9A-Fa-f]{1,6}(?![0-9A-Fa-f])|&(?:nbsp|amp|lt|gt|quot|shy)|[*_`~]/g
+  /<!--[\s\S]*?(?:-->|$)|<[A-Za-z!/?][^>]{0,79}>|&[#A-Za-z0-9 -]{1,14};|&#[0-9]{1,7}(?![0-9])|&#[xX][0-9A-Fa-f]{1,6}(?![0-9A-Fa-f])|&(?:nbsp|amp|lt|gt|quot|shy)|[*_`~]/g
+// The "lenient" reading (fuzz, R3 item 10) also strips "<…>" runs a browser would show as text
+// ("<-span …>", "< I>") and "&…;" runs with junk inside ("&n<bsp;") — junk that can still hide
+// a reporter from the other two readings. (The strict tag allows "<" inside, as the HTML
+// tokenizer does: "</span<>" is one end tag.)
+const MARKUP_LENIENT =
+  /<!--[\s\S]*?(?:-->|$)|<[^<>]{1,80}>|&[^\s&;]{1,14};|&#[0-9]{1,7}(?![0-9])|&#[xX][0-9A-Fa-f]{1,6}(?![0-9A-Fa-f])|&(?:nbsp|amp|lt|gt|quot|shy)|[*_`~]/g
 
 const NAMED_ENTITIES: Record<string, string> = {
   nbsp: " ",
@@ -87,6 +95,15 @@ function foldChars(f: Folding, segment: string): void {
     f.pending = false
   }
   for (const original of segment) {
+    // A blank other than U+0020 (NBSP, em space, tab, …) folds to " " but is marked, so a
+    // ", 1240" pinpoint needs a real space (fuzz, R3 item 10). Marking a blank never affects
+    // digitRunTainted, which only looks between two digits.
+    const ocp = original.codePointAt(0) ?? 0
+    if (original !== " " && (BLANKS.has(ocp) || RE_SPACE.test(original))) {
+      f.pending = true
+      push(" ")
+      continue
+    }
     for (const ch of original.normalize("NFKD")) {
       const cp = ch.codePointAt(0) ?? 0
       if (ch === "\n" || ch === "\r") {
@@ -117,7 +134,8 @@ function foldChars(f: Folding, segment: string): void {
 /** One markup-removal pass over code-point arrays; removals taint the next character. */
 function stripMarkupOnce(
   chars: string[],
-  marks: boolean[]
+  marks: boolean[],
+  pattern: RegExp = MARKUP
 ): { out: string[]; taint: boolean[]; changed: boolean } {
   const text = chars.join("")
   // UTF-16 offset -> code point index
@@ -136,7 +154,7 @@ function stripMarkupOnce(
       f.pending = false
     }
   }
-  for (const m of text.matchAll(MARKUP)) {
+  for (const m of text.matchAll(pattern)) {
     const at = index[m.index ?? 0] ?? 0
     const token = m[0]
     const end = index[(m.index ?? 0) + token.length - 1] ?? at
@@ -174,8 +192,11 @@ export type FoldOptions = {
    * Review R3 N8: bodies are plain text, so the gate scans *both* and unions the findings —
    * text between a "<" and a ">" is never deleted from analysis.
    */
-  markup?: "strip" | "keep"
+  markup?: "strip" | "keep" | "lenient"
 }
+
+/** The readings the gate unions (R3 N8 + fuzz): plain text, HTML-accurate strip, lenient strip. */
+export const DRAFT_READINGS: ReadonlyArray<FoldOptions> = [{ markup: "keep" }, { markup: "strip" }, { markup: "lenient" }]
 
 export function foldDraftText(raw: string, options: FoldOptions = {}): FoldedText {
   // Phase 1: fold every character first, so invisibles, marks, odd dashes or blanks inside
@@ -190,7 +211,7 @@ export function foldDraftText(raw: string, options: FoldOptions = {}): FoldedTex
   let current = { out: first.out, taint: first.taint }
   // every pass removes at least one token, so this terminates; the cap only bounds work
   for (let pass = 0; options.markup !== "keep" && pass < 64; pass += 1) {
-    const next = stripMarkupOnce(current.out, current.taint)
+    const next = stripMarkupOnce(current.out, current.taint, options.markup === "lenient" ? MARKUP_LENIENT : MARKUP)
     if (!next.changed) break
     current = next
   }

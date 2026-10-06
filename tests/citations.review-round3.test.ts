@@ -421,3 +421,154 @@ describe("review round 3 gate3 probe: compose never accepts an evasion body", ()
     expect(checkDraftCharset("see 2019 SCMR ‮4321‬").ok).toBe(false)
   })
 })
+
+// Found by the round-3 fuzz extension (item 10).
+describe("fuzz round 3: closing punctuation glued between digits; stray punctuation inside an Urdu reporter", () => {
+  it.each(["see 2019 SCMR 12>34", "see <- 2018 CLC 7>89", "see 2019 SCMR 12)34", "see 2019 SCMR 12;34", "see 2019 SCMR 12!34", "see 2018 CLC 7\t\u201989", "see 2019 SCMR 12 ,34", "see 2019 SCMR 12 .34"])(
+    "%j never resolves to a shorter page",
+    (text) => {
+      const store = newStore()
+      seedJudgment(store, "j-12", "Twelve", "full", "2019 SCMR 12")
+      seedJudgment(store, "j-7", "Seven", "full", "2018 CLC 7")
+      const res = verifyCitations(store, extractCitations(text))
+      expect(res.status).toBe("UNVERIFIED")
+      expect(res.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+    }
+  )
+  it("'2019 SCMR 1234) and' and '(2019 SCMR 1234)' still read page 1234", () => {
+    expect(extractCitations("(2019 SCMR 1234) and")).toEqual(["2019 SCMR 1234"])
+  })
+  it.each([
+    "۲ ۰۱۹‒ ایس سی ایم >آر ۱۲۳۴",
+    "۲۰۱۹ ایس *سی* ایم آر ۱۲۳۴",
+    "۲۰۱۹ ایس<سی ایم آر ۱۲۳۴",
+    // a dash or blank inside a letter name
+    "2019⸻ای‑س سی ایم\r\nآر 1234",
+    "پ⹀ی ایل\nڈی ۲۰۱۰ Lahore ۵",
+    "۲۰۱۹⸺پی سی ―آر ایل ج ے ۴۴",
+  ])("Urdu reporter with stray punctuation between letter names %# is a suspect", (text) => {
+    const refs = extractCitations(text)
+    expect(refs.length, JSON.stringify(refs)).toBeGreaterThan(0)
+    expect(refs.every(isSuspect)).toBe(true)
+  })
+})
+
+describe("fuzz round 3 (seed sweep): thousands marks before junk or odd blanks, angles before digits, Common-script letter tokens", () => {
+  it.each([
+    "see 2019 SCMR 123’<b>⸻4",
+    "see 2019 PCrLJ 4,—4",
+    "see 2018 CLC 7.⹝8,9",
+    "see 2018 CLC\n7, &nbsp;89",
+    "see 2018 CLC 7,  89",
+    "see 2019 SCMR 12’  34",
+    "see 2019 SCmR 1’\t234",
+    "see 2019 SCMR  1'   2&nbsp;34",
+    "see 2018\r\nClC 7 <89",
+    "see 2019 scmR 1> 234a < b",
+  ])("%j never resolves to a shorter page", (text) => {
+    const store = newStore()
+    for (const [id, cite] of [["a", "2019 SCMR 1"], ["b", "2019 SCMR 12"], ["c", "2019 SCMR 123"], ["d", "2019 PCrLJ 4"], ["e", "2018 CLC 7"]] as const) {
+      seedJudgment(store, id, cite, "full", cite)
+    }
+    const res = verifyCitations(store, extractCitations(text))
+    expect(res.status).toBe("UNVERIFIED")
+    expect(res.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+  })
+  it("ordinary forms still read exactly: pinpoint, citation lists, a numbered next paragraph", () => {
+    expect(extractCitations("2019 SCMR 1234, 1240")).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations("2019 SCMR 1234; 2020 SCMR 56")).toEqual(["2019 SCMR 1234", "2020 SCMR 56"])
+    expect(extractCitations("as held in 2019 SCMR 1234.\n\n5. The next issue")).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations("(2019 SCMR 1234) 5 cases")).toEqual(["2019 SCMR 1234"])
+  })
+  it("a token of Common-script letters (math alphanumerics) with a confusable symbol is refused", () => {
+    expect(checkDraftCharset("Relying on 201 8 \u{1d4d2}\u{1d473}\u{1f74c} 789").ok).toBe(false)
+  })
+})
+
+describe("fuzz round 3 (wide sweep): bare angles never pair into a fake tag; marks before markup; exotic pinpoint blanks", () => {
+  const seeded = () => {
+    const store = newStore()
+    for (const [id, cite] of [["a", "2019 SCMR 1"], ["b", "2019 SCMR 12"], ["c", "2019 SCMR 123"], ["d", "2019 PCrLJ 4"], ["e", "2018 CLC 7"]] as const) {
+      seedJudgment(store, id, cite, "full", cite)
+    }
+    seedJudgment(store, "j-larger", "Larger", "larger", "2025 SCMR 999")
+    for (const [id, cite] of [["o1", "2019 SCMR 1234"], ["o2", "2019 PCrLJ 44"], ["o3", "2018 CLC 789"]] as const) {
+      seedJudgment(store, id, cite, "single", cite)
+      seedTreatment(store, "j-larger", id, "overruled", "larger")
+    }
+    return store
+  }
+  it.each([
+    'where loss < 5% 2019 SCM<span class="c">R >1234 x',
+    '-> 20<19 PCr<span class="c">LJ **44** and > 5% x',
+    '2٬01<8 <sp〰an class="c">CLC</span> 789 c > d x',
+    "<- 2019 S<i>CMR 1234 c > d.",
+    "see 2019 SCMR 1>–2 34",
+    "see 2019 PCrlj 4>٬4",
+    "see 2019 scmR 123>﹣4",
+    "see 2019 SCMR 1>'234.",
+    "see 2019\nSCMR\r\n123\n>4.",
+    'see 2019 PCrLJ 4,<span class="c">4',
+    'see 2018 CLC 7,<span class="c">89',
+    "see 2019 SCMR 1,<i>234-",
+    "see 2019\nSCMR\n1.&nbsp;234",
+    "see 2018 CLC\n7, 89",
+    "see 2019 PCrLJ 4, 4",
+    // a dash or blank right after "<" (not a tag to a browser, junk that hides the reporter)
+    'see 2018 <-sPAn CLAsS="C">Clc</spAN> 7\'89',
+    "see 2019 <\u2005 I>Scmr</I> 123-4",
+  ])("%j is never OK and never VERIFIED", (text) => {
+    const check = checkDraftCharset(text)
+    if (!check.ok) return
+    const res = verifyCitations(seeded(), extractCitations(check.normalised))
+    expect(res.status).not.toBe("OK")
+    expect(res.findings.some((f) => f.status === "VERIFIED"), JSON.stringify(res)).toBe(false)
+  })
+  it("a math-alphanumeric Greek letter (compatibility form of a disallowed script) is refused; µ is allowed", () => {
+    expect(checkDraftCharset("２0<19 _\u{1d6b8}_ CrLJ \u{1fbf4}4").ok).toBe(false)
+    expect(checkDraftCharset("a dose of 5 µg per day").ok).toBe(true)
+  })
+  it("prose angles and real pinpoints are unaffected", () => {
+    expect(extractCitations("where loss < 5% the rule in 2019 SCMR 1234 applies; where > 5% it does not")).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations("2019 SCMR 1234, 1240")).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations("2019 <b>SCMR</b> 1234")).toContain("2019 SCMR 1234")
+  })
+})
+
+describe("ellipsis after a citation stays ordinary prose", () => {
+  it("'2019 SCMR 1234 ... 2019' and '2019 SCMR 1234... 5 cases' read page 1234", () => {
+    expect(extractCitations("2019 SCMR 1234 ... 2019 was a year")).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations("2019 SCMR 1234... 5 cases")).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations("2019 SCMR 1234.  5 cases")).toEqual(["2019 SCMR 1234"])
+  })
+})
+
+describe("fuzz round 3 (41-seed sweep): single-letter confusables are not orthographic; exotic blank after a period", () => {
+  it("thorn standing in for P is refused; multi-letter prototypes (Æ) stay allowed", () => {
+    expect(checkDraftCharset("Relying on <b>2</b> 019 þC rlj 44").ok).toBe(false)
+    expect(checkDraftCharset("Æsop and Café mañana").ok).toBe(true)
+  })
+  it("'12.\\u200a34' never resolves to page 12", () => {
+    const store = newStore()
+    seedJudgment(store, "b", "Twelve", "full", "2019 SCMR 12")
+    const res = verifyCitations(store, extractCitations("see 2019 SCMR﹣ 12. 34."))
+    expect(res.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+    expect(res.status).not.toBe("OK")
+  })
+})
+
+describe("fuzz round 3 (fresh seeds): malformed end tags and junk inside entity-like runs", () => {
+  const seeded = () => {
+    const store = newStore()
+    seedJudgment(store, "j-larger", "Larger", "larger", "2025 SCMR 999")
+    seedJudgment(store, "o3", "2018 CLC 789", "single", "2018 CLC 789")
+    seedTreatment(store, "j-larger", "o3", "overruled", "larger")
+    seedJudgment(store, "e", "2018 CLC 78", "full", "2018 CLC 78")
+    return store
+  }
+  it.each(['see 2018 <span class="c">cLC</span<> 78\n9', "see `2018` CL&n<bsp;C 789"])("%j is never OK and never VERIFIED", (text) => {
+    const res = verifyCitations(seeded(), extractCitations(text))
+    expect(res.status).not.toBe("OK")
+    expect(res.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+  })
+})

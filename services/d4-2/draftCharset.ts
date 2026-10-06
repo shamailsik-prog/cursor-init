@@ -78,9 +78,20 @@ const RE_DI = /^\p{Default_Ignorable_Code_Point}$/u
 const RE_ARABIC_LETTER = /^(?=\p{L})\p{Script=Arabic}$/u
 const RE_LATIN_LETTER = /^(?=\p{L})\p{Script=Latin}$/u
 const RE_LETTER = /^\p{L}$/u
+/**
+ * Latin letters, plus letters of other scripts that render as Latin letters and decompose to
+ * them (math alphanumerics such as U+1D4D2, Common script): a token of those is a Latin token
+ * for the confusable rules (fuzz, R3 item 10: "\u{1d4d2}\u{1d473}\u{1f74c}" for "CLC").
+ */
+function isLatinLike(ch: string): boolean {
+  if (RE_LATIN_LETTER.test(ch) || COMPAT_ALLOWED.has(ch)) return true
+  return RE_LETTER.test(ch) && /^[A-Za-z]+$/.test(ch.normalize("NFKD").replace(RE_MARK, ""))
+}
 const RE_MARK = /\p{M}/gu
 // Orthographic Latin letters that do not decompose to ASCII but are ordinary in names/text.
 const ORTHOGRAPHIC = new Set([..."ßẞæÆœŒøØđĐðÐþÞłŁŋŊħĦŧŦ"])
+// Common-script compatibility letters that are ordinary in drafts (MICRO SIGN in "5 µg").
+const COMPAT_ALLOWED = new Set(["\u00b5"])
 
 export function codePointLabel(cp: number): string {
   return `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`
@@ -92,8 +103,10 @@ function latinLetterProblem(ch: string): string | null {
   if (cp < 0x80) return null
   // ordinary orthographic letters (Æ, ß, ø, …) are allowed even where UTS #39 lists a
   // multi-letter prototype ("AE"); none of them can stand in for a reporter-token letter
-  if (ORTHOGRAPHIC.has(ch)) return null
   const mapped = CONFUSABLE[cp.toString(16).toUpperCase().padStart(4, "0")]
+  // ...but not one UTS #39 maps onto a single ASCII letter (þ -> "p"): that can stand in for a
+  // reporter letter (fuzz, R3 item 10)
+  if (ORTHOGRAPHIC.has(ch) && (mapped === undefined || mapped.length > 1)) return null
   if (mapped !== undefined) return `confusable with "${mapped}"`
   const base = ch.normalize("NFKD").replace(RE_MARK, "")
   // decomposes to ASCII letters (é -> e, ﬁ -> fi): folds to the same text
@@ -134,6 +147,11 @@ export function checkDraftCharset(body: string): CharsetCheck {
     else if (cat === "Cs") flag(i, "surrogate")
     else if (cat === "Cn") flag(i, "unassigned code point")
     else if (!RE_ALLOWED_SCRIPT.test(ch)) flag(i, "script not allowed (Latin, Arabic, Common, Inherited only)")
+    else if (RE_LETTER.test(ch) && !RE_LATIN_LETTER.test(ch) && !RE_ARABIC_LETTER.test(ch) && !COMPAT_ALLOWED.has(ch)
+      && [...ch.normalize("NFKD")].some((d) => RE_LETTER.test(d) && !RE_ALLOWED_SCRIPT.test(d))) {
+      // a Common-script compatibility letter of a disallowed script (math Greek U+1D6B8 "P")
+      flag(i, "compatibility form of a letter in a disallowed script")
+    }
   }
 
   // Token rules (whitespace-separated): mixed Latin/non-Latin letters; Latin confusables.
@@ -146,18 +164,18 @@ export function checkDraftCharset(body: string): CharsetCheck {
       let latin = false
       let otherLetter = false
       for (const t of token) {
-        if (RE_LATIN_LETTER.test(t)) latin = true
+        if (isLatinLike(t)) latin = true
         else if (RE_LETTER.test(t)) otherLetter = true
       }
       if (latin && otherLetter) {
         token.forEach((t, k) => {
-          if (RE_LETTER.test(t) && !RE_LATIN_LETTER.test(t)) flag(start + k, "token mixes Latin and non-Latin letters")
+          if (RE_LETTER.test(t) && !isLatinLike(t)) flag(start + k, "token mixes Latin and non-Latin letters")
         })
       }
       if (latin) {
         token.forEach((t, k) => {
           const cp = t.codePointAt(0) ?? 0
-          if (cp < 0x80) return
+          if (cp < 0x80 || COMPAT_ALLOWED.has(t)) return
           // Common-script look-alikes inside a Latin token (e.g. "∣SCMR∣") count too.
           const problem = RE_LATIN_LETTER.test(t)
             ? latinLetterProblem(t)

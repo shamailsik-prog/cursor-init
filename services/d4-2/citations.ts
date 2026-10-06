@@ -29,7 +29,7 @@
  */
 
 /** Prefix for a suspected authority the strict extractor could not read. Never resolvable. */
-import { digitRunTainted, foldDraftText, type FoldedText } from "@/services/d4-2/citationFold"
+import { DRAFT_READINGS, digitRunTainted, foldDraftText, type FoldedText } from "@/services/d4-2/citationFold"
 
 export const UNRECOGNISED_PREFIX = "UNRECOGNISED: "
 
@@ -188,8 +188,13 @@ function ambiguousTail(rest: string): boolean {
   // after a run of dashes/slashes ("12--34", "1/2"); a thousands-style separator — , . ' or a
   // right single quote — directly followed by a digit ("1,234", "1.234", "1'234"; the ", 1240"
   // pinpoint with a space stays a pinpoint); and any other glued character that is not a
-  // closing punctuation mark ("1<b>234", "1#234", "1\u066c234").
-  return /^(?:[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|[,.'\u2019]\d|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
+  // closing punctuation mark ("1<b>234", "1#234", "1\u066c234"); and a closing mark glued
+  // between the page and more letters/digits ("12>34", "12)34", "12;34"), and a thousands-style
+  // mark after blanks ("7\t\u201989", "12 ,34"); a thousands-style mark then junk or odd blanks
+  // on the same line before digits ("4,\u20144", "123\u2019<b>-4", "7,  89" — only ", 1240" with
+  // one space is a pinpoint, and "." may be followed by plain spaces or an ellipsis); "<" / ">" before digits
+  // ("7 <89", "1> 234") — fuzz, R3 item 10.
+  return /^(?:[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}\n]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}\n]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
 }
 
 function trailingParen(rest: string): { length: number; key: string } | null {
@@ -199,11 +204,12 @@ function trailingParen(rest: string): { length: number; key: string } | null {
 }
 
 function finishHit(
-  text: string,
+  folded: FoldedText,
   start: number,
   end: number,
   build: (trailing: string | null) => string | null
 ): StrictHit | null {
+  const text = folded.text
   let stop = end
   let trailingKey: string | null = null
   const paren = trailingParen(text.slice(end))
@@ -212,6 +218,11 @@ function finishHit(
     trailingKey = paren.key
   }
   if (ambiguousTail(text.slice(stop))) return null
+  // ", 1240" is a pinpoint only with a real U+0020 space: a removed tag/entity or an exotic
+  // blank there is ambiguous (fuzz, R3 item 10: "7,<span>89", "4,\u202f4").
+  // Likewise ". 34": the blanks after a period must be real spaces ("12.\u200a34").
+  const sep = /^[,.]( +)\d/u.exec(text.slice(stop))
+  if (sep?.[1] && folded.taint.slice(stop + 1, stop + 1 + sep[1].length).some(Boolean)) return null
   const citation = build(trailingKey)
   return citation ? { start, end: stop, citation } : null
 }
@@ -245,7 +256,7 @@ function strictHits(folded: FoldedText, ambiguous: Array<Span & { raw: string }>
     const court = canonicalCourt(rawCourt)
     if (!reporter || !court) continue
     const start = m.index ?? 0
-    const hit = finishHit(text, start, start + whole.length, (trailing) =>
+    const hit = finishHit(folded, start, start + whole.length, (trailing) =>
       keyed(`${reporter} ${year} ${court}`, page, sub ? canonicalParen(sub) : null, trailing)
     )
     if (hit) hits.push(hit)
@@ -258,7 +269,7 @@ function strictHits(folded: FoldedText, ambiguous: Array<Span & { raw: string }>
     const court = rawCourt ? canonicalCourt(rawCourt) : null
     if (rawCourt && (!court || !SECTIONED.has(reporter))) continue
     const start = m.index ?? 0
-    const hit = finishHit(text, start, start + whole.length, (trailing) => {
+    const hit = finishHit(folded, start, start + whole.length, (trailing) => {
       if (court) {
         // "2015 PLJ SC 100" is the reporter-first "PLJ 2015 SC 100".
         return keyed(`${reporter} ${year} ${court}`, page, sub ? canonicalParen(sub) : null, trailing)
@@ -421,7 +432,11 @@ const URDU_REPORTER = new RegExp(
   `(?<![\\p{L}])(?:${Object.values(URDU_REPORTER_SPELLINGS)
     .sort((a, b) => b.length - a.length)
     // match against folded text, so fold the spelling the same way (آ -> ا + dropped madda)
-    .map((spelling) => foldDraftText(spelling).text.split(" ").map(escapeRe).join("[\\s.\\u200c-]*"))
+    // any short run of non-letters between letter names and inside them ("ایم >آر", "*سی*",
+    // "ای\u2011س", "ج\u2008ے") — fuzz, R3 item 10
+    .map((spelling) =>
+      [...foldDraftText(spelling).text.replace(/ /g, "")].map(escapeRe).join("[^\\p{L}\\p{N}]{0,4}")
+    )
     .join("|")})(?![\\p{L}])`,
   "gu"
 )
@@ -553,7 +568,8 @@ function analyse(
 
 export function analyseCitations(input: string, options: AnalyseOptions = {}): CitationAnalysis {
   // R3 N8: analyse the plain-text reading and the markup-stripped reading; union the findings.
-  const readings = [foldDraftText(input ?? "", { markup: "keep" }), foldDraftText(input ?? "")]
+  // (plus a lenient strip that also removes "<…>" junk a browser would show — fuzz, R3 item 10)
+  const readings = DRAFT_READINGS.map((options) => foldDraftText(input ?? "", options))
   if (readings.every((v) => !v.text)) return { citations: [], suspects: [] }
   const results = readings.map((folded) => {
     const { accepted, suspects } = analyse(folded, options)
@@ -605,7 +621,7 @@ export function normaliseCitation(raw: string): string | null {
   // Both readings (plain text and markup-stripped) must agree on exactly one citation with no
   // residue and no suspect (R3 N8), so a ref can never resolve to another authority.
   let result: string | null = null
-  for (const folded of [foldDraftText(raw ?? "", { markup: "keep" }), foldDraftText(raw ?? "")]) {
+  for (const folded of DRAFT_READINGS.map((options) => foldDraftText(raw ?? "", options))) {
     const text = folded.text
     if (!text) return null
     const { accepted, suspects } = analyse(folded, {})
