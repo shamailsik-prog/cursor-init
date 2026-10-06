@@ -363,3 +363,61 @@ describe("character references without ';' and long HTML comments (browsers rend
     expect(refs.includes("2019 SCMR 1234") || refs.every(isSuspect), JSON.stringify(refs)).toBe(true)
   })
 })
+
+// Review round 3, gate3 probe: every evasion body through the real compose route is a 422 —
+// refused by the charset layer (unsupported_characters) or blocked by the citation gate.
+describe("review round 3 gate3 probe: compose never accepts an evasion body", () => {
+  afterEach(() => resetRuntimeStoreForTests())
+  let n = 0
+  const key = () => `00000000-0000-4000-8333-${String(++n).padStart(12, "0")}`
+  function setup() {
+    const store = getRuntimeStore()
+    const m = createMatter(store, { firmId: "firmA", clientId: "client_a", title: "t", courtId: "SHC", classification: "internal" })
+    for (const u of ["partner_a", "associate_a", "clerk_a"]) addMember(store, m.id, u, "firmA")
+    seedJudgment(store, "j-old", "Old", "single", "2019 SCMR 1234")
+    seedJudgment(store, "j-new", "New", "larger", "2021 SCMR 1")
+    seedTreatment(store, "j-new", "j-old", "overruled", "larger")
+    return { store, matterId: m.id }
+  }
+  // the fuzz test's exact request shape (no citedJudgmentIds / temporalCitations)
+  const compose = (matterId: string, body: string) =>
+    DRAFTS(new Request("http://127.0.0.1/api/d4/drafts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key() },
+      body: JSON.stringify({ action: "compose", actorId: "associate_a", matterId, templateId: getDocumentTypes()[0]!.id, title: "x", body, classification: "internal" }),
+    }))
+
+  it("control: a clean body is 200 and the plain overruled citation is 422 (the property is not vacuous)", async () => {
+    const { matterId } = setup()
+    expect((await compose(matterId, "Relying on nothing at all.")).status).toBe(200)
+    expect((await compose(matterId, "Relying on 2019 SCMR 1234.")).status).toBe(422)
+  })
+
+  it.each([
+    "Relying on <2019 SCMR 1234>.",
+    "Relying on 2019 SCMR 1234 <emphasis supplied>.",
+    "Where loss < 5% the rule in 2019 SCMR 1234 applies; where > 5% it does not.",
+    "Relying on 2019 SCMR ‮4321‬.",
+    "Relying on ‮4321 RMCS 9102‬.",
+    "Relying on 2019 ꜱᴄᴍʀ 1234.",
+    "Relying on 2019 ꮪꮯꮇꭱ 1234.",
+    "Relying on 2019 SCMR 1,234.",
+    "Relying on ۲۰۱۹ ایس سی ایم آر ۱۲۳۴.",
+    "Relying on First Appeal from Order No. 12 of 2019.",
+    "Relying on 2019 &#83CMR 1234.",
+    "Relying on 2019 SC<!-- " + "x".repeat(90) + " -->MR 1234.",
+  ])("%j is 422", async (body) => {
+    const { matterId } = setup()
+    const res = await compose(matterId, body)
+    expect(res.status).toBe(422)
+  })
+
+  it("thousands comma and an RLO page never resolve to a different VERIFIED authority", () => {
+    const { store } = setup()
+    seedJudgment(store, "j-one", "Page one", "full", "2019 SCMR 1")
+    seedJudgment(store, "j-4321", "P4321", "full", "2019 SCMR 4321")
+    const thousands = verifyCitations(store, extractCitations("see 2019 SCMR 1,234"))
+    expect(thousands.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+    expect(checkDraftCharset("see 2019 SCMR ‮4321‬").ok).toBe(false)
+  })
+})
