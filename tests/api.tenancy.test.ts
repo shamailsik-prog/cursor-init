@@ -1512,4 +1512,79 @@ describe("GET/POST /api/p5/tenancy", () => {
       true
     )
   })
+
+  describe("cross-firm lineage root (G-2)", () => {
+    /** Firm A's lineage: partner_a's session, a diverged reissue, an open dispute (so digest and monitoring rows exist). */
+    async function firmALineage(): Promise<string> {
+      const session = await get(new URLSearchParams({ view: "session", userId: "partner_a", firmId: "firmA" }))
+      const root = ((await session.json()) as { sessionReference: { id: string } }).sessionReference.id
+      const reissued = await post(
+        {
+          action: "reissue_session_reference",
+          actorId: "partner_a",
+          firmId: "firmA",
+          sessionReferenceId: root,
+          authBoundary: "external_session_hint",
+          externalSessionId: "ext-firm-a-g2",
+        },
+        crypto.randomUUID()
+      )
+      const child = ((await reissued.json()) as { result: { sessionReference: { id: string } } }).result.sessionReference.id
+      const dispute = await post(
+        { action: "attest_session_lineage_dispute", actorId: "partner_a", firmId: "firmA", sessionReferenceId: child, reason: "g2" },
+        crypto.randomUUID()
+      )
+      expect(dispute.status).toBe(200)
+      return root
+    }
+
+    /** Every firm-A row keyed by the lineage root, as (id, firmId). */
+    function rootRows(root: string) {
+      const store = getRuntimeStore()
+      return [
+        store.tenancyLineageReconciliationDigests,
+        store.tenancyLineageReconciliationQueueArbitrations,
+        store.tenancyLineageDigestClosureCheckpoints,
+        store.tenancyLineageClosureAdjudications,
+        store.tenancyLineageArbitrationDebtRetirementLedgers,
+        store.tenancyLineageClosureAdjudicationSettlements,
+        store.tenancyLineageArbitrationDebtRetirementDisputeLedgers,
+      ].flatMap((rows) =>
+        [...rows.values()]
+          .filter((row) => row.lineageRootSessionReferenceId === root)
+          .map((row) => JSON.stringify(row))
+      )
+    }
+
+    it.each([
+      ["assign_lineage_reconciliation_queue", { assignedPartnerId: "partner_b", slaWindowMinutes: 90 }],
+      ["arbitrate_lineage_reconciliation_queue", { disposition: "confirm_needs_review" }],
+      ["attest_lineage_digest_closure", { closureReason: "x" }],
+      ["reopen_lineage_digest_closure", { reopenTrigger: "x" }],
+      ["govern_lineage_closure_adjudication", { panelPartnerIds: ["partner_b"], requiredPanelQuorum: 1, verdictWindowMinutes: 60 }],
+      ["record_lineage_closure_adjudication_verdict", { disposition: "mark_reconciled", dispositionDriftReasons: ["x"] }],
+      ["attest_lineage_arbitration_debt_retirement", { retirementNote: "x" }],
+      ["reopen_lineage_arbitration_debt_retirement", { carryoverSignal: "x" }],
+      ["checkpoint_lineage_closure_adjudication_settlement_publication", { publicationChannel: "partner_workboard" }],
+      ["log_lineage_closure_adjudication_settlement_correction", { correctionNote: "x" }],
+      ["confirm_lineage_closure_adjudication_settlement_sla", {}],
+      ["open_lineage_arbitration_debt_retirement_dispute", { challengeReason: "x" }],
+      ["assign_lineage_arbitration_debt_retirement_dispute_reviewer", { reviewerId: "partner_b" }],
+      ["resolve_lineage_arbitration_debt_retirement_dispute", { resolutionOutcome: "uphold_retirement" }],
+      ["control_lineage_arbitration_debt_retirement_dispute_rollback", { rollbackControlNote: "x" }],
+    ])("%s on another firm's lineage root: refused as unknown, firm A's rows untouched and not returned", async (action, extra) => {
+      const root = await firmALineage()
+      const before = rootRows(root)
+      expect(before.length).toBeGreaterThan(0)
+      const res = await post(
+        { action, actorId: "partner_b", firmId: "firmB", lineageRootSessionReferenceId: root, ...extra },
+        crypto.randomUUID()
+      )
+      const text = await res.text()
+      expect(res.status).toBe(400)
+      expect(text).toMatch(/unknown lineage root/)
+      expect(text).not.toContain("firmA")
+      expect(rootRows(root)).toEqual(before)
+    })
+  })
 })

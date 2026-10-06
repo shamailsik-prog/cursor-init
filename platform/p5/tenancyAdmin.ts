@@ -908,6 +908,11 @@ export function recomputeLineageReconciliationDigest(
       row.firmId === input.firmId &&
       (row.lineageRootSessionReferenceId || row.id) === input.lineageRootSessionReferenceId
   )
+  // The digest and its monitoring rows are keyed by the root id alone, so a root
+  // outside the caller's firm must be refused here: recomputing it would overwrite
+  // the other firm's digest with this firm's id and hand back its rows. One answer
+  // for not-found and other-firm (no cross-firm existence oracle).
+  if (references.length === 0) throw new PublicError("unknown lineage root session reference")
   const disputes = [...store.tenancyLineageDisputeAttestations.values()].filter(
     (row) =>
       row.firmId === input.firmId &&
