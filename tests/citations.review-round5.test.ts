@@ -132,3 +132,29 @@ describe("R5-3: a ', n' pinpoint is accepted only when page <= pinpoint <= page 
     }
   )
 })
+
+describe("R5-4: residue of the non-authority exclusions", () => {
+  it("Urdu مقدمہ (case) is no longer a blanket exclusion: an unreported Supreme Court case is a suspect", () => {
+    const refs = extractCitations("سپریم کورٹ کے مقدمہ نمبر ۱۲ بابت ۲۰۱۹ میں قرار دیا گیا")
+    expect(refs.length).toBe(1)
+    expect(refs.every(isSuspect)).toBe(true)
+  })
+  it("... but the FIR sense (زیر دفعہ after it, or ایف آئی آر / تھانہ in the clause) stays excluded", () => {
+    for (const text of [
+      "مقدمہ نمبر 123 سال 2024 زیر دفعہ 302 ت پ تھانہ صدر لاہور میں درج ہوا۔",
+      "تھانہ گلبرگ کا مقدمہ نمبر 45 بابت 2024",
+      "ایف آئی آر کا مقدمہ نمبر 45 بابت 2024",
+    ]) {
+      expect(extractCitations(text), text).toEqual([])
+    }
+  })
+  it("'Diary No.' stays excluded (kept by the ruling)", () => {
+    expect(extractCitations("Relying on Diary No. 1234 of 2019 decided by the Supreme Court.")).toEqual([])
+  })
+  it("'Civil Petition Notice No.' is excluded only because Notice sits directly before No.", () => {
+    expect(extractCitations("Relying on Civil Petition Notice No. 12 of 2019.")).toEqual([])
+    const refs = extractCitations("Relying on Notice in Civil Petition No. 12 of 2019.")
+    expect(refs.length).toBe(1)
+    expect(refs.every(isSuspect)).toBe(true)
+  })
+})

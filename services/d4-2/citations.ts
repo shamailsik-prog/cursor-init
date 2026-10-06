@@ -504,7 +504,12 @@ const URDU_REPORTER = new RegExp(
 )
 const URDU_NUMBER_WORD = foldDraftText("نمبر").text
 // R4 FP1: Urdu non-authority prefixes before نمبر (FIR, case/FIR, challan, mutation, khasra).
-const URDU_NON_AUTHORITY = ["ایف آئی آر", "مقدمہ", "چالان", "انتقال", "خسرہ"].map((w) => foldDraftText(w).text)
+const URDU_NON_AUTHORITY = ["ایف آئی آر", "چالان", "انتقال", "خسرہ"].map((w) => foldDraftText(w).text)
+// R5-4: مقدمہ means "case" in general (a Supreme Court case too), so it is excluded only in the
+// FIR sense: followed by زیر دفعہ, or with ایف آئی آر / تھانہ in the same clause.
+const URDU_CASE_WORD = foldDraftText("مقدمہ").text
+const URDU_FIR_CONTEXT = ["ایف آئی آر", "تھانہ"].map((w) => foldDraftText(w).text)
+const URDU_UNDER_SECTION = foldDraftText("زیر دفعہ").text
 // "<type words> نمبر n (بابت|آف|سال|سن|/|-) yyyy" — Urdu case references.
 const URDU_CASE_REFERENCE = new RegExp(
   `(?:[\\p{Script=Arabic}.]+\\s+){0,4}${foldDraftText("نمبر").text}\\s*\\d+(?:\\s*-\\s*\\p{L})?\\s*(?:${["بابت", "آف", "سال", "سن"]
@@ -529,6 +534,13 @@ function urduSuspects(folded: FoldedText): Array<Span & { raw: string }> {
     // R4 FP1: FIR / case-diary / challan / mutation / khasra numbers are not authorities
     const before = text.slice(0, start + m[0].indexOf(URDU_NUMBER_WORD)).replace(/\s+/gu, " ").trimEnd()
     if (URDU_NON_AUTHORITY.some((prefix) => before.endsWith(prefix))) continue
+    if (before.endsWith(URDU_CASE_WORD)) {
+      const clauseStart = Math.max(text.lastIndexOf("\u06d4", start), text.lastIndexOf(".", start), text.lastIndexOf("\n", start), 0)
+      const clauseEndAt = text.slice(start).search(/[\u06d4.\n]/u)
+      const clause = text.slice(clauseStart, clauseEndAt < 0 ? text.length : start + clauseEndAt)
+      const after = text.slice(start + m[0].length, start + m[0].length + 20).trimStart()
+      if (after.startsWith(URDU_UNDER_SECTION) || URDU_FIR_CONTEXT.some((w) => clause.includes(w))) continue
+    }
     out.push({ start, end: start + m[0].length, raw: m[0] })
   }
   return out
