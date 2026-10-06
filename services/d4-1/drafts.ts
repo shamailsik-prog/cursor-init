@@ -8,6 +8,7 @@ import {
   type CitationFinding,
 } from "@/services/d4-2/draftingIntelligence"
 import { extractCitations } from "@/services/d4-2/citations"
+import { requireSupportedDraftBody } from "@/services/d4-2/draftCharset"
 import courtsSeed from "@/data/courts.json"
 import { loadCourts, normalise as normaliseCaseNumber } from "@/core/case-number-normaliser"
 
@@ -114,10 +115,13 @@ export function runDraftPreflight(
     throw new PublicError("draft classification cannot be lower than matter classification")
   }
 
+  // Review round 3: refuse (422 unsupported_characters) any body containing characters that can
+  // disguise text; analyse the normalised body (NFC, ASCII digits/dashes).
+  const body = input.draftBody === undefined ? "" : requireSupportedDraftBody(input.draftBody)
   const caller = { actorId: input.actorId, firmId: matter.firmId }
   // Module 33: the gate checks union(extracted from the body, caller-listed), never only the latter.
   const refs = [
-    ...extractCitations(input.draftBody ?? "", { isOwnCaseReference: ownCaseReferenceMatcher(matter) }),
+    ...extractCitations(body, { isOwnCaseReference: ownCaseReferenceMatcher(matter) }),
     ...(input.citedJudgmentIds ?? []),
   ]
   const citation = verifyCitations(store, refs, input.partnerOverride, caller)
@@ -178,8 +182,11 @@ export function composeDraft(
 ): DraftRecord {
   const templateExists = getDocumentTypes().some((type) => type.id === input.templateId)
   if (!templateExists) throw new PublicError("unknown templateId")
+  // The stored body is exactly the analysed body: refused if it has disguising characters,
+  // otherwise normalised (NFC, ASCII digits/dashes) before the gate reads it and it is saved.
+  const body = requireSupportedDraftBody(input.body)
   // The gate always reads the body being saved, whatever the caller put in preflight.
-  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: input.body }, { recordOverride: true })
+  const gate = runDraftPreflight(store, { ...input.preflight, draftBody: body }, { recordOverride: true })
   if (!gate.ok) {
     throw new PublicError("preflight blocked drafting")
   }
@@ -191,7 +198,7 @@ export function composeDraft(
     matterId: input.matterId,
     templateId: input.templateId,
     title: input.title,
-    body: input.body,
+    body,
     classification: input.classification,
     createdBy: input.actorId,
     createdAt: Date.now(),

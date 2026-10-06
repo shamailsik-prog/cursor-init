@@ -9,6 +9,7 @@ import {
   type DraftPreflightInput,
 } from "@/services/d4-1/drafts"
 import { extractCitations } from "@/services/d4-2/citations"
+import { requireSupportedDraftBody } from "@/services/d4-2/draftCharset"
 import { verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import type { PartnerOverride } from "@/services/d4-2/partnerOverride"
 
@@ -134,6 +135,8 @@ export function decideFilingPackage(
     if (typeof draftBody !== "string") {
       throw new PublicError("preflight blocked approval: draft unavailable for the citation gate")
     }
+    // Review round 3: a body with disguising characters is refused before anything else.
+    requireSupportedDraftBody(draftBody)
     // The body being approved must be the body the gate checked at creation (fails closed for
     // a legacy package without a pinned hash).
     if (!filingPackage.draftBodySha256 || draftBodySha256(draftBody) !== filingPackage.draftBodySha256) {

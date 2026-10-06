@@ -4,6 +4,7 @@ import { withSession, type HandlerSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, errorResponse, publicErrorMessage } from "@/platform/http/errors"
 import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
 import { closureRowVisible } from "@/services/d4-3/closureVisibility"
+import { DraftCharsetError } from "@/services/d4-2/draftCharset"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -19238,6 +19239,12 @@ async function handlePost(request: Request, session: HandlerSession | null) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
+    if (err instanceof DraftCharsetError) {
+      return NextResponse.json(
+        { error: err.message, code: err.code, violations: err.violations },
+        { status: 422 }
+      )
+    }
     if (err instanceof DraftChangedError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: 409 })
     }

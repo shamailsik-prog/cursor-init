@@ -64,7 +64,7 @@ const BLANKS = new Set([0x2800, 0x3164, 0x115f, 0x1160, 0xffa0, 0x0009])
 const digitCache = new Map<number, string>()
 
 /** ASCII digit for a \p{Nd} code point: its offset in its contiguous Nd run, mod 10. */
-function asciiDigit(cp: number): string {
+export function asciiDigit(cp: number): string {
   const cached = digitCache.get(cp)
   if (cached) return cached
   let start = cp

@@ -3,6 +3,7 @@ import { PublicError } from "@/platform/http/publicError"
 import { withSession, type HandlerSession } from "@/platform/http/withSession"
 import { errorResponse } from "@/platform/http/errors"
 import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
+import { DraftCharsetError } from "@/services/d4-2/draftCharset"
 import type { SpineStore } from "@/platform/spine/store"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -390,6 +391,12 @@ async function handlePost(request: Request, session: HandlerSession | null) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
+    if (err instanceof DraftCharsetError) {
+      return NextResponse.json(
+        { error: err.message, code: err.code, violations: err.violations },
+        { status: 422 }
+      )
+    }
     const message = publicErrorMessage(err, "draft operation failed")
     return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
