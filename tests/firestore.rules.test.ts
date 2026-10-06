@@ -551,10 +551,10 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
   })
 
   describe("matters create/update (#4)", () => {
-    it("create requires clearance for the new classification", async () => {
+    it("client-SDK create is denied at any classification (R3 N14 supersedes the #4 clearance check)", async () => {
       const db = authed("rv-low", ASSOC_LOW)
       await assertFails(setDoc(doc(db, "matters", "rNewPriv"), { firmId: "firmA", title: "n", classification: "privileged" }))
-      await assertSucceeds(setDoc(doc(db, "matters", "rNewOk"), { firmId: "firmA", title: "n", classification: "internal" }))
+      await assertFails(setDoc(doc(db, "matters", "rNewOk"), { firmId: "firmA", title: "n", classification: "internal" }))
     })
     it("member below the matter classification cannot update it", async () => {
       await assertFails(updateDoc(doc(authed("rv-low", ASSOC_LOW), "matters", "r1Priv"), { title: "x" }))
@@ -1275,5 +1275,45 @@ describe("review round 3 N13 — audit_dead_letter is server-only", () => {
     await assertFails(setDoc(doc(db, "audit_dead_letter", "dl2"), { row: { firmId: "firmA" }, reason: "r", deadLetteredAt: 2 }))
     await assertFails(updateDoc(doc(db, "audit_dead_letter", "dl1"), { reason: "erased" }))
     await assertFails(deleteDoc(doc(db, "audit_dead_letter", "dl1")))
+  })
+})
+
+describe("review round 3 N14 and rules3 probes", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "r3m1"), { firmId: "firmA", title: "t", classification: "privileged" })
+      await setDoc(doc(db, "matter_members", "r3m1_r3-member"), { firmId: "firmA", matterId: "r3m1", userId: "r3-member" })
+      await setDoc(doc(db, "matter_members", "r3m1_r3-pm"), { firmId: "firmA", matterId: "r3m1", userId: "r3-pm" })
+      await setDoc(doc(db, "users", "r3-foreign"), { firmId: "firmB", role: "associate", clearanceLevel: "privileged", active: true })
+      await setDoc(doc(db, "users", "r3-acc1"), { firmId: "firmA", role: "associate", clearanceLevel: "privileged", active: true })
+    })
+  })
+
+  it("no role can create a matters doc through the client SDK; an orphan never reaches the client it names", async () => {
+    const orphan = { firmId: "firmA", title: "Your case update - pay here", classification: "internal", clientId: "r3-cli", caseNumber: "C.P. No. 12 of 2019", courtId: "SC" }
+    await assertFails(setDoc(doc(authed("r3-member", ASSOC), "matters", "r3orph1"), orphan))
+    await assertFails(setDoc(doc(authed("r3-pm", PARTNER), "matters", "r3orph2"), orphan))
+    await assertFails(setDoc(doc(authed("r3-member", ASSOC), "matters", "r3orph3"), { firmId: "firmA", title: "t", classification: "internal" }))
+    await assertFails(getDoc(doc(authed("r3-cli", CLIENT), "matters", "r3orph1")))
+  })
+
+  it("a member partner cannot assign a foreign-firm user; a same-firm associate is fine", async () => {
+    const db = authed("r3-pm", PARTNER)
+    await assertFails(setDoc(doc(db, "matter_members", "r3m1_r3-foreign"), { firmId: "firmA", matterId: "r3m1", userId: "r3-foreign" }))
+    await assertSucceeds(setDoc(doc(db, "matter_members", "r3m1_r3-acc1"), { firmId: "firmA", matterId: "r3m1", userId: "r3-acc1" }))
+  })
+
+  it("a member cannot rewrite the matter case number", async () => {
+    await assertFails(updateDoc(doc(authed("r3-member", ASSOC), "matters", "r3m1"), { caseNumber: "X" }))
+  })
+
+  it("client-SDK document create: privileged web allowed in a privileged matter, unknown channel refused", async () => {
+    const db = authed("r3-member", ASSOC)
+    await assertSucceeds(setDoc(doc(db, "documents", "r3csdk1"), { firmId: "firmA", matterId: "r3m1", classification: "privileged", sourceChannel: "web" }))
+    await assertFails(setDoc(doc(db, "documents", "r3csdk3"), { firmId: "firmA", matterId: "r3m1", classification: "privileged", sourceChannel: "email" }))
   })
 })

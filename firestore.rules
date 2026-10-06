@@ -92,7 +92,9 @@ service cloud.firestore {
       // Missing classification fails closed (rank() of an absent field errors -> deny); every writer sets it.
       allow read: if sameFirm() && cleared(resource.data.classification)
         && (memberReader(matterId) || (role() == 'client' && resource.data.get('clientId', '') == request.auth.uid));
-      allow create: if sameFirmNew() && role() in ['partner', 'associate'] && clearedNew();
+      // R3 N14: the matters API (which also creates the first member) is the only create path; a
+      // client-SDK create made orphans that staff could not see but the named client could read.
+      allow create: if false;
       // R2 N6: caseNumber / caseNumberStatus / courtId are written only by the API (partner-only,
       // audited); they feed the citation gate's own-case exemption.
       allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate']
