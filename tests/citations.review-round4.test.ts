@@ -63,3 +63,17 @@ describe("R4-1 (gate): a token one edit away from a reporter, next to year/page 
     }
   })
 })
+
+describe("R4-3: any run of punctuation between page digits makes the page ambiguous", () => {
+  it.each(["…", "‥", "‼", "⁇", "⁈", "⁉", "⩴", "︙", "︰", "!!", "?!", "...", ".:", "!)"])("2019 SCMR 12%s34", (junk) => {
+    const store = newStore()
+    seedJudgment(store, "d12", "Twelve", "full", "2019 SCMR 12")
+    const res = verifyCitations(store, extractCitations(`Relying on 2019 SCMR 12${junk}34.`))
+    expect(res.status).not.toBe("OK")
+    expect(res.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+  })
+  it("ellipsis or punctuation followed by a space stays prose", () => {
+    expect(extractCitations("2019 SCMR 1234... 5 cases")).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations("2019 SCMR 1234! 5 cases")).toEqual(["2019 SCMR 1234"])
+  })
+})

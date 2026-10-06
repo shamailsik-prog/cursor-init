@@ -194,7 +194,9 @@ function ambiguousTail(rest: string): boolean {
   // on the same line before digits ("4,\u20144", "123\u2019<b>-4", "7,  89" — only ", 1240" with
   // one space is a pinpoint, and "." may be followed by plain spaces or an ellipsis); "<" / ">" before digits
   // ("7 <89", "1> 234") — fuzz, R3 item 10.
-  return /^(?:[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}\n]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}\n]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
+  // R4-3: any run of punctuation/symbols glued between the page and more digits ("12\u202634",
+  // "12!!34", "12\u2a7434") is ambiguous.
+  return /^(?:[\p{P}\p{S}]+\d|[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}\n]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}\n]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
 }
 
 function trailingParen(rest: string): { length: number; key: string } | null {
