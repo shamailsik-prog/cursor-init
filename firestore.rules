@@ -20,10 +20,13 @@ service cloud.firestore {
     function isStaff() { return role() in ['partner', 'associate', 'clerk', 'intern']; }
     function isRegisterOnly() { return role() == 'accounts'; }
     // Membership-based read: L17.6 #41 "no matter documents" for accounts, even if added as a member.
-    function memberReader(matterId) { return !isRegisterOnly() && isMember(matterId); }
+    // R2 N5: membership-based reads are for matter staff only — never accounts (register-only) and
+    // never a client-role user, even if (wrongly) added as a member. Clients read only their own
+    // matters (matters.clientId), as the API allows.
+    function memberReader(matterId) { return role() in ['partner', 'associate', 'clerk', 'intern'] && isMember(matterId); }
     // R1 #6: for collections whose rows may be firm-level (matterId null by type) — a null
     // matterId is firm-scoped, a set one needs membership, a missing field denies.
-    function matterScoped(matterId) { return !isRegisterOnly() && (matterId == null || isMember(matterId)); }
+    function matterScoped(matterId) { return role() in ['partner', 'associate', 'clerk', 'intern'] && (matterId == null || isMember(matterId)); }
     function isAuthor() { return role() in ['partner', 'associate', 'clerk']; }   // interns/accounts/clients never author
     function clearedNew() { return cleared(request.resource.data.classification); }
     // Matter-bound -> membership; loose vault (matterId == null) -> clerk/partner with confidential+ clearance (L4.5).
@@ -67,7 +70,11 @@ service cloud.firestore {
       // themselves — a non-member partner cannot self-assign into a matter. Initial membership of
       // a new matter is written server-side (matters API create).
       allow create: if sameFirmNew() && isPartner() && id == request.resource.data.matterId + '_' + request.resource.data.userId
-        && isMember(request.resource.data.matterId) && request.resource.data.userId != request.auth.uid;
+        && isMember(request.resource.data.matterId) && request.resource.data.userId != request.auth.uid
+        // R2 N5: the assignee must be an existing same-firm staff user (never client or accounts).
+        && exists(/databases/$(database)/documents/users/$(request.resource.data.userId))
+        && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.firmId == request.auth.token.firmId
+        && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.role in ['partner', 'associate', 'clerk', 'intern'];
       allow update: if sameFirm() && isPartner() && isMember(resource.data.matterId) && firmIdUnchanged()
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId']);
       allow delete: if sameFirm() && isPartner() && isMember(resource.data.matterId);
@@ -81,7 +88,8 @@ service cloud.firestore {
     match /matters/{matterId} {
       // Layer 18 §5.3 + Job E: membership is the access source. No role exempt (including partner).
       // Missing classification fails closed (rank() of an absent field errors -> deny); every writer sets it.
-      allow read: if sameFirm() && memberReader(matterId) && cleared(resource.data.classification);
+      allow read: if sameFirm() && cleared(resource.data.classification)
+        && (memberReader(matterId) || (role() == 'client' && resource.data.get('clientId', '') == request.auth.uid));
       allow create: if sameFirmNew() && role() in ['partner', 'associate'] && clearedNew();
       allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate']
         && cleared(resource.data.classification) && clearedNew() && monotonic();

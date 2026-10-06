@@ -613,6 +613,8 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
       // R1 #6: the adding partner must already be a member of the matter.
       await testEnv.withSecurityRulesDisabled(async (ctx) => {
         await setDoc(doc(ctx.firestore(), "matter_members", "r1_partner1"), { firmId: "firmA", matterId: "r1", userId: "partner1" })
+        // R2 N5: the assignee must be an existing same-firm staff user.
+        await setDoc(doc(ctx.firestore(), "users", "rv-new"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
       })
       const db = authed("partner1", PARTNER)
       await assertFails(setDoc(doc(db, "matter_members", "r1_someoneElse"), { firmId: "firmA", matterId: "r1", userId: "rv-new" }))
@@ -1056,6 +1058,9 @@ describe("Review R1 #6 — every matter-bound collection requires membership (R-
       await assertFails(setDoc(doc(authed("p9", PARTNER_OUT), "matter_members", "sgM_p10"), { firmId: "firmA", matterId: "sgM", userId: "p10" }))
     })
     it("a member partner can add another partner", async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "users", "p9"), { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted", active: true })
+      })
       await assertSucceeds(setDoc(doc(authed("sg-partner-in", PARTNER_OUT), "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9" }))
     })
   })
@@ -1101,5 +1106,41 @@ describe("Review R1 #10 — accounts cannot read feature flags or firm overrides
     await assertFails(getDoc(doc(authed("ff-acc", ACCOUNTS), "firm_feature_overrides", "ffoA")))
     await assertSucceeds(getDoc(doc(authed("ff-assoc", ASSOC), "feature_flags", "ffL17")))
     await assertSucceeds(getDoc(doc(authed("ff-assoc", ASSOC), "firm_feature_overrides", "ffoA")))
+  })
+})
+
+describe("Review R2 N5 — client-role users read only their own matters, never staff collections", () => {
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "n5M"), { firmId: "firmA", title: "Other client's matter", classification: "internal", clientId: "someone" })
+      await setDoc(doc(db, "matters", "n5Own"), { firmId: "firmA", title: "Own matter", classification: "internal", clientId: "n5-cli" })
+      await setDoc(doc(db, "matter_members", "n5M_n5-cli"), { firmId: "firmA", matterId: "n5M", userId: "n5-cli" })
+      await setDoc(doc(db, "matter_members", "n5M_n5-pm"), { firmId: "firmA", matterId: "n5M", userId: "n5-pm" })
+      await setDoc(doc(db, "drafts", "n5D"), { firmId: "firmA", matterId: "n5M", classification: "internal", body: "b" })
+      await setDoc(doc(db, "documents", "n5Doc"), { firmId: "firmA", matterId: "n5M", classification: "internal" })
+      await setDoc(doc(db, "users", "n5-cli2"), { firmId: "firmA", role: "client", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "users", "n5-acc"), { firmId: "firmA", role: "accounts", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "users", "n5-assoc"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
+    })
+  })
+  it("a client-role member cannot read the matter, its drafts or its documents", async () => {
+    const db = authed("n5-cli", CLIENT)
+    await assertFails(getDoc(doc(db, "matters", "n5M")))
+    await assertFails(getDoc(doc(db, "drafts", "n5D")))
+    await assertFails(getDoc(doc(db, "documents", "n5Doc")))
+    await assertFails(getDoc(doc(db, "matter_members", "n5M_n5-pm")))
+  })
+  it("a client reads their own matter (clientId), as the API allows", async () => {
+    await assertSucceeds(getDoc(doc(authed("n5-cli", CLIENT), "matters", "n5Own")))
+  })
+  it("a member partner cannot assign a client or accounts user; a staff assignee is fine", async () => {
+    const db = authed("n5-pm", PARTNER)
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-cli2"), { firmId: "firmA", matterId: "n5M", userId: "n5-cli2" }))
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-acc"), { firmId: "firmA", matterId: "n5M", userId: "n5-acc" }))
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-ghost"), { firmId: "firmA", matterId: "n5M", userId: "n5-ghost" }))
+    await assertSucceeds(setDoc(doc(db, "matter_members", "n5M_n5-assoc"), { firmId: "firmA", matterId: "n5M", userId: "n5-assoc" }))
   })
 })

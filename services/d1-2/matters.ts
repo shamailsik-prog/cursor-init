@@ -57,7 +57,7 @@ export function addMember(
 /** Refused membership assignment (review R1 #6); carries a stable code and HTTP status. */
 export class MembershipAssignmentError extends PublicError {
   constructor(
-    readonly code: "self_assignment_forbidden" | "partner_required" | "not_member",
+    readonly code: "self_assignment_forbidden" | "partner_required" | "not_member" | "assignee_role_forbidden",
     message: string
   ) {
     super(message)
@@ -90,6 +90,16 @@ export function assignMatterMember(
   }
   if (!store.members.has(store.memberKey(input.matterId, actor.id))) {
     throw new MembershipAssignmentError("not_member", "only a member of the matter assigns its members")
+  }
+  // R2 N5: only same-firm matter staff are assigned. Clients reach their own matters through
+  // matters.clientId (L8.1), and accounts is register-only (L17.6 #41).
+  const assignee = store.users.get(input.userId)
+  if (!assignee || assignee.firmId !== matter.firmId) throw new PublicError("unknown member user")
+  if (assignee.role === "client" || assignee.role === "accounts") {
+    throw new MembershipAssignmentError(
+      "assignee_role_forbidden",
+      "client and accounts users are not assigned to matters"
+    )
   }
   addMember(store, input.matterId, input.userId, matter.firmId)
   store.audit.push({

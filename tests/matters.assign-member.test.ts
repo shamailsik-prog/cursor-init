@@ -48,3 +48,30 @@ describe("POST /api/d1/matters add_member", () => {
     expect(crossFirm.status).toBeGreaterThanOrEqual(400)
   })
 })
+
+describe("assignee role validation (review R2 N5)", () => {
+  it("client and accounts users cannot be assigned; a cross-firm user is unknown", async () => {
+    const { store, matterId } = setup()
+    store.users.set("accounts_x", { id: "accounts_x", firmId: "firmA", role: "accounts", clearanceLevel: "internal" })
+    for (const userId of ["client_a", "accounts_x"]) {
+      const res = await post({ action: "add_member", actorId: "partner_a", matterId, userId })
+      expect(res.status).toBe(403)
+      expect(((await res.json()) as { code: string }).code).toBe("assignee_role_forbidden")
+      expect(store.members.has(store.memberKey(matterId, userId))).toBe(false)
+    }
+    const cross = await post({ action: "add_member", actorId: "partner_a", matterId, userId: "partner_b" })
+    expect(cross.status).toBeGreaterThanOrEqual(400)
+    expect(store.members.has(store.memberKey(matterId, "partner_b"))).toBe(false)
+  })
+})
+
+describe("documents API: a client-role member reads no matter documents (review R2 N5)", () => {
+  it("canReadDocument denies client role", async () => {
+    const { canReadDocument } = await import("@/platform/p5/documentAccess")
+    const { store, matterId } = setup()
+    addMember(store, matterId, "client_a", "firmA")
+    const user = store.users.get("client_a")
+    if (!user) throw new Error("client missing")
+    expect(canReadDocument(store, user, { firmId: "firmA", classification: "internal", matterId })).toBe(false)
+  })
+})

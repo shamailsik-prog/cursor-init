@@ -20,7 +20,8 @@ export function canReadDocument(
   user: User,
   doc: Pick<DocumentRecord, "firmId" | "classification" | "matterId">
 ): boolean {
-  if (user.role === "accounts") return false
+  // L17.6 #41 (accounts) and R2 N5 (clients read no matter documents; same as the rules).
+  if (user.role === "accounts" || user.role === "client") return false
   if (user.firmId !== doc.firmId) return false
   if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
   if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, user.id))
