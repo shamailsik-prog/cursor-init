@@ -31,3 +31,18 @@ describe("N9: thousands separators make the page ambiguous; the ', 1240' pinpoin
     }
   })
 })
+
+describe("N8: plain-text '<' and '>' never hide a citation (raw and markup-stripped scans are unioned)", () => {
+  it.each([
+    ["Relying on <2019 SCMR 1234>.", "2019 SCMR 1234"],
+    ["Where loss < 5% the rule in 2019 SCMR 1234 applies; where > 5% it does not.", "2019 SCMR 1234"],
+    ["<https://x.pk/2019-SCMR-1234>", null],
+    ["Relying on 2019 SCMR 1234 <emphasis supplied>.", "2019 SCMR 1234"],
+    ["2019 SC<b>MR</b> 1234", "2019 SCMR 1234"],
+  ])("%j", (text, citation) => {
+    const refs = extractCitations(text)
+    expect(refs.length, text).toBeGreaterThan(0)
+    if (citation) expect(refs).toContain(citation)
+    else expect(refs.every(isSuspect)).toBe(true)
+  })
+})

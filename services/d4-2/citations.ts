@@ -189,7 +189,7 @@ function ambiguousTail(rest: string): boolean {
   // right single quote — directly followed by a digit ("1,234", "1.234", "1'234"; the ", 1240"
   // pinpoint with a space stays a pinpoint); and any other glued character that is not a
   // closing punctuation mark ("1<b>234", "1#234", "1\u066c234").
-  return /^(?:[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|[,.'\u2019]\d|[^\s.,;:)\]'"\u201d\u2019!?])/u.test(rest)
+  return /^(?:[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|[,.'\u2019]\d|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
 }
 
 function trailingParen(rest: string): { length: number; key: string } | null {
@@ -428,19 +428,34 @@ function analyse(
 }
 
 export function analyseCitations(input: string, options: AnalyseOptions = {}): CitationAnalysis {
-  const folded = foldDraftText(input ?? "")
-  if (!folded.text) return { citations: [], suspects: [] }
-  const { accepted, suspects } = analyse(folded, options)
-  const seen = new Set<string>()
+  // R3 N8: analyse the plain-text reading and the markup-stripped reading; union the findings.
+  const readings = [foldDraftText(input ?? "", { markup: "keep" }), foldDraftText(input ?? "")]
+  if (readings.every((v) => !v.text)) return { citations: [], suspects: [] }
+  const results = readings.map((folded) => {
+    const { accepted, suspects } = analyse(folded, options)
+    return {
+      citations: [...new Set(accepted.map((hit) => hit.citation))],
+      suspects: suspects.sort((a, b) => a.start - b.start).map((s) => s.raw),
+    }
+  })
+  // A citation read in only one reading is kept only when the other reading is clean of it:
+  // no suspect at all and no other page under the same reporter/year ("2019 SCMR\n123 *4*"
+  // reads as page 123 in plain text but "123 4" — ambiguous — once the emphasis is removed).
+  const head = (citation: string) => citation.replace(/ \d+(?: \([^()]*\))?$/, "")
   const citations: string[] = []
-  for (const hit of accepted) {
-    if (seen.has(hit.citation)) continue
-    seen.add(hit.citation)
-    citations.push(hit.citation)
+  const demoted: string[] = []
+  for (const citation of [...new Set(results.flatMap((r) => r.citations))]) {
+    const missingFrom = results.filter((r) => !r.citations.includes(citation))
+    const inconsistent = missingFrom.some(
+      (r) => r.suspects.length > 0 || r.citations.some((other) => head(other) === head(citation))
+    )
+    if (inconsistent) demoted.push(citation)
+    else citations.push(citation)
   }
+  const seen = new Set<string>(citations)
   const suspectRefs: string[] = []
-  for (const s of suspects.sort((a, b) => a.start - b.start)) {
-    const ref = `${UNRECOGNISED_PREFIX}${s.raw.replace(/\s+/g, " ").trim().slice(0, 80)}`
+  for (const raw of [...demoted, ...results.flatMap((r) => r.suspects)]) {
+    const ref = `${UNRECOGNISED_PREFIX}${raw.replace(/\s+/g, " ").trim().slice(0, 80)}`
     if (seen.has(ref)) continue
     seen.add(ref)
     suspectRefs.push(ref)
@@ -463,13 +478,19 @@ export function extractCitations(text: string, options: AnalyseOptions = {}): st
  * mixed-script token, residue text — is null, so it can never resolve to another authority.
  */
 export function normaliseCitation(raw: string): string | null {
-  const folded = foldDraftText(raw ?? "")
-  const text = folded.text
-  if (!text) return null
-  const { accepted, suspects } = analyse(folded, {})
-  const [hit] = accepted
-  if (accepted.length !== 1 || !hit || suspects.length > 0) return null
-  const residue = text.slice(0, hit.start) + text.slice(hit.end)
-  if (/[\p{L}\p{N}]/u.test(residue)) return null
-  return hit.citation
+  // Both readings (plain text and markup-stripped) must agree on exactly one citation with no
+  // residue and no suspect (R3 N8), so a ref can never resolve to another authority.
+  let result: string | null = null
+  for (const folded of [foldDraftText(raw ?? "", { markup: "keep" }), foldDraftText(raw ?? "")]) {
+    const text = folded.text
+    if (!text) return null
+    const { accepted, suspects } = analyse(folded, {})
+    const [hit] = accepted
+    if (accepted.length !== 1 || !hit || suspects.length > 0) return null
+    const residue = text.slice(0, hit.start) + text.slice(hit.end)
+    if (/[\p{L}\p{N}]/u.test(residue)) return null
+    if (result !== null && result !== hit.citation) return null
+    result = hit.citation
+  }
+  return result
 }

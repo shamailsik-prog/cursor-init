@@ -150,6 +150,11 @@ function stripMarkupOnce(
         f.pending = true
         foldChars(f, decoded)
       }
+    } else if (token.startsWith("<")) {
+      // a tag becomes a space (R3 N8): never glue the text on either side together
+      f.out.push(" ")
+      f.taint.push(true)
+      f.pending = false
     } else {
       f.pending = true
     }
@@ -159,7 +164,17 @@ function stripMarkupOnce(
   return { out: f.out, taint: f.taint, changed }
 }
 
-export function foldDraftText(raw: string): FoldedText {
+export type FoldOptions = {
+  /**
+   * "strip" (default): markup is removed for matching — a tag becomes a space, an entity is
+   * decoded, emphasis characters are dropped. "keep": the plain-text reading, nothing removed.
+   * Review R3 N8: bodies are plain text, so the gate scans *both* and unions the findings —
+   * text between a "<" and a ">" is never deleted from analysis.
+   */
+  markup?: "strip" | "keep"
+}
+
+export function foldDraftText(raw: string, options: FoldOptions = {}): FoldedText {
   // Phase 1: fold every character first, so invisibles, marks, odd dashes or blanks inside
   // markup cannot hide the markup itself ("<\u2E3Ab>", "&nbs\u{E0034}p;").
   const first: Folding = { out: [], taint: [], pending: false }
@@ -171,7 +186,7 @@ export function foldDraftText(raw: string): FoldedText {
   // first.out is already one entry per code point, aligned with first.taint
   let current = { out: first.out, taint: first.taint }
   // every pass removes at least one token, so this terminates; the cap only bounds work
-  for (let pass = 0; pass < 64; pass += 1) {
+  for (let pass = 0; options.markup !== "keep" && pass < 64; pass += 1) {
     const next = stripMarkupOnce(current.out, current.taint)
     if (!next.changed) break
     current = next
