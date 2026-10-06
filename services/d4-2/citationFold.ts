@@ -104,6 +104,11 @@ function foldChars(f: Folding, segment: string): void {
       push(" ")
       continue
     }
+    // R5-2: a number that is not a decimal digit but decomposes to one — superscript, subscript,
+    // circled digits — is a footnote marker or ornament, not part of the number: its digits are
+    // tainted on both sides, so glued to a digit run ("123\u2074") the number is ambiguous.
+    const compatNumber = /^\p{No}$/u.test(original) && original.normalize("NFKD") !== original
+    if (compatNumber) f.pending = true
     for (const ch of original.normalize("NFKD")) {
       const cp = ch.codePointAt(0) ?? 0
       if (ch === "\n" || ch === "\r") {
@@ -128,6 +133,7 @@ function foldChars(f: Folding, segment: string): void {
       }
       push(ch)
     }
+    if (compatNumber) f.pending = true
   }
 }
 

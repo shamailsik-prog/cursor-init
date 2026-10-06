@@ -11,11 +11,16 @@ import { seedJudgment, seedTreatment, verifyCitations } from "@/services/d4-2/dr
 
 const FULL = process.env.CITATION_BRUTE_FULL === "1"
 
-function plainReading(ch: string): string | null {
-  if (/^\p{N}$/u.test(ch)) return ch.normalize("NFKD").replace(/\p{Nd}/gu, (d) => asciiDigit(d.codePointAt(0) ?? 0))
-  if (/^[\p{M}\p{Cf}]$/u.test(ch)) return ""
-  if (/^\p{Z}$/u.test(ch)) return " "
-  return null
+function plainReadings(ch: string, besideDigit: boolean): string[] {
+  const digits = ch.normalize("NFKD").replace(/\p{Nd}/gu, (d) => asciiDigit(d.codePointAt(0) ?? 0))
+  // R5-2: a superscript / subscript / circled digit reads as its digits beside letters ("S²MR"
+  // reads as nothing, like "S2MR") or as a separate marker beside digits ("123⁴" = page 123,
+  // footnote 4) — never as part of a number
+  if (/^\p{No}$/u.test(ch)) return besideDigit ? [` ${digits} `] : [digits]
+  if (/^\p{N}$/u.test(ch)) return [digits]
+  if (/^[\p{M}\p{Cf}]$/u.test(ch)) return [""]
+  if (/^\p{Z}$/u.test(ch)) return [" "]
+  return []
 }
 // [start, end] inclusive
 const CI_RANGES: Array<[number, number]> = [
@@ -76,10 +81,12 @@ it(`brute force: ${FULL ? "every code point" : "look-alike blocks"} x 9 position
         // (nothing), "SC\u0300R" / "SC\u00a0R" as SCR, "12٠4" as page 1204 (the reviewer's
         // "not deceptive" classes). Letters, symbols and punctuation have no plain reading here:
         // any OK result for them (R4-1: "S∁MR") is an evasion.
-        const plain = plainReading(ch)
-        const faithful =
-          plain !== null &&
-          JSON.stringify(verifyCitations(store, extractCitations(template(plain))).findings) === JSON.stringify(res.findings)
+        const variant = template(ch)
+        const at = variant.indexOf(ch)
+        const besideDigit = /[0-9]/.test(variant[at - 1] ?? "") || /[0-9]/.test(variant[at + ch.length] ?? "")
+        const faithful = plainReadings(ch, besideDigit).some(
+          (plain) => JSON.stringify(verifyCitations(store, extractCitations(template(plain))).findings) === JSON.stringify(res.findings)
+        )
         if (!faithful) evasions.push(`${name} U+${cp.toString(16).toUpperCase()} -> ${JSON.stringify(res.findings)}`)
       }
     }

@@ -261,8 +261,10 @@ const PROBE3_EXPECTED: Record<string, Probe3Expectation> = {
   "Cyrillic Ze as 3 in page": "suspect-or-refused",
   "Latin small l as 1 in page": "suspect-or-refused",
   "counting rod digits (No, not Nd)": "suspect-or-refused",
-  "superscripts page": ["2019 SCMR 1234"],
-  "circled digits page": ["2019 SCMR 1234"],
+  // R5-2: superscript / circled digits are footnote markers, not page digits: ambiguous
+  "superscripts page": "suspect-or-refused",
+  // R5-2: superscript / circled digits are footnote markers, not page digits: ambiguous
+  "circled digits page": "suspect-or-refused",
   "dingbat negative circled digits": "suspect-or-refused",
   "VS17 (E0100) in page": "suspect-or-refused",
   "tag chars in reporter": "suspect-or-refused",

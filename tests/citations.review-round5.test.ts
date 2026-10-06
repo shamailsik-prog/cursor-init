@@ -71,3 +71,43 @@ describe("R5-1: acronym reporters with citation filler (court names, at page, br
     }
   })
 })
+
+describe("R5-2: a superscript / subscript / circled digit glued to a digit run makes the number ambiguous", () => {
+  function fn6Store() {
+    const store = newStore()
+    seedJudgment(store, "L", "L", "larger", "2025 SCMR 999")
+    seedJudgment(store, "over", "O", "single", "2019 SCMR 123")
+    seedTreatment(store, "L", "over", "overruled", "larger")
+    seedJudgment(store, "v1234", "V", "full", "2019 SCMR 1234")
+    seedJudgment(store, "v1", "V", "full", "2019 SCMR 1")
+    return store
+  }
+  it.each([
+    "Relying on 2019 SCMR 123⁴.",
+    "Relying on 2019 SCMR 123¹ and others.",
+    "Relying on 2019 SCMR 123₄.",
+    "Relying on 2019 SCMR 123④.",
+    "Relying on 2019 SCMR 12³34.",
+    "Relying on 2019² SCMR 123.",
+  ])("fn6 footnote probe %j: never OK, never VERIFIED", (body) => {
+    const check = checkDraftCharset(body)
+    expect(check.ok).toBe(true)
+    if (!check.ok) return
+    expect(check.normalised).toContain(body.replace("Relying on ", "").slice(0, 4)) // stored as written
+    const res = verifyCitations(fn6Store(), extractCitations(check.normalised))
+    expect(res.status).not.toBe("OK")
+    expect(res.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+  })
+  it("other-script and fullwidth digits still fold faithfully", () => {
+    expect(extractCitations("2019 SCMR ١٢٣٤")).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations("2019 SCMR １２３４")).toEqual(["2019 SCMR 1234"])
+  })
+})
+
+describe("R5-2: a marker before the number taints it too", () => {
+  it("'2019 SCMR ⁴123' is a suspect", () => {
+    const refs = extractCitations("2019 SCMR ⁴123")
+    expect(refs.length).toBeGreaterThan(0)
+    expect(refs.every(isSuspect)).toBe(true)
+  })
+})
