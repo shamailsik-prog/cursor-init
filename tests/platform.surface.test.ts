@@ -13,6 +13,8 @@ import { BodySchema as CLIENTS_BODY, CLIENTS_SURFACE } from "@/app/api/d1/client
 import { GET as mattersGet } from "@/app/api/d1/matters/route"
 import { POST as clientsPost } from "@/app/api/d1/clients/route"
 import { GET as workflowGet } from "@/app/api/d1/document-workflow/route"
+import { GET as reportingGet } from "@/app/api/d1/reporting/route"
+import { GET as tenancyGet } from "@/app/api/p5/tenancy/route"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { bindRequestToSession, withSession } from "@/platform/http/withSession"
 
@@ -145,5 +147,17 @@ describe("the handler sees only declared headers (fix round 3, R1)", () => {
       return new Response(null, { status: 204 })
     })
     expect(cookie).toBe("scope=all")
+  })
+})
+
+describe("an empty view= selects the route's default view (fix round 3, M2)", () => {
+  it.each([
+    ["/api/p5/tenancy", tenancyGet, "?userId=partner_a&view=", (b: Record<string, unknown>) => (b.session as { user: { id: string } }).user.id, "partner_a"],
+    ["/api/d1/reporting", reportingGet, "?actorId=partner_a&view=", (b: Record<string, unknown>) => b.view, "search"],
+    ["/api/d1/document-workflow", workflowGet, "?userId=partner_a&view=", (b: Record<string, unknown>) => b.view, "queue"],
+  ] as const)("%s", async (route, handler, query, pick, expected) => {
+    const res = await handler(new Request(`http://127.0.0.1${route}${query}`))
+    expect(res.status).toBe(200)
+    expect(pick((await res.json()) as Record<string, unknown>)).toBe(expected)
   })
 })
