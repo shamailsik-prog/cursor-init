@@ -176,6 +176,19 @@ function variant(base: string, rnd: () => number, pools: Pools): string {
   return cps.join("")
 }
 
+/**
+ * True when the gate's findings are all VERIFIED and every one is stated in the normalised text
+ * as "<ref>, <digits>" with a plain space — the pinpoint form the round-3 ruling keeps ("2019
+ * SCMR 1, 234" reads page 1 pinpoint 234; the stored body says exactly that).
+ */
+function isRuledPinpointOnly(normalised: string, findings: Array<{ ref: string; status: string }>): boolean {
+  return findings.every((f) => {
+    if (f.status !== "VERIFIED") return false
+    const pattern = f.ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s+")
+    return new RegExp(`(?<![0-9A-Za-z])${pattern}, [0-9]`, "i").test(normalised)
+  })
+}
+
 const codePoints = (text: string) => [...text].map((c) => (c.codePointAt(0) ?? 0).toString(16)).join(" ")
 
 const OVERRULED = ["2019 SCMR 1234", "PLD 2010 Lahore 5", "2018 CLC 789", "2019 PCrLJ 44"]
@@ -208,6 +221,7 @@ describe(`citation gate fuzz (seed ${SEED})`, () => {
     const rnd = mulberry32(SEED ^ [...cite].reduce((h, c) => Math.imul(h, 31) + (c.codePointAt(0) ?? 0), 7))
     let refused = 0
     let blocked = 0
+    let pinpoints = 0
     for (let i = 0; i < VARIANTS_PER_CITATION; i += 1) {
       const text = `Relying on ${variant(cite, rnd, pools)} for the proposition.`
       // production pipeline: charset refusal first, then the gate on the normalised body
@@ -217,6 +231,12 @@ describe(`citation gate fuzz (seed ${SEED})`, () => {
         continue
       }
       const res = verifyCitations(store, extractCitations(check.normalised))
+      // A VERIFIED finding that the normalised body states as "<ref>, <digits>" is the ruled
+      // ", 1240" pinpoint form — what the stored text literally says, not another authority.
+      if (res.findings.some((f) => f.status === "VERIFIED") && isRuledPinpointOnly(check.normalised, res.findings)) {
+        pinpoints += 1
+        continue
+      }
       if (res.status === "OK" || res.findings.some((f) => f.status === "VERIFIED")) {
         throw new Error(
           `seed ${SEED} variant #${i} evaded: ${JSON.stringify(text)} [${codePoints(text)}] -> ${JSON.stringify(res)}`
@@ -255,6 +275,14 @@ describe(`citation gate fuzz (seed ${SEED})`, () => {
           })
         )
         // refused (422 unsupported_characters) or blocked by the gate (422) — never anything else
+        const stored = checkDraftCharset(body)
+        if (res.status === 200 && stored.ok) {
+          const gate = verifyCitations(store, extractCitations(stored.normalised))
+          if (gate.findings.some((f) => f.status === "VERIFIED") && isRuledPinpointOnly(stored.normalised, gate.findings)) {
+            store.drafts.clear()
+            continue
+          }
+        }
         if (res.status !== 422) {
           throw new Error(`seed ${SEED} compose variant #${i} returned ${res.status}: ${JSON.stringify(body)} [${codePoints(body)}]`)
         }
