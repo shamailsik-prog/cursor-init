@@ -15,9 +15,11 @@
 # emulators), a temporary config with free ports is written instead
 # (functions/README.md "Port notes"); the repo firebase.json is never edited.
 #
-# After a green run a platform admin records the pass with
-# recordGatePass({ gate: "G-2", evidence }); until then onboardFirm refuses a
-# second firm (second_firm_forbidden).
+# A green run prints `counts: {...}` and an `evidence: {...}` line (also written
+# to G2_EVIDENCE_OUT when set). A platform admin records the pass from a CI run
+# with recordGatePass({ gate: "G-2", evidence }); until then onboardFirm refuses
+# a second firm (second_firm_forbidden). A pass covers its commit: re-run and
+# re-record when the WhatsApp webhook, D5-1 web research or Postgres RLS lands.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,7 +31,7 @@ if [ "${1:-}" = "--inner" ]; then
   echo "--- web + WhatsApp read paths (tests/g2.cross-firm.test.ts)"
   G2_COVERAGE_OUT="$out/next.json" npx vitest run tests/g2.cross-firm.test.ts || rc=1
   echo "--- P5 callables, HTTP api, Firestore rules (functions/test/g2.cross-firm.test.ts)"
-  (cd "$ROOT/functions" && G2_COVERAGE_OUT="$out/functions.json" npx vitest run test/g2.cross-firm.test.ts) || rc=1
+  (cd "$ROOT/functions" && G2_GATE=1 G2_COVERAGE_OUT="$out/functions.json" npx vitest run test/g2.cross-firm.test.ts) || rc=1
   exit $rc
 fi
 
@@ -37,6 +39,8 @@ cd "$ROOT" || exit 1
 echo "=== Gate G-2: cross-firm isolation ==="
 
 export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
+# firebase-tools and the Firebase client SDK import punycode (DEP0040 on every process start).
+export NODE_OPTIONS="--disable-warning=DEP0040${NODE_OPTIONS:+ $NODE_OPTIONS}"
 export no_proxy="$NO_PROXY"
 
 out="$(mktemp -d)"
@@ -74,10 +78,14 @@ npx firebase emulators:exec --config "$config" --only auth,firestore --project d
   "bash \"$ROOT/ci_gates/gate_g2.sh\" --inner \"$out\""
 suites_rc=$?
 
-node - "$out" "$suites_rc" <<'NODE'
+commit_sha="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "")"
+run_url=""
+if [ -n "${GITHUB_RUN_ID:-}" ]; then run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"; fi
+
+node - "$out" "$suites_rc" "$commit_sha" "$run_url" "${G2_EVIDENCE_OUT:-}" <<'NODE'
 const fs = require("node:fs")
 const path = require("node:path")
-const [out, suitesRc] = process.argv.slice(2)
+const [out, suitesRc, commitSha, runUrl, evidenceOut] = process.argv.slice(2)
 const problems = []
 if (suitesRc !== "0") problems.push(`suite run failed (exit ${suitesRc})`)
 
@@ -100,12 +108,19 @@ for (const r of rows) {
 if (!rows.some((r) => r.suite === "next" && r.status === "tested")) problems.push("no web/WhatsApp read path was tested")
 if (!rows.some((r) => r.channel === "callable")) problems.push("no P5 callable was tested")
 if (!rows.some((r) => r.channel === "rules" && r.status === "tested")) problems.push("no Firestore rules collection was tested")
+// Every web/WhatsApp path must have run in both persistence modes.
+const nextTested = rows.filter((r) => r.suite === "next" && r.status === "tested")
+for (const p of new Set(nextTested.map((r) => r.path))) {
+  for (const mode of ["memory", "firestore"]) {
+    if (!nextTested.some((r) => r.path === p && r.mode === mode)) problems.push(`no ${mode}-mode run of ${p}`)
+  }
+}
 
 const pad = (s, n) => String(s).padEnd(n).slice(0, n)
 const line = (c) => `${pad(c[0], 6)} ${pad(c[1], 9)} ${pad(c[2], 10)} ${pad(c[3], 70)} ${pad(c[4], 12)} ${pad(c[5], 8)} ${c[6]}`
 const print = (r) => console.log(line([r.service, r.channel, r.mode ?? "", r.path, r.status, r.attempts, r.allowed]))
 
-console.log("\n=== G-2 coverage: web and WhatsApp (D1-1, D1-2, D3-1, D5-1, D2-1) ===")
+console.log("\n=== G-2 coverage: web and WhatsApp (D1-1, D1-2, D3-1, D5-1, D2-1; P5 tenancy) ===")
 console.log(line(["svc", "channel", "mode", "read path", "status", "attempts", "allowed"]))
 const order = { tested: 0, not_built: 1, out_of_scope: 2, global: 3 }
 rows
@@ -125,11 +140,29 @@ console.log(`${tested.length} tenant collections x 6 firm-B roles x {get, list}:
 console.log(`platform-global (reviewed, no tenant data): ${global.join(", ") || "none"}`)
 
 const count = (s) => rows.filter((r) => r.status === s).length
-console.log(`\nsummary: ${count("tested")} tested, ${count("not_built")} not built, ${count("out_of_scope")} out of scope, ${count("global")} global`)
+const counts = {
+  tested: count("tested"),
+  notBuilt: count("not_built"),
+  outOfScope: count("out_of_scope"),
+  global: count("global"),
+  allowed: rows.reduce((n, r) => n + r.allowed, 0),
+}
+console.log(`\nsummary: ${counts.tested} tested, ${counts.notBuilt} not built, ${counts.outOfScope} out of scope, ${counts.global} global, ${counts.allowed} allowed`)
+console.log(`counts: ${JSON.stringify(counts)}`)
 if (problems.length) {
   console.log("\nGate G-2: FAIL")
   for (const p of problems) console.log(`  - ${p}`)
   process.exit(1)
 }
+// The evidence recordGatePass({ gate: "G-2", evidence }) takes (functions/src/p5/gates.ts). A
+// local run has no CI run URL: record a pass only from a CI run (its URL proves the run).
+const evidence = {
+  summary: `gate:g2 PASS: ${counts.tested} tested, ${counts.allowed} allowed, ${counts.notBuilt} not built`,
+  commitSha,
+  runUrl: runUrl || null,
+  counts,
+}
+console.log(`evidence: ${JSON.stringify(evidence)}`)
+if (evidenceOut) fs.writeFileSync(evidenceOut, `${JSON.stringify(evidence, null, 2)}\n`)
 console.log("\nGate G-2: PASS (no cross-firm read allowed on any implemented path)")
 NODE

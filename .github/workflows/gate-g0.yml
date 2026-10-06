@@ -15,8 +15,12 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # functions/ declares engines.node 22 and deploys on 22; the whole job runs on it.
+          node-version: "22"
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -40,6 +44,7 @@ jobs:
         run: npm --prefix functions run typecheck
       - name: Functions build
         run: npm --prefix functions run build
+      # test/g2.cross-firm.test.ts is excluded here (functions/vitest.config.ts): it runs once, in gate:g2.
       - name: Functions tests (Auth + Firestore emulators)
         run: npm --prefix functions run test:emu
       - name: Gate G-2 cross-firm isolation (L18 §10)
