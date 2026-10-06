@@ -406,14 +406,19 @@ const CASE_REFERENCE_GENERIC = new RegExp(
 // "No." is a statute word. Bare "Order" is not one ("First Appeal from Order No. 12 of 2019" is a
 // case); "Order-in-Council" is.
 const STATUTE_WORD = /^(?:Act|Ordinance|Rules|Regulations?|S\.?R\.?O\.?|Notification|Order-in-Council)$/iu
+// R4 FP1: numbers that are never authorities — police, revenue, banking, correspondence and
+// identity numbers — by the same "word immediately before No." rule.
+const NON_AUTHORITY_WORD =
+  /^(?:FIR|F\.I\.R\.?|Challan|Diary|Rapt|Mutation|Intiqal|Khasra|Khewat|Khatooni|Cheque|Check|Letter|Memo|Notice|CNIC|Plot|House|Account|A\/C|Receipt|Invoice|Registration|Vehicle)$/iu
 const RE_NO_ANCHOR = /No[s]?\.?\s*\p{L}?-?\s*\d/u
 
-function isStatuteReference(text: string, matchStart: number, match: string): boolean {
+/** A "… No. n of yyyy" whose word right before "No." is a statute or non-authority word (N12, R4 FP1). */
+function isExcludedReference(text: string, matchStart: number, match: string): boolean {
   const at = match.search(RE_NO_ANCHOR)
   if (at < 0) return false
   const before = text.slice(0, matchStart + at).trimEnd()
-  const word = before.split(/\s+/).pop() ?? ""
-  return STATUTE_WORD.test(word.replace(/^[("'\u201c]+|[,;:]+$/gu, ""))
+  const word = (before.split(/\s+/).pop() ?? "").replace(/^[("'\u201c]+|[,;:]+$/gu, "")
+  return STATUTE_WORD.test(word) || NON_AUTHORITY_WORD.test(word)
 }
 
 // ---- Urdu script (R3 N11) ------------------------------------------------------------------
@@ -442,6 +447,9 @@ const URDU_REPORTER = new RegExp(
     .join("|")})(?![\\p{L}])`,
   "gu"
 )
+const URDU_NUMBER_WORD = foldDraftText("نمبر").text
+// R4 FP1: Urdu non-authority prefixes before نمبر (FIR, case/FIR, challan, mutation, khasra).
+const URDU_NON_AUTHORITY = ["ایف آئی آر", "مقدمہ", "چالان", "انتقال", "خسرہ"].map((w) => foldDraftText(w).text)
 // "<type words> نمبر n (بابت|آف|سال|سن|/|-) yyyy" — Urdu case references.
 const URDU_CASE_REFERENCE = new RegExp(
   `(?:[\\p{Script=Arabic}.]+\\s+){0,4}${foldDraftText("نمبر").text}\\s*\\d+(?:\\s*-\\s*\\p{L})?\\s*(?:${["بابت", "آف", "سال", "سن"]
@@ -463,6 +471,9 @@ function urduSuspects(folded: FoldedText): Array<Span & { raw: string }> {
   }
   for (const m of text.matchAll(URDU_CASE_REFERENCE)) {
     const start = m.index ?? 0
+    // R4 FP1: FIR / case-diary / challan / mutation / khasra numbers are not authorities
+    const before = text.slice(0, start + m[0].indexOf(URDU_NUMBER_WORD)).replace(/\s+/gu, " ").trimEnd()
+    if (URDU_NON_AUTHORITY.some((prefix) => before.endsWith(prefix))) continue
     out.push({ start, end: start + m[0].length, raw: m[0] })
   }
   return out
@@ -612,7 +623,7 @@ function analyse(
   }
   for (const pattern of [CASE_REFERENCE, CASE_REFERENCE_GENERIC]) {
     for (const m of text.matchAll(pattern)) {
-      if (isStatuteReference(text, m.index ?? 0, m[0])) continue
+      if (isExcludedReference(text, m.index ?? 0, m[0])) continue
       if (isOwnCase(m[0], options)) continue
       const start = m.index ?? 0
       addSuspect(start, start + m[0].length, m[0])
