@@ -61,3 +61,28 @@ describe("dedup is not a cross-matter oracle", () => {
     expect(json.result.doc.classification).toBe("privileged")
   })
 })
+
+describe("same-matter dedup is not a clearance oracle (review R2 N3)", () => {
+  it("a member cleared below the existing record gets a fresh document, indistinguishable from a new upload", async () => {
+    const store = getRuntimeStore()
+    const m = createMatter(store, { firmId: "firmA", clientId: "client_a", title: "m", courtId: "SHC", classification: "internal" })
+    addMember(store, m.id, "partner_a", "firmA")
+    addMember(store, m.id, "associate_a", "firmA")
+    const b = Buffer.from("whistleblower memo").toString("base64")
+    const held = await ingest({ action: "ingest", actorId: "partner_a", firmId: "firmA", matterId: m.id, contentBase64: b, sourceChannel: "web", classification: "privileged-restricted" })
+    const heldDoc = ((await held.json()) as { result: { doc: { id: string } } }).result.doc
+    const probe = await ingest({ action: "ingest", actorId: "associate_a", firmId: "firmA", matterId: m.id, contentBase64: b, sourceChannel: "web", classification: "internal" })
+    expect(probe.status).toBe(200)
+    const pj = (await probe.json()) as { result: { reused: boolean; ocrJobs: number; doc: { id: string; classification: string } } }
+    expect(pj.result.doc.id).not.toBe(heldDoc.id)
+    expect(pj.result.doc.classification).toBe("internal")
+    expect(pj.result.reused).toBe(false)
+    expect(pj.result.ocrJobs).toBe(1)
+    expect(store.documents.get(heldDoc.id)?.classification).toBe("privileged-restricted")
+    // A cleared member still dedups onto the existing record.
+    const again = await ingest({ action: "ingest", actorId: "partner_a", firmId: "firmA", matterId: m.id, contentBase64: b, sourceChannel: "web", classification: "privileged-restricted" })
+    const aj = (await again.json()) as { result: { reused: boolean; doc: { id: string } } }
+    expect(aj.result.reused).toBe(true)
+    expect(aj.result.doc.id).toBe(heldDoc.id)
+  })
+})

@@ -261,6 +261,7 @@ async function handlePost(request: Request) {
       sourceChannel: parsed.sourceChannel,
       classification,
       idempotencyKey: key,
+      callerClearance: actor.clearanceLevel,
     })
 
     const inMemoryDoc = store.documents.get(write.docId)
