@@ -3,6 +3,7 @@ import { PublicError } from "@/platform/http/publicError"
 import { withSession, type HandlerSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, errorResponse, publicErrorMessage } from "@/platform/http/errors"
 import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
+import { closureRowVisible } from "@/services/d4-3/closureVisibility"
 import {
   IdempotencyCache,
   IdempotencyError,
@@ -4486,16 +4487,9 @@ async function handleGet(request: Request) {
           if (!isFilingEscalationClosureFollowupQueueStatus(queueStatus)) return true
           return row.status === queueStatus
         })
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .map((row) => {
           const window = slaWindowByOwner.get(row.ownerId)
           const exceptionDigest = exceptionDigestByOwner.get(row.ownerId)
@@ -4883,16 +4877,9 @@ async function handleGet(request: Request) {
             : true
         )
         .filter((row) => (packageId ? row.packageIds.includes(packageId) : true))
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = firmPackages.find((item) => item.id === pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => firmPackages.find((item) => item.id === pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4941,16 +4928,9 @@ async function handleGet(request: Request) {
         .filter((row): row is NonNullable<typeof row> => row !== null)
         .filter((row) => (queueId ? row.queueId === queueId : true))
         .filter((row) => (packageId ? row.packageIds.includes(packageId) : true))
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4979,16 +4959,9 @@ async function handleGet(request: Request) {
             ? row.status === disputeStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5015,16 +4988,9 @@ async function handleGet(request: Request) {
             ? row.status === enforcementStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => {
           const aDue = a.waiverExpiresAt ?? Number.MAX_SAFE_INTEGER
           const bDue = b.waiverExpiresAt ?? Number.MAX_SAFE_INTEGER
@@ -5057,16 +5023,9 @@ async function handleGet(request: Request) {
             ? row.status === adjudicationStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5093,16 +5052,9 @@ async function handleGet(request: Request) {
             ? row.status === rebalanceStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5131,16 +5083,9 @@ async function handleGet(request: Request) {
             ? row.status === quorumStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5173,16 +5118,9 @@ async function handleGet(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureRebalanceExecutionMode(mode) ? row.mode === mode : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5215,16 +5153,9 @@ async function handleGet(request: Request) {
             ? row.escalationTier === escalationTier
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5259,16 +5190,9 @@ async function handleGet(request: Request) {
             ? row.suppressionReasons.includes(suppressionReason)
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5299,16 +5223,9 @@ async function handleGet(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5337,16 +5254,9 @@ async function handleGet(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5375,16 +5285,9 @@ async function handleGet(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5413,16 +5316,9 @@ async function handleGet(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5449,16 +5345,9 @@ async function handleGet(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureBurndownRecalibrationStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5485,16 +5374,9 @@ async function handleGet(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureExpiryAttestationQueueStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5521,16 +5403,9 @@ async function handleGet(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureBurndownSettlementStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5559,16 +5434,9 @@ async function handleGet(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5595,16 +5463,9 @@ async function handleGet(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureSettlementAttestationStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5631,16 +5492,9 @@ async function handleGet(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureQueueDrainReconciliationStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5667,16 +5521,9 @@ async function handleGet(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureSettlementArbitrationStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5703,16 +5550,9 @@ async function handleGet(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureQueueReentryComplianceStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null

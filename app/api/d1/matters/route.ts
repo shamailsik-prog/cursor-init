@@ -342,6 +342,14 @@ async function handlePost(request: Request) {
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
+      // R2 N6: the case number feeds the citation gate's own-case exemption; only a partner
+      // member records it (D6-1 owns it, L18 §3.2), and it is audited below.
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "only a partner records the case number", code: "partner_required" },
+          { status: 403 }
+        )
+      }
       const priorAuditCount = store.audit.length
       const priorFollowUpIds = new Set(store.followUps.map((row) => row.id))
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)

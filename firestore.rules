@@ -91,8 +91,11 @@ service cloud.firestore {
       allow read: if sameFirm() && cleared(resource.data.classification)
         && (memberReader(matterId) || (role() == 'client' && resource.data.get('clientId', '') == request.auth.uid));
       allow create: if sameFirmNew() && role() in ['partner', 'associate'] && clearedNew();
+      // R2 N6: caseNumber / caseNumberStatus / courtId are written only by the API (partner-only,
+      // audited); they feed the citation gate's own-case exemption.
       allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate']
-        && cleared(resource.data.classification) && clearedNew() && monotonic();
+        && cleared(resource.data.classification) && clearedNew() && monotonic()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['caseNumber', 'caseNumberStatus', 'courtId']);
       allow delete: if false;
     }
     match /documents/{docId} {
@@ -377,33 +380,36 @@ service cloud.firestore {
     match /filing_escalation_rollover_breach_watches/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
     match /filing_escalation_remediation_lifecycles/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
     match /filing_escalation_rollover_reaffirmation_sla/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
-    match /filing_escalation_closure_compliance_digests/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_followup_queue/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_sla_window_configs/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_auto_assignment_rules/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_sla_windows/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_attestations/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_sla_exception_digests/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_attestation_disputes/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_sla_exception_enforcement/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_adjudication_queue/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_enforcement_rebalance/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_adjudication_quorum/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_rebalance_execution/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_adjudication_slo/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_rebalance_safeguards/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_adjudication_slo_debt_remediation/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_rebalance_safeguard_expiry/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_adjudication_debt_burndown/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_safeguard_expiry_attestations/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_burndown_recalibration/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_expiry_attestation_queue/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_burndown_settlement/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_expiry_attestation_queue_drain/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_settlement_attestation/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_queue_drain_reconciliation/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_settlement_arbitration/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
-    match /filing_escalation_closure_queue_reentry_compliance/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    // R2 N6: per-owner closure digests whose packageIds span several matters. Membership of every
+    // referenced matter is not expressible over an array in rules, so they are server-only; the
+    // API shows a row only to a partner who can access every package (closureRowVisible).
+    match /filing_escalation_closure_compliance_digests/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_followup_queue/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_sla_window_configs/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_auto_assignment_rules/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_sla_windows/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_attestations/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_sla_exception_digests/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_attestation_disputes/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_sla_exception_enforcement/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_adjudication_queue/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_enforcement_rebalance/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_adjudication_quorum/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_rebalance_execution/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_adjudication_slo/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_rebalance_safeguards/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_adjudication_slo_debt_remediation/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_rebalance_safeguard_expiry/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_adjudication_debt_burndown/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_safeguard_expiry_attestations/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_burndown_recalibration/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_expiry_attestation_queue/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_burndown_settlement/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_expiry_attestation_queue_drain/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_settlement_attestation/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_queue_drain_reconciliation/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_settlement_arbitration/{id} { allow read: if false; allow write: if false; }
+    match /filing_escalation_closure_queue_reentry_compliance/{id} { allow read: if false; allow write: if false; }
     // L17.6 #41 / review R1 #10: the register-only accounts role reads no configuration either.
     // No accounts UI consumes flags today; if one ever does, serve the needed flags via the API.
     match /feature_flags/{id}  { allow read: if signedIn() && !isRegisterOnly(); allow write: if false; }

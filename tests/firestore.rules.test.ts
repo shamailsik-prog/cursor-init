@@ -1144,3 +1144,31 @@ describe("Review R2 N5 — client-role users read only their own matters, never 
     await assertSucceeds(setDoc(doc(db, "matter_members", "n5M_n5-assoc"), { firmId: "firmA", matterId: "n5M", userId: "n5-assoc" }))
   })
 })
+
+describe("Review R2 N6 — escalation-closure digests are server-only; case number fields are API-only", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "filing_escalation_closure_followup_queue", "n6q"), { id: "n6q", firmId: "firmA", ownerId: "n6-pm", classification: "internal", packageIds: ["p1", "p2"], notes: ["re: memo"] })
+      await setDoc(doc(db, "filing_escalation_closure_compliance_digests", "n6c"), { id: "n6c", firmId: "firmA", ownerId: "n6-pm", classification: "internal", packageIds: ["p1"] })
+      await setDoc(doc(db, "matters", "n6M"), { firmId: "firmA", title: "N6", classification: "internal", caseNumber: null, caseNumberStatus: "pending", courtId: "SHC" })
+      await setDoc(doc(db, "matter_members", "n6M_n6-pm"), { firmId: "firmA", matterId: "n6M", userId: "n6-pm" })
+      await setDoc(doc(db, "matter_members", "n6M_n6-assoc"), { firmId: "firmA", matterId: "n6M", userId: "n6-assoc" })
+    })
+  })
+  it("no client-SDK read of filing_escalation_closure_* (rows span several matters), owner partner included", async () => {
+    await assertFails(getDoc(doc(authed("n6-assoc", ASSOC), "filing_escalation_closure_followup_queue", "n6q")))
+    await assertFails(getDoc(doc(authed("n6-pm", PARTNER), "filing_escalation_closure_followup_queue", "n6q")))
+    await assertFails(getDoc(doc(authed("n6-pm", PARTNER), "filing_escalation_closure_compliance_digests", "n6c")))
+  })
+  it("members cannot rewrite caseNumber, caseNumberStatus or courtId from the client SDK", async () => {
+    for (const db of [authed("n6-assoc", ASSOC), authed("n6-pm", PARTNER)]) {
+      await assertFails(updateDoc(doc(db, "matters", "n6M"), { caseNumber: "C.P. No. 12 of 2019" }))
+      await assertFails(updateDoc(doc(db, "matters", "n6M"), { caseNumberStatus: "recorded" }))
+      await assertFails(updateDoc(doc(db, "matters", "n6M"), { courtId: "SC" }))
+    }
+    await assertSucceeds(updateDoc(doc(authed("n6-assoc", ASSOC), "matters", "n6M"), { title: "renamed" }))
+  })
+})
