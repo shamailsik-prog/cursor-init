@@ -184,11 +184,12 @@ function overlaps(a: Span, b: Span): boolean {
 
 /** Rest-of-text after a match that makes the page ambiguous ("12 3", "1234-A", "123A", "1/2"). */
 function ambiguousTail(rest: string): boolean {
-  // A digit/letter glued on, digits after only blanks, or anything after a run of dashes and
-  // slashes ("12 3", "1234-A", "12--34", "1/2") leaves the page ambiguous.
-  return /^(?:[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|[^\s\p{L}\p{N}.,;:)\]'"\u201d\u2019!?]+\d)/u.test(
-    rest
-  )
+  // Ambiguous (review R2 N1, R3 N9): a digit/letter glued on; digits after only blanks; anything
+  // after a run of dashes/slashes ("12--34", "1/2"); a thousands-style separator — , . ' or a
+  // right single quote — directly followed by a digit ("1,234", "1.234", "1'234"; the ", 1240"
+  // pinpoint with a space stays a pinpoint); and any other glued character that is not a
+  // closing punctuation mark ("1<b>234", "1#234", "1\u066c234").
+  return /^(?:[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|[,.'\u2019]\d|[^\s.,;:)\]'"\u201d\u2019!?])/u.test(rest)
 }
 
 function trailingParen(rest: string): { length: number; key: string } | null {
