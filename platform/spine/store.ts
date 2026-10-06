@@ -5612,8 +5612,12 @@ export class SpineStore {
   links: EntityLink[] = []
   followUps: FollowUp[] = []
   intimations: Intimation[] = []
-  /** Bounded, request-collected audit log (platform/audit/requestAudit.ts). */
-  audit: AuditEntry[] = new AuditLog()
+  /**
+   * Bounded, request-collected audit log (platform/audit/requestAudit.ts). Readonly: replacing
+   * the object would silently disable per-request persistence (review R2 N2); use
+   * `audit.replaceAll(rows)` to change its contents.
+   */
+  readonly audit: AuditLog = new AuditLog()
   sectionVersions: StatuteSectionVersion[] = []
   judgments = new Map<string, Judgment>()
   treatments: TreatmentRow[] = []

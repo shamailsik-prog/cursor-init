@@ -68,6 +68,18 @@ export class AuditLog extends Array<AuditEntry> {
     return this.length
   }
 
+  /**
+   * Replace the contents in place (review R2 N2): the log object — and with it per-request
+   * collection and the bound — survives a sync. Rows are not re-collected by any request.
+   */
+  replaceAll(rows: readonly AuditEntry[]): void {
+    this.length = 0
+    for (let i = 0; i < rows.length; i += 10_000) {
+      Array.prototype.push.apply(this, rows.slice(i, i + 10_000) as AuditEntry[])
+    }
+    this.evictPersisted()
+  }
+
   private evictPersisted(): void {
     let evict = 0
     while (this.length - evict > this.capacity) {

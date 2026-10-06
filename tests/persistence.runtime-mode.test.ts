@@ -4881,7 +4881,7 @@ describe("Runtime persistence mode", () => {
       expect(
         firmAScopeQueueReentryComplianceJson.items.some((item) => item.ownerId === "partner_b")
       ).toBe(false)
-      getRuntimeStore().audit = []
+      getRuntimeStore().audit.replaceAll([])
       // Every permission decision is now persisted to the firm's audit log (review R1 #4), so
       // the rows asserted below may be beyond the first page: read the whole view.
       const auditViewJson: { items: Array<{ action: string; target: string }> } = { items: [] }
@@ -10533,7 +10533,7 @@ describe("Runtime persistence mode", () => {
       expect(resolveRes.status).toBe(200)
 
       // Simulate fresh runtime cycle without in-memory audit cache.
-      getRuntimeStore().audit = []
+      getRuntimeStore().audit.replaceAll([])
       const auditViewRes = await tenancyGet(
         new Request(
           "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=100&cursor=0"
@@ -10868,7 +10868,7 @@ describe("Runtime persistence mode", () => {
         clearanceLevel: "confidential",
       })
       getRuntimeStore().members = new Map()
-      getRuntimeStore().audit = []
+      getRuntimeStore().audit.replaceAll([])
       getRuntimeStore().tenancySessionReferences = new Map()
 
       const staleReplayRes = await tenancyGet(
