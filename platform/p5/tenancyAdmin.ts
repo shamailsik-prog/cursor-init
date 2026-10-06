@@ -791,6 +791,22 @@ export function resolveSessionLineageDispute(
   return { dispute: resolved, relatedSessionReference, auditEntry }
 }
 
+/**
+ * Rows keyed by a lineage root (digest, queue, checkpoint, adjudication,
+ * ledgers, settlement) or by a session reference (identity bridge) carry no
+ * firm in their id. A row read by that key must belong to the caller's firm;
+ * another firm's row is refused like an unknown root. Second line behind the
+ * root check in recomputeLineageReconciliationDigest.
+ */
+function ownRow<T extends { firmId: string }>(
+  row: T | undefined,
+  firmId: string,
+  message = "unknown lineage root session reference"
+): T | undefined {
+  if (row && row.firmId !== firmId) throw new PublicError(message)
+  return row
+}
+
 function lineageDigestId(lineageRootSessionReferenceId: string): string {
   return `tenancy-lineage-digest:${lineageRootSessionReferenceId}`
 }
@@ -993,7 +1009,7 @@ export function ensureLineageReconciliationMonitoringRows(
 } {
   const now = input.now ?? Date.now()
   const queueId = lineageArbitrationQueueId(input.digest.lineageRootSessionReferenceId)
-  const existingQueue = store.tenancyLineageReconciliationQueueArbitrations.get(queueId)
+  const existingQueue = ownRow(store.tenancyLineageReconciliationQueueArbitrations.get(queueId), input.firmId)
   const digestRegressedToNeedsReview =
     existingQueue?.digestStatus !== "needs_review" && input.digest.status === "needs_review"
   const queue: TenancyLineageReconciliationQueueArbitrationRow = existingQueue
@@ -1042,7 +1058,7 @@ export function ensureLineageReconciliationMonitoringRows(
   store.tenancyLineageReconciliationQueueArbitrations.set(queue.id, queue)
 
   const checkpointId = lineageClosureCheckpointId(input.digest.lineageRootSessionReferenceId)
-  const existingCheckpoint = store.tenancyLineageDigestClosureCheckpoints.get(checkpointId)
+  const existingCheckpoint = ownRow(store.tenancyLineageDigestClosureCheckpoints.get(checkpointId), input.firmId)
   const checkpoint: TenancyLineageDigestClosureCheckpointRow = existingCheckpoint
     ? {
         ...existingCheckpoint,
@@ -1083,7 +1099,7 @@ export function ensureLineageReconciliationMonitoringRows(
   store.tenancyLineageDigestClosureCheckpoints.set(checkpoint.id, checkpoint)
 
   const adjudicationId = lineageClosureAdjudicationId(input.digest.lineageRootSessionReferenceId)
-  const existingAdjudication = store.tenancyLineageClosureAdjudications.get(adjudicationId)
+  const existingAdjudication = ownRow(store.tenancyLineageClosureAdjudications.get(adjudicationId), input.firmId)
   const requiredPanelQuorum = existingAdjudication?.requiredPanelQuorum ?? 2
   const confirmedPanelPartnerIds = existingAdjudication?.confirmedPanelPartnerIds ?? []
   const checkpointReopened = checkpoint.status === "reopened"
@@ -1156,7 +1172,7 @@ export function ensureLineageReconciliationMonitoringRows(
   const debtLedgerId = lineageArbitrationDebtRetirementLedgerId(
     input.digest.lineageRootSessionReferenceId
   )
-  const existingDebtLedger = store.tenancyLineageArbitrationDebtRetirementLedgers.get(debtLedgerId)
+  const existingDebtLedger = ownRow(store.tenancyLineageArbitrationDebtRetirementLedgers.get(debtLedgerId), input.firmId)
   const unresolvedQueuePressureCount =
     (input.digest.status === "needs_review" ? 1 : 0) +
     input.digest.openDisputeCount +
@@ -1213,7 +1229,7 @@ export function ensureLineageReconciliationMonitoringRows(
   const settlementId = lineageClosureAdjudicationSettlementId(
     input.digest.lineageRootSessionReferenceId
   )
-  const existingSettlement = store.tenancyLineageClosureAdjudicationSettlements.get(settlementId)
+  const existingSettlement = ownRow(store.tenancyLineageClosureAdjudicationSettlements.get(settlementId), input.firmId)
   const settlementConfirmationSlaStartedAt =
     existingSettlement?.settlementConfirmationSlaStartedAt ??
     closureAdjudication.verdictRecordedAt ??
@@ -1256,9 +1272,9 @@ export function ensureLineageReconciliationMonitoringRows(
   const disputeLedgerId = lineageArbitrationDebtRetirementDisputeLedgerId(
     input.digest.lineageRootSessionReferenceId
   )
-  const existingDisputeLedger = store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(
+  const existingDisputeLedger = ownRow(store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(
     disputeLedgerId
-  )
+  ), input.firmId)
   const arbitrationDebtRetirementDisputeLedger: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow =
     {
       id: disputeLedgerId,
@@ -1325,9 +1341,9 @@ export function assignLineageReconciliationArbitration(
   if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const existing =
-    store.tenancyLineageReconciliationQueueArbitrations.get(
+    ownRow(store.tenancyLineageReconciliationQueueArbitrations.get(
       lineageArbitrationQueueId(input.lineageRootSessionReferenceId)
-    ) ??
+    ), input.firmId) ??
     ensureLineageReconciliationMonitoringRows(store, {
       firmId: input.firmId,
       digest,
@@ -1387,9 +1403,9 @@ export function arbitrateLineageReconciliationQueue(
   if (!digest || digest.firmId !== input.firmId) throw new PublicError("unknown lineage reconciliation digest")
   const now = input.now ?? Date.now()
   const existing =
-    store.tenancyLineageReconciliationQueueArbitrations.get(
+    ownRow(store.tenancyLineageReconciliationQueueArbitrations.get(
       lineageArbitrationQueueId(input.lineageRootSessionReferenceId)
-    ) ??
+    ), input.firmId) ??
     ensureLineageReconciliationMonitoringRows(store, {
       firmId: input.firmId,
       digest,
@@ -1448,9 +1464,9 @@ export function attestLineageDigestClosureCheckpoint(
   if (!closureReason) throw new PublicError("closureReason is required")
   const now = input.now ?? Date.now()
   const existing =
-    store.tenancyLineageDigestClosureCheckpoints.get(
+    ownRow(store.tenancyLineageDigestClosureCheckpoints.get(
       lineageClosureCheckpointId(input.lineageRootSessionReferenceId)
-    ) ??
+    ), input.firmId) ??
     ensureLineageReconciliationMonitoringRows(store, {
       firmId: input.firmId,
       digest,
@@ -1510,9 +1526,9 @@ export function reopenLineageDigestClosureCheckpoint(
   if (!reopenTrigger) throw new PublicError("reopenTrigger is required")
   const now = input.now ?? Date.now()
   const existing =
-    store.tenancyLineageDigestClosureCheckpoints.get(
+    ownRow(store.tenancyLineageDigestClosureCheckpoints.get(
       lineageClosureCheckpointId(input.lineageRootSessionReferenceId)
-    ) ??
+    ), input.firmId) ??
     ensureLineageReconciliationMonitoringRows(store, {
       firmId: input.firmId,
       digest,
@@ -2280,7 +2296,7 @@ export function attestExternalSessionIdentityBridge(
   const assertedExternalSessionId = input.assertedExternalSessionId?.trim() || null
   const now = input.now ?? Date.now()
   const bridgeId = externalSessionIdentityBridgeId(sessionReference.id)
-  const existing = store.tenancyExternalSessionIdentityBridges.get(bridgeId)
+  const existing = ownRow(store.tenancyExternalSessionIdentityBridges.get(bridgeId), input.firmId, "unknown session reference")
   const mismatchReasons = computeExternalSessionIdentityMismatchReasons({
     sessionReference,
     assertedExternalSessionId,
@@ -2363,7 +2379,7 @@ export function quarantineExternalSessionIdentityBridge(
   if (!quarantineReason) throw new PublicError("quarantineReason is required")
   const now = input.now ?? Date.now()
   const bridgeId = externalSessionIdentityBridgeId(sessionReference.id)
-  const existing = store.tenancyExternalSessionIdentityBridges.get(bridgeId)
+  const existing = ownRow(store.tenancyExternalSessionIdentityBridges.get(bridgeId), input.firmId, "unknown session reference")
   const bridge: TenancyExternalSessionIdentityBridgeRow = {
     id: bridgeId,
     firmId: input.firmId,
@@ -2436,7 +2452,7 @@ export function clearExternalSessionIdentityBridge(
   if (!clearReason) throw new PublicError("clearReason is required")
   const now = input.now ?? Date.now()
   const bridgeId = externalSessionIdentityBridgeId(sessionReference.id)
-  const existing = store.tenancyExternalSessionIdentityBridges.get(bridgeId)
+  const existing = ownRow(store.tenancyExternalSessionIdentityBridges.get(bridgeId), input.firmId, "unknown session reference")
   const bridge: TenancyExternalSessionIdentityBridgeRow = {
     id: bridgeId,
     firmId: input.firmId,

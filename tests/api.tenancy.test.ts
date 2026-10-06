@@ -2,6 +2,14 @@ import { afterEach, describe, expect, it } from "vitest"
 import { GET, POST } from "@/app/api/p5/tenancy/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
+import {
+  arbitrateLineageReconciliationQueue,
+  assignLineageReconciliationArbitration,
+  attestLineageDigestClosureCheckpoint,
+  ensureLineageReconciliationMonitoringRows,
+  governLineageClosureAdjudication,
+  reopenLineageDigestClosureCheckpoint,
+} from "@/platform/p5/tenancyAdmin"
 
 afterEach(() => {
   resetRuntimeStoreForTests()
@@ -1555,6 +1563,30 @@ describe("GET/POST /api/p5/tenancy", () => {
           .map((row) => JSON.stringify(row))
       )
     }
+
+    it("second line: root-keyed monitoring rows of another firm are refused even if a digest was re-stamped to the caller's firm", async () => {
+      const root = await firmALineage()
+      const store = getRuntimeStore()
+      const digestId = `tenancy-lineage-digest:${root}`
+      const aDigest = store.tenancyLineageReconciliationDigests.get(digestId)!
+      // A future caller that skipped recomputeLineageReconciliationDigest's root check.
+      const planted = { ...aDigest, firmId: "firmB" }
+      store.tenancyLineageReconciliationDigests.set(digestId, planted)
+      const before = rootRows(root).filter((row) => !row.includes("tenancy-lineage-digest:"))
+      const input = { actorId: "partner_b", firmId: "firmB", lineageRootSessionReferenceId: root }
+      const calls: Array<[string, () => unknown]> = [
+        ["ensure", () => ensureLineageReconciliationMonitoringRows(store, { firmId: "firmB", digest: planted })],
+        ["assign", () => assignLineageReconciliationArbitration(store, { ...input, assignedPartnerId: "partner_b" })],
+        ["arbitrate", () => arbitrateLineageReconciliationQueue(store, { ...input, disposition: "confirm_needs_review" })],
+        ["attest closure", () => attestLineageDigestClosureCheckpoint(store, { ...input, closureReason: "x" })],
+        ["reopen closure", () => reopenLineageDigestClosureCheckpoint(store, { ...input, reopenTrigger: "x" })],
+        ["govern", () => governLineageClosureAdjudication(store, { ...input, panelPartnerIds: ["partner_b"], requiredPanelQuorum: 1 })],
+      ]
+      for (const [label, call] of calls) {
+        expect(call, label).toThrow(/unknown lineage root session reference/)
+      }
+      expect(rootRows(root).filter((row) => !row.includes("tenancy-lineage-digest:"))).toEqual(before)
+    })
 
     it.each([
       ["assign_lineage_reconciliation_queue", { assignedPartnerId: "partner_b", slaWindowMinutes: 90 }],
