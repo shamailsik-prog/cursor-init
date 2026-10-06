@@ -29,15 +29,21 @@
  */
 
 /** Prefix for a suspected authority the strict extractor could not read. Never resolvable. */
+import { digitRunTainted, foldDraftText, type FoldedText } from "@/services/d4-2/citationFold"
+
 export const UNRECOGNISED_PREFIX = "UNRECOGNISED: "
 
 export function isUnrecognisedRef(ref: string): boolean {
   return ref.startsWith(UNRECOGNISED_PREFIX)
 }
 
-/** NFKC + strip format characters (zero-width space/joiner, BOM, bidi marks, soft hyphen). */
+/**
+ * Category-driven folding (services/d4-2/citationFold.ts, review round 2 N1): NFKD, marks and
+ * ignorables dropped, every Nd digit to ASCII, every dash to "-", every blank to " ", markup
+ * stripped. Kept for callers that only need the folded text.
+ */
 export function normaliseDraftText(text: string): string {
-  return text.normalize("NFKC").replace(/\p{Cf}/gu, "")
+  return foldDraftText(text).text
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -178,7 +184,11 @@ function overlaps(a: Span, b: Span): boolean {
 
 /** Rest-of-text after a match that makes the page ambiguous ("12 3", "1234-A", "123A", "1/2"). */
 function ambiguousTail(rest: string): boolean {
-  return /^(?:[\p{L}\p{N}]|\s*[-/]\s*[\p{L}\p{N}]|\s+\d)/u.test(rest)
+  // A digit/letter glued on, digits after only blanks, or anything after a run of dashes and
+  // slashes ("12 3", "1234-A", "12--34", "1/2") leaves the page ambiguous.
+  return /^(?:[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|[^\s\p{L}\p{N}.,;:)\]'"\u201d\u2019!?]+\d)/u.test(
+    rest
+  )
 }
 
 function trailingParen(rest: string): { length: number; key: string } | null {
@@ -217,8 +227,14 @@ function keyed(head: string, page: string, leading: string | null, trailing: str
   return sub ? `${head}(${sub}) ${page}` : `${head} ${page}`
 }
 
-function strictHits(text: string): StrictHit[] {
-  const hits: StrictHit[] = []
+/**
+ * Strict hits on folded text. A hit whose year/page digits had a removed mark or ignorable
+ * between them is ambiguous (N1: never read a shorter page) and goes to `ambiguous`.
+ */
+function strictHits(folded: FoldedText, ambiguous: Array<Span & { raw: string }> = []): StrictHit[] {
+  const text = folded.text
+  const raw: StrictHit[] = []
+  const hits = raw
   for (const m of text.matchAll(REPORTER_FIRST)) {
     const [whole, rawReporter, year, rawCourt, sub, page] = m
     if (!whole || !rawReporter || !year || !rawCourt || !page) continue
@@ -256,7 +272,11 @@ function strictHits(text: string): StrictHit[] {
     })
     if (hit) hits.push(hit)
   }
-  return hits
+  return raw.filter((hit) => {
+    if (!digitRunTainted(folded, hit.start, hit.end)) return true
+    ambiguous.push({ start: hit.start, end: hit.end, raw: text.slice(hit.start, hit.end) })
+    return false
+  })
 }
 
 function mixedScriptTokens(text: string): Array<Span & { raw: string }> {
@@ -290,11 +310,87 @@ export type AnalyseOptions = {
   isOwnCaseReference?: (raw: string) => boolean
 }
 
+// ---- reporter-token fallback (N1) ---------------------------------------------------------
+// Any known reporter token, in any folded form — dotted, spaced, hyphenated, glued to digits —
+// with a digit within FALLBACK_WINDOW skeleton characters, that no strict hit covers, is a
+// suspect. Stricter than "near a 4-digit year": any nearby number triggers it.
+const REPORTER_TOKENS = ["SCMR", "PLD", "PLJ", "CLC", "YLR", "MLD", "PCrLJ", "PTD", "PTCL", "CLD", "PLC", "NLR", "KLR", "SCR", "GBLR"]
+const FALLBACK_WINDOW = 20
+const SKELETON_REPORTER = new RegExp(
+  `(?<![\\p{L}])(?:${REPORTER_TOKENS.map((t) => [...t].join("\\s?")).join("|")})(?![\\p{L}])`,
+  "giu"
+)
+// AIR (All India Reporter) only in capitals: "air" is an ordinary word.
+const SKELETON_AIR = /(?<![\p{L}])A\s?I\s?R(?![\p{L}])/gu
+// A reporter written in capitals glued to other letters on one side ("bPLD", "SCMRnbsp") still
+// counts; capitals keep ordinary words ("script", "DESCRIPTION" — no boundary at all) out.
+const UPPER_REPORTERS = REPORTER_TOKENS.map((t) => t.toUpperCase()).join("|")
+const SKELETON_UPPER_GLUED = new RegExp(
+  `(?:(?<![\\p{L}])(?:${UPPER_REPORTERS}|PCrLJ)|(?:${UPPER_REPORTERS}|PCrLJ)(?![\\p{L}]))`,
+  "gu"
+)
+
+function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
+  const text = folded.text
+  const skel: string[] = []
+  const map: number[] = []
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i] ?? ""
+    if (/[\p{L}\p{N}\s]/u.test(ch)) {
+      const blank = /\s/.test(ch)
+      // collapse runs of blanks: "PL  D" is "PL D"
+      if (blank && skel[skel.length - 1] === " ") continue
+      skel.push(blank ? " " : ch)
+      map.push(i)
+    }
+  }
+  const skeleton = skel.join("")
+  const out: Array<Span & { raw: string }> = []
+  for (const pattern of [SKELETON_REPORTER, SKELETON_AIR, SKELETON_UPPER_GLUED]) {
+    for (const m of skeleton.matchAll(pattern)) {
+      const ms = m.index ?? 0
+      const me = ms + m[0].length
+      const lo = Math.max(0, ms - FALLBACK_WINDOW)
+      const hi = Math.min(skeleton.length, me + FALLBACK_WINDOW)
+      if (!/[0-9]/.test(skeleton.slice(lo, ms) + skeleton.slice(me, hi))) continue
+      const start = map[ms] ?? 0
+      const end = (map[me - 1] ?? start) + 1
+      const ctxStart = map[lo] ?? start
+      const ctxEnd = (map[hi - 1] ?? end - 1) + 1
+      out.push({ start, end, raw: text.slice(ctxStart, ctxEnd) })
+    }
+  }
+  return out
+}
+
+// Generic case reference (N1): capitalised / dotted type words or a case keyword, "No.", a
+// number (optionally "-K"), then of|/|- and a year. Statute references ("Act No. V of 2019",
+// "S.R.O. No. …") are left to the statute follow-up and are not suspects here.
+const CASE_TYPE_WORD =
+  "(?:\\p{Lu}[\\p{L}&]*\\.?|(?:\\p{L}{1,4}\\.){1,6}\\p{L}{0,4}\\.?|(?:case|petition|appeal|application|reference|revision|review|suit|motion|bail|writ|original)(?![\\p{L}]))"
+const CASE_REFERENCE_GENERIC = new RegExp(
+  `(?<![\\p{L}])(?:${CASE_TYPE_WORD}\\s*){1,6}No[s]?\\.?\\s*\\p{L}?-?\\s*\\d+(?:\\s*-\\s*\\p{L}(?![\\p{L}]))?\\s*(?:of|/|-)\\s*(?:19|20)\\d{2}`,
+  "gu"
+)
+const STATUTE_WORDS = /(?<![\p{L}])(?:Act|Ordinance|Order|Notification|Regulations?|Rules|S\.?\s?R\.?\s?O\.?|Bill|Circular|Gazette)(?![\p{L}])/iu
+
+/** The generic pattern may include leading capitalised prose ("In C.P. No. …"): try each word suffix. */
+function isOwnCase(raw: string, options: AnalyseOptions): boolean {
+  if (!options.isOwnCaseReference) return false
+  const words = raw.split(/\s+/)
+  for (let i = 0; i < words.length; i += 1) {
+    if (options.isOwnCaseReference(words.slice(i).join(" "))) return true
+  }
+  return false
+}
+
 function analyse(
-  text: string,
+  folded: FoldedText,
   options: AnalyseOptions
 ): { accepted: StrictHit[]; suspects: Array<Span & { raw: string }> } {
-  const strict = strictHits(text)
+  const text = folded.text
+  const ambiguous: Array<Span & { raw: string }> = []
+  const strict = strictHits(folded, ambiguous)
   const accepted: StrictHit[] = []
   for (const hit of strict.sort((a, b) => a.start - b.start || b.end - a.end)) {
     if (accepted.some((prev) => overlaps(prev, hit))) continue
@@ -307,17 +403,22 @@ function analyse(
     if (suspects.some((s) => overlaps(s, { start, end }))) return
     suspects.push({ start, end, raw })
   }
+  for (const a of ambiguous) addSuspect(a.start, a.end, a.raw)
   for (const pattern of [BROAD_YEAR_FIRST, BROAD_GLUED, BROAD_REPORTER_FIRST]) {
     for (const m of text.matchAll(pattern)) {
       const start = m.index ?? 0
       addSuspect(start, start + m[0].length, m[0])
     }
   }
-  for (const m of text.matchAll(CASE_REFERENCE)) {
-    if (options.isOwnCaseReference?.(m[0])) continue
-    const start = m.index ?? 0
-    addSuspect(start, start + m[0].length, m[0])
+  for (const pattern of [CASE_REFERENCE, CASE_REFERENCE_GENERIC]) {
+    for (const m of text.matchAll(pattern)) {
+      if (pattern === CASE_REFERENCE_GENERIC && STATUTE_WORDS.test(m[0])) continue
+      if (isOwnCase(m[0], options)) continue
+      const start = m.index ?? 0
+      addSuspect(start, start + m[0].length, m[0])
+    }
   }
+  for (const hit of reporterFallback(folded)) addSuspect(hit.start, hit.end, hit.raw)
   // Mixed-script tokens are suspects even beside a strict hit: never map confusables.
   for (const token of mixedScriptTokens(text)) {
     if (!suspects.some((s) => overlaps(s, token))) suspects.push(token)
@@ -326,9 +427,9 @@ function analyse(
 }
 
 export function analyseCitations(input: string, options: AnalyseOptions = {}): CitationAnalysis {
-  const text = normaliseDraftText(input ?? "")
-  if (!text) return { citations: [], suspects: [] }
-  const { accepted, suspects } = analyse(text, options)
+  const folded = foldDraftText(input ?? "")
+  if (!folded.text) return { citations: [], suspects: [] }
+  const { accepted, suspects } = analyse(folded, options)
   const seen = new Set<string>()
   const citations: string[] = []
   for (const hit of accepted) {
@@ -361,9 +462,10 @@ export function extractCitations(text: string, options: AnalyseOptions = {}): st
  * mixed-script token, residue text — is null, so it can never resolve to another authority.
  */
 export function normaliseCitation(raw: string): string | null {
-  const text = normaliseDraftText(raw ?? "")
+  const folded = foldDraftText(raw ?? "")
+  const text = folded.text
   if (!text) return null
-  const { accepted, suspects } = analyse(text, {})
+  const { accepted, suspects } = analyse(folded, {})
   const [hit] = accepted
   if (accepted.length !== 1 || !hit || suspects.length > 0) return null
   const residue = text.slice(0, hit.start) + text.slice(hit.end)
