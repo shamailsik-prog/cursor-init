@@ -185,3 +185,33 @@ describe("R5-4: the own-case exemption must also match the court", () => {
     expect(refs.every(isSuspect)).toBe(true)
   })
 })
+
+describe("R5-4: spelled-out reporter names resolve to their abbreviations", () => {
+  it.each([
+    ["Relying on 2018 Civil Law Cases 789.", "2018 CLC 789"],
+    ["Relying on 2019 Supreme Court Monthly Review 1234.", "2019 SCMR 1234"],
+    ["Relying on Pakistan Law Decisions 2019 Supreme Court 123.", "PLD 2019 SC 123"],
+    ["Relying on Pakistan Legal Decisions 2019 SC 123.", "PLD 2019 SC 123"],
+    ["Relying on 2020 Yearly Law Reporter 222.", "2020 YLR 222"],
+    ["Relying on 2021 Monthly Law Digest 333.", "2021 MLD 333"],
+    ["Relying on 2016 Pakistan Criminal Law Journal 44.", "2016 PCrLJ 44"],
+    ["Relying on 2019 Pakistan Tax Decisions 66.", "2019 PTD 66"],
+    ["Relying on 2019 Pakistan Labour Cases 77.", "2019 PLC 77"],
+    ["Relying on 2019 Civil Law Decisions 55.", "2019 CLD 55"],
+    ["Relying on Pakistan Law Journal 2015 SC 100.", "PLJ 2015 SC 100"],
+    ["Relying on National Law Reporter 2001 Civil 12.", "NLR 2001 Civil 12"],
+    ["Relying on 2018 civil law cases 789.", "2018 CLC 789"],
+  ])("%j -> %s", (text, citation) => {
+    expect(extractCitations(text)).toContain(citation)
+  })
+  it("an overruled authority cited by its spelled-out name is blocked", () => {
+    const store = newStore()
+    seedJudgment(store, "L", "L", "larger", "2025 SCMR 999")
+    seedJudgment(store, "o", "O", "single", "2018 CLC 789")
+    seedTreatment(store, "L", "o", "overruled", "larger")
+    expect(verifyCitations(store, extractCitations("Relying on 2018 Civil Law Cases 789.")).blocked).toBe(true)
+  })
+  it("the phrases in ordinary prose without a citation shape are not citations", () => {
+    expect(extractCitations("The Civil Law Cases series is published monthly.")).toEqual([])
+  })
+})

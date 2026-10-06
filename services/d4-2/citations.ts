@@ -752,10 +752,37 @@ function analyse(
   return { accepted, suspects }
 }
 
+// R5-4: reporters written out in full, resolved to their abbreviations before analysis.
+const SPELLED_REPORTERS: ReadonlyArray<readonly [string, string]> = [
+  ["Supreme Court Monthly Review", "SCMR"],
+  ["Pakistan Law Decisions", "PLD"],
+  ["Pakistan Legal Decisions", "PLD"],
+  ["Pakistan Criminal Law Journal", "PCrLJ"],
+  ["Civil Law Cases", "CLC"],
+  ["Civil Law Decisions", "CLD"],
+  ["Yearly Law Reporter", "YLR"],
+  ["Monthly Law Digest", "MLD"],
+  ["Pakistan Tax Decisions", "PTD"],
+  ["Pakistan Labour Cases", "PLC"],
+  ["Pakistan Law Journal", "PLJ"],
+  ["National Law Reporter", "NLR"],
+]
+const SPELLED_REPORTER_PATTERNS = SPELLED_REPORTERS.map(
+  ([name, abbreviation]) => [new RegExp(`(?<![\\p{L}])${name.split(" ").map(escapeRe).join("\\s+")}(?![\\p{L}])`, "giu"), abbreviation] as const
+)
+function resolveSpelledReporters(input: string): string {
+  let out = input
+  for (const [pattern, abbreviation] of SPELLED_REPORTER_PATTERNS) out = out.replace(pattern, abbreviation)
+  return out
+}
+
 export function analyseCitations(input: string, options: AnalyseOptions = {}): CitationAnalysis {
   // R3 N8: analyse the plain-text reading and the markup-stripped reading; union the findings.
   // (plus a lenient strip that also removes "<…>" junk a browser would show — fuzz, R3 item 10)
-  const readings = DRAFT_READINGS.map((options) => foldDraftText(input ?? "", options))
+  // R5-4: spelled-out reporter names are resolved to their abbreviations before every reading
+  // ("2018 Civil Law Cases 789" -> "2018 CLC 789"); the replacement keeps the meaning.
+  const resolved = resolveSpelledReporters(input ?? "")
+  const readings = DRAFT_READINGS.map((options) => foldDraftText(resolved, options))
   if (readings.every((v) => !v.text)) return { citations: [], suspects: [] }
   const results = readings.map((folded) => {
     const { accepted, suspects } = analyse(folded, options)
