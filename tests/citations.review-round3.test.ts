@@ -124,3 +124,31 @@ describe("acronym reporter tokens need a 4-digit year within 4 tokens (review R3
     expect(extractCitations("see SCMR at 5").length).toBeGreaterThan(0)
   })
 })
+
+describe("N12: statute exclusion only when the word immediately before No. is a statute word", () => {
+  it.each([
+    "First Appeal from Order No. 12 of 2019",
+    "Rules Suo Motu Case No. 4 of 2010",
+    "Act Human Rights Case No. 4 of 2010",
+    "Election Petition No. 12 of 2019",
+    "Order No. 7 of 2018",
+  ])("%j is a case reference (UNVERIFIED)", (text) => {
+    const refs = extractCitations(text)
+    expect(refs.length, text).toBeGreaterThan(0)
+    expect(refs.every(isSuspect)).toBe(true)
+  })
+  it.each([
+    "The Companies Act No. 5 of 2017 applies.",
+    "Ordinance No. 12 of 2019 was promulgated.",
+    "Punjab Rules No. 3 of 2015",
+    "Regulations No. 2 of 2020",
+    "S.R.O. No. 1243 of 2019",
+    "Notification No. 4 of 2021",
+    "Order-in-Council No. 9 of 1950",
+  ])("%j is a statute reference (excluded)", (text) => {
+    expect(extractCitations(text)).toEqual([])
+  })
+  it("a disguised reported citation is still caught", () => {
+    expect(extractCitations("Act No. 2019 SCMR 1234")).toContain("2019 SCMR 1234")
+  })
+})

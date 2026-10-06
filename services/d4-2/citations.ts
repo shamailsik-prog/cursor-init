@@ -389,7 +389,19 @@ const CASE_REFERENCE_GENERIC = new RegExp(
   `(?<![\\p{L}])(?:${CASE_TYPE_WORD}\\s*){1,6}No[s]?\\.?\\s*\\p{L}?-?\\s*\\d+(?:\\s*-\\s*\\p{L}(?![\\p{L}]))?\\s*(?:of|/|-)\\s*(?:19|20)\\d{2}`,
   "gu"
 )
-const STATUTE_WORDS = /(?<![\p{L}])(?:Act|Ordinance|Order|Notification|Regulations?|Rules|S\.?\s?R\.?\s?O\.?|Bill|Circular|Gazette)(?![\p{L}])/iu
+// R3 N12: a "No. n of yyyy" is a statute reference only when the word *immediately* before
+// "No." is a statute word. Bare "Order" is not one ("First Appeal from Order No. 12 of 2019" is a
+// case); "Order-in-Council" is.
+const STATUTE_WORD = /^(?:Act|Ordinance|Rules|Regulations?|S\.?R\.?O\.?|Notification|Order-in-Council)$/iu
+const RE_NO_ANCHOR = /No[s]?\.?\s*\p{L}?-?\s*\d/u
+
+function isStatuteReference(text: string, matchStart: number, match: string): boolean {
+  const at = match.search(RE_NO_ANCHOR)
+  if (at < 0) return false
+  const before = text.slice(0, matchStart + at).trimEnd()
+  const word = before.split(/\s+/).pop() ?? ""
+  return STATUTE_WORD.test(word.replace(/^[("'\u201c]+|[,;:]+$/gu, ""))
+}
 
 // ---- Urdu script (R3 N11) ------------------------------------------------------------------
 // Standard Urdu names of the Latin letters; reporter spellings are generated from the Latin
@@ -523,7 +535,7 @@ function analyse(
   }
   for (const pattern of [CASE_REFERENCE, CASE_REFERENCE_GENERIC]) {
     for (const m of text.matchAll(pattern)) {
-      if (pattern === CASE_REFERENCE_GENERIC && STATUTE_WORDS.test(m[0])) continue
+      if (isStatuteReference(text, m.index ?? 0, m[0])) continue
       if (isOwnCase(m[0], options)) continue
       const start = m.index ?? 0
       addSuspect(start, start + m[0].length, m[0])
