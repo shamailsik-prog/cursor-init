@@ -1,5 +1,10 @@
+import { existsSync, readFileSync } from "node:fs"
+import path from "node:path"
+
 /**
  * Static guard for routes with a declared request surface (platform/http/surface.ts).
+ * (Early warning: at runtime withSession already strips undeclared headers and
+ * cookies and refuses undeclared query params and body fields.)
  *
  * In those files a selector may be read only through the surface helpers
  * (getQuery, selectView, actionOf, isAction, refuseUndeclaredBody), so the
@@ -21,12 +26,19 @@ function stripCommandTable(src: string): string {
   return src.replace(/export const WHATSAPP_COMMANDS = \[[\s\S]*?\] as const/, "")
 }
 
-const RULES: Array<[string, RegExp]> = [
+/** Header, cookie and query reads: banned in G-2 routes and in the local modules they import. */
+const READ_RULES: Array<[string, RegExp]> = [
   ["direct searchParams access (use getQuery / selectView)", /\bsearchParams\b/],
   ["URLSearchParams outside the surface helpers", /\bURLSearchParams\b/],
   ["nextUrl query access", /\bnextUrl\b/],
+  ["header read (declare it in the surface; the platform reads auth headers)", /\bheaders\.get\s*\(|\.headers\b|Object\.fromEntries\([^)]*headers/],
+  ["cookie read", /\bcookies\b/],
+  ["next/headers (headers() / cookies())", /from\s+["']next\/headers["']/],
+]
+
+const RULES: Array<[string, RegExp]> = [
+  ...READ_RULES,
   ["raw query string access", /\.search\b|split\(\s*["'`]\?/],
-  ["header read (declare it in the surface; the platform reads auth headers)", /\bheaders\.get\s*\(|\b(?:request|req)\.headers\b/],
   [".action member access (use actionOf / isAction)", /(?<!\bevent)\.action\b/],
   ["string-keyed bracket access", /[\w\])]\s*\[\s*["'`]/],
   ["destructured selector", /\{[^{}]*\b(?:action|view|command)\b[^{}]*\}\s*=(?!=)|\(\s*\{[^{}]*\b(?:action|view|command)\b[^{}]*\}\s*[:)]/],
@@ -54,4 +66,40 @@ export function guardViolations(src: string, opts: { route: boolean }): string[]
     if (!/from "\.\/surface"/.test(code)) out.push("route does not import its ./surface")
   }
   return out
+}
+
+/** Header, cookie and query reads in a module a G-2 route imports. */
+export function helperViolations(src: string): string[] {
+  const lines = stripComments(src).split("\n")
+  const out: string[] = []
+  for (const [label, re] of READ_RULES) {
+    lines.forEach((line, i) => {
+      if (re.test(line)) out.push(`${label}: line ${i + 1}: ${line.trim().slice(0, 100)}`)
+    })
+  }
+  return out
+}
+
+/**
+ * The local modules (`@/…`, `./…`) the given route files import, one level
+ * deep, as repo-relative paths. platform/http/* is the surface-aware boundary
+ * itself (withSession, validation, idempotency, surface, errors): it reads the
+ * auth, firm, idempotency and content headers before or for the handler, so
+ * it is excluded. The routes' own ./surface.ts declarations are excluded too.
+ */
+export function helperModulesOf(routeFiles: string[], root: string): string[] {
+  const out = new Set<string>()
+  for (const file of routeFiles) {
+    const src = readFileSync(file, "utf8")
+    for (const m of src.matchAll(/from\s+["']((?:@\/|\.\.?\/)[^"']+)["']/g)) {
+      const spec = m[1]
+      const base = spec.startsWith("@/") ? path.join(root, spec.slice(2)) : path.resolve(path.dirname(file), spec)
+      const resolved = [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")].find((p) => existsSync(p))
+      if (!resolved) continue
+      const rel = path.relative(root, resolved).split(path.sep).join("/")
+      if (rel.startsWith("platform/http/") || rel.endsWith("/surface.ts")) continue
+      out.add(rel)
+    }
+  }
+  return [...out].sort()
 }

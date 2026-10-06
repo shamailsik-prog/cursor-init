@@ -14,6 +14,7 @@ import { GET as mattersGet } from "@/app/api/d1/matters/route"
 import { POST as clientsPost } from "@/app/api/d1/clients/route"
 import { GET as workflowGet } from "@/app/api/d1/document-workflow/route"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
+import { bindRequestToSession, withSession } from "@/platform/http/withSession"
 
 afterEach(() => resetRuntimeStoreForTests())
 
@@ -89,5 +90,60 @@ describe("routes refuse what their surface does not declare", () => {
     )
     expect(res.status).toBe(400)
     expect(await res.json()).toEqual({ error: "unknown body parameter: entityIds", code: "unknown_param" })
+  })
+})
+
+describe("the handler sees only declared headers (fix round 3, R1)", () => {
+  const HEADER_SURFACE = defineSurface({
+    views: [],
+    actions: [],
+    bodyFields: {},
+    queryParams: ["actorId", "userId", "firmId"],
+    headers: ["authorization", "x-firm-id", "idempotency-key", "content-type"],
+  })
+  const incoming = () =>
+    new Request("http://127.0.0.1/api/x?actorId=partner_a", {
+      headers: {
+        authorization: "Bearer t",
+        "x-firm-id": "firmA",
+        "idempotency-key": "k",
+        "content-type": "application/json",
+        cookie: "scope=all",
+        "x-view": "all",
+        "x-forwarded-for": "10.0.0.1",
+      },
+    })
+
+  it("withSession (insecure-dev) drops undeclared headers and the cookie", async () => {
+    let seen: string[] = []
+    const res = await withSession(
+      incoming(),
+      (request) => {
+        seen = [...request.headers.keys()].sort()
+        return new Response(null, { status: 204 })
+      },
+      { surface: HEADER_SURFACE }
+    )
+    expect(res.status).toBe(204)
+    expect(seen).toEqual(["authorization", "content-type", "idempotency-key", "x-firm-id"])
+  })
+
+  it("bindRequestToSession (firebase mode) drops them too", async () => {
+    const bound = await bindRequestToSession(
+      incoming(),
+      { userId: "partner_a", firmId: "firmA", role: "partner", clearance: "privileged-restricted", mode: "firebase" },
+      { surface: HEADER_SURFACE }
+    )
+    expect(bound).toBeInstanceOf(Request)
+    expect([...(bound as Request).headers.keys()].sort()).toEqual(["authorization", "content-type", "idempotency-key", "x-firm-id"])
+  })
+
+  it("without a surface, headers pass through unchanged", async () => {
+    let cookie: string | null = null
+    await withSession(incoming(), (request) => {
+      cookie = request.headers.get("cookie")
+      return new Response(null, { status: 204 })
+    })
+    expect(cookie).toBe("scope=all")
   })
 })

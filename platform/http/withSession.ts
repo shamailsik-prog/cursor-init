@@ -78,7 +78,8 @@ export type SessionRouteOptions = {
   /**
    * The route's declared request surface (platform/http/surface.ts). After the
    * caller is resolved, a query param it does not declare is refused with 400
-   * `unknown_param`.
+   * `unknown_param`, and the handler's Request carries only the declared
+   * headers (the cookie only if declared).
    */
   surface?: RouteSurface
 }
@@ -135,10 +136,18 @@ function rebuild(
   request: Request,
   url: URL,
   body: ReadBody & { ok: true },
-  mutated = false
+  mutated = false,
+  surface?: RouteSurface
 ): Request {
   const headers = new Headers(request.headers)
   headers.delete("content-length")
+  if (surface) {
+    // A declared surface is the whole of what the handler can read: undeclared
+    // headers (and the cookie, unless declared) read as null in the route and in
+    // anything it calls.
+    const allowed = new Set(surface.headers.map((h) => h.toLowerCase()))
+    for (const name of [...headers.keys()]) if (!allowed.has(name)) headers.delete(name)
+  }
   const text = mutated ? JSON.stringify(body.parsed) : body.text
   const next = new Request(url, {
     method: request.method,
@@ -186,10 +195,10 @@ export async function bindRequestToSession(
     if (!isAbsent(record[FIRM_KEY]) && record[FIRM_KEY] !== session.firmId) return mismatch()
     if (isAbsent(record.actorId)) {
       record.actorId = session.userId
-      return rebuild(request, url, body, true)
+      return rebuild(request, url, body, true, options.surface)
     }
   }
-  return rebuild(request, url, body)
+  return rebuild(request, url, body, false, options.surface)
 }
 
 function describe(request: Request): string {
@@ -245,7 +254,7 @@ export async function withSession(
       const body = await readBoundedBody(request, options)
       if (!body.ok) return body.response
       const url = new URL(request.url)
-      const devRequest = rebuild(request, url, body)
+      const devRequest = rebuild(request, url, body, false, options.surface)
       const devRefused = refuseUndeclaredQuery(devRequest, options)
       if (devRefused) return devRefused
       const claimed = claimedIdentity(url, body.parsed)

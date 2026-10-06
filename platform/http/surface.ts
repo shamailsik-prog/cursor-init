@@ -13,13 +13,16 @@ import { errorResponse } from "@/platform/http/errors"
  *   reads (`bodyFields`, derived from the zod schema where the route has one);
  * - `queryParams`: every query key the route reads, including the identity
  *   keys withSession binds (actorId, userId, firmId);
- * - `headers`: the request headers the route depends on (read by the platform:
- *   auth, firm binding, idempotency);
+ * - `headers`: the request headers the handler may read (the platform reads
+ *   auth and firm binding before it; the handler reads idempotency-key and
+ *   content-type); all others are stripped;
  * - `commands`: the WhatsApp commands an action dispatches, when it has any.
  *
  * withSession refuses a request carrying an undeclared query param with 400
  * `unknown_param`; `refuseUndeclaredBody` does the same for body fields.
- * Undeclared headers are ignored (proxies and browsers add their own).
+ * Undeclared headers are not refused (proxies and browsers add their own) but
+ * are removed: the handler's Request carries only the declared headers, and
+ * no cookie unless `cookie` is declared.
  * Gate G-2 inventories these objects, and a static guard
  * (tests/g2.surface-guard.test.ts) fails any direct `searchParams` /
  * `headers.get` / `.action` / bracket / destructuring / switch selector read

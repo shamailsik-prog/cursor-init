@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
-import { guardViolations } from "./g2/guard"
+import { guardViolations, helperModulesOf, helperViolations } from "./g2/guard"
 
 /**
  * Gate G-2 static guard (fix round 2, N1): the routes in G-2 scope read
@@ -47,10 +47,35 @@ const FORMS: Array<[string, string, (src: string) => string]> = [
   ["K query re-parsed from the URL", "app/api/d1/documents/route.ts", (s) => insertAfter(s, "const url = new URL(request.url)", '\n  const id = new URLSearchParams(request.url.split("?")[1]).get("id")')],
   ["nextUrl", "app/api/d1/clients/route.ts", (s) => insertAfter(s, "const url = new URL(request.url)", '\n  const id = (request as unknown as { nextUrl: URL }).nextUrl')],
   // Built from parts: ci_gates/check_idempotency.py scans for exported write handlers.
+  ["X9 headers spread through an alias", "app/api/d1/clients/route.ts", (s) => insertAfter(s, "const url = new URL(request.url)", "\n  const r = request\n  const all = Object.fromEntries(r.headers)")],
+  ["X10 request.cookies", "app/api/d1/matters/route.ts", (s) => insertAfter(s, "const url = new URL(request.url)", '\n  const scope = (request as unknown as { cookies: Map<string, string> }).cookies.get("scope")')],
+  ["X11 next/headers headers()", "app/api/d1/reporting/route.ts", (s) => `import { headers } from "next/headers"\n${s}`],
+  ["X11' next/headers cookies()", "app/api/p5/tenancy/route.ts", (s) => `import { cookies } from "next/headers"\n${s}`],
   ["a withSession call without the surface", "app/api/p5/tenancy/route.ts", (s) => `${s}\n${["export async function", "PUT(request: Request) {"].join(" ")}\n  return withSession(request, handlePost)\n}\n`],
 ]
 
+/** X6: a helper module a G-2 route imports reads a header (or a cookie, or the query). */
+const HELPER_FORMS: Array<[string, string, string]> = [
+  ["X6 header", "services/d1-1/clients.ts", '\nexport const scopeOf = (request: Request) => request.headers.get("x-scope")\n'],
+  ["X6 cookie", "services/d1-2/matters.ts", '\nexport const scopeOf = (request: { cookies: Map<string, string> }) => request.cookies.get("scope")\n'],
+  ["X6 next/headers", "platform/persistence/memberSync.ts", '\nimport { headers } from "next/headers"\n'],
+  ["X6 query", "services/d2-1/whatsapp.ts", '\nexport const idOf = (url: URL) => url.searchParams.get("id")\n'],
+]
+
 describe("G-2 static guard: selectors only through the declared surface", () => {
+  it("scans, one import level deep, every local module the G-2 routes import (the platform/http boundary excepted)", () => {
+    const helpers = helperModulesOf(GUARDED_ROUTES.map((f) => path.join(ROOT, f)), ROOT)
+    expect(helpers).toContain("services/d1-1/clients.ts")
+    expect(helpers).toContain("platform/p5/tenancyAdmin.ts")
+    expect(helpers.some((h) => h.startsWith("platform/http/"))).toBe(false)
+    expect(helpers.flatMap((h) => helperViolations(read(h)).map((v) => `${h}: ${v}`))).toEqual([])
+  })
+
+  it.each(HELPER_FORMS)("rejects helper form %s", (_label, file, added) => {
+    expect(helperViolations(read(file) + added).length).toBeGreaterThan(0)
+  })
+
+
   it.each(GUARDED_ROUTES)("%s reads selectors only through its surface", (file) => {
     expect(guardViolations(read(file), { route: true })).toEqual([])
   })
