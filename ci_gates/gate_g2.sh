@@ -10,7 +10,8 @@
 # out of scope) and fails on any allowed cross-firm attempt, any read path the
 # suites do not list, or a missing suite result.
 #
-# Ports: in CI (CI set) the repo firebase.json is used. Every local run writes
+# Ports and project: in CI (CI set) the repo firebase.json and demo-sikander
+# are used; a local run uses a demo-g2-<random> project. Every local run writes
 # a temporary config with ephemeral ports (all five held at once while
 # picked, so they are distinct and were free), so concurrent emulators of
 # other checkouts or sessions cannot collide with it (functions/README.md
@@ -48,7 +49,11 @@ out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 
 config="$ROOT/firebase.json"
+project="demo-sikander"
 if [ -z "${CI:-}" ]; then
+  # A demo project of its own, so concurrent local runs share no emulator hub
+  # or project state (demo-* ids never reach a real project).
+  project="demo-g2-$(node -e 'console.log(require("node:crypto").randomBytes(4).toString("hex"))')"
   # Every local run gets its own ports: node binds each on :0 (the kernel hands
   # out a free ephemeral port), reads it and releases it, and the config is
   # written from those. No check-then-start window on the shared repo ports.
@@ -70,10 +75,10 @@ if [ -z "${CI:-}" ]; then
   }
 }
 JSON
-  echo "local run: temporary emulator config (firestore ${free[0]}, auth ${free[2]})"
+  echo "local run: temporary emulator config (firestore ${free[0]}, auth ${free[2]}), project $project"
 fi
 
-npx firebase emulators:exec --config "$config" --only auth,firestore --project demo-sikander \
+npx firebase emulators:exec --config "$config" --only auth,firestore --project "$project" \
   "bash \"$ROOT/ci_gates/gate_g2.sh\" --inner \"$out\""
 suites_rc=$?
 
