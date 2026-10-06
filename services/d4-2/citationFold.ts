@@ -20,9 +20,12 @@
 
 export type FoldedText = { text: string; taint: boolean[] }
 
-// Generic markup, matched on already-folded text: any short "<…>" tag (whatever junk sits
-// inside), any "&…;" character-reference-like run, and Markdown emphasis characters.
-const MARKUP = /<[^<>]{1,80}>|&[#A-Za-z0-9 -]{1,14};|[*_`~]/g
+// Generic markup, matched on already-folded text: an HTML comment of any length (unterminated
+// = to the end, as a browser hides it), any short "<…>" tag (whatever junk sits inside), any
+// "&…;" character-reference-like run, numeric references without the ";" and the legacy named
+// references a browser also decodes without it ("&#83CMR", "&nbspSCMR"), and Markdown emphasis.
+const MARKUP =
+  /<!--[\s\S]*?(?:-->|$)|<[^<>]{1,80}>|&[#A-Za-z0-9 -]{1,14};|&#[0-9]{1,7}(?![0-9])|&#[xX][0-9A-Fa-f]{1,6}(?![0-9A-Fa-f])|&(?:nbsp|amp|lt|gt|quot|shy)|[*_`~]/g
 
 const NAMED_ENTITIES: Record<string, string> = {
   nbsp: " ",
@@ -40,7 +43,7 @@ const NAMED_ENTITIES: Record<string, string> = {
 }
 
 function decodeEntity(entity: string): string {
-  const body = entity.slice(1, -1)
+  const body = entity.endsWith(";") ? entity.slice(1, -1) : entity.slice(1)
   if (body.startsWith("#x") || body.startsWith("#X")) {
     const cp = Number.parseInt(body.slice(2), 16)
     return cp <= 0x10ffff ? String.fromCodePoint(cp) : " "
@@ -140,7 +143,7 @@ function stripMarkupOnce(
     copy(last, at)
     changed = true
     if (marks[at]) f.pending = true
-    if (token.startsWith("&") && token.endsWith(";")) {
+    if (token.startsWith("&")) {
       const decoded = decodeEntity(token.replace(/[\s-]/g, ""))
       if (decoded === " ") {
         f.out.push(" ")

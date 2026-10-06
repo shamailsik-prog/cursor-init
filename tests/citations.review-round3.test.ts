@@ -5,6 +5,7 @@ import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/run
 import { newStore } from "@/platform/spine/store"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import { extractCitations } from "@/services/d4-2/citations"
+import { checkDraftCharset } from "@/services/d4-2/draftCharset"
 import { seedJudgment, seedTreatment, verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
@@ -150,5 +151,215 @@ describe("N12: statute exclusion only when the word immediately before No. is a 
   })
   it("a disguised reported citation is still caught", () => {
     expect(extractCitations("Act No. 2019 SCMR 1234")).toContain("2019 SCMR 1234")
+  })
+})
+
+// Review round 3: the reviewer's extract3 probe matrix, every string pinned. Each is refused by
+// the charset layer (422 unsupported_characters), or reads as exactly the expected authority, or
+// is fail-closed (UNRECOGNISED suspects only). The false-positive strings must yield nothing.
+const PROBE3_CASES: Array<[string, string]> = [
+  // confusables surviving NFKD
+  ["Latin small capitals ꜱᴄᴍʀ", "2019 ꜱᴄᴍʀ 1234"],
+  ["small caps P L D", "ᴘʟᴅ 2019 SC 123"],
+  ["Cherokee capitals ᏚᏟᎷᎡ", "2019 ᏚᏟᎷᎡ 1234"],
+  ["Cherokee small ꮪꮯꮇꭱ", "2019 ꮪꮯꮇꭱ 1234"],
+  ["Greek Omicron in year", "2Ο19 SCMR 1234"],
+  ["Greek Mu split token lower spaced", "2019 s c μ r 1234"],
+  ["Greek+Cyrillic all non-Latin 'ЅСΜR'?", "2019 ЅСΜR 1234"],
+  ["Cyrillic all-but-R separate tokens", "2019 ЅСМ R 1234"],
+  ["Cyrillic PLD-ish Р L D", "Р L D 2019 SC 123"],
+  ["Cyrillic Р + Latin LD spaced dotted", "Р. L. D. 2019 S.C. 123"],
+  ["Latin letter dental click ǀ glue", "2019 ǀSCMRǀ 1234"],
+  ["Latin alveolar click ǃ glue", "2019 SCMRǃ 1234"],
+  // spacing modifier letters (not marks)
+  ["modifier small caps ˢᶜᴹᴿ", "2019 ˢᶜᴹᴿ 1234"],
+  ["modifier colon ː separators", "2019ːSCMRː1234"],
+  ["modifier apostrophe in page", "2019 SCMR 12ʼ34"],
+  ["modifier letter ʹ U+02B9 between digits", "2019 SCMR 1ʹ234"],
+  // NFKD-unchanged lookalikes
+  ["Cyrillic Ze as 3 in page", "2019 SCMR 12З4"],
+  ["Latin small l as 1 in page", "2019 SCMR l234"],
+  ["counting rod digits (No, not Nd)", "2019 SCMR \u{1D361}\u{1D362}\u{1D363}\u{1D364}"],
+  ["superscripts page", "2019 SCMR ¹²³⁴"],
+  ["circled digits page", "2019 SCMR ①②③④"],
+  ["dingbat negative circled digits", "2019 SCMR ❶❷❸❹"],
+  // variation selectors / tags / bidi / mongolian / soft hyphen
+  ["VS17 (E0100) in page", "2019 SCMR 12\u{E0100}34"],
+  ["tag chars in reporter", "2019 SC\u{E0041}\u{E0042}MR 1234"],
+  ["tag chars in page", "2019 SCMR 12\u{E0030}34"],
+  ["RLO reversed whole citation", "‮4321 RMCS 9102‬"],
+  ["RLO reversed page only", "2019 SCMR ‮4321‬"],
+  ["RLI isolate + reversed", "⁧4321 RMCS 9102⁩"],
+  ["Mongolian FVS in page", "2019 SCMR 12᠋34"],
+  ["Mongolian vowel sep U+180E in page", "2019 SCMR 12᠎34"],
+  ["soft hyphen inside reporter", "2019 SC­MR 1234"],
+  ["soft hyphen in page", "2019 SCMR 12­34"],
+  // HTML entities
+  ["&#83;CMR", "2019 &#83;CMR 1234"],
+  ["&#x53;CMR", "2019 &#x53;CMR 1234"],
+  ["&#83CMR no semicolon", "2019 &#83CMR 1234"],
+  ["&amp;#83;CMR double encoded", "2019 &amp;#83;CMR 1234"],
+  ["&amp; in body", "PLD 2019 SC (AJ&amp;K) 1"],
+  ["entity &minus; page", "2019 SCMR&minus;1234"],
+  ["entity in page digits", "2019 SCMR 12&#51;4"],
+  ["html comment long", "2019 SC<!-- " + "x".repeat(90) + " -->MR 1234"],
+  // Markdown links
+  ["md link text", "[2019 SCMR 1234](https://x.pk)"],
+  ["md link split", "[2019 SCMR](https://x.pk) 1234"],
+  ["md link url only", "see [the judgment](https://pakistanlawsite.com/2019SCMR1234)"],
+  ["md autolink", "<https://x.pk/2019-SCMR-1234>"],
+  ["md image alt", "![2019 SCMR 1234](a.png)"],
+  // year after page
+  ["SCMR 1234 (2019)", "SCMR 1234 (2019)"],
+  ["SCMR page 1234 of 2019", "SCMR page 1234 of 2019"],
+  ["PLD SC 123 of 2019", "PLD SC 123 of 2019"],
+  ["CLC 789 Lahore 2018", "CLC 789 Lahore 2018"],
+  // Urdu script
+  ["Urdu reporter name", "۲۰۱۹ ایس سی ایم آر ۱۲۳۴"],
+  ["Urdu PLD", "پی ایل ڈی ۲۰۱۹ سپریم کورٹ ۱۲۳"],
+  ["Urdu C.P. no", "سی پی نمبر ۱۲ بابت ۲۰۱۹"],
+  // pinpoint / thousands
+  ["pinpoint", "2019 SCMR 1234, 1240"],
+  ["thousands comma", "2019 SCMR 1,234"],
+  ["thousands period", "2019 SCMR 1.234"],
+  ["Arabic thousands sep U+066C", "2019 SCMR 1٬234"],
+  ["apostrophe thousands", "2019 SCMR 1'234"],
+  ["PLD thousands comma", "PLD 2019 SC 1,234"],
+  // statute disguise
+  ["FAO spelled out", "First Appeal from Order No. 12 of 2019"],
+  ["Rules + Suo Motu", "Rules Suo Motu Case No. 4 of 2010"],
+  ["Election Petition", "Election Petition No. 12 of 2019"],
+  ["Act-prefixed HRC", "Act Human Rights Case No. 4 of 2010"],
+  ["Ordinance disguise", "Ordinance No. 12 of 2019 (Lahore High Court)"],
+  ["Act No. disguising reported", "Act No. 2019 SCMR 1234"],
+  // false-positive checks for stricter fallback
+  ["FP: company PLC with number", "Engro Fertilizers PLC paid Rs. 5 million"],
+  ["FP: ptd ltd", "XYZ (Pvt.) Ltd. and PTD 5 others"],
+  ["FP: section", "section 302 PPC read with 34 PPC"],
+  ["FP: CLC as acronym", "the CLC committee met on 5 May"],
+  ["FP: YLR", "employee no. 4 of YLR division"],
+]
+type Probe3Expectation = string[] | "suspect-or-refused" | "blocked" | "found"
+const PROBE3_EXPECTED: Record<string, Probe3Expectation> = {
+  "Latin small capitals ꜱᴄᴍʀ": "suspect-or-refused",
+  "small caps P L D": "suspect-or-refused",
+  "Cherokee capitals ᏚᏟᎷᎡ": "suspect-or-refused",
+  "Cherokee small ꮪꮯꮇꭱ": "suspect-or-refused",
+  "Greek Omicron in year": "suspect-or-refused",
+  "Greek Mu split token lower spaced": "suspect-or-refused",
+  "Greek+Cyrillic all non-Latin 'ЅСΜR'?": "suspect-or-refused",
+  "Cyrillic all-but-R separate tokens": "suspect-or-refused",
+  "Cyrillic PLD-ish Р L D": "suspect-or-refused",
+  "Cyrillic Р + Latin LD spaced dotted": "suspect-or-refused",
+  "Latin letter dental click ǀ glue": "suspect-or-refused",
+  "Latin alveolar click ǃ glue": "suspect-or-refused",
+  "modifier small caps ˢᶜᴹᴿ": ["2019 SCMR 1234"],
+  "modifier colon ː separators": "suspect-or-refused",
+  "modifier apostrophe in page": "suspect-or-refused",
+  "modifier letter ʹ U+02B9 between digits": "suspect-or-refused",
+  "Cyrillic Ze as 3 in page": "suspect-or-refused",
+  "Latin small l as 1 in page": "suspect-or-refused",
+  "counting rod digits (No, not Nd)": "suspect-or-refused",
+  "superscripts page": ["2019 SCMR 1234"],
+  "circled digits page": ["2019 SCMR 1234"],
+  "dingbat negative circled digits": "suspect-or-refused",
+  "VS17 (E0100) in page": "suspect-or-refused",
+  "tag chars in reporter": "suspect-or-refused",
+  "tag chars in page": "suspect-or-refused",
+  "RLO reversed whole citation": "suspect-or-refused",
+  "RLO reversed page only": "suspect-or-refused",
+  "RLI isolate + reversed": "suspect-or-refused",
+  "Mongolian FVS in page": "suspect-or-refused",
+  "Mongolian vowel sep U+180E in page": "suspect-or-refused",
+  "soft hyphen inside reporter": "suspect-or-refused",
+  "soft hyphen in page": "suspect-or-refused",
+  "&#83;CMR": ["2019 SCMR 1234"],
+  "&#x53;CMR": ["2019 SCMR 1234"],
+  "&#83CMR no semicolon": ["2019 SCMR 1234"],
+  "&amp;#83;CMR double encoded": ["2019 SCMR 1234"],
+  "&amp; in body": "found",
+  "entity &minus; page": "suspect-or-refused",
+  "entity in page digits": "suspect-or-refused",
+  "html comment long": "blocked",
+  "md link text": ["2019 SCMR 1234"],
+  "md link split": "suspect-or-refused",
+  "md link url only": "suspect-or-refused",
+  "md autolink": "suspect-or-refused",
+  "md image alt": ["2019 SCMR 1234"],
+  "SCMR 1234 (2019)": "suspect-or-refused",
+  "SCMR page 1234 of 2019": "suspect-or-refused",
+  "PLD SC 123 of 2019": "suspect-or-refused",
+  "CLC 789 Lahore 2018": "suspect-or-refused",
+  "Urdu reporter name": "suspect-or-refused",
+  "Urdu PLD": "suspect-or-refused",
+  "Urdu C.P. no": "suspect-or-refused",
+  "pinpoint": ["2019 SCMR 1234"],
+  "thousands comma": "suspect-or-refused",
+  "thousands period": "suspect-or-refused",
+  "Arabic thousands sep U+066C": "suspect-or-refused",
+  "apostrophe thousands": "suspect-or-refused",
+  "PLD thousands comma": "suspect-or-refused",
+  "FAO spelled out": "suspect-or-refused",
+  "Rules + Suo Motu": "suspect-or-refused",
+  "Election Petition": "suspect-or-refused",
+  "Act-prefixed HRC": "suspect-or-refused",
+  "Ordinance disguise": [],
+  "Act No. disguising reported": ["2019 SCMR 1234"],
+  "FP: company PLC with number": [],
+  "FP: ptd ltd": [],
+  "FP: section": [],
+  "FP: CLC as acronym": [],
+  "FP: YLR": [],
+}
+describe("review round 3 extract3 probe matrix", () => {
+  it("covers every probe string", () => {
+    expect(PROBE3_CASES).toHaveLength(Object.keys(PROBE3_EXPECTED).length)
+  })
+  it.each(PROBE3_CASES)("%s", (label, text) => {
+    const expected = PROBE3_EXPECTED[label]
+    const check = checkDraftCharset(text)
+    if (expected === "suspect-or-refused") {
+      if (!check.ok) return
+      const refs = extractCitations(check.normalised)
+      expect(refs.length, text).toBeGreaterThan(0)
+      expect(refs.every(isSuspect), JSON.stringify(refs)).toBe(true)
+      return
+    }
+    expect(check.ok, text).toBe(true)
+    if (!check.ok) return
+    const refs = extractCitations(check.normalised)
+    if (expected === "blocked") {
+      expect(refs.length, text).toBeGreaterThan(0)
+      expect(refs.includes("2019 SCMR 1234") || refs.every(isSuspect), JSON.stringify(refs)).toBe(true)
+    } else if (expected === "found") {
+      expect(refs.length, text).toBeGreaterThan(0)
+    } else {
+      expect(refs).toEqual(expected)
+    }
+  })
+})
+
+describe("character references without ';' and long HTML comments (browsers render both)", () => {
+  it.each(["2019 &#83CMR 1234", "2019 S&#67MR 1234"])("%j reads as 2019 SCMR 1234", (text) => {
+    expect(extractCitations(text)).toContain("2019 SCMR 1234")
+  })
+  it("'2019&nbspSCMR 1234' is never silent (exact or fail-closed)", () => {
+    const refs = extractCitations("2019&nbspSCMR 1234")
+    expect(refs.length).toBeGreaterThan(0)
+    expect(refs.includes("2019 SCMR 1234") || refs.every(isSuspect), JSON.stringify(refs)).toBe(true)
+  })
+  it("a numeric reference without ';' inside the page makes it ambiguous", () => {
+    const refs = extractCitations("2019 SCMR 12&#51 4")
+    expect(refs.length).toBeGreaterThan(0)
+    expect(refs.every(isSuspect)).toBe(true)
+  })
+  it.each([
+    "2019 SC<!-- " + "x".repeat(90) + " -->MR 1234",
+    "2019 SC<!--" + "y".repeat(500) + "-->MR 1234",
+    "2019 SCMR 12<!-- " + "x".repeat(90) + " -->34",
+  ])("long comment %#", (text) => {
+    const refs = extractCitations(text)
+    expect(refs.length).toBeGreaterThan(0)
+    expect(refs.includes("2019 SCMR 1234") || refs.every(isSuspect), JSON.stringify(refs)).toBe(true)
   })
 })
