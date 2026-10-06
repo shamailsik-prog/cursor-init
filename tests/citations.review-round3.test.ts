@@ -70,3 +70,28 @@ describe("N10: script-agnostic shape detector (year, 1-6 short letter tokens, nu
     expect(extractCitations(text)).toEqual([])
   })
 })
+
+describe("N11: citations written in Urdu script", () => {
+  it.each([
+    "۲۰۱۹ ایس سی ایم آر ۱۲۳۴",
+    "ایس سی ایم آر ۲۰۱۹ ۱۲۳۴",
+    "پی ایل ڈی ۲۰۱۹ سپریم کورٹ ۱۲۳",
+    "پی.ایل.ڈی ۱۲۳ سال ۲۰۱۹",
+    "سی پی نمبر ۱۲ بابت ۲۰۱۹",
+    "رٹ پٹیشن نمبر ۱۲۳۴ آف ۲۰۱۹",
+    "اپیل نمبر ۱۲/۲۰۱۹",
+  ])("%j is an UNVERIFIED suspect", (text) => {
+    const refs = extractCitations(text)
+    expect(refs.length, text).toBeGreaterThan(0)
+    expect(refs.every(isSuspect)).toBe(true)
+  })
+  it("ordinary Urdu prose with a number is not a suspect", () => {
+    expect(extractCitations("میں نے ۱۲ کتابیں پڑھیں۔")).toEqual([])
+  })
+  it("the Urdu reporter table is generated from the Latin reporter list", async () => {
+    const { URDU_REPORTER_SPELLINGS } = await import("@/services/d4-2/citations")
+    expect(URDU_REPORTER_SPELLINGS.SCMR).toBe("ایس سی ایم آر")
+    expect(URDU_REPORTER_SPELLINGS.PLD).toBe("پی ایل ڈی")
+    expect(Object.keys(URDU_REPORTER_SPELLINGS).length).toBeGreaterThanOrEqual(15)
+  })
+})

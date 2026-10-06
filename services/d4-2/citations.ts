@@ -375,6 +375,54 @@ const CASE_REFERENCE_GENERIC = new RegExp(
 )
 const STATUTE_WORDS = /(?<![\p{L}])(?:Act|Ordinance|Order|Notification|Regulations?|Rules|S\.?\s?R\.?\s?O\.?|Bill|Circular|Gazette)(?![\p{L}])/iu
 
+// ---- Urdu script (R3 N11) ------------------------------------------------------------------
+// Standard Urdu names of the Latin letters; reporter spellings are generated from the Latin
+// reporter list (SCMR -> "ایس سی ایم آر"), so adding a reporter adds its Urdu spelling.
+const URDU_LETTER_NAMES: Record<string, string> = {
+  A: "اے", B: "بی", C: "سی", D: "ڈی", E: "ای", F: "ایف", G: "جی", H: "ایچ", I: "آئی",
+  J: "جے", K: "کے", L: "ایل", M: "ایم", N: "این", O: "او", P: "پی", Q: "کیو", R: "آر",
+  S: "ایس", T: "ٹی", U: "یو", V: "وی", W: "ڈبلیو", X: "ایکس", Y: "وائی", Z: "زیڈ",
+}
+export const URDU_REPORTER_SPELLINGS: Readonly<Record<string, string>> = Object.fromEntries(
+  [...REPORTER_TOKENS, "AIR"].map((token) => [
+    token,
+    [...token.toUpperCase()].map((letter) => URDU_LETTER_NAMES[letter] ?? letter).join(" "),
+  ])
+)
+const URDU_REPORTER = new RegExp(
+  `(?<![\\p{L}])(?:${Object.values(URDU_REPORTER_SPELLINGS)
+    .sort((a, b) => b.length - a.length)
+    // match against folded text, so fold the spelling the same way (آ -> ا + dropped madda)
+    .map((spelling) => foldDraftText(spelling).text.split(" ").map(escapeRe).join("[\\s.\\u200c-]*"))
+    .join("|")})(?![\\p{L}])`,
+  "gu"
+)
+// "<type words> نمبر n (بابت|آف|سال|سن|/|-) yyyy" — Urdu case references.
+const URDU_CASE_REFERENCE = new RegExp(
+  `(?:[\\p{Script=Arabic}.]+\\s+){0,4}${foldDraftText("نمبر").text}\\s*\\d+(?:\\s*-\\s*\\p{L})?\\s*(?:${["بابت", "آف", "سال", "سن"]
+    .map((word) => foldDraftText(word).text)
+    .join("|")}|\\/|-)\\s*(?:19|20)\\d{2}`,
+  "gu"
+)
+
+function urduSuspects(folded: FoldedText): Array<Span & { raw: string }> {
+  const text = folded.text
+  const out: Array<Span & { raw: string }> = []
+  for (const m of text.matchAll(URDU_REPORTER)) {
+    const start = m.index ?? 0
+    const end = start + m[0].length
+    const lo = Math.max(0, start - FALLBACK_WINDOW)
+    const hi = Math.min(text.length, end + FALLBACK_WINDOW)
+    if (!/[0-9]/.test(text.slice(lo, start) + text.slice(end, hi))) continue
+    out.push({ start, end, raw: text.slice(lo, hi) })
+  }
+  for (const m of text.matchAll(URDU_CASE_REFERENCE)) {
+    const start = m.index ?? 0
+    out.push({ start, end: start + m[0].length, raw: m[0] })
+  }
+  return out
+}
+
 // ---- script-agnostic shape detector (R3 N10) ----------------------------------------------
 // A year (folded, so any digit script), then 1-6 short letter tokens of any script, then a
 // number. "Short letter token": for Latin, abbreviation-like (capitals, dotted letters, single
@@ -467,6 +515,7 @@ function analyse(
   }
   for (const hit of reporterFallback(folded)) addSuspect(hit.start, hit.end, hit.raw)
   for (const hit of shapeSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
+  for (const hit of urduSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
   // Mixed-script tokens are suspects even beside a strict hit: never map confusables.
   for (const token of mixedScriptTokens(text)) {
     if (!suspects.some((s) => overlaps(s, token))) suspects.push(token)
