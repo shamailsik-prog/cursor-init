@@ -5,6 +5,7 @@ import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/run
 import { newStore } from "@/platform/spine/store"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import { extractCitations } from "@/services/d4-2/citations"
+import { ownCaseReferenceMatcher } from "@/services/d4-1/drafts"
 import { checkDraftCharset } from "@/services/d4-2/draftCharset"
 import { seedJudgment, seedTreatment, verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import { getDocumentTypes } from "@/lib/foundation-data"
@@ -154,6 +155,32 @@ describe("R5-4: residue of the non-authority exclusions", () => {
   it("'Civil Petition Notice No.' is excluded only because Notice sits directly before No.", () => {
     expect(extractCitations("Relying on Civil Petition Notice No. 12 of 2019.")).toEqual([])
     const refs = extractCitations("Relying on Notice in Civil Petition No. 12 of 2019.")
+    expect(refs.length).toBe(1)
+    expect(refs.every(isSuspect)).toBe(true)
+  })
+})
+
+describe("R5-4: the own-case exemption must also match the court", () => {
+  const shc = { isOwnCaseReference: ownCaseReferenceMatcher({ courtId: "SHC", caseNumber: "CP 12/2019" }) }
+  it("an explicit different court within 6 tokens means no exemption", () => {
+    for (const text of [
+      "The Supreme Court in C.P. No. 12 of 2019 held that bail is a right.",
+      "In Lahore High Court C.P. No. 12 of 2019 it was held",
+      "C.P. No. 12 of 2019 decided by the Islamabad High Court",
+    ]) {
+      const refs = extractCitations(text, shc)
+      expect(refs.length, text).toBe(1)
+      expect(refs.every(isSuspect)).toBe(true)
+    }
+  })
+  it("the same court, or no court mentioned, keeps the exemption", () => {
+    expect(extractCitations("IN THE HIGH COURT OF SINDH AT KARACHI\nC.P. No. 12 of 2019\nPetitioner", shc)).toEqual([])
+    expect(extractCitations("Sindh High Court C.P. No. 12 of 2019", shc)).toEqual([])
+    expect(extractCitations("C.P. No. 12 of 2019", shc)).toEqual([])
+  })
+  it("fn5: a reported citation is never exempted; another court's Crl. Misc. is a suspect", () => {
+    expect(extractCitations("2019 SCMR 1234", { isOwnCaseReference: ownCaseReferenceMatcher({ courtId: "SC_PK", caseNumber: "2019 SCMR 1234" }) })).toEqual(["2019 SCMR 1234"])
+    const refs = extractCitations("Lahore High Court Crl. Misc. No. 456 of 2025 held", { isOwnCaseReference: ownCaseReferenceMatcher({ courtId: "SHC", caseNumber: "CRM 456/2025" }) })
     expect(refs.length).toBe(1)
     expect(refs.every(isSuspect)).toBe(true)
   })

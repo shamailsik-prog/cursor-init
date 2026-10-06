@@ -334,9 +334,12 @@ export type CitationAnalysis = {
   suspects: string[]
 }
 
+/** Up to 6 tokens either side of a case reference (R5-4: court mentions near it). */
+export type OwnCaseContext = { before: string; after: string }
+
 export type AnalyseOptions = {
   /** Case references that are the matter's own number (not an authority) are not suspects. */
-  isOwnCaseReference?: (raw: string) => boolean
+  isOwnCaseReference?: (raw: string, context?: OwnCaseContext) => boolean
 }
 
 // ---- reporter-token fallback (N1) ---------------------------------------------------------
@@ -684,14 +687,20 @@ function markupResidueSuspects(folded: FoldedText): Array<Span & { raw: string }
 }
 
 /** The generic pattern may include leading capitalised prose ("In C.P. No. …"): try each word suffix. */
-function isOwnCase(raw: string, options: AnalyseOptions, preceding = ""): boolean {
+const OWN_CASE_CONTEXT_TOKENS = 6
+
+function isOwnCase(raw: string, options: AnalyseOptions, preceding = "", following = ""): boolean {
   if (!options.isOwnCaseReference) return false
+  const context: OwnCaseContext = {
+    before: preceding.split(/\s+/).filter(Boolean).slice(-OWN_CASE_CONTEXT_TOKENS).join(" "),
+    after: following.split(/\s+/).filter(Boolean).slice(0, OWN_CASE_CONTEXT_TOKENS).join(" "),
+  }
   // R4 FP2: also try the match extended by up to 3 preceding words on the same line ("Family"
   // before "Suit No. …", "Bail" before "Application No. …").
   const before = (preceding.split("\n").pop() ?? "").split(/\s+/).filter(Boolean).slice(-3)
   const words = [...before, ...raw.split(/\s+/)]
   for (let i = 0; i < words.length; i += 1) {
-    if (options.isOwnCaseReference(words.slice(i).join(" "))) return true
+    if (options.isOwnCaseReference(words.slice(i).join(" "), context)) return true
   }
   return false
 }
@@ -725,7 +734,8 @@ function analyse(
   for (const pattern of [CASE_REFERENCE, CASE_REFERENCE_GENERIC]) {
     for (const m of text.matchAll(pattern)) {
       if (isExcludedReference(text, m.index ?? 0, m[0])) continue
-      if (isOwnCase(m[0], options, text.slice(Math.max(0, (m.index ?? 0) - 60), m.index ?? 0))) continue
+      const mEnd = (m.index ?? 0) + m[0].length
+      if (isOwnCase(m[0], options, text.slice(Math.max(0, (m.index ?? 0) - 80), m.index ?? 0), text.slice(mEnd, mEnd + 80))) continue
       const start = m.index ?? 0
       addSuspect(start, start + m[0].length, m[0])
     }

@@ -15,6 +15,20 @@ import { loadCourts, normalise as normaliseCaseNumber } from "@/core/case-number
 const courts = loadCourts(courtsSeed)
 
 /** A case reference that normalises to the matter's own recorded case number is not an authority. */
+// Explicit court names (not bare city names, which also name district courts) -> court ids.
+const COURT_MENTIONS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["SC_PK", /\bsupreme\s+court\b/iu],
+  ["FSC", /\bfederal\s+shariat\s+court\b|\bFSC\b/u],
+  ["LHC", /\blahore\s+high\s+court\b|\bhigh\s+court\s+of\s+(?:the\s+)?punjab\b|\bLHC\b/iu],
+  ["SHC", /\bsindh\s+high\s+court\b|\bhigh\s+court\s+of\s+sindh\b|\bSHC\b/iu],
+  ["IHC", /\bislamabad\s+high\s+court\b|\bIHC\b/iu],
+  ["PHC", /\bpeshawar\s+high\s+court\b|\bPHC\b/iu],
+  ["BHC", /\bbalochistan\s+high\s+court\b|\bhigh\s+court\s+of\s+balochistan\b|\bBHC\b/iu],
+]
+function mentionedCourts(text: string): string[] {
+  return COURT_MENTIONS.filter(([, pattern]) => pattern.test(text)).map(([courtId]) => courtId)
+}
+
 /** Case-number text with case, dots, "No."/"Number", "of"/"/" and spacing folded away. */
 function comparableCaseNumber(raw: string): string {
   return raw
@@ -28,9 +42,15 @@ function comparableCaseNumber(raw: string): string {
 export function ownCaseReferenceMatcher(matter: {
   courtId: string
   caseNumber: string | null
-}): (raw: string) => boolean {
-  return (raw) => {
+}): (raw: string, context?: OwnCaseContext) => boolean {
+  return (raw, context) => {
     if (!matter.caseNumber) return false
+    // R5-4: a court named within 6 tokens of the reference must be the matter's own court
+    // ("The Supreme Court in C.P. No. 12 of 2019" is not an SHC matter's C.P. No. 12 of 2019).
+    if (context) {
+      const mentioned = mentionedCourts(`${context.before} ${raw} ${context.after}`)
+      if (mentioned.some((courtId) => courtId !== matter.courtId)) return false
+    }
     try {
       const result = normaliseCaseNumber(raw, matter.courtId, courts)
       if (result.status !== "REJECT") return result.canonical === matter.caseNumber
@@ -43,6 +63,7 @@ export function ownCaseReferenceMatcher(matter: {
   }
 }
 import { getDocumentTypes } from "@/lib/foundation-data"
+import type { OwnCaseContext } from "@/services/d4-2/citations"
 
 export type TemplateSummary = {
   id: string
