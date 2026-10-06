@@ -3260,6 +3260,9 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
     },
     auditDeadLetter: {
       async append(letter) {
+        // idempotent like the Firestore id `${row.id}_${deadLetteredAt}`: a retried write after
+        // an ambiguous failure never stores a second copy
+        if (store.auditDeadLetters.some((l) => l.row === letter.row && l.deadLetteredAt === letter.deadLetteredAt)) return
         store.auditDeadLetters.push(letter)
       },
       async list() {

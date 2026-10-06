@@ -7,6 +7,7 @@ import {
   isAuditRowPersisted,
   markAuditRowPersisted,
   type AuditLog,
+  type DeadLetterWriter,
 } from "@/platform/audit/requestAudit"
 import { normalizeAuditEntryInPlace } from "@/platform/persistence/auditWriteThrough"
 
@@ -50,24 +51,19 @@ export async function flushRequestAudit(rows: readonly AuditEntry[]): Promise<vo
   }
 }
 
-async function storeDeadLetters(
-  store: SpineStore,
-  log: Partial<AuditLog>
-): Promise<void> {
-  if (typeof log.takeDeadLetters !== "function") return
-  const letters = log.takeDeadLetters()
-  if (letters.length === 0) return
-  const unwritten = [...letters]
-  try {
+async function storeDeadLetters(store: SpineStore, log: Partial<AuditLog>): Promise<void> {
+  // R4-6: dead-letters are written when dead-lettered; the flush retries what is still cached.
+  if (typeof log.flushDeadLetters !== "function") return
+  if (log.hasDeadLetterWriter && !log.hasDeadLetterWriter()) log.setDeadLetterWriter?.(repositoryDeadLetterWriter(store))
+  await log.flushDeadLetters()
+}
+
+/** Writes a dead-letter to the store's audit_dead_letter repository. */
+export function repositoryDeadLetterWriter(store: SpineStore): DeadLetterWriter {
+  return async (letter) => {
     const { getRuntimeRepositories } = await import("@/platform/persistence/runtimeRepositories")
     const repos = await getRuntimeRepositories(store)
-    while (unwritten.length > 0) {
-      await repos.auditDeadLetter.append(unwritten[0]!)
-      unwritten.shift()
-    }
-  } catch (err) {
-    console.error("[audit] dead-letter repository unavailable; will retry", String(err).slice(0, 200))
-    log.requeueDeadLetters?.(unwritten)
+    await repos.auditDeadLetter.append(letter)
   }
 }
 

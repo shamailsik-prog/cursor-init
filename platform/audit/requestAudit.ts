@@ -73,6 +73,7 @@ export function endAuditFlight(rows: readonly AuditEntry[]): void {
 
 /** A dead-lettered row with why and when; written to the durable audit_dead_letter repository. */
 export type AuditDeadLetter = { row: AuditEntry; reason: string; deadLetteredAt: number }
+export type DeadLetterWriter = (letter: AuditDeadLetter) => Promise<void>
 
 export function isAuditRowDeadLettered(row: AuditEntry): boolean {
   return deadLettered.has(row)
@@ -95,8 +96,14 @@ export class AuditLog extends Array<AuditEntry> {
   readonly retryQueue: AuditEntry[] = []
   private readonly attempts = new WeakMap<object, number>()
   private readonly nextAttemptAt = new WeakMap<object, number>()
-  /** Dead-letters not yet written to the durable repository (drained by the next flush). */
+  /**
+   * Cache of dead-letters not yet confirmed written to the durable repository (R4-6: each one is
+   * written at the moment it is dead-lettered; a failed write stays here for the next flush).
+   */
   private readonly pendingDeadLetters: AuditDeadLetter[] = []
+  private deadLetterWriter: DeadLetterWriter | null = null
+  private readonly writingDeadLetters = new Set<AuditDeadLetter>()
+  private readonly deadLetterWrites = new Set<Promise<void>>()
 
   constructor(
     private readonly capacity: number = AUDIT_LOG_CAPACITY,
@@ -170,18 +177,68 @@ export class AuditLog extends Array<AuditEntry> {
     this.enqueueForRetry([row])
   }
 
-  /** Dead-letters awaiting the durable write; the caller re-queues any it could not write. */
-  takeDeadLetters(): AuditDeadLetter[] {
-    return this.pendingDeadLetters.splice(0, this.pendingDeadLetters.length)
+  /** Where dead-letters are written durably (the runtime store wires its audit_dead_letter repo). */
+  setDeadLetterWriter(writer: DeadLetterWriter | null): void {
+    this.deadLetterWriter = writer
   }
 
+  hasDeadLetterWriter(): boolean {
+    return this.deadLetterWriter !== null
+  }
+
+  /** Cached dead-letters not being written right now, oldest first (removed from the cache). */
+  takeDeadLetters(): AuditDeadLetter[] {
+    const taken = this.pendingDeadLetters.filter((letter) => !this.writingDeadLetters.has(letter))
+    this.removePending(taken)
+    return taken
+  }
+
+  /** Letters the caller could not write go back in front (oldest first). */
   requeueDeadLetters(letters: readonly AuditDeadLetter[]): void {
     this.pendingDeadLetters.unshift(...letters)
-    // bounded like the retry queue: the oldest unwritten dead-letters are only logged
+    // bounded like the retry queue: over capacity, the *oldest* unwritten dead-letters are only
+    // logged (R4-6: this used pop(), which dropped the newest)
     while (this.pendingDeadLetters.length > this.retryCapacity) {
-      const dropped = this.pendingDeadLetters.pop()
+      const dropped = this.pendingDeadLetters.shift()
       if (dropped) console.error("[audit] dead-letter could not be stored durably", JSON.stringify(dropped))
     }
+  }
+
+  /** Waits for the dead-letter writes in flight. */
+  async settleDeadLetterWrites(): Promise<void> {
+    while (this.deadLetterWrites.size > 0) await Promise.all([...this.deadLetterWrites])
+  }
+
+  /** Writes every cached dead-letter (oldest first) through the writer; failures stay cached. */
+  async flushDeadLetters(): Promise<void> {
+    await this.settleDeadLetterWrites()
+    for (const letter of [...this.pendingDeadLetters]) this.writeDeadLetter(letter)
+    await this.settleDeadLetterWrites()
+  }
+
+  private removePending(letters: readonly AuditDeadLetter[]): void {
+    for (const letter of letters) {
+      const at = this.pendingDeadLetters.indexOf(letter)
+      if (at >= 0) this.pendingDeadLetters.splice(at, 1)
+    }
+  }
+
+  private writeDeadLetter(letter: AuditDeadLetter): void {
+    const writer = this.deadLetterWriter
+    if (!writer || this.writingDeadLetters.has(letter)) return
+    this.writingDeadLetters.add(letter)
+    const write: Promise<void> = writer(letter)
+      .then(
+        () => this.removePending([letter]),
+        (err: unknown) => {
+          console.error("[audit] dead-letter write failed; kept for the next flush", String(err).slice(0, 200))
+        }
+      )
+      .finally(() => {
+        this.writingDeadLetters.delete(letter)
+        this.deadLetterWrites.delete(write)
+      })
+    this.deadLetterWrites.add(write)
   }
 
   /** Permanently unpersistable: logged (the dead-letter), then free to be trimmed. */
@@ -197,7 +254,10 @@ export class AuditLog extends Array<AuditEntry> {
       target: row.target,
       at: row.at ?? null,
     })
-    this.pendingDeadLetters.push({ row, reason, deadLetteredAt: Date.now() })
+    const letter: AuditDeadLetter = { row, reason, deadLetteredAt: Date.now() }
+    this.pendingDeadLetters.push(letter)
+    // R4-6: durable at the moment of dead-lettering, not at the next flush
+    this.writeDeadLetter(letter)
     this.trim()
   }
 
