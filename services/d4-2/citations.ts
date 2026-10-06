@@ -337,6 +337,14 @@ const FALLBACK_WINDOW = 20
 // R4 FP3: PTCL (the telecom company) too.
 const ACRONYM_REPORTERS = new Set(["PLC", "CLC", "CLD", "PTD", "SCR", "KLR", "NLR", "YLR", "PTCL"])
 const ACRONYM_AFTER_YEAR_TOKENS = 3
+const ACRONYM_YEAR_WINDOW = 3
+const RE_YEAR_IN_TOKEN = /^[(\[]?(?:19|20)[0-9]{2}[)\],.;:]*$/u
+// Citation filler between an acronym reporter and its page (R5-1): blanks, punctuation,
+// bracketed text, court names and the connectors at / page / p. / pp. / Vol.
+const CITATION_FILLER = new RegExp(
+  `^(?:\\s+|[,.:;\\-–—]|\\([^()\\n]{0,30}\\)|\\[[^\\[\\]\\n]{0,30}\\]|(?:at|page|pp?\\.|vol\\.?)(?![\\p{L}])|(?:${COURT_ALTERNATION})(?![\\p{L}]))*`,
+  "iu"
+)
 const SKELETON_REPORTER = new RegExp(
   `(?<![\\p{L}])(?:${REPORTER_TOKENS.map((t) => [...t].join("\\s?")).join("|")})(?![\\p{L}])`,
   "giu"
@@ -382,7 +390,8 @@ function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
       // ACRONYM_AFTER_YEAR_TOKENS tokens after it ("CLC 789 Lahore 2018"). Glued digits count.
       if (ACRONYM_REPORTERS.has(m[0].replace(/\s/g, "").toUpperCase())) {
         const beforeToken = skeleton.slice(0, ms).split(" ").filter(Boolean).pop() ?? ""
-        const afterRaw = text.slice((map[me - 1] ?? 0) + 1).replace(/^\s*\([^()\n]{0,30}\)/u, "")
+        const afterRawFull = text.slice((map[me - 1] ?? 0) + 1)
+        const afterRaw = afterRawFull.replace(/^\s*\([^()\n]{0,30}\)/u, "")
         const afterTokens = afterRaw.split(/\s+/).filter(Boolean)
         const digitsBefore = /[0-9]/.test(skeleton[ms - 1] ?? "") || /[0-9]/.test(beforeToken)
         // the next token has digits ("789", "<789", "77,"), or is a connector ("page", "at", "p.")
@@ -401,7 +410,21 @@ function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
           const at = afterTokens.slice(0, 4).findIndex((token) => /[0-9]/.test(token))
           return at > 0 && afterTokens.slice(0, at).some((token) => /[^\p{L}\p{N}.,;:'()\u2019-]/u.test(token))
         })()
-        if (!((numberAfter || junkThenNumber) && (digitsBefore || yearAfter))) continue
+        // R5-1 (reviewer's rule): a year within 3 tokens before or after, and a number within 4
+        // tokens after reached only through citation filler — court names, at / page / p. / pp. /
+        // Vol., bracketed text, punctuation ("2018 CLC Lahore 789", "2019 PLC at page 77",
+        // "CLC (2018) 789"). Ordinary words in between ("PLC entered into …", "PTCL bill of Rs.")
+        // keep prose clean.
+        const textBefore = text.slice(0, map[ms] ?? 0)
+        const yearNear = [...textBefore.split(/\s+/).filter(Boolean).slice(-ACRONYM_YEAR_WINDOW), ...afterRawFull.split(/\s+/).filter(Boolean).slice(0, ACRONYM_YEAR_WINDOW)]
+          .some((token) => RE_YEAR_IN_TOKEN.test(token))
+        const fillerThenNumber = (() => {
+          const filler = CITATION_FILLER.exec(afterRawFull)?.[0] ?? ""
+          const words = filler.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length
+          return words <= 3 && /^[0-9]/.test(afterRawFull.slice(filler.length))
+        })()
+        const citationShape = yearNear && fillerThenNumber
+        if (!citationShape && !((numberAfter || junkThenNumber) && (digitsBefore || yearAfter))) continue
       }
       const start = map[ms] ?? 0
       const end = (map[me - 1] ?? start) + 1
