@@ -430,15 +430,61 @@ export const NON_SELECTOR_PARAMS: Record<string, string> = {
 }
 
 /**
- * Id-like body fields (`...Id`) that reference no firm's object, reviewed.
- * Every other id field a G-2 action reads must be aimed at a firm-A object.
+ * Body fields of the G-2 actions that select no firm's object, reviewed, one
+ * line each. Every other declared body field (the references: entityId,
+ * matterId, clientId, memberUserIds, documentId, reviewerId, targetUserId,
+ * sessionReferenceId, lineageRootSessionReferenceId, disputeId,
+ * assignedPartnerId, panelPartnerIds, ...) must be set to a firm-A value by an
+ * aimed attack, or the inventory fails.
  */
-export const NON_REFERENCE_ID_FIELDS: Record<string, string> = {
+export const NON_SELECTOR_BODY_FIELDS: Record<string, string> = {
+  action: "selects the action; every value is inventoried as its own selector",
   actorId: "the caller; bound to the session (spoofed by every path)",
   firmId: "the caller's firm; bound to the session (spoofed by every path)",
+  command: "WhatsApp command text; its verb is a WHATSAPP_COMMANDS row (own selector), /research's query is aimed",
   courtId: "a court code from data/courts.json, the same for every firm",
+  raw: "a case-number string to normalise and store on the caller's matter",
+  atMs: "timestamp for the engagement confirmation",
+  classification: "classification label of the record being written",
+  nextClassification: "classification label requested for the caller's document",
+  canonicalName: "name of the client being registered in the caller's firm",
+  cnic: "national ID of the client being registered; the twin attack checks it never links across firms",
+  phone: "phone of the client being registered",
+  title: "title of the matter being created",
+  contentBase64: "the uploaded bytes (byte-identical upload to firm A's is attacked)",
+  sourceChannel: "enum: web / team_portal / whatsapp / bulk",
+  nextStatus: "enum: workflow status",
+  decision: "enum: review decision",
+  exportFormat: "enum: csv / json / pdf",
+  exportScope: "enum: summary / detailed / relevance_review",
+  provenanceTags: "free-text tags stored on the caller's relevance row",
+  nextRole: "enum: role assigned to the (firm-checked) target user",
+  nextClearance: "enum: clearance assigned to the (firm-checked) target user",
+  authBoundary: "enum: runtime_local / external_session_hint",
   externalSessionId: "a caller-supplied IdP session hint stored on the caller's own reference",
   assertedExternalSessionId: "a caller-supplied IdP assertion compared with the caller's own reference",
+  assertedIssuer: "IdP issuer asserted for the caller's own reference",
+  assertedSubject: "IdP subject asserted for the caller's own reference",
+  disposition: "enum: arbitration / dispute disposition",
+  dispositionDriftReasons: "free-text reasons stored on the caller's adjudication",
+  resolutionOutcome: "enum: debt-dispute outcome",
+  slaWindowMinutes: "number: SLA window",
+  requiredPanelQuorum: "number: panel quorum",
+  verdictWindowMinutes: "number: verdict window",
+  publicationChannel: "free-text channel label",
+  queueType: "enum: follow_up / workflow (out-of-scope court-ops write)",
+  reason: "free text stored with the caller's action",
+  note: "free text stored with the caller's action",
+  resolutionNote: "free text",
+  closureReason: "free text",
+  reopenTrigger: "free text",
+  retirementNote: "free text",
+  carryoverSignal: "free text",
+  correctionNote: "free text",
+  challengeReason: "free text",
+  rollbackControlNote: "free text",
+  quarantineReason: "free text",
+  clearReason: "free text",
 }
 
 /** Request headers the G-2 routes depend on, reviewed: all are read by the platform, not the routes. */

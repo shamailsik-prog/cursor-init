@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
  *   (every id-like field of every firm-A row in the store) or name.
  *
  * The inventory (tests/g2/discovery.ts) reads every method, view, action,
- * WhatsApp command, query param, id body field and header from each route's
+ * WhatsApp command, query param, body field and header from each route's
  * declared surface (app/api/<route>/surface.ts), which the route can only
  * dispatch through (tests/g2.surface-guard.test.ts); anything not tested,
  * attacked or reviewed fails, and a self-test checks surface changes are caught. Runs in memory persistence always and in
@@ -60,7 +60,7 @@ import {
   type FirmSeed,
 } from "./g2/harness"
 import {
-  NON_REFERENCE_ID_FIELDS,
+  NON_SELECTOR_BODY_FIELDS,
   NON_SELECTOR_PARAMS,
   NOT_BUILT,
   REVIEWED_HEADERS,
@@ -120,13 +120,13 @@ function coverageOf(route: string): Coverage {
     attackedParams: new Set([...SPOOFED_PARAMS, ...aimed.flatMap(([, xs]) => xs.flatMap((x) => Object.keys(x.call.query ?? {})))]),
     reviewedParams: new Set(Object.keys(NON_SELECTOR_PARAMS)),
     // A body field counts as attacked only when some aimed attack sets it to a firm-A object (placeholder ids / firm-A users).
-    attackedIdFields: new Map(
+    attackedBodyFields: new Map(
       aimed.map(([key, xs]) => [
         key,
         new Set(xs.flatMap((x) => Object.entries(x.call.body ?? {}).filter(([, v]) => FIRM_A_VALUE.test(JSON.stringify(v))).map(([k]) => k))),
       ])
     ),
-    reviewedIdFields: new Set(Object.keys(NON_REFERENCE_ID_FIELDS)),
+    reviewedBodyFields: new Set(Object.keys(NON_SELECTOR_BODY_FIELDS)),
     reviewedHeaders: new Set(Object.keys(REVIEWED_HEADERS)),
   }
 }
@@ -138,6 +138,8 @@ function problemsOf(route: string, surface: RouteSurface = SURFACES[route], meth
 /** Surface changes the inventory must catch (the review's forms that change what a route accepts). */
 const MUTATIONS: Array<[string, string, (s: RouteSurface) => RouteSurface, string[]?]> = [
   ["J a new body field on an existing action", "/api/d1/clients", (s) => ({ ...s, bodyFields: { ...s.bodyFields, conflict_check: [...s.bodyFields.conflict_check, "entityIds"] } })],
+  ["a new non-id-named body field (caseRef)", "/api/d1/clients", (s) => ({ ...s, bodyFields: { ...s.bodyFields, conflict_check: [...s.bodyFields.conflict_check, "caseRef"] } })],
+  ["a new body field on a tenancy action (scope)", "/api/p5/tenancy", (s) => ({ ...s, bodyFields: { ...s.bodyFields, update_role: [...s.bodyFields.update_role, "scope"] } })],
   ["a new by-id query param", "/api/d1/clients", (s) => ({ ...s, queryParams: [...s.queryParams, "id"] })],
   ["a new view", "/api/d1/document-workflow", (s) => ({ ...s, views: [...s.views, "export_all"] })],
   ["a new action", "/api/p5/tenancy", (s) => ({ ...s, actions: [...s.actions, "dump_firm"], bodyFields: { ...s.bodyFields, dump_firm: ["action", "actorId", "firmId"] } })],
@@ -197,7 +199,7 @@ describe("G-2 read-path inventory", () => {
     expect(Object.keys(SURFACES).sort()).toEqual(Object.keys(MODULES).sort())
   })
 
-  it("every method, view, action, command, query param, id body field and header of the G-2 surfaces is tested, attacked or reviewed", () => {
+  it("every method, view, action, command, query param, body field and header of the G-2 surfaces is tested, attacked or reviewed", () => {
     expect(Object.keys(MODULES).flatMap((route) => problemsOf(route))).toEqual([])
   })
 
