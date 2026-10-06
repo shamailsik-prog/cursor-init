@@ -244,6 +244,7 @@ describe(`citation gate fuzz (seed ${SEED})`, () => {
       }
       blocked += 1
     }
+    console.log(`${cite}: refused ${refused}, blocked ${blocked}, ruled pinpoint ${pinpoints}`)
     // both outcomes must actually occur, or the property is vacuous for one of them
     expect(refused).toBeGreaterThan(0)
     expect(blocked).toBeGreaterThan(VARIANTS_PER_CITATION / 10)
