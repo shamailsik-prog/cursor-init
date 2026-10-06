@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server"
+import { BodySchema, MATTERS_SURFACE } from "./surface"
 import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
@@ -10,7 +12,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { checkPermission } from "@/platform/p5/checkPermission"
-import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
+import { DEFAULT_JSON_BODY_BYTES, parseBody, readJsonLimited } from "@/platform/http/validation"
 import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
@@ -26,31 +28,6 @@ import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-const BodySchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("create"),
-    actorId: idField,
-    firmId: idField,
-    clientId: idField,
-    title: textField(1000),
-    courtId: idField,
-    classification: classificationField,
-    memberUserIds: z.array(idField).max(200).optional(),
-  }),
-  z.object({
-    action: z.literal("confirm_engagement"),
-    actorId: idField,
-    matterId: idField,
-    atMs: z.number().int().nonnegative().optional(),
-  }),
-  z.object({
-    action: z.literal("record_case_number"),
-    actorId: idField,
-    matterId: idField,
-    raw: textField(500),
-    courtId: idField,
-  }),
-])
 
 type Body = z.infer<typeof BodySchema>
 
@@ -124,16 +101,16 @@ async function ensureMatterAccess(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGet, { surface: MATTERS_SURFACE })
 }
 
 async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repo = await getRuntimeRepositories(store)
   const url = new URL(request.url)
-  const userId = url.searchParams.get("userId")
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const userId = getQuery(MATTERS_SURFACE, url, "userId")
+  const limit = parseLimit(getQuery(MATTERS_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(MATTERS_SURFACE, url, "cursor"))
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
   }
@@ -165,7 +142,7 @@ async function handleGet(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: MATTERS_SURFACE })
 }
 
 async function handlePost(request: Request) {
@@ -182,13 +159,15 @@ async function handlePost(request: Request) {
 
   const raw = await readJsonLimited(request)
   if (!raw.ok) return raw.response
+  const undeclared = refuseUndeclaredBody(MATTERS_SURFACE, raw.data)
+  if (undeclared) return undeclared
   const body = parseBody(BodySchema, raw.data)
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
   const fingerprint = JSON.stringify({
     route: "/api/d1/matters",
-    action: parsed.action,
+    action: actionOf(MATTERS_SURFACE, parsed),
     body: parsed,
   })
   const replay = idempotency.getReplay(key, fingerprint)
@@ -203,7 +182,7 @@ async function handlePost(request: Request) {
   }
 
   try {
-    if (parsed.action === "create") {
+    if (isAction(MATTERS_SURFACE, parsed, "create")) {
       if (!parsed.actorId || !parsed.firmId || !parsed.clientId || !parsed.title || !parsed.courtId) {
         return NextResponse.json(
           { error: "actorId, firmId, clientId, title, and courtId are required" },
@@ -260,7 +239,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "confirm_engagement") {
+    if (isAction(MATTERS_SURFACE, parsed, "confirm_engagement")) {
       if (!parsed.actorId || !parsed.matterId) {
         return NextResponse.json({ error: "actorId and matterId are required" }, { status: 400 })
       }
@@ -298,7 +277,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "record_case_number") {
+    if (isAction(MATTERS_SURFACE, parsed, "record_case_number")) {
       if (!parsed.actorId || !parsed.matterId || !parsed.raw || !parsed.courtId) {
         return NextResponse.json(
           { error: "actorId, matterId, raw, and courtId are required" },

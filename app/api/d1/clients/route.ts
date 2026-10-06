@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server"
+import { BodySchema, CLIENTS_SURFACE } from "./surface"
 import { z } from "zod"
-import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited, textField } from "@/platform/http/validation"
+import { DEFAULT_JSON_BODY_BYTES, parseBody, readJsonLimited } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -20,23 +22,6 @@ import { conflictCheck, createClient } from "@/services/d1-1/clients"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-const BodySchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("create"),
-    actorId: idField,
-    firmId: idField,
-    canonicalName: textField(500),
-    cnic: textField(64),
-    phone: textField(64),
-    classification: classificationField,
-  }),
-  z.object({
-    action: z.literal("conflict_check"),
-    actorId: idField,
-    firmId: idField,
-    entityId: idField,
-  }),
-])
 
 type Body = z.infer<typeof BodySchema>
 
@@ -64,16 +49,16 @@ function requireActor(actorId: string, firmId?: string) {
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGet, { surface: CLIENTS_SURFACE })
 }
 
 async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
-  const userId = url.searchParams.get("userId")
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const userId = getQuery(CLIENTS_SURFACE, url, "userId")
+  const limit = parseLimit(getQuery(CLIENTS_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(CLIENTS_SURFACE, url, "cursor"))
 
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
@@ -104,7 +89,7 @@ async function handleGet(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: CLIENTS_SURFACE })
 }
 
 async function handlePost(request: Request) {
@@ -121,13 +106,15 @@ async function handlePost(request: Request) {
 
   const raw = await readJsonLimited(request)
   if (!raw.ok) return raw.response
+  const undeclared = refuseUndeclaredBody(CLIENTS_SURFACE, raw.data)
+  if (undeclared) return undeclared
   const body = parseBody(BodySchema, raw.data)
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
   const fingerprint = JSON.stringify({
     route: "/api/d1/clients",
-    action: parsed.action,
+    action: actionOf(CLIENTS_SURFACE, parsed),
     body: parsed,
   })
   const replay = idempotency.getReplay(key, fingerprint)
@@ -142,7 +129,7 @@ async function handlePost(request: Request) {
   }
 
   try {
-    if (parsed.action === "create") {
+    if (isAction(CLIENTS_SURFACE, parsed, "create")) {
       if (!parsed.actorId || !parsed.firmId || !parsed.canonicalName || !parsed.cnic || !parsed.phone) {
         return NextResponse.json(
           { error: "actorId, firmId, canonicalName, cnic, and phone are required" },
@@ -201,7 +188,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "conflict_check") {
+    if (isAction(CLIENTS_SURFACE, parsed, "conflict_check")) {
       if (!parsed.actorId || !parsed.firmId || !parsed.entityId) {
         return NextResponse.json({ error: "actorId, firmId, and entityId are required" }, { status: 400 })
       }

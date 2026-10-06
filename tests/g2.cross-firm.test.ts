@@ -17,14 +17,15 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
  *   boundary attempts: the firm/identity spoofs of that base (X-Firm-Id,
  *   firmId, actorId, userId), which must be refused with FIRM_MISMATCH /
  *   IDENTITY_MISMATCH, and the attacks aimed at firm-A objects, which must be
- *   refused with a tenant-scoped reason (TENANT_DENY) when they name one;
+ *   refused with the exact reason that path gives for a firm-A object;
  * - no response of any role (headers or body) may carry a firm-A identifier
  *   (every id-like field of every firm-A row in the store) or name.
  *
- * The inventory (tests/g2/discovery.ts) derives every method, view, action,
- * WhatsApp command and query param from the route sources; anything not
- * tested, attacked or reviewed fails, and a self-test checks that seeded
- * source mutations are caught. Runs in memory persistence always and in
+ * The inventory (tests/g2/discovery.ts) reads every method, view, action,
+ * WhatsApp command, query param, id body field and header from each route's
+ * declared surface (app/api/<route>/surface.ts), which the route can only
+ * dispatch through (tests/g2.surface-guard.test.ts); anything not tested,
+ * attacked or reviewed fails, and a self-test checks surface changes are caught. Runs in memory persistence always and in
  * Firestore persistence too when the emulator is up (ci_gates/gate_g2.sh,
  * which requires both). `G2_COVERAGE_OUT` receives the coverage rows.
  */
@@ -48,6 +49,7 @@ import {
   FIRM_B,
   FIRM_B_USERS,
   MODULES,
+  SURFACES,
   firmMarkers,
   placeholderSeed,
   seedFirm,
@@ -58,8 +60,10 @@ import {
   type FirmSeed,
 } from "./g2/harness"
 import {
+  NON_REFERENCE_ID_FIELDS,
   NON_SELECTOR_PARAMS,
   NOT_BUILT,
+  REVIEWED_HEADERS,
   OUT_OF_SCOPE_MODULES,
   OUT_OF_SCOPE_SELECTORS,
   READ_PATHS,
@@ -67,7 +71,8 @@ import {
   type Attack,
   type ReadPath,
 } from "./g2/paths"
-import { discover, inventoryProblems } from "./g2/discovery"
+import { discover, inventoryProblems, type Coverage } from "./g2/discovery"
+import type { RouteSurface } from "@/platform/http/surface"
 
 function installVerifier(): void {
   const table = new Map([...FIRM_A_USERS, ...FIRM_B_USERS].map((u) => [tokenOf(u.id), u]))
@@ -84,8 +89,6 @@ function installVerifier(): void {
 // ---------------------------------------------------------------------------
 
 const ROOT = path.resolve(__dirname, "..")
-const sourceOf = (route: string) => readFileSync(path.join(ROOT, "app", route, "route.ts"), "utf8")
-const CHANNEL_SOURCES = [readFileSync(path.join(ROOT, "services/d2-1/whatsapp.ts"), "utf8")]
 
 function routeModules(): string[] {
   const out: string[] = []
@@ -101,42 +104,46 @@ function routeModules(): string[] {
 }
 
 const SPOOFED_PARAMS = ["firmId", "actorId", "userId"]
-const LISTED = new Set([...READ_PATHS.map(selectorKey), ...Object.keys(OUT_OF_SCOPE_SELECTORS)])
-const REVIEWED_PARAMS = new Set(Object.keys(NON_SELECTOR_PARAMS))
+/** A firm-A object in a placeholder-seeded attack: a firm-A seed id or a firm-A user. */
+const FIRM_A_VALUE = new RegExp(`${FIRM_A}-|"(?:${FIRM_A_USERS.map((u) => u.id).join("|")})"`)
+const methodsOf = (route: string) => Object.keys(MODULES[route]).filter((k) => /^[A-Z]+$/.test(k))
 
-/** Query params attacked on `route`: the spoofs, plus every key of an aimed attack (evaluated on placeholder seeds). */
-function attackedParams(route: string): Set<string> {
+/** What the attacks cover on each route (aimed attacks evaluated on placeholder seeds). */
+function coverageOf(route: string): Coverage {
   const a = placeholderSeed(FIRM_A)
   const b = placeholderSeed(FIRM_B)
-  const keys = READ_PATHS.filter((p) => p.route === route).flatMap((p) => p.aimed(a, b).flatMap((x) => Object.keys(x.call.query ?? {})))
-  return new Set([...SPOOFED_PARAMS, ...keys])
+  const paths = READ_PATHS.filter((p) => p.route === route)
+  const aimed = paths.map((p) => [selectorKey(p), p.aimed(a, b)] as const)
+  return {
+    listedSelectors: new Set([...READ_PATHS.map(selectorKey), ...Object.keys(OUT_OF_SCOPE_SELECTORS)]),
+    outOfScopeSelectors: new Set(Object.keys(OUT_OF_SCOPE_SELECTORS)),
+    attackedParams: new Set([...SPOOFED_PARAMS, ...aimed.flatMap(([, xs]) => xs.flatMap((x) => Object.keys(x.call.query ?? {})))]),
+    reviewedParams: new Set(Object.keys(NON_SELECTOR_PARAMS)),
+    // A body field counts as attacked only when some aimed attack sets it to a firm-A object (placeholder ids / firm-A users).
+    attackedIdFields: new Map(
+      aimed.map(([key, xs]) => [
+        key,
+        new Set(xs.flatMap((x) => Object.entries(x.call.body ?? {}).filter(([, v]) => FIRM_A_VALUE.test(JSON.stringify(v))).map(([k]) => k))),
+      ])
+    ),
+    reviewedIdFields: new Set(Object.keys(NON_REFERENCE_ID_FIELDS)),
+    reviewedHeaders: new Set(Object.keys(REVIEWED_HEADERS)),
+  }
 }
 
-function problemsOf(route: string, src = sourceOf(route), channel = CHANNEL_SOURCES): string[] {
-  return inventoryProblems(route, discover(route, src, channel), LISTED, attackedParams(route), REVIEWED_PARAMS)
+function problemsOf(route: string, surface: RouteSurface = SURFACES[route], methods = methodsOf(route)): string[] {
+  return inventoryProblems(route, discover(route, surface, methods), coverageOf(route))
 }
 
-const insertAfter = (src: string, anchor: string, text: string) => {
-  const i = src.indexOf(anchor)
-  if (i < 0) throw new Error(`anchor not found: ${anchor}`)
-  return src.slice(0, i + anchor.length) + text + src.slice(i + anchor.length)
-}
-
-/** Source mutations the inventory must catch (review probe, Task 8 fix round 1). */
-const MUTATIONS: Array<[string, string, (src: string) => string, string[]]> = [
-  ["a by-id param on an existing GET", "/api/d1/clients", (s) => insertAfter(s, "const url = new URL(request.url)", '\n  const byId = url.searchParams.get("id")'), [], ],
-  ["a new param on another GET", "/api/d1/reporting", (s) => insertAfter(s, "const url = new URL(request.url)", '\n  const mode = url.searchParams.get("mode")'), []],
-  ["searchParams read by a variable key", "/api/d1/matters", (s) => insertAfter(s, "const url = new URL(request.url)", "\n  const k = 'x'; url.searchParams.get(k)"), []],
-  ["all params read at once", "/api/d1/documents", (s) => insertAfter(s, "const url = new URL(request.url)", "\n  const all = Object.fromEntries(url.searchParams)"), []],
-  ["export const PATCH", "/api/d1/clients", (s) => `${s}\nexport const PATCH = async () => new Response(null)\n`, []],
-  ["export { x as DELETE }", "/api/d1/clients", (s) => `${s}\nconst del = async () => new Response(null)\nexport { del as DELETE }\n`, []],
-  ["switch/case action", "/api/d1/matters", (s) => insertAfter(s, "  try {\n", '    switch (parsed.action) {\n      case "export_all":\n        break\n    }\n'), []],
-  ["z.enum action", "/api/d1/clients", (s) => insertAfter(s, "z.discriminatedUnion(\"action\", [", '\n  z.object({ action: z.enum(["dump", "peek"]), actorId: idField }),'), []],
-  ["action declared with another zod form", "/api/d1/clients", (s) => insertAfter(s, "z.discriminatedUnion(\"action\", [", "\n  z.object({ action: z.string(), actorId: idField }),"), []],
-  ["dispatch through a handler map", "/api/d1/documents", (s) => insertAfter(s, "  try {\n", "    const handlers: Record<string, () => void> = {}\n    handlers[parsed.action]?.()\n"), []],
-  ["a WhatsApp command outside the table", "/api/d2/court-ops", (s) => insertAfter(s, "const text = parsed.command.trim()", '\n      if (text.startsWith("/hearings")) return NextResponse.json({})'), []],
-  ["a new view on a G-2 GET", "/api/d1/document-workflow", (s) => insertAfter(s, '    if (view === "timeline") {', '\n    }\n    if (view === "export_all") {'), []],
-  ["a new tenancy action", "/api/p5/tenancy", (s) => insertAfter(s, '  if (parsed.action === "update_role") {', '\n  } else if (parsed.action === "dump_firm") {'), []],
+/** Surface changes the inventory must catch (the review's forms that change what a route accepts). */
+const MUTATIONS: Array<[string, string, (s: RouteSurface) => RouteSurface, string[]?]> = [
+  ["J a new body field on an existing action", "/api/d1/clients", (s) => ({ ...s, bodyFields: { ...s.bodyFields, conflict_check: [...s.bodyFields.conflict_check, "entityIds"] } })],
+  ["a new by-id query param", "/api/d1/clients", (s) => ({ ...s, queryParams: [...s.queryParams, "id"] })],
+  ["a new view", "/api/d1/document-workflow", (s) => ({ ...s, views: [...s.views, "export_all"] })],
+  ["a new action", "/api/p5/tenancy", (s) => ({ ...s, actions: [...s.actions, "dump_firm"], bodyFields: { ...s.bodyFields, dump_firm: ["action", "actorId", "firmId"] } })],
+  ["a new WhatsApp command", "/api/d2/court-ops", (s) => ({ ...s, commands: [...(s.commands ?? []), "hearings"] })],
+  ["a new request header", "/api/d1/matters", (s) => ({ ...s, headers: [...s.headers, "x-view"] })],
+  ["another exported method", "/api/d1/clients", (s) => s, ["GET", "POST", "PATCH"]],
 ]
 
 // ---------------------------------------------------------------------------
@@ -168,7 +175,7 @@ afterAll(() => {
       mode: "-",
       service: why.split(" ")[0],
       channel: "web",
-      path: `${route} (${discover(route, sourceOf(route)).selectors.length} read/act selectors)`,
+      path: route,
       status: "out_of_scope",
       attempts: 0,
       allowed: 0,
@@ -186,23 +193,22 @@ describe("G-2 read-path inventory", () => {
     for (const r of [...inScope, ...Object.keys(OUT_OF_SCOPE_MODULES)]) expect(routeModules()).toContain(r)
   })
 
-  it("every method, view, action, command and query param of the G-2 modules is tested, attacked or reviewed, and the sources hold no form the inventory cannot read", () => {
+  it("every G-2 module declares its request surface", () => {
+    expect(Object.keys(SURFACES).sort()).toEqual(Object.keys(MODULES).sort())
+  })
+
+  it("every method, view, action, command, query param, id body field and header of the G-2 surfaces is tested, attacked or reviewed", () => {
     expect(Object.keys(MODULES).flatMap((route) => problemsOf(route))).toEqual([])
   })
 
-  it("nothing listed is stale: every tested or reviewed selector is still in the sources", () => {
-    const discovered = new Set(Object.keys(MODULES).flatMap((route) => discover(route, sourceOf(route), CHANNEL_SOURCES).selectors))
-    expect([...LISTED].filter((s) => !discovered.has(s))).toEqual([])
+  it("nothing listed is stale: every tested or reviewed selector is still declared", () => {
+    const declared = new Set(Object.keys(MODULES).flatMap((route) => discover(route, SURFACES[route], methodsOf(route)).selectors))
+    expect([...coverageOf("/api/d1/clients").listedSelectors].filter((s) => !declared.has(s))).toEqual([])
   })
 
-  it.each(MUTATIONS.map(([label, route, mutate]) => [label, route, mutate] as const))(
-    "self-test: the inventory catches %s",
-    (_label, route, mutate) => {
-      const mutated = mutate(sourceOf(route))
-      expect(mutated).not.toBe(sourceOf(route))
-      expect(problemsOf(route, mutated).length).toBeGreaterThan(0)
-    }
-  )
+  it.each(MUTATIONS)("self-test: the inventory catches %s", (_label, route, mutate, methods) => {
+    expect(problemsOf(route, mutate(SURFACES[route]), methods ?? methodsOf(route)).length).toBeGreaterThan(0)
+  })
 
   it("each G-2 service has tested read paths or NOT_BUILT entries", () => {
     for (const s of ["D1-1", "D1-2", "D3-1", "D5-1", "D2-1", "P5"] as const) {

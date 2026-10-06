@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
+import { COURT_OPS_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -142,16 +144,16 @@ async function persistWorkflowEventsSince(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGet, { surface: COURT_OPS_SURFACE })
 }
 
 async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const url = new URL(request.url)
-  const userId = url.searchParams.get("userId")
-  const matterId = url.searchParams.get("matterId") ?? undefined
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const userId = getQuery(COURT_OPS_SURFACE, url, "userId")
+  const matterId = getQuery(COURT_OPS_SURFACE, url, "matterId") ?? undefined
+  const limit = parseLimit(getQuery(COURT_OPS_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(COURT_OPS_SURFACE, url, "cursor"))
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
   }
@@ -173,7 +175,7 @@ async function handleGet(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withSession(request, handlePost)
+  return withSession(request, handlePost, { surface: COURT_OPS_SURFACE })
 }
 
 async function handlePost(request: Request) {
@@ -193,13 +195,15 @@ async function handlePost(request: Request) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
   }
-  if (!parsed.action) {
+  const undeclared = refuseUndeclaredBody(COURT_OPS_SURFACE, parsed)
+  if (undeclared) return undeclared
+  if (actionOf(COURT_OPS_SURFACE, parsed) === null) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
 
   const fingerprint = JSON.stringify({
     route: "/api/d2/court-ops",
-    action: parsed.action,
+    action: actionOf(COURT_OPS_SURFACE, parsed),
     body: parsed,
   })
   const replay = idempotency.getReplay(key, fingerprint)
@@ -214,7 +218,7 @@ async function handlePost(request: Request) {
   }
 
   try {
-    if (parsed.action === "whatsapp_command") {
+    if (isAction(COURT_OPS_SURFACE, parsed, "whatsapp_command")) {
       if (!parsed.actorId || !parsed.command) {
         return NextResponse.json({ error: "actorId and command are required" }, { status: 400 })
       }
@@ -251,7 +255,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "acknowledge_item") {
+    if (isAction(COURT_OPS_SURFACE, parsed, "acknowledge_item")) {
       if (!parsed.actorId || !parsed.queueType || !parsed.id) {
         return NextResponse.json(
           { error: "actorId, queueType, and id are required" },
@@ -293,7 +297,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "resolve_follow_up") {
+    if (isAction(COURT_OPS_SURFACE, parsed, "resolve_follow_up")) {
       if (!parsed.actorId || !parsed.followUpId) {
         return NextResponse.json(
           { error: "actorId and followUpId are required" },
@@ -332,7 +336,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "resolve_workflow") {
+    if (isAction(COURT_OPS_SURFACE, parsed, "resolve_workflow")) {
       if (!parsed.actorId || !parsed.documentId || !isWorkflowStatus(parsed.nextStatus)) {
         return NextResponse.json(
           { error: "actorId, documentId, and valid nextStatus are required" },

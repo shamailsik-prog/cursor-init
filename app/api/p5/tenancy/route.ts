@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
+import { TENANCY_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -84,7 +86,7 @@ const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 /** On `view=session_refs`, `userId` filters the listing; the caller is `actorId`. */
 const TENANCY_GET_SESSION_OPTIONS = {
   subjectQueryParams: (url: URL) =>
-    url.searchParams.get("view") === "session_refs" ? ["userId"] : [],
+    selectView(TENANCY_SURFACE, url) === "session_refs" ? ["userId"] : [],
 }
 
 type UpdateRoleBody = {
@@ -573,24 +575,24 @@ async function recomputeAndPersistLineageDigestState(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, TENANCY_GET_SESSION_OPTIONS)
+  return withSession(request, handleGet, { ...TENANCY_GET_SESSION_OPTIONS, surface: TENANCY_SURFACE })
 }
 
 async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
-  const view = url.searchParams.get("view") ?? "session"
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const view = selectView(TENANCY_SURFACE, url)
+  const limit = parseLimit(getQuery(TENANCY_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(TENANCY_SURFACE, url, "cursor"))
 
   try {
     if (view === "session") {
-      const requestedUserId = normalizeOptionalString(url.searchParams.get("userId"))
-      const requestedFirmId = normalizeOptionalString(url.searchParams.get("firmId"))
-      const sessionReferenceId = normalizeOptionalString(url.searchParams.get("sessionRefId"))
-      const authBoundary = parseAuthBoundary(url.searchParams.get("authBoundary"))
-      const externalSessionId = normalizeOptionalString(url.searchParams.get("externalSessionId"))
+      const requestedUserId = normalizeOptionalString(getQuery(TENANCY_SURFACE, url, "userId"))
+      const requestedFirmId = normalizeOptionalString(getQuery(TENANCY_SURFACE, url, "firmId"))
+      const sessionReferenceId = normalizeOptionalString(getQuery(TENANCY_SURFACE, url, "sessionRefId"))
+      const authBoundary = parseAuthBoundary(getQuery(TENANCY_SURFACE, url, "authBoundary"))
+      const externalSessionId = normalizeOptionalString(getQuery(TENANCY_SURFACE, url, "externalSessionId"))
 
       if (!requestedUserId && !sessionReferenceId) {
         return NextResponse.json(
@@ -698,8 +700,8 @@ async function handleGet(request: Request) {
     }
 
     if (view === "users") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -717,9 +719,9 @@ async function handleGet(request: Request) {
     }
 
     if (view === "memberships") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
-      const matterId = url.searchParams.get("matterId") ?? undefined
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
+      const matterId = getQuery(TENANCY_SURFACE, url, "matterId") ?? undefined
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -744,8 +746,8 @@ async function handleGet(request: Request) {
     }
 
     if (view === "audit") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -763,9 +765,9 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_refs") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
-      const userId = normalizeOptionalString(url.searchParams.get("userId"))
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
+      const userId = normalizeOptionalString(getQuery(TENANCY_SURFACE, url, "userId"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -783,10 +785,10 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
-      const rootSessionReferenceId = normalizeOptionalString(url.searchParams.get("rootSessionRefId"))
-      const delegatedDivergedOnly = parseBoolean(url.searchParams.get("delegatedDivergedOnly"))
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
+      const rootSessionReferenceId = normalizeOptionalString(getQuery(TENANCY_SURFACE, url, "rootSessionRefId"))
+      const delegatedDivergedOnly = parseBoolean(getQuery(TENANCY_SURFACE, url, "delegatedDivergedOnly"))
       if (!actorId || !firmId || !rootSessionReferenceId) {
         return NextResponse.json(
           { error: "actorId, firmId, and rootSessionRefId are required" },
@@ -815,12 +817,12 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage_disputes") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseLineageDisputeStatus(url.searchParams.get("status"))
+      const status = parseLineageDisputeStatus(getQuery(TENANCY_SURFACE, url, "status"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -846,12 +848,12 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage_reconciliation_digests") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseLineageDigestStatus(url.searchParams.get("status"))
+      const status = parseLineageDigestStatus(getQuery(TENANCY_SURFACE, url, "status"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -901,12 +903,12 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage_reconciliation_queue") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseLineageQueueStatus(url.searchParams.get("status"))
+      const status = parseLineageQueueStatus(getQuery(TENANCY_SURFACE, url, "status"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -957,12 +959,12 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage_digest_closure_checkpoints") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseLineageClosureStatus(url.searchParams.get("status"))
+      const status = parseLineageClosureStatus(getQuery(TENANCY_SURFACE, url, "status"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -1013,12 +1015,12 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage_closure_adjudications") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseLineageClosureAdjudicationStatus(url.searchParams.get("status"))
+      const status = parseLineageClosureAdjudicationStatus(getQuery(TENANCY_SURFACE, url, "status"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -1069,12 +1071,12 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage_arbitration_debt_retirement_ledgers") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseLineageDebtRetirementStatus(url.searchParams.get("status"))
+      const status = parseLineageDebtRetirementStatus(getQuery(TENANCY_SURFACE, url, "status"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -1125,12 +1127,12 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage_closure_adjudication_settlements") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseLineageSettlementStatus(url.searchParams.get("status"))
+      const status = parseLineageSettlementStatus(getQuery(TENANCY_SURFACE, url, "status"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -1181,12 +1183,12 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_lineage_arbitration_debt_retirement_dispute_ledgers") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseLineageDebtRetirementDisputeStatus(url.searchParams.get("status"))
+      const status = parseLineageDebtRetirementDisputeStatus(getQuery(TENANCY_SURFACE, url, "status"))
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
       }
@@ -1237,14 +1239,14 @@ async function handleGet(request: Request) {
     }
 
     if (view === "session_external_session_identity_bridges") {
-      const actorId = url.searchParams.get("actorId")
-      const firmId = url.searchParams.get("firmId")
+      const actorId = getQuery(TENANCY_SURFACE, url, "actorId")
+      const firmId = getQuery(TENANCY_SURFACE, url, "firmId")
       const lineageRootSessionReferenceId = normalizeOptionalString(
-        url.searchParams.get("rootSessionRefId")
+        getQuery(TENANCY_SURFACE, url, "rootSessionRefId")
       )
-      const status = parseExternalSessionIdentityBridgeStatus(url.searchParams.get("status"))
+      const status = parseExternalSessionIdentityBridgeStatus(getQuery(TENANCY_SURFACE, url, "status"))
       const mismatchStatus = parseExternalSessionIdentityBridgeMismatchStatus(
-        url.searchParams.get("mismatchStatus")
+        getQuery(TENANCY_SURFACE, url, "mismatchStatus")
       )
       if (!actorId || !firmId) {
         return NextResponse.json({ error: "actorId and firmId are required" }, { status: 400 })
@@ -1280,7 +1282,7 @@ async function handleGet(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withSession(request, handlePost)
+  return withSession(request, handlePost, { surface: TENANCY_SURFACE })
 }
 
 async function handlePost(request: Request) {
@@ -1301,36 +1303,38 @@ async function handlePost(request: Request) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
   }
+  const undeclared = refuseUndeclaredBody(TENANCY_SURFACE, parsed)
+  if (undeclared) return undeclared
 
   if (
-    parsed.action !== "update_role" &&
-    parsed.action !== "revoke_session_reference" &&
-    parsed.action !== "reissue_session_reference" &&
-    parsed.action !== "attest_session_lineage_dispute" &&
-    parsed.action !== "resolve_session_lineage_dispute" &&
-    parsed.action !== "assign_lineage_reconciliation_queue" &&
-    parsed.action !== "arbitrate_lineage_reconciliation_queue" &&
-    parsed.action !== "attest_lineage_digest_closure" &&
-    parsed.action !== "reopen_lineage_digest_closure" &&
-    parsed.action !== "govern_lineage_closure_adjudication" &&
-    parsed.action !== "record_lineage_closure_adjudication_verdict" &&
-    parsed.action !== "attest_lineage_arbitration_debt_retirement" &&
-    parsed.action !== "reopen_lineage_arbitration_debt_retirement" &&
-    parsed.action !== "checkpoint_lineage_closure_adjudication_settlement_publication" &&
-    parsed.action !== "log_lineage_closure_adjudication_settlement_correction" &&
-    parsed.action !== "confirm_lineage_closure_adjudication_settlement_sla" &&
-    parsed.action !== "open_lineage_arbitration_debt_retirement_dispute" &&
-    parsed.action !== "assign_lineage_arbitration_debt_retirement_dispute_reviewer" &&
-    parsed.action !== "resolve_lineage_arbitration_debt_retirement_dispute" &&
-    parsed.action !== "control_lineage_arbitration_debt_retirement_dispute_rollback" &&
-    parsed.action !== "attest_external_session_identity_bridge" &&
-    parsed.action !== "quarantine_external_session_identity_bridge" &&
-    parsed.action !== "clear_external_session_identity_bridge"
+    !isAction(TENANCY_SURFACE, parsed, "update_role") &&
+    !isAction(TENANCY_SURFACE, parsed, "revoke_session_reference") &&
+    !isAction(TENANCY_SURFACE, parsed, "reissue_session_reference") &&
+    !isAction(TENANCY_SURFACE, parsed, "attest_session_lineage_dispute") &&
+    !isAction(TENANCY_SURFACE, parsed, "resolve_session_lineage_dispute") &&
+    !isAction(TENANCY_SURFACE, parsed, "assign_lineage_reconciliation_queue") &&
+    !isAction(TENANCY_SURFACE, parsed, "arbitrate_lineage_reconciliation_queue") &&
+    !isAction(TENANCY_SURFACE, parsed, "attest_lineage_digest_closure") &&
+    !isAction(TENANCY_SURFACE, parsed, "reopen_lineage_digest_closure") &&
+    !isAction(TENANCY_SURFACE, parsed, "govern_lineage_closure_adjudication") &&
+    !isAction(TENANCY_SURFACE, parsed, "record_lineage_closure_adjudication_verdict") &&
+    !isAction(TENANCY_SURFACE, parsed, "attest_lineage_arbitration_debt_retirement") &&
+    !isAction(TENANCY_SURFACE, parsed, "reopen_lineage_arbitration_debt_retirement") &&
+    !isAction(TENANCY_SURFACE, parsed, "checkpoint_lineage_closure_adjudication_settlement_publication") &&
+    !isAction(TENANCY_SURFACE, parsed, "log_lineage_closure_adjudication_settlement_correction") &&
+    !isAction(TENANCY_SURFACE, parsed, "confirm_lineage_closure_adjudication_settlement_sla") &&
+    !isAction(TENANCY_SURFACE, parsed, "open_lineage_arbitration_debt_retirement_dispute") &&
+    !isAction(TENANCY_SURFACE, parsed, "assign_lineage_arbitration_debt_retirement_dispute_reviewer") &&
+    !isAction(TENANCY_SURFACE, parsed, "resolve_lineage_arbitration_debt_retirement_dispute") &&
+    !isAction(TENANCY_SURFACE, parsed, "control_lineage_arbitration_debt_retirement_dispute_rollback") &&
+    !isAction(TENANCY_SURFACE, parsed, "attest_external_session_identity_bridge") &&
+    !isAction(TENANCY_SURFACE, parsed, "quarantine_external_session_identity_bridge") &&
+    !isAction(TENANCY_SURFACE, parsed, "clear_external_session_identity_bridge")
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
 
-  if (parsed.action === "update_role") {
+  if (isAction(TENANCY_SURFACE, parsed, "update_role")) {
     if (!parsed.actorId || !parsed.firmId || !parsed.targetUserId || !isRole(parsed.nextRole)) {
       return NextResponse.json(
         { error: "actorId, firmId, targetUserId, and nextRole are required" },
@@ -1343,7 +1347,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "resolve_session_lineage_dispute") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "resolve_session_lineage_dispute")) {
     if (!parsed.actorId || !parsed.firmId || !parsed.disputeId) {
       return NextResponse.json(
         { error: "actorId, firmId, and disputeId are required" },
@@ -1360,7 +1364,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "assign_lineage_reconciliation_queue") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "assign_lineage_reconciliation_queue")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1375,7 +1379,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "arbitrate_lineage_reconciliation_queue") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "arbitrate_lineage_reconciliation_queue")) {
     if (!parsed.actorId || !parsed.firmId || !parsed.lineageRootSessionReferenceId) {
       return NextResponse.json(
         { error: "actorId, firmId, and lineageRootSessionReferenceId are required" },
@@ -1395,7 +1399,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "attest_lineage_digest_closure") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "attest_lineage_digest_closure")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1407,7 +1411,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "reopen_lineage_digest_closure") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "reopen_lineage_digest_closure")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1419,7 +1423,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "govern_lineage_closure_adjudication") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "govern_lineage_closure_adjudication")) {
     if (!parsed.actorId || !parsed.firmId || !parsed.lineageRootSessionReferenceId) {
       return NextResponse.json(
         { error: "actorId, firmId, and lineageRootSessionReferenceId are required" },
@@ -1432,7 +1436,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "record_lineage_closure_adjudication_verdict") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "record_lineage_closure_adjudication_verdict")) {
     if (!parsed.actorId || !parsed.firmId || !parsed.lineageRootSessionReferenceId) {
       return NextResponse.json(
         { error: "actorId, firmId, and lineageRootSessionReferenceId are required" },
@@ -1452,7 +1456,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "attest_lineage_arbitration_debt_retirement") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "attest_lineage_arbitration_debt_retirement")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1464,7 +1468,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "reopen_lineage_arbitration_debt_retirement") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "reopen_lineage_arbitration_debt_retirement")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1476,7 +1480,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "checkpoint_lineage_closure_adjudication_settlement_publication") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "checkpoint_lineage_closure_adjudication_settlement_publication")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1488,7 +1492,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "log_lineage_closure_adjudication_settlement_correction") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "log_lineage_closure_adjudication_settlement_correction")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1500,14 +1504,14 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "confirm_lineage_closure_adjudication_settlement_sla") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "confirm_lineage_closure_adjudication_settlement_sla")) {
     if (!parsed.actorId || !parsed.firmId || !parsed.lineageRootSessionReferenceId) {
       return NextResponse.json(
         { error: "actorId, firmId, and lineageRootSessionReferenceId are required" },
         { status: 400 }
       )
     }
-  } else if (parsed.action === "open_lineage_arbitration_debt_retirement_dispute") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "open_lineage_arbitration_debt_retirement_dispute")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1519,7 +1523,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "assign_lineage_arbitration_debt_retirement_dispute_reviewer") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "assign_lineage_arbitration_debt_retirement_dispute_reviewer")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1531,7 +1535,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "resolve_lineage_arbitration_debt_retirement_dispute") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "resolve_lineage_arbitration_debt_retirement_dispute")) {
     if (!parsed.actorId || !parsed.firmId || !parsed.lineageRootSessionReferenceId) {
       return NextResponse.json(
         { error: "actorId, firmId, and lineageRootSessionReferenceId are required" },
@@ -1551,7 +1555,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "control_lineage_arbitration_debt_retirement_dispute_rollback") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "control_lineage_arbitration_debt_retirement_dispute_rollback")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1563,7 +1567,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "attest_external_session_identity_bridge") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "attest_external_session_identity_bridge")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1579,7 +1583,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "quarantine_external_session_identity_bridge") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "quarantine_external_session_identity_bridge")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1591,7 +1595,7 @@ async function handlePost(request: Request) {
         { status: 400 }
       )
     }
-  } else if (parsed.action === "clear_external_session_identity_bridge") {
+  } else if (isAction(TENANCY_SURFACE, parsed, "clear_external_session_identity_bridge")) {
     if (
       !parsed.actorId ||
       !parsed.firmId ||
@@ -1612,7 +1616,7 @@ async function handlePost(request: Request) {
 
   const fingerprint = JSON.stringify({
     route: "/api/p5/tenancy",
-    action: parsed.action,
+    action: actionOf(TENANCY_SURFACE, parsed),
     body: parsed,
   })
   const replay = idempotency.getReplay(key, fingerprint)
@@ -1627,7 +1631,7 @@ async function handlePost(request: Request) {
   }
 
   try {
-    if (parsed.action === "revoke_session_reference") {
+    if (isAction(TENANCY_SURFACE, parsed, "revoke_session_reference")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const sessionReferenceId = parsed.sessionReferenceId
@@ -1692,7 +1696,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "reissue_session_reference") {
+    if (isAction(TENANCY_SURFACE, parsed, "reissue_session_reference")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const parentSessionReferenceId = parsed.sessionReferenceId
@@ -1767,7 +1771,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "attest_session_lineage_dispute") {
+    if (isAction(TENANCY_SURFACE, parsed, "attest_session_lineage_dispute")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const sessionReferenceId = parsed.sessionReferenceId
@@ -1827,7 +1831,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "resolve_session_lineage_dispute") {
+    if (isAction(TENANCY_SURFACE, parsed, "resolve_session_lineage_dispute")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const disputeId = parsed.disputeId
@@ -1899,7 +1903,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "assign_lineage_reconciliation_queue") {
+    if (isAction(TENANCY_SURFACE, parsed, "assign_lineage_reconciliation_queue")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -1950,7 +1954,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "arbitrate_lineage_reconciliation_queue") {
+    if (isAction(TENANCY_SURFACE, parsed, "arbitrate_lineage_reconciliation_queue")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2000,7 +2004,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "attest_lineage_digest_closure") {
+    if (isAction(TENANCY_SURFACE, parsed, "attest_lineage_digest_closure")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2050,7 +2054,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "reopen_lineage_digest_closure") {
+    if (isAction(TENANCY_SURFACE, parsed, "reopen_lineage_digest_closure")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2100,7 +2104,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "govern_lineage_closure_adjudication") {
+    if (isAction(TENANCY_SURFACE, parsed, "govern_lineage_closure_adjudication")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2161,7 +2165,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "record_lineage_closure_adjudication_verdict") {
+    if (isAction(TENANCY_SURFACE, parsed, "record_lineage_closure_adjudication_verdict")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2221,7 +2225,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "attest_lineage_arbitration_debt_retirement") {
+    if (isAction(TENANCY_SURFACE, parsed, "attest_lineage_arbitration_debt_retirement")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2278,7 +2282,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "reopen_lineage_arbitration_debt_retirement") {
+    if (isAction(TENANCY_SURFACE, parsed, "reopen_lineage_arbitration_debt_retirement")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2335,7 +2339,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "checkpoint_lineage_closure_adjudication_settlement_publication") {
+    if (isAction(TENANCY_SURFACE, parsed, "checkpoint_lineage_closure_adjudication_settlement_publication")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2386,7 +2390,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "log_lineage_closure_adjudication_settlement_correction") {
+    if (isAction(TENANCY_SURFACE, parsed, "log_lineage_closure_adjudication_settlement_correction")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2437,7 +2441,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "confirm_lineage_closure_adjudication_settlement_sla") {
+    if (isAction(TENANCY_SURFACE, parsed, "confirm_lineage_closure_adjudication_settlement_sla")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2484,7 +2488,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "open_lineage_arbitration_debt_retirement_dispute") {
+    if (isAction(TENANCY_SURFACE, parsed, "open_lineage_arbitration_debt_retirement_dispute")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2535,7 +2539,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "assign_lineage_arbitration_debt_retirement_dispute_reviewer") {
+    if (isAction(TENANCY_SURFACE, parsed, "assign_lineage_arbitration_debt_retirement_dispute_reviewer")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2588,7 +2592,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "resolve_lineage_arbitration_debt_retirement_dispute") {
+    if (isAction(TENANCY_SURFACE, parsed, "resolve_lineage_arbitration_debt_retirement_dispute")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2642,7 +2646,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "control_lineage_arbitration_debt_retirement_dispute_rollback") {
+    if (isAction(TENANCY_SURFACE, parsed, "control_lineage_arbitration_debt_retirement_dispute_rollback")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const lineageRootSessionReferenceId = parsed.lineageRootSessionReferenceId
@@ -2695,7 +2699,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "attest_external_session_identity_bridge") {
+    if (isAction(TENANCY_SURFACE, parsed, "attest_external_session_identity_bridge")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const sessionReferenceId = parsed.sessionReferenceId
@@ -2728,7 +2732,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "quarantine_external_session_identity_bridge") {
+    if (isAction(TENANCY_SURFACE, parsed, "quarantine_external_session_identity_bridge")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const sessionReferenceId = parsed.sessionReferenceId
@@ -2756,7 +2760,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "clear_external_session_identity_bridge") {
+    if (isAction(TENANCY_SURFACE, parsed, "clear_external_session_identity_bridge")) {
       const actorId = parsed.actorId
       const firmId = parsed.firmId
       const sessionReferenceId = parsed.sessionReferenceId

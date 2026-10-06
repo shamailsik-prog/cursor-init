@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server"
+import { BodySchema, DOCUMENT_WORKFLOW_SURFACE } from "./surface"
 import { z } from "zod"
-import { DEFAULT_JSON_BODY_BYTES, classificationField, idField, parseBody, readJsonLimited } from "@/platform/http/validation"
+import { DEFAULT_JSON_BODY_BYTES, parseBody, readJsonLimited } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -25,29 +27,6 @@ import {
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-const BodySchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("transition"),
-    actorId: idField,
-    documentId: idField,
-    nextStatus: z.enum(["queued", "processing", "review_required", "complete"]),
-    reason: z.string().max(2000).optional(),
-  }),
-  z.object({
-    action: z.literal("assign_reviewer"),
-    actorId: idField,
-    documentId: idField,
-    reviewerId: idField,
-  }),
-  z.object({
-    action: z.literal("review_decision"),
-    actorId: idField,
-    documentId: idField,
-    decision: z.enum(["confirm_classification", "declassify"]),
-    nextClassification: classificationField.optional(),
-    reason: z.string().max(2000).optional(),
-  }),
-])
 
 type Body = z.infer<typeof BodySchema>
 
@@ -101,18 +80,18 @@ async function persistWorkflowEventsSince(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGet, { surface: DOCUMENT_WORKFLOW_SURFACE })
 }
 
 async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
-  const view = url.searchParams.get("view") ?? "queue"
-  const userId = url.searchParams.get("userId")
-  const matterId = url.searchParams.get("matterId") ?? undefined
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const view = selectView(DOCUMENT_WORKFLOW_SURFACE, url)
+  const userId = getQuery(DOCUMENT_WORKFLOW_SURFACE, url, "userId")
+  const matterId = getQuery(DOCUMENT_WORKFLOW_SURFACE, url, "matterId") ?? undefined
+  const limit = parseLimit(getQuery(DOCUMENT_WORKFLOW_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(DOCUMENT_WORKFLOW_SURFACE, url, "cursor"))
 
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
@@ -157,7 +136,7 @@ async function handleGet(request: Request) {
       })
     }
 
-    const rawStatus = url.searchParams.get("status")
+    const rawStatus = getQuery(DOCUMENT_WORKFLOW_SURFACE, url, "status")
     const status = isWorkflowStatus(rawStatus) ? rawStatus : undefined
     const user = store.users.get(userId)
     if (!user) throw new PublicError("unknown user")
@@ -207,7 +186,7 @@ async function handleGet(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES })
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: DOCUMENT_WORKFLOW_SURFACE })
 }
 
 async function handlePost(request: Request) {
@@ -224,13 +203,15 @@ async function handlePost(request: Request) {
 
   const raw = await readJsonLimited(request)
   if (!raw.ok) return raw.response
+  const undeclared = refuseUndeclaredBody(DOCUMENT_WORKFLOW_SURFACE, raw.data)
+  if (undeclared) return undeclared
   const body = parseBody(BodySchema, raw.data)
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
   const fingerprint = JSON.stringify({
     route: "/api/d1/document-workflow",
-    action: parsed.action,
+    action: actionOf(DOCUMENT_WORKFLOW_SURFACE, parsed),
     body: parsed,
   })
   const replay = idempotency.getReplay(key, fingerprint)
@@ -245,7 +226,7 @@ async function handlePost(request: Request) {
   }
 
   try {
-    if (parsed.action === "transition") {
+    if (isAction(DOCUMENT_WORKFLOW_SURFACE, parsed, "transition")) {
       if (!parsed.actorId || !parsed.documentId || !isWorkflowStatus(parsed.nextStatus)) {
         return NextResponse.json(
           { error: "actorId, documentId, and valid nextStatus are required" },
@@ -271,7 +252,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "assign_reviewer") {
+    if (isAction(DOCUMENT_WORKFLOW_SURFACE, parsed, "assign_reviewer")) {
       if (!parsed.actorId || !parsed.documentId || !parsed.reviewerId) {
         return NextResponse.json(
           { error: "actorId, documentId, and reviewerId are required" },
@@ -296,7 +277,7 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "review_decision") {
+    if (isAction(DOCUMENT_WORKFLOW_SURFACE, parsed, "review_decision")) {
       if (!parsed.actorId || !parsed.documentId || !parsed.decision) {
         return NextResponse.json(
           { error: "actorId, documentId, and decision are required" },

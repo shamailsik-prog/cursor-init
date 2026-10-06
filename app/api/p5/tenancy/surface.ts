@@ -1,0 +1,35 @@
+import { SESSION_HEADERS, defineSurface } from "@/platform/http/surface"
+
+/** Request surface of /api/p5/tenancy (P5 tenancy administration); see platform/http/surface.ts. */
+export const TENANCY_SURFACE = defineSurface({
+  views: ["session", "users", "memberships", "audit", "session_refs", "session_lineage", "session_lineage_disputes", "session_lineage_reconciliation_digests", "session_lineage_reconciliation_queue", "session_lineage_digest_closure_checkpoints", "session_lineage_closure_adjudications", "session_lineage_arbitration_debt_retirement_ledgers", "session_lineage_closure_adjudication_settlements", "session_lineage_arbitration_debt_retirement_dispute_ledgers", "session_external_session_identity_bridges"],
+  defaultView: "session",
+  actions: ["update_role", "revoke_session_reference", "reissue_session_reference", "attest_session_lineage_dispute", "resolve_session_lineage_dispute", "assign_lineage_reconciliation_queue", "arbitrate_lineage_reconciliation_queue", "attest_lineage_digest_closure", "reopen_lineage_digest_closure", "govern_lineage_closure_adjudication", "record_lineage_closure_adjudication_verdict", "attest_lineage_arbitration_debt_retirement", "reopen_lineage_arbitration_debt_retirement", "checkpoint_lineage_closure_adjudication_settlement_publication", "log_lineage_closure_adjudication_settlement_correction", "confirm_lineage_closure_adjudication_settlement_sla", "open_lineage_arbitration_debt_retirement_dispute", "assign_lineage_arbitration_debt_retirement_dispute_reviewer", "resolve_lineage_arbitration_debt_retirement_dispute", "control_lineage_arbitration_debt_retirement_dispute_rollback", "attest_external_session_identity_bridge", "quarantine_external_session_identity_bridge", "clear_external_session_identity_bridge"],
+  bodyFields: {
+    update_role: ["action", "actorId", "authBoundary", "externalSessionId", "firmId", "nextClearance", "nextRole", "reason", "sessionReferenceId", "targetUserId"],
+    revoke_session_reference: ["action", "actorId", "firmId", "reason", "sessionReferenceId"],
+    reissue_session_reference: ["action", "actorId", "authBoundary", "externalSessionId", "firmId", "reason", "sessionReferenceId"],
+    attest_session_lineage_dispute: ["action", "actorId", "firmId", "note", "reason", "sessionReferenceId"],
+    resolve_session_lineage_dispute: ["action", "actorId", "disposition", "disputeId", "firmId", "resolutionNote"],
+    assign_lineage_reconciliation_queue: ["action", "actorId", "assignedPartnerId", "firmId", "lineageRootSessionReferenceId", "note", "slaWindowMinutes"],
+    arbitrate_lineage_reconciliation_queue: ["action", "actorId", "disposition", "firmId", "lineageRootSessionReferenceId", "note"],
+    attest_lineage_digest_closure: ["action", "actorId", "closureReason", "firmId", "lineageRootSessionReferenceId", "note"],
+    reopen_lineage_digest_closure: ["action", "actorId", "firmId", "lineageRootSessionReferenceId", "note", "reopenTrigger"],
+    govern_lineage_closure_adjudication: ["action", "actorId", "firmId", "lineageRootSessionReferenceId", "note", "panelPartnerIds", "requiredPanelQuorum", "verdictWindowMinutes"],
+    record_lineage_closure_adjudication_verdict: ["action", "actorId", "disposition", "dispositionDriftReasons", "firmId", "lineageRootSessionReferenceId", "note"],
+    attest_lineage_arbitration_debt_retirement: ["action", "actorId", "firmId", "lineageRootSessionReferenceId", "note", "retirementNote"],
+    reopen_lineage_arbitration_debt_retirement: ["action", "actorId", "carryoverSignal", "firmId", "lineageRootSessionReferenceId", "note"],
+    checkpoint_lineage_closure_adjudication_settlement_publication: ["action", "actorId", "firmId", "lineageRootSessionReferenceId", "note", "publicationChannel"],
+    log_lineage_closure_adjudication_settlement_correction: ["action", "actorId", "correctionNote", "firmId", "lineageRootSessionReferenceId", "note"],
+    confirm_lineage_closure_adjudication_settlement_sla: ["action", "actorId", "firmId", "lineageRootSessionReferenceId", "note"],
+    open_lineage_arbitration_debt_retirement_dispute: ["action", "actorId", "challengeReason", "firmId", "lineageRootSessionReferenceId", "note"],
+    assign_lineage_arbitration_debt_retirement_dispute_reviewer: ["action", "actorId", "firmId", "lineageRootSessionReferenceId", "note", "reviewerId"],
+    resolve_lineage_arbitration_debt_retirement_dispute: ["action", "actorId", "firmId", "lineageRootSessionReferenceId", "note", "resolutionNote", "resolutionOutcome"],
+    control_lineage_arbitration_debt_retirement_dispute_rollback: ["action", "actorId", "firmId", "lineageRootSessionReferenceId", "note", "rollbackControlNote"],
+    attest_external_session_identity_bridge: ["action", "actorId", "assertedExternalSessionId", "assertedIssuer", "assertedSubject", "firmId", "note", "sessionReferenceId"],
+    quarantine_external_session_identity_bridge: ["action", "actorId", "firmId", "note", "quarantineReason", "sessionReferenceId"],
+    clear_external_session_identity_bridge: ["action", "actorId", "clearReason", "firmId", "note", "sessionReferenceId"],
+  },
+  queryParams: ["view", "limit", "cursor", "userId", "firmId", "sessionRefId", "authBoundary", "externalSessionId", "actorId", "matterId", "rootSessionRefId", "delegatedDivergedOnly", "status", "mismatchStatus"],
+  headers: SESSION_HEADERS,
+})

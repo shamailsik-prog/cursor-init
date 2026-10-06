@@ -28,8 +28,6 @@ import {
 export type Service = "D1-1" | "D1-2" | "D3-1" | "D5-1" | "D2-1" | "D6-1" | "P5"
 export type Channel = "web" | "whatsapp"
 
-/** What a refusal of a firm-A object must say: a tenant-scoped lookup or a firm check, never a validation error. */
-export const TENANT_DENY = /cross-firm|firm scope|unknown|not found|not permitted|not a member|denied/i
 
 export type Attack = { label: string; call: Call; mustDeny: boolean; expect?: RegExp }
 
@@ -61,7 +59,8 @@ export type ReadPath = {
   control?: { as: string; call: (a: FirmSeed) => Call | Promise<Call>; shows?: (a: FirmSeed) => string }
 }
 
-const deny = (label: string, call: Call, expect: RegExp = TENANT_DENY): Attack => ({ label, call, mustDeny: true, expect })
+/** A firm-A aim that must be refused, with the exact reason the path gives for it (a firm check or a firm-scoped lookup, never a validation error). */
+const deny = (label: string, call: Call, expect: RegExp): Attack => ({ label, call, mustDeny: true, expect })
 const filter = (label: string, call: Call): Attack => ({ label, call, mustDeny: false })
 const WA = (command: string) => post("/api/d2/court-ops", { action: "whatsapp_command", command })
 
@@ -95,13 +94,13 @@ const D1_D3_D2_PATHS: ReadPath[] = [
   {
     service: "D1-1", channel: "web", route: "/api/d1/clients", method: "POST", selector: "action=conflict_check", kind: "read",
     base: ({ B }) => post("/api/d1/clients", { action: "conflict_check", firmId: FIRM_B, entityId: B.entityId }),
-    aimed: (a) => [deny("firm-A entityId", post("/api/d1/clients", { action: "conflict_check", firmId: FIRM_B, entityId: a.entityId }))],
+    aimed: (a) => [deny("firm-A entityId", post("/api/d1/clients", { action: "conflict_check", firmId: FIRM_B, entityId: a.entityId }), /"unknown entity"/)],
     control: { as: "partner_a", call: (a) => post("/api/d1/clients", { action: "conflict_check", firmId: FIRM_A, entityId: a.entityId }), shows: (a) => a.entityId },
   },
   {
     service: "D1-1", channel: "web", route: "/api/d1/clients", method: "POST", selector: "action=create", kind: "write",
     base: () => post("/api/d1/clients", { action: "create", firmId: FIRM_B, canonicalName: `Beta Probe ${randomUUID().slice(0, 6)}`, cnic: "3520233333333", phone: "+923005550000", classification: "internal" }),
-    aimed: (a) => [filter("same CNIC as a firm-A client (no cross-firm link)", post("/api/d1/clients", { action: "create", firmId: FIRM_B, canonicalName: "Beta Twin", cnic: a.cnic, phone: "+923005550001", classification: "internal" }))],
+    aimed: (a) => [filter("same CNIC as a firm-A client (no cross-firm link)", post("/api/d1/clients", { action: "create", firmId: FIRM_B, canonicalName: "Beta Twin", cnic: a.twinCnic, phone: "+923005550001", classification: "internal" }))],
   },
   {
     service: "D1-1", channel: "web", route: "/api/d1/reporting", method: "GET", selector: "view=search", kind: "read",
@@ -131,13 +130,13 @@ const D1_D3_D2_PATHS: ReadPath[] = [
   {
     service: "D1-1", channel: "web", route: "/api/d1/reporting", method: "POST", selector: "action=record_matter_report_export", kind: "write",
     base: ({ B }) => post("/api/d1/reporting", { action: "record_matter_report_export", matterId: B.matterId, exportFormat: "csv", exportScope: "summary" }),
-    aimed: (a) => [deny("firm-A matterId", post("/api/d1/reporting", { action: "record_matter_report_export", matterId: a.matterId, exportFormat: "csv", exportScope: "summary" }))],
+    aimed: (a) => [deny("firm-A matterId", post("/api/d1/reporting", { action: "record_matter_report_export", matterId: a.matterId, exportFormat: "csv", exportScope: "summary" }), /"unknown matter"/)],
     control: { as: "partner_a", call: (a) => post("/api/d1/reporting", { action: "record_matter_report_export", matterId: a.matterId, exportFormat: "json", exportScope: "detailed" }), shows: (a) => a.matterId },
   },
   {
     service: "D1-1", channel: "web", route: "/api/d1/reporting", method: "POST", selector: "action=recompute_matter_report_relevance", kind: "write",
     base: ({ B }) => post("/api/d1/reporting", { action: "recompute_matter_report_relevance", matterId: B.matterId }),
-    aimed: (a) => [deny("firm-A matterId", post("/api/d1/reporting", { action: "recompute_matter_report_relevance", matterId: a.matterId }))],
+    aimed: (a) => [deny("firm-A matterId", post("/api/d1/reporting", { action: "recompute_matter_report_relevance", matterId: a.matterId }), /"unknown matter"/)],
     control: { as: "partner_a", call: (a) => post("/api/d1/reporting", { action: "recompute_matter_report_relevance", matterId: a.matterId }), shows: (a) => a.matterId },
   },
 
@@ -151,21 +150,21 @@ const D1_D3_D2_PATHS: ReadPath[] = [
   {
     service: "D1-2", channel: "web", route: "/api/d1/matters", method: "POST", selector: "action=confirm_engagement", kind: "write",
     base: ({ B }) => post("/api/d1/matters", { action: "confirm_engagement", matterId: B.matterId }),
-    aimed: (a) => [deny("firm-A matterId", post("/api/d1/matters", { action: "confirm_engagement", matterId: a.matterId }))],
+    aimed: (a) => [deny("firm-A matterId", post("/api/d1/matters", { action: "confirm_engagement", matterId: a.matterId }), /"cross-firm access denied"/)],
     control: { as: "partner_a", call: (a) => post("/api/d1/matters", { action: "confirm_engagement", matterId: a.matterId }), shows: (a) => a.matterTitle },
   },
   {
     service: "D1-2", channel: "web", route: "/api/d1/matters", method: "POST", selector: "action=record_case_number", kind: "write",
     base: ({ B }) => post("/api/d1/matters", { action: "record_case_number", matterId: B.matterId, raw: "C.P. 1/2026", courtId: "SHC" }),
-    aimed: (a) => [deny("firm-A matterId", post("/api/d1/matters", { action: "record_case_number", matterId: a.matterId, raw: "C.P. 1/2026", courtId: "SHC" }))],
+    aimed: (a) => [deny("firm-A matterId", post("/api/d1/matters", { action: "record_case_number", matterId: a.matterId, raw: "C.P. 1/2026", courtId: "SHC" }), /"cross-firm access denied"/)],
     control: { as: "partner_a", call: (a) => post("/api/d1/matters", { action: "record_case_number", matterId: a.matterId, raw: "C.P. 2/2026", courtId: "SHC" }), shows: (a) => a.matterTitle },
   },
   {
     service: "D1-2", channel: "web", route: "/api/d1/matters", method: "POST", selector: "action=create", kind: "write",
     base: () => post("/api/d1/matters", { action: "create", firmId: FIRM_B, clientId: "client_b", title: `Beta probe matter ${randomUUID().slice(0, 6)}`, courtId: "SHC", classification: "internal" }),
     aimed: () => [
-      deny("firm-A clientId", post("/api/d1/matters", { action: "create", firmId: FIRM_B, clientId: "client_a", title: "Beta probe", courtId: "SHC", classification: "internal" })),
-      deny("firm-A member", post("/api/d1/matters", { action: "create", firmId: FIRM_B, clientId: "client_b", title: "Beta probe", courtId: "SHC", classification: "internal", memberUserIds: ["clerk_a"] })),
+      deny("firm-A clientId", post("/api/d1/matters", { action: "create", firmId: FIRM_B, clientId: "client_a", title: "Beta probe", courtId: "SHC", classification: "internal" }), /"cross-firm client denied"/),
+      deny("firm-A member", post("/api/d1/matters", { action: "create", firmId: FIRM_B, clientId: "client_b", title: "Beta probe", courtId: "SHC", classification: "internal", memberUserIds: ["clerk_a"] }), /"unknown member user"/),
     ],
   },
 
@@ -181,7 +180,7 @@ const D1_D3_D2_PATHS: ReadPath[] = [
     note: "D1-6 ingest write path; tested because its response returns the stored document",
     base: () => post("/api/d1/documents", { action: "ingest", firmId: FIRM_B, contentBase64: Buffer.from(`beta probe ${randomUUID()}`).toString("base64"), sourceChannel: "web", classification: "internal" }),
     aimed: (a) => [
-      deny("firm-A matterId", post("/api/d1/documents", { action: "ingest", firmId: FIRM_B, matterId: a.matterId, contentBase64: Buffer.from("x").toString("base64"), sourceChannel: "web", classification: "confidential" })),
+      deny("firm-A matterId", post("/api/d1/documents", { action: "ingest", firmId: FIRM_B, matterId: a.matterId, contentBase64: Buffer.from("x").toString("base64"), sourceChannel: "web", classification: "confidential" }), /"cross-firm matter denied"/),
       filter("byte-identical to a firm-A document (no cross-firm dedupe)", post("/api/d1/documents", { action: "ingest", firmId: FIRM_B, contentBase64: Buffer.from(`${a.bytes} #1`).toString("base64"), sourceChannel: "web", classification: "confidential" })),
     ],
   },
@@ -197,21 +196,21 @@ const D1_D3_D2_PATHS: ReadPath[] = [
   {
     service: "D3-1", channel: "web", route: "/api/d1/document-workflow", method: "GET", selector: "view=timeline", kind: "read",
     base: ({ B }) => get("/api/d1/document-workflow", { view: "timeline", matterId: B.matterId }),
-    aimed: (a) => [deny("firm-A matterId", get("/api/d1/document-workflow", { view: "timeline", matterId: a.matterId }))],
+    aimed: (a) => [deny("firm-A matterId", get("/api/d1/document-workflow", { view: "timeline", matterId: a.matterId }), /"cross-firm matter denied"/)],
     control: { as: "partner_a", call: (a) => get("/api/d1/document-workflow", { view: "timeline", matterId: a.matterId }), shows: (a) => a.reviewDocId },
   },
   {
     service: "D3-1", channel: "web", route: "/api/d1/document-workflow", method: "POST", selector: "action=transition", kind: "write",
     base: async ({ fresh }) => post("/api/d1/document-workflow", { action: "transition", documentId: await fresh("doc", looseDocB), nextStatus: "processing" }),
-    aimed: (a) => a.docIds.map((id, i) => deny(`firm-A document #${i}`, post("/api/d1/document-workflow", { action: "transition", documentId: id, nextStatus: "processing" }))),
+    aimed: (a) => a.docIds.map((id, i) => deny(`firm-A document #${i}`, post("/api/d1/document-workflow", { action: "transition", documentId: id, nextStatus: "processing" }), /"actor not permitted for this document"/)),
     control: { as: "partner_a", call: (a) => post("/api/d1/document-workflow", { action: "transition", documentId: a.docIds[1], nextStatus: "processing" }), shows: (a) => a.docIds[1] },
   },
   {
     service: "D3-1", channel: "web", route: "/api/d1/document-workflow", method: "POST", selector: "action=assign_reviewer", kind: "write",
     base: async ({ fresh }) => post("/api/d1/document-workflow", { action: "assign_reviewer", documentId: await fresh("doc", looseDocB), reviewerId: "clerk_b" }),
     aimed: (a, b) => [
-      deny("firm-A document", post("/api/d1/document-workflow", { action: "assign_reviewer", documentId: a.docIds[0], reviewerId: "clerk_b" })),
-      deny("firm-A reviewer on a firm-B document", post("/api/d1/document-workflow", { action: "assign_reviewer", documentId: b.docIds[1], reviewerId: "clerk_a" })),
+      deny("firm-A document", post("/api/d1/document-workflow", { action: "assign_reviewer", documentId: a.docIds[0], reviewerId: "clerk_b" }), /"actor not permitted for this document"/),
+      deny("firm-A reviewer on a firm-B document", post("/api/d1/document-workflow", { action: "assign_reviewer", documentId: b.docIds[1], reviewerId: "clerk_a" }), /"cross-firm reviewer denied"/),
     ],
     control: { as: "partner_a", call: (a) => post("/api/d1/document-workflow", { action: "assign_reviewer", documentId: a.docIds[0], reviewerId: "clerk_a" }), shows: (a) => a.docIds[0] },
   },
@@ -225,7 +224,7 @@ const D1_D3_D2_PATHS: ReadPath[] = [
       })
       return post("/api/d1/document-workflow", { action: "review_decision", documentId: doc, decision: "confirm_classification" })
     },
-    aimed: (a) => [deny("firm-A document", post("/api/d1/document-workflow", { action: "review_decision", documentId: a.reviewDocId, decision: "declassify", nextClassification: "public" }))],
+    aimed: (a) => [deny("firm-A document", post("/api/d1/document-workflow", { action: "review_decision", documentId: a.reviewDocId, decision: "declassify", nextClassification: "public" }), /"actor not permitted for this document"/)],
     // docIds[0] is put in review by the assign_reviewer control above; reviewDocId stays in review for /ops queue.
     control: { as: "partner_a", call: (a) => post("/api/d1/document-workflow", { action: "review_decision", documentId: a.docIds[0], decision: "confirm_classification" }), shows: (a) => a.docIds[0] },
   },
@@ -251,7 +250,7 @@ const D1_D3_D2_PATHS: ReadPath[] = [
     control: { as: "clerk_a", call: () => WA("/ops queue"), shows: (a) => a.reviewDocId },
   },
   {
-    service: "D6-1", channel: "web", route: "/api/d2/court-ops", method: "GET", selector: "view=court_ops_queue", kind: "read",
+    service: "D6-1", channel: "web", route: "/api/d2/court-ops", method: "GET", selector: "list", kind: "read",
     note: "court-ops queue; the web twin of WhatsApp /ops queue",
     base: () => get("/api/d2/court-ops", { limit: "100" }),
     aimed: (a) => [filter("matterId=firm-A matter", get("/api/d2/court-ops", { matterId: a.matterId }))],
@@ -291,12 +290,38 @@ const tenancyView = (view: string, extra: Record<string, string> = {}): ReadPath
   control: { as: "partner_a", call: (a) => get(TENANCY, { view, firmId: FIRM_A, limit: "100", ...rootOf(view, a) }) },
 })
 
-const lineageAction = (steps: typeof LINEAGE_STEPS, k: number, key: string): ReadPath => ({
+const lineageAction = (
+  steps: typeof LINEAGE_STEPS,
+  k: number,
+  key: string,
+  expect: RegExp,
+  extra: (a: FirmSeed, b: FirmSeed) => Attack[] = () => []
+): ReadPath => ({
   service: "P5", channel: "web", route: TENANCY, method: "POST", selector: `action=${steps[k].action}`, kind: "write",
   base: async ({ fresh }) => stepCall(await fresh(key, () => chainAt(FIRM_B, steps, k)), steps[k]),
-  aimed: (a) => [deny("firm-A lineage", stepCall(aimChain(a), steps[k]))],
+  aimed: (a, b) => [deny("firm-A lineage", stepCall(aimChain(a), steps[k]), expect), ...extra(a, b)],
   control: { as: "partner_a", call: async () => stepCall(await chainAt(FIRM_A, steps, k), steps[k]) },
 })
+
+/** The refusal of a firm-A aim per lineage action, where it is not the root check. */
+const LINEAGE_DENY: Record<string, RegExp> = {
+  attest_session_lineage_dispute: /"unknown session reference"/,
+  resolve_session_lineage_dispute: /"unknown lineage dispute"/,
+}
+
+/** Firm-A users named in a lineage action on firm B's own lineage (B's fully-run chain). */
+const onOwnChain = (b: FirmSeed, partnerId: string): Chain => ({ ...b.tenancy, partnerId })
+const LINEAGE_EXTRA: Record<string, (a: FirmSeed, b: FirmSeed) => Attack[]> = {
+  assign_lineage_reconciliation_queue: (_a, b) => [
+    deny("firm-A partner as assignee", stepCall(onOwnChain(b, "partner_a"), LINEAGE_STEPS[1]), /"unknown assigned partner"/),
+  ],
+  govern_lineage_closure_adjudication: (_a, b) => [
+    deny("firm-A partner on the panel", stepCall(onOwnChain(b, "partner_a"), LINEAGE_STEPS[5]), /"unknown panel partner"/),
+  ],
+  assign_lineage_arbitration_debt_retirement_dispute_reviewer: (_a, b) => [
+    deny("firm-A partner as reviewer", stepCall(onOwnChain(b, "partner_a"), LINEAGE_STEPS[13]), /"unknown reviewer"/),
+  ],
+}
 
 const TENANCY_PATHS: ReadPath[] = [
   {
@@ -304,8 +329,8 @@ const TENANCY_PATHS: ReadPath[] = [
     note: "the caller's own session; also mints a session reference",
     base: () => get(TENANCY, { view: "session" }),
     aimed: (a) => [
-      deny("sessionRefId = firm-A session reference", get(TENANCY, { view: "session", sessionRefId: a.tenancy.child })),
-      deny("sessionRefId = firm-A root", get(TENANCY, { view: "session", sessionRefId: a.tenancy.root })),
+      deny("sessionRefId = firm-A session reference", get(TENANCY, { view: "session", sessionRefId: a.tenancy.child }), /"unknown session reference"/),
+      deny("sessionRefId = firm-A root", get(TENANCY, { view: "session", sessionRefId: a.tenancy.root }), /"unknown session reference"/),
       filter("externalSessionId of firm A", get(TENANCY, { view: "session", authBoundary: "external_session_hint", externalSessionId: a.tenancy.ext })),
     ],
     control: { as: "partner_a", call: () => get(TENANCY, { view: "session" }) },
@@ -342,8 +367,9 @@ const TENANCY_PATHS: ReadPath[] = [
   {
     service: "P5", channel: "web", route: TENANCY, method: "POST", selector: "action=update_role", kind: "write",
     base: () => post(TENANCY, { action: "update_role", firmId: FIRM_B, targetUserId: "accounts_b", nextRole: "accounts", nextClearance: "privileged-restricted", reason: "g2 base" }),
-    aimed: () => [
-      deny("firm-A target user", post(TENANCY, { action: "update_role", firmId: FIRM_B, targetUserId: "clerk_a", nextRole: "clerk", nextClearance: "confidential", reason: "g2 aimed" })),
+    aimed: (a) => [
+      deny("firm-A session reference", post(TENANCY, { action: "update_role", firmId: FIRM_B, targetUserId: "accounts_b", nextRole: "accounts", nextClearance: "privileged-restricted", reason: "g2 aimed", sessionReferenceId: a.tenancy.child }), /"unknown session reference"/),
+      deny("firm-A target user", post(TENANCY, { action: "update_role", firmId: FIRM_B, targetUserId: "clerk_a", nextRole: "clerk", nextClearance: "confidential", reason: "g2 aimed" }), /"unknown target user"/),
     ],
     control: { as: "partner_a", call: () => post(TENANCY, { action: "update_role", firmId: FIRM_A, targetUserId: "accounts_a", nextRole: "accounts", nextClearance: "internal", reason: "g2 control" }) },
   },
@@ -353,7 +379,7 @@ const TENANCY_PATHS: ReadPath[] = [
       const c = await fresh("chain", () => chainAt(FIRM_B))
       return post(TENANCY, { action: "revoke_session_reference", firmId: FIRM_B, sessionReferenceId: c.child, reason: "g2 base" })
     },
-    aimed: (a) => [deny("firm-A session reference", post(TENANCY, { action: "revoke_session_reference", firmId: FIRM_B, sessionReferenceId: a.tenancy.child, reason: "g2 aimed" }))],
+    aimed: (a) => [deny("firm-A session reference", post(TENANCY, { action: "revoke_session_reference", firmId: FIRM_B, sessionReferenceId: a.tenancy.child, reason: "g2 aimed" }), /"unknown session reference"/)],
     control: { as: "partner_a", call: async () => post(TENANCY, { action: "revoke_session_reference", firmId: FIRM_A, sessionReferenceId: (await chainAt(FIRM_A)).child, reason: "g2 control" }) },
   },
   {
@@ -362,12 +388,12 @@ const TENANCY_PATHS: ReadPath[] = [
       const c = await fresh("chain", () => chainAt(FIRM_B))
       return post(TENANCY, { action: "reissue_session_reference", firmId: FIRM_B, sessionReferenceId: c.root })
     },
-    aimed: (a) => [deny("firm-A session reference", post(TENANCY, { action: "reissue_session_reference", firmId: FIRM_B, sessionReferenceId: a.tenancy.root }))],
+    aimed: (a) => [deny("firm-A session reference", post(TENANCY, { action: "reissue_session_reference", firmId: FIRM_B, sessionReferenceId: a.tenancy.root }), /"unknown session reference"/)],
     control: { as: "partner_a", call: async () => post(TENANCY, { action: "reissue_session_reference", firmId: FIRM_A, sessionReferenceId: (await chainAt(FIRM_A)).root }) },
   },
-  ...LINEAGE_STEPS.map((_, k) => lineageAction(LINEAGE_STEPS, k, "lineage")),
+  ...LINEAGE_STEPS.map((step, k) => lineageAction(LINEAGE_STEPS, k, "lineage", LINEAGE_DENY[step.action] ?? /"unknown lineage root session reference"/, LINEAGE_EXTRA[step.action])),
   // Bridge steps 0 and 1 are the same action (attest, then attest a mismatch): one path for it.
-  ...[0, 2, 3].map((k) => lineageAction(BRIDGE_STEPS, k, "bridge")),
+  ...[0, 2, 3].map((k) => lineageAction(BRIDGE_STEPS, k, "bridge", /"unknown session reference"/)),
 ]
 
 export const READ_PATHS: ReadPath[] = [...D1_D3_D2_PATHS, ...TENANCY_PATHS]
@@ -401,6 +427,26 @@ export const NON_SELECTOR_PARAMS: Record<string, string> = {
   view: "selects the read path; every value is inventoried as its own selector",
   limit: "page size (clamped 1-100)",
   cursor: "page offset into a list already scoped to the caller",
+}
+
+/**
+ * Id-like body fields (`...Id`) that reference no firm's object, reviewed.
+ * Every other id field a G-2 action reads must be aimed at a firm-A object.
+ */
+export const NON_REFERENCE_ID_FIELDS: Record<string, string> = {
+  actorId: "the caller; bound to the session (spoofed by every path)",
+  firmId: "the caller's firm; bound to the session (spoofed by every path)",
+  courtId: "a court code from data/courts.json, the same for every firm",
+  externalSessionId: "a caller-supplied IdP session hint stored on the caller's own reference",
+  assertedExternalSessionId: "a caller-supplied IdP assertion compared with the caller's own reference",
+}
+
+/** Request headers the G-2 routes depend on, reviewed: all are read by the platform, not the routes. */
+export const REVIEWED_HEADERS: Record<string, string> = {
+  authorization: "Bearer ID token; withSession verifies it",
+  "x-firm-id": "the caller's firm; withSession requires it to equal the token's",
+  "idempotency-key": "write replay key, scoped by payload fingerprint (tested cross-firm)",
+  "content-type": "JSON body marker",
 }
 
 /** Spec read functions of the G-2 services (L18 §3 service table, §8 WhatsApp grammar) with no code yet. */

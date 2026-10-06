@@ -35,6 +35,7 @@ import { AuthError, loadUserRecord, resolveSession, type Session } from "@/platf
 import { runWithSession } from "@/platform/p5/requestSession"
 import { errorResponse, internalErrorResponse } from "@/platform/http/errors"
 import { attachParsedBody, maxUploadRequestBytes, readBodyLimited } from "@/platform/http/validation"
+import { undeclaredQueryParam, unknownParamResponse, type RouteSurface } from "@/platform/http/surface"
 
 /**
  * The caller as seen by a handler. `null` only for public routes and for
@@ -74,6 +75,18 @@ export type SessionRouteOptions = {
   maxBodyBytes?: number
   /** Limit named in the 413 message (e.g. the decoded upload size). Defaults to `maxBodyBytes`. */
   reportedBodyLimit?: number
+  /**
+   * The route's declared request surface (platform/http/surface.ts). After the
+   * caller is resolved, a query param it does not declare is refused with 400
+   * `unknown_param`.
+   */
+  surface?: RouteSurface
+}
+
+function refuseUndeclaredQuery(request: Request, options: SessionRouteOptions): Response | null {
+  if (!options.surface) return null
+  const key = undeclaredQueryParam(options.surface, new URL(request.url))
+  return key === undefined ? null : unknownParamResponse("query", key)
 }
 
 const IDENTITY_KEYS = ["actorId", "userId"] as const
@@ -233,6 +246,8 @@ export async function withSession(
       if (!body.ok) return body.response
       const url = new URL(request.url)
       const devRequest = rebuild(request, url, body)
+      const devRefused = refuseUndeclaredQuery(devRequest, options)
+      if (devRefused) return devRefused
       const claimed = claimedIdentity(url, body.parsed)
       const record = claimed ? await loadUserRecord(claimed) : null
       const devSession: HandlerSession | null = record
@@ -249,6 +264,8 @@ export async function withSession(
 
     const bound = await bindRequestToSession(request, session, options)
     if (bound instanceof Response) return bound
+    const refused = refuseUndeclaredQuery(bound, options)
+    if (refused) return refused
     const handlerSession: HandlerSession = {
       userId: session.userId,
       firmId: session.firmId,

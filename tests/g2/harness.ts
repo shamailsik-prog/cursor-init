@@ -6,6 +6,14 @@ import * as documentsRoute from "@/app/api/d1/documents/route"
 import * as workflowRoute from "@/app/api/d1/document-workflow/route"
 import * as courtOpsRoute from "@/app/api/d2/court-ops/route"
 import * as tenancyRoute from "@/app/api/p5/tenancy/route"
+import { CLIENTS_SURFACE } from "@/app/api/d1/clients/surface"
+import { REPORTING_SURFACE } from "@/app/api/d1/reporting/surface"
+import { MATTERS_SURFACE } from "@/app/api/d1/matters/surface"
+import { DOCUMENTS_SURFACE } from "@/app/api/d1/documents/surface"
+import { DOCUMENT_WORKFLOW_SURFACE } from "@/app/api/d1/document-workflow/surface"
+import { COURT_OPS_SURFACE } from "@/app/api/d2/court-ops/surface"
+import { TENANCY_SURFACE } from "@/app/api/p5/tenancy/surface"
+import type { RouteSurface } from "@/platform/http/surface"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { Role, User } from "@/platform/spine/store"
 
@@ -67,6 +75,17 @@ export const MODULES: Record<string, RouteModule> = {
   "/api/d1/document-workflow": workflowRoute,
   "/api/d2/court-ops": courtOpsRoute,
   "/api/p5/tenancy": tenancyRoute,
+}
+
+/** Each G-2 module's declared request surface (its sibling surface.ts). */
+export const SURFACES: Record<string, RouteSurface> = {
+  "/api/d1/clients": CLIENTS_SURFACE,
+  "/api/d1/reporting": REPORTING_SURFACE,
+  "/api/d1/matters": MATTERS_SURFACE,
+  "/api/d1/documents": DOCUMENTS_SURFACE,
+  "/api/d1/document-workflow": DOCUMENT_WORKFLOW_SURFACE,
+  "/api/d2/court-ops": COURT_OPS_SURFACE,
+  "/api/p5/tenancy": TENANCY_SURFACE,
 }
 
 export type Sent = { status: number; body: unknown; text: string }
@@ -187,6 +206,8 @@ export type FirmSeed = {
   entityId: string
   entityName: string
   cnic: string
+  /** A second firm-A client's CNIC, for the same-person-in-both-firms attack; the one CNIC that is not a leak marker. */
+  twinCnic: string
   phone: string
   matterId: string
   matterTitle: string
@@ -206,10 +227,12 @@ export async function seedFirm(firmId: string, tag: "alpha" | "beta"): Promise<F
   const entityName = `${tag.toUpperCase()}-Client-${titleTerm}`
   const cnic = firmId === FIRM_A ? "4210111111111" : "3520222222222"
   const phone = firmId === FIRM_A ? "+923001110001" : "+923009990009"
+  const twinCnic = firmId === FIRM_A ? "4210177777777" : "3520288888888"
   const client = await ok<{ result: { entity: { id: string } } }>(
     partner,
     post("/api/d1/clients", { action: "create", firmId, canonicalName: entityName, cnic, phone, classification: "confidential" })
   )
+  await ok(partner, post("/api/d1/clients", { action: "create", firmId, canonicalName: `${tag.toUpperCase()}-Twin-${titleTerm}`, cnic: twinCnic, phone, classification: "internal" }))
   const matterTitle = `${titleTerm} constitutional petition`
   const matter = await ok<{ result: { matter: { id: string } } }>(
     partner,
@@ -248,7 +271,7 @@ export async function seedFirm(firmId: string, tag: "alpha" | "beta"): Promise<F
   await ok(partner, post("/api/d1/reporting", { action: "record_matter_report_export", matterId, exportFormat: "pdf", exportScope: "summary" }))
   const tenancy = await chainAt(firmId, LINEAGE_STEPS, LINEAGE_STEPS.length)
   for (const step of BRIDGE_STEPS) await ok(partner, stepCall(tenancy, step))
-  return { firmId, entityId: client.result.entity.id, entityName, cnic, phone, matterId, matterTitle, titleTerm, docIds, contentHashes, reviewDocId, bytes, tenancy }
+  return { firmId, entityId: client.result.entity.id, entityName, cnic, twinCnic, phone, matterId, matterTitle, titleTerm, docIds, contentHashes, reviewDocId, bytes, tenancy }
 }
 
 /** Placeholder seeds: lets the inventory evaluate attack shapes without seeding. */
@@ -259,6 +282,7 @@ export function placeholderSeed(firmId: string): FirmSeed {
     entityId: id("entity"),
     entityName: id("name"),
     cnic: "0000000000000",
+    twinCnic: "0000000000001",
     phone: "+920000000000",
     matterId: id("matter"),
     matterTitle: id("title"),
@@ -292,10 +316,10 @@ const MARKER_KEYS = [
  * Derived from the store, so a new row type is covered without listing it.
  */
 export function firmMarkers(seed: FirmSeed): string[] {
-  // Not the CNIC (it identifies a person, who may be firm B's client too) and not
+  // Not twinCnic (the D1-1 attack registers that person with firm B too) and not
   // externalSessionId (a caller-supplied hint: the gate itself sends firm A's value
   // as firm B, which stores it on firm B's own session reference).
-  const out = new Set<string>([seed.firmId, seed.entityName, seed.phone, seed.titleTerm])
+  const out = new Set<string>([seed.firmId, seed.entityName, seed.cnic, seed.phone, seed.titleTerm])
   const visit = (row: unknown) => {
     if (!row || typeof row !== "object") return
     const r = row as Record<string, unknown>

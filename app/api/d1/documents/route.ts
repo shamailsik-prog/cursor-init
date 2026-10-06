@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server"
+import { BodySchema, DOCUMENTS_SURFACE } from "./surface"
 import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
@@ -10,9 +12,6 @@ import {
 } from "@/platform/http/idempotency"
 import {
   base64DecodedLength,
-  base64Field,
-  classificationField,
-  idField,
   maxUploadBytes,
   maxUploadRequestBytes,
   fingerprintOf,
@@ -29,17 +28,6 @@ import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-const BodySchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("ingest"),
-    actorId: idField,
-    firmId: idField,
-    matterId: idField.nullable().optional(),
-    contentBase64: base64Field,
-    sourceChannel: z.enum(["web", "team_portal", "whatsapp", "bulk"]),
-    classification: classificationField,
-  }),
-])
 
 type Body = z.infer<typeof BodySchema>
 
@@ -82,17 +70,17 @@ function canViewDocument(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGet, { surface: DOCUMENTS_SURFACE })
 }
 
 async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
-  const userId = url.searchParams.get("userId")
-  const matterId = url.searchParams.get("matterId")
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const userId = getQuery(DOCUMENTS_SURFACE, url, "userId")
+  const matterId = getQuery(DOCUMENTS_SURFACE, url, "matterId")
+  const limit = parseLimit(getQuery(DOCUMENTS_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(DOCUMENTS_SURFACE, url, "cursor"))
 
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
@@ -141,7 +129,7 @@ const uploadBodyLimits: SessionRouteOptions = {
 }
 
 export async function POST(request: Request) {
-  return withSession(request, handlePost, uploadBodyLimits)
+  return withSession(request, handlePost, { ...uploadBodyLimits, surface: DOCUMENTS_SURFACE })
 }
 
 async function handlePost(request: Request) {
@@ -159,6 +147,8 @@ async function handlePost(request: Request) {
   const uploadLimit = maxUploadBytes()
   const raw = await readJsonLimited(request, maxUploadRequestBytes(), uploadLimit)
   if (!raw.ok) return raw.response
+  const undeclared = refuseUndeclaredBody(DOCUMENTS_SURFACE, raw.data)
+  if (undeclared) return undeclared
   const body = parseBody(BodySchema, raw.data)
   if (!body.ok) return body.response
   const parsed: Body = body.data
@@ -168,7 +158,7 @@ async function handlePost(request: Request) {
 
   const fingerprint = fingerprintOf({
     route: "/api/d1/documents",
-    action: parsed.action,
+    action: actionOf(DOCUMENTS_SURFACE, parsed),
     body: parsed,
   })
   const replay = idempotency.getReplay(key, fingerprint)

@@ -14,7 +14,8 @@ export const WHATSAPP_COMMANDS = [
   { name: "ops", usage: "/ops queue", pattern: /^\/ops\s+queue$/i },
 ] as const
 
-export type WhatsAppCommandName = (typeof WHATSAPP_COMMANDS)[number]["name"]
+type WhatsAppCommandRow = (typeof WHATSAPP_COMMANDS)[number]
+export type WhatsAppCommandName = WhatsAppCommandRow extends { name: infer N } ? N : never
 
 export const WHATSAPP_GRAMMAR_HELP = `unsupported command grammar; allowed: ${WHATSAPP_COMMANDS.map((c) => c.usage).join(", ")}`
 
@@ -36,8 +37,8 @@ export function handleWhatsApp(
   userId: string,
   command: string
 ): WhatsAppResult {
-  const text = command.trim()
-  if (text.startsWith("/matters")) {
+  const name = whatsAppCommandName(command)
+  if (name === "matters") {
     const perm = checkPermission(store, userId, "list_matters")
     if (!perm.allow) return { ok: false, denied: true }
     const matters = listMattersForUser(store, userId).map((m) => ({
@@ -46,7 +47,7 @@ export function handleWhatsApp(
     }))
     return { ok: true, matters }
   }
-  if (text.startsWith("/research")) {
+  if (name === "research") {
     const perm = checkPermission(store, userId, "research")
     if (!perm.allow) return { ok: false, denied: true }
     return { ok: true, research: [] }
