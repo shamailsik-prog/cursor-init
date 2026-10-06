@@ -95,3 +95,32 @@ describe("N11: citations written in Urdu script", () => {
     expect(Object.keys(URDU_REPORTER_SPELLINGS).length).toBeGreaterThanOrEqual(15)
   })
 })
+
+describe("acronym reporter tokens need a 4-digit year within 4 tokens (review R3 item 6)", () => {
+  it.each([
+    "Engro Fertilizers PLC paid Rs. 5 million",
+    "the CLC committee met on 5 May",
+    "employee no. 4 of YLR division",
+    "XYZ PTD 5 others",
+    "the SCR unit filed 3 reports",
+  ])("prose %j passes", (text) => {
+    expect(extractCitations(text)).toEqual([])
+  })
+  it.each([
+    ["2019 PLC 77", "2019 PLC 77"],
+    ["2018 CLC 789", "2018 CLC 789"],
+    ["2019 PLC page 77", null],
+    ["PLC 77 of 2019", null],
+    ["2018 C L C, 789", null],
+    ["2019 NLR at 12", null],
+  ])("real citation %j still blocks", (text, exact) => {
+    const refs = extractCitations(text)
+    expect(refs.length).toBeGreaterThan(0)
+    if (exact) expect(refs).toEqual([exact])
+    else expect(refs.every(isSuspect)).toBe(true)
+  })
+  it("distinctive tokens keep the any-digit trigger", () => {
+    expect(extractCitations("see SCMR at 5").every(isSuspect)).toBe(true)
+    expect(extractCitations("see SCMR at 5").length).toBeGreaterThan(0)
+  })
+})

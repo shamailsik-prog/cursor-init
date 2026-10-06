@@ -317,6 +317,9 @@ export type AnalyseOptions = {
 // suspect. Stricter than "near a 4-digit year": any nearby number triggers it.
 const REPORTER_TOKENS = ["SCMR", "PLD", "PLJ", "CLC", "YLR", "MLD", "PCrLJ", "PTD", "PTCL", "CLD", "PLC", "NLR", "KLR", "SCR", "GBLR"]
 const FALLBACK_WINDOW = 20
+// Reporter tokens that double as common acronyms (R3 item 6).
+const ACRONYM_REPORTERS = new Set(["PLC", "CLC", "CLD", "PTD", "SCR", "KLR", "NLR", "YLR"])
+const ACRONYM_YEAR_TOKENS = 4
 const SKELETON_REPORTER = new RegExp(
   `(?<![\\p{L}])(?:${REPORTER_TOKENS.map((t) => [...t].join("\\s?")).join("|")})(?![\\p{L}])`,
   "giu"
@@ -354,6 +357,19 @@ function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
       const lo = Math.max(0, ms - FALLBACK_WINDOW)
       const hi = Math.min(skeleton.length, me + FALLBACK_WINDOW)
       if (!/[0-9]/.test(skeleton.slice(lo, ms) + skeleton.slice(me, hi))) continue
+      // R3 item 6: tokens that double as common acronyms ("Engro … PLC paid Rs. 5", "the CLC
+      // committee met on 5 May") need a 4-digit year within ACRONYM_YEAR_TOKENS skeleton tokens,
+      // or digits within that distance on both sides (a split year "201 8 CLC 789").
+      if (ACRONYM_REPORTERS.has(m[0].replace(/\s/g, "").toUpperCase())) {
+        const before = skeleton.slice(0, ms).split(" ").filter(Boolean).slice(-ACRONYM_YEAR_TOKENS)
+        const after = skeleton.slice(me).split(" ").filter(Boolean).slice(0, ACRONYM_YEAR_TOKENS)
+        const nearYear = [...before, ...after].some((token) => /(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])/.test(token))
+        // A citation has numbers on both sides of the reporter (year and page); prose acronyms
+        // have a number on one side. Digits glued to the token count as that side.
+        const digitsBefore = /[0-9]/.test(skeleton[ms - 1] ?? "") || before.some((t) => /[0-9]/.test(t))
+        const digitsAfter = /[0-9]/.test(skeleton[me] ?? "") || after.some((t) => /[0-9]/.test(t))
+        if (!nearYear && !(digitsBefore && digitsAfter)) continue
+      }
       const start = map[ms] ?? 0
       const end = (map[me - 1] ?? start) + 1
       const ctxStart = map[lo] ?? start
