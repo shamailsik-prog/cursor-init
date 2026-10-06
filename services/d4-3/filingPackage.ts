@@ -68,10 +68,14 @@ export function createFilingPackage(
   if (rankOfStoredOrMax(draft.classification) < rankOfStoredOrMax(matter.classification)) {
     throw new PublicError("draft classification cannot be lower than matter classification")
   }
+  // R4-4: the stored body may be raw (a client-SDK edit of an unlocked draft): normalise it at
+  // read time — refused (422 unsupported_characters) if it fails the charset check — and pin and
+  // analyse the normalised form.
+  const body = requireSupportedDraftBody(draft.body)
   // Module 33: the gate reads the draft being filed, not only the ids the caller lists.
   const gate = runDraftPreflight(
     store,
-    { ...input.preflight, draftBody: draft.body, draftTitle: draft.title },
+    { ...input.preflight, draftBody: body, draftTitle: draft.title },
     { recordOverride: true }
   )
   if (!gate.ok) throw new PublicError("preflight blocked filing package")
@@ -88,7 +92,7 @@ export function createFilingPackage(
     createdAt: Date.now(),
     approvedBy: null,
     approvalReason: null,
-    draftBodySha256: draftBodySha256(draft.body),
+    draftBodySha256: draftBodySha256(body),
     citedRefs: [
       ...new Set(
         (input.preflight.citedJudgmentIds ?? [])
@@ -144,18 +148,19 @@ export function decideFilingPackage(
     }
     // Review round 3: a body with disguising characters is refused before anything else; so is a
     // title (R4-2: client-SDK title edits are allowed on locked drafts, so it is re-read here).
-    requireSupportedDraftBody(draftBody)
+    // R4-4: hash and analyse the normalised body (a raw client-SDK body is normalised here).
+    const body = requireSupportedDraftBody(draftBody)
     const draftTitle = requireSupportedDraftBody(input.draftTitle ?? store.drafts.get(filingPackage.draftId)?.title ?? "")
     // The body being approved must be the body the gate checked at creation (fails closed for
     // a legacy package without a pinned hash).
-    if (!filingPackage.draftBodySha256 || draftBodySha256(draftBody) !== filingPackage.draftBodySha256) {
+    if (!filingPackage.draftBodySha256 || draftBodySha256(body) !== filingPackage.draftBodySha256) {
       throw new DraftChangedError()
     }
     // Body citations (re-extracted) plus the refs listed at creation (review R1 #8).
     const packageMatter = store.matters.get(filingPackage.matterId)
     const refs = [
       ...extractCitations(
-        gatedDraftText(draftTitle, requireSupportedDraftBody(draftBody)),
+        gatedDraftText(draftTitle, body),
         packageMatter ? { isOwnCaseReference: ownCaseReferenceMatcher(packageMatter) } : {}
       ),
       ...(filingPackage.citedRefs ?? []),

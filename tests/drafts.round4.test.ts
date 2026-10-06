@@ -84,3 +84,45 @@ describe("R4-2: the draft title is charset-checked and gated like the body", () 
     expect((await approve(pkg.id)).status).toBe(200)
   })
 })
+
+describe("R4-4: package creation and approval hash and analyse the normalised body", () => {
+  // a client-SDK edit of an unlocked draft is stored raw: NFD, Arabic-Indic digits, Unicode dashes
+  const RAW = "Cléan ۱۲ pleading–text."
+  const NORMALISED = "Cléan 12 pleading-text."
+  it("creation pins sha256 of the normalised body, and approval of the same raw body succeeds", async () => {
+    const { store, matterId } = setup()
+    const draftId = await composed(matterId)
+    store.drafts.set(draftId, { ...store.drafts.get(draftId)!, body: RAW })
+    const pkg = await packaged(matterId, draftId)
+    expect(pkg.draftBodySha256).toBe(sha(NORMALISED))
+    expect(pkg.draftBodySha256).not.toBe(sha(RAW))
+    expect((await approve(pkg.id)).status).toBe(200)
+  })
+  it("approval compares the normalised forms: a raw re-encoding of the same text is the same body", async () => {
+    const { store, matterId } = setup()
+    const draftId = await composed(matterId, NORMALISED)
+    const pkg = await packaged(matterId, draftId)
+    store.drafts.set(draftId, { ...store.drafts.get(draftId)!, body: RAW })
+    expect((await approve(pkg.id)).status).toBe(200)
+  })
+  it("a raw body that fails the charset check is refused at creation and at approval", async () => {
+    const { store, matterId } = setup()
+    const draftId = await composed(matterId)
+    const clean = store.drafts.get(draftId)!
+    store.drafts.set(draftId, { ...clean, body: "Clean ​pleading." })
+    const created = await createPackage(matterId, draftId)
+    expect(created.status).toBe(422)
+    expect(((await created.json()) as { code: string }).code).toBe("unsupported_characters")
+    store.drafts.set(draftId, clean)
+    const pkg = await packaged(matterId, draftId)
+    store.drafts.set(draftId, { ...store.drafts.get(draftId)!, body: "Relying on ۲۰۱۹ SCMR ۱۲۳۴." })
+    // a different body (after normalisation) is draft_changed (409), before any gate result
+    const changed = await approve(pkg.id)
+    expect(changed.status).toBe(409)
+    expect(((await changed.json()) as { code: string }).code).toBe("draft_changed")
+    store.drafts.set(draftId, { ...store.drafts.get(draftId)!, body: "Clean \u200bpleading." })
+    const refused = await approve(pkg.id)
+    expect(refused.status).toBe(422)
+    expect(((await refused.json()) as { code: string }).code).toBe("unsupported_characters")
+  })
+})
