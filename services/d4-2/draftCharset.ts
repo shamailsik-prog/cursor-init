@@ -78,6 +78,9 @@ const RE_DI = /^\p{Default_Ignorable_Code_Point}$/u
 const RE_ARABIC_LETTER = /^(?=\p{L})\p{Script=Arabic}$/u
 const RE_LATIN_LETTER = /^(?=\p{L})\p{Script=Latin}$/u
 const RE_LETTER = /^\p{L}$/u
+const RE_SYMBOL_OR_PUNCT = /^[\p{S}\p{P}]$/u
+// Intra-word marks that are ordinary in Latin text: dashes (\p{Pd}) and the curly apostrophes.
+const INTRA_WORD_MARKS = new Set(["\u2018", "\u2019", "\u02bc"])
 /**
  * Latin letters, plus letters of other scripts that render as Latin letters and decompose to
  * them (math alphanumerics such as U+1D4D2, Common script): a token of those is a Latin token
@@ -170,6 +173,17 @@ export function checkDraftCharset(body: string): CharsetCheck {
       if (latin && otherLetter) {
         token.forEach((t, k) => {
           if (RE_LETTER.test(t) && !isLatinLike(t)) flag(start + k, "token mixes Latin and non-Latin letters")
+        })
+      }
+      // R4-1: a non-ASCII symbol or punctuation mark directly between two letters of a token
+      // that has ASCII letters ("S\u2201MR", "S\u00a9MR") splits a reporter for the gate while
+      // reading as one word. Ordinary intra-word marks (dashes, ’ ‘) stay allowed.
+      if (token.some((t) => /^[A-Za-z]$/.test(t))) {
+        token.forEach((t, k) => {
+          if ((t.codePointAt(0) ?? 0) < 0x80 || !RE_SYMBOL_OR_PUNCT.test(t) || INTRA_WORD_MARKS.has(t) || /^\p{Pd}$/u.test(t)) return
+          if (RE_LETTER.test(token[k - 1] ?? "") && RE_LETTER.test(token[k + 1] ?? "")) {
+            flag(start + k, "symbol or punctuation between two letters of a word")
+          }
         })
       }
       if (latin) {

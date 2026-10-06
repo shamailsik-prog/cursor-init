@@ -512,6 +512,66 @@ function shapeSuspects(folded: FoldedText): Array<Span & { raw: string }> {
   return out
 }
 
+// ---- edit-distance-1 reporter fallback (R4-1) ---------------------------------------------
+// A token within one substitution, insertion or deletion of a reporter token ("SCNR", "S\u2201MR",
+// "SXCMR"), in citation position — a year right before it and a number right after (or after
+// one capitalised court word), or a year right after it — is a suspect. Only abbreviation-like
+// tokens count (two capitals, or a non-letter / non-ASCII character inside), so ordinary words
+// ("old" ~ MLD) and organisations in prose ("In 2018 PTI won 116 seats") are not.
+const EDIT_REPORTERS = REPORTER_TOKENS.map((t) => t.toUpperCase())
+function editDistanceAtMostOne(a: string, b: string): boolean {
+  const x = [...a]
+  const y = [...b]
+  if (Math.abs(x.length - y.length) > 1) return false
+  let i = 0
+  let j = 0
+  let edits = 0
+  while (i < x.length && j < y.length) {
+    if (x[i] === y[j]) {
+      i += 1
+      j += 1
+      continue
+    }
+    edits += 1
+    if (edits > 1) return false
+    if (x.length > y.length) i += 1
+    else if (x.length < y.length) j += 1
+    else {
+      i += 1
+      j += 1
+    }
+  }
+  return edits + (x.length - i) + (y.length - j) <= 1
+}
+function isAbbreviationLike(token: string): boolean {
+  if ((token.match(/[A-Z]/g) ?? []).length >= 2) return true
+  return [...token].some((ch) => (ch.codePointAt(0) ?? 0) >= 0x80 || !/\p{L}/u.test(ch))
+}
+function editDistanceSuspects(folded: FoldedText): Array<Span & { raw: string }> {
+  const text = folded.text
+  const tokens = [...text.matchAll(/\S+/gu)].map((m) => ({ raw: m[0], start: m.index ?? 0 }))
+  const out: Array<Span & { raw: string }> = []
+  const clean = (raw: string) => raw.replace(/^[(\["'\u201c\u2018]+|[)\]"'\u201d\u2019,;:.]+$/gu, "")
+  const isNumber = (i: number) => RE_NUMBER_TOKEN.test(tokens[i]?.raw ?? "")
+  const isYear = (i: number) => RE_YEAR_TOKEN.test(tokens[i]?.raw ?? "")
+  const isCourtWord = (i: number) => /^[(\[]?\p{Lu}[\p{L}.&]*[)\]]?$/u.test(tokens[i]?.raw ?? "")
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = clean(tokens[i]?.raw ?? "")
+    if ([...token].length < 3 || /\d/.test(token) || !isAbbreviationLike(token)) continue
+    const upper = token.toUpperCase()
+    if (EDIT_REPORTERS.includes(upper) || !EDIT_REPORTERS.some((r) => editDistanceAtMostOne(upper, r))) continue
+    const yearFirst = isYear(i - 1) && (isNumber(i + 1) || (isCourtWord(i + 1) && isNumber(i + 2)))
+    const reporterFirst = isYear(i + 1) && (isNumber(i + 2) || (isCourtWord(i + 2) && isNumber(i + 3)))
+    if (!yearFirst && !reporterFirst) continue
+    const from = yearFirst ? i - 1 : i
+    const last = tokens[Math.min(tokens.length - 1, isNumber(i + 1) || (reporterFirst && isNumber(i + 2)) ? (yearFirst ? i + 1 : i + 2) : yearFirst ? i + 2 : i + 3)]
+    const start = tokens[from]?.start ?? 0
+    const end = (last?.start ?? start) + (last?.raw.length ?? 0)
+    out.push({ start, end, raw: text.slice(start, end) })
+  }
+  return out
+}
+
 /** The generic pattern may include leading capitalised prose ("In C.P. No. …"): try each word suffix. */
 function isOwnCase(raw: string, options: AnalyseOptions): boolean {
   if (!options.isOwnCaseReference) return false
@@ -558,6 +618,7 @@ function analyse(
   }
   for (const hit of reporterFallback(folded)) addSuspect(hit.start, hit.end, hit.raw)
   for (const hit of shapeSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
+  for (const hit of editDistanceSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
   for (const hit of urduSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
   // Mixed-script tokens are suspects even beside a strict hit: never map confusables.
   for (const token of mixedScriptTokens(text)) {
