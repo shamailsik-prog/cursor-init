@@ -520,8 +520,13 @@ function isShortLetterToken(raw: string): boolean {
     if (/^[A-Z][A-Za-z]*[A-Z][A-Za-z]*$/u.test(token) && letters.length <= 6) return true // PCrLJ
     return false
   }
+  // R4 FP4: for scripts without case (Urdu), only the Urdu names of Latin letters — a
+  // transliterated abbreviation ("ایس سی ایم آر") — not any short word ("میں", "زیر", "سے").
+  if (letters.every((ch) => /\p{Script=Arabic}/u.test(ch))) return URDU_LETTER_NAME_SET.has(token)
+  // other uncased scripts (refused by the charset layer anyway): any short token
   return letters.length <= 6
 }
+const URDU_LETTER_NAME_SET = new Set(Object.values(URDU_LETTER_NAMES).map((name) => foldDraftText(name).text))
 
 function shapeSuspects(folded: FoldedText): Array<Span & { raw: string }> {
   const text = folded.text

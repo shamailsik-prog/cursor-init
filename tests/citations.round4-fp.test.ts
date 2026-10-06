@@ -101,3 +101,24 @@ describe("FP3: company/acronym tokens need tight year-token-page adjacency", () 
     expect(extractCitations("Relying on 2019 P T C L 5.")).toEqual(["2019 PTCL 5"])
   })
 })
+
+describe("FP4: the Urdu shape detector accepts only Urdu letter-name tokens", () => {
+  it.each([
+    "یہ کہ سال ۲۰۱۹ میں مدعی نے ۵ لاکھ روپے بطور بیعانہ ادا کیے",
+    "مقدمہ نمبر 123 سال 2024 زیر دفعہ 302 ت پ تھانہ صدر لاہور میں درج ہوا۔",
+    "ملزم ۲۰۲۴ سے جیل میں ہے ۳ ماہ",
+  ])("%j", (text) => {
+    expect(extractCitations(text)).toEqual([])
+  })
+  it("letter-name abbreviations (any, not only known reporters) between a year and a number stay suspects", () => {
+    for (const text of [
+      "۲۰۱۹ ایکس وائی زیڈ ۱۲",
+      "۲۰۱۹ ایس سی ایم آر ۱۲۳۴",
+      "2019 پی ایل ڈی 5",
+    ]) {
+      const refs = extractCitations(text)
+      expect(refs.length, text).toBeGreaterThan(0)
+      expect(refs.every(isSuspect)).toBe(true)
+    }
+  })
+})
