@@ -1,11 +1,14 @@
 // Review round 4 (review-secgaps-r4.md): security findings R4-1, R4-3 and the false-positive fixes.
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
+import { POST as DRAFTS } from "@/app/api/d4/drafts/route"
+import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { newStore } from "@/platform/spine/store"
+import { addMember, createMatter } from "@/services/d1-2/matters"
+import { getDocumentTypes } from "@/lib/foundation-data"
 import { extractCitations } from "@/services/d4-2/citations"
 import { checkDraftCharset } from "@/services/d4-2/draftCharset"
 import { seedJudgment, seedTreatment, verifyCitations } from "@/services/d4-2/draftingIntelligence"
 
-const isSuspect = (ref: string) => ref.startsWith("UNRECOGNISED: ")
 
 function overruledStore() {
   const store = newStore()
@@ -75,5 +78,35 @@ describe("R4-3: any run of punctuation between page digits makes the page ambigu
   it("ellipsis or punctuation followed by a space stays prose", () => {
     expect(extractCitations("2019 SCMR 1234... 5 cases")).toEqual(["2019 SCMR 1234"])
     expect(extractCitations("2019 SCMR 1234! 5 cases")).toEqual(["2019 SCMR 1234"])
+  })
+})
+
+
+// Review round 4 gate4 probe: every body through the real compose route is 422 — refused by the
+// charset layer (unsupported_characters) or blocked by the gate. Never 200.
+describe("review round 4 gate4 probe bodies through compose", () => {
+  afterEach(() => resetRuntimeStoreForTests())
+  let n = 0
+  const key = () => `00000000-0000-4000-8444-${String(++n).padStart(12, "0")}`
+  function setup() {
+    const store = getRuntimeStore()
+    const m = createMatter(store, { firmId: "firmA", clientId: "client_a", title: "t", courtId: "SHC", classification: "internal" })
+    for (const u of ["partner_a", "associate_a", "clerk_a"]) addMember(store, m.id, u, "firmA")
+    seedJudgment(store, "j-old", "Old", "single", "2019 SCMR 1234")
+    seedJudgment(store, "j-new", "New", "larger", "2021 SCMR 1")
+    seedTreatment(store, "j-new", "j-old", "overruled", "larger")
+    return m.id
+  }
+  const compose = (matterId: string, body: string) =>
+    DRAFTS(new Request("http://127.0.0.1/api/d4/drafts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key() },
+      body: JSON.stringify({ action: "compose", actorId: "associate_a", matterId, templateId: getDocumentTypes()[0]!.id, title: "x", body, classification: "internal", citedJudgmentIds: [], temporalCitations: [] }),
+    }))
+  it.each(["Relying on 2019 S\u2201MR 1234.", "Relying on 2019 S\u2282MR 1234.", "Relying on 2019 S\u00a2MR 1234.", "Relying on 2019 S\u00a9MR 1234.", "Relying on 2019 S\ud83c\udd72MR 1234.", "Relying on PL\u2202 2019 SC 123.", "Relying on 2019 SCMR 12\u202634.", "Relying on 2019 SCMR 12\u203c34.", "Relying on 2019 \ufb01 SCMR 1234.", "Relying on 2019 \u212aLR 1234.", "Relying on \u212aLR 2001 SC 1.", "Relying on 2019 \uff33\uff23\uff2d\uff32 1234.", "Relying on 2019 \u015eCMR 1234.", "Relying on 2019 SC\u1e43R 1234.", "Relying on 2019 SC\u00b5R 1234.", "Relying on 2019 \u00c6SCMR 1234.", "Relying on 2019 \ud835\udc12\ud835\udc02\ud835\udc0c\ud835\udc11 1234.", "Relying on 2019 SC\ud835\udcdcR 1234.", "Relying on \u0628\u200d2019 SCMR 1234.", "Relying on 2019 SCMR 12\u03033\u03034.", "Relying on 2019 SCMR 1234\u0303.", "Relying on 2019 SCMR \u0627234.", "Relying on 2019 SCMR 1\u0665\u0665.", "Relying on 2\u0647\u0661\u0669 SCMR 1234.", "Relying on 2019 SCMR \u0661\u0662\u0663\u0664."])("%j is 422", async (body) => {
+    expect((await compose(setup(), body)).status).toBe(422)
+  })
+  it.each(["Relying on 2019 SCMR &#x202E;4321&#x202C;.", "Relying on 2019 SCMR 12&#x200B;34."])("title probe entity body %j is 422", async (body) => {
+    expect((await compose(setup(), body)).status).toBe(422)
   })
 })
