@@ -9,8 +9,9 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
-  formatApiErrorMessage,
+  apiCallError,
   runApiCallAllowingStatuses as runApiCallAllowingStatusesImpl,
+  stepFailureOutcome,
   type ApiCallResult,
 } from "@/app/ops/api-call-helpers"
 
@@ -117,7 +118,7 @@ export function OperatorAuditConsole() {
   async function runApiCall(options: ApiCallOptions): Promise<unknown> {
     const result = await runApiCallWithStatus(options)
     if (!result.ok) {
-      throw new Error(formatApiErrorMessage(options.step, result.status, result.body))
+      throw apiCallError(options.step, result.status, result.body)
     }
     return result.body
   }
@@ -189,7 +190,10 @@ export function OperatorAuditConsole() {
       await fn()
       setNotice(name)
     } catch (err) {
-      setError(err instanceof Error ? err.message : `${name} failed`)
+      // A frozen layer (Erratum E-24) is a disabled state, not a failure.
+      const outcome = stepFailureOutcome(name, err)
+      if (outcome.kind === "notice") setNotice(outcome.message)
+      else setError(outcome.message)
     } finally {
       setBusy(false)
     }

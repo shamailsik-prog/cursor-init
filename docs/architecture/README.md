@@ -44,3 +44,30 @@ In practice, for this repository:
 - Code features are governed separately by Layer 18 §9 (Amendment Layer Protocol, p. 307): a new feature needs both
   a layer folder under `/layers` behind a feature flag and a numbered layer in the set.
 - Once signed, append the text to the set file and update the precedence line above.
+
+## Frozen layers
+
+Code with no basis in the set is frozen behind a feature flag rather than deleted (Layer 18 §9.1 rule 4; proposed
+Erratum E-24). Frozen means the routes answer `404 { "error": "feature_disabled", "flag": "<FLAG>" }` while the flag
+is off, after authentication (an anonymous caller still gets 401) and with a `feature_disabled` audit entry (at most
+one per user, route and flag per minute); the
+handlers, collections and stored records are untouched and come back when the flag is turned on. The registry,
+with owner, spec reference and default for each flag, is `FLAG_REGISTRY` in `platform/flags/featureFlags.ts`
+(a subset of the `feature_flags` seed in `postgres/ddl/002_platform.sql`, checked by test); the route gate is `platform/flags/routeGate.ts`.
+
+| Flag | Default | Freezes | Stays live |
+|---|---|---|---|
+| `LEGACY_GOVERNANCE_CHAINS` | off | Every view and action of `/api/d2/ops-reporting` (the governance / attestation / adjudication / seal-verification / lattice chains). Every view and action of `/api/d4/filings` outside the core: dispatch queue, annexures, submission receipts / reconciliation / exceptions, transport execution, escalation, closure and settlement chains. | `/api/d4/filings` POST `create_package` (citation gate, `partnerOverride`) and `decide_package` (partner approval; with the flag off an approval stops at filing readiness and writes no dispatch-queue or annexure row), and GET of the package list (no `view`, or `view=packages`). |
+
+Re-enabling:
+
+- **Deployment:** set `SIKANDER_FLAG_LEGACY_GOVERNANCE_CHAINS=true` (`false` or unset keeps the default). Turning it
+  on in production needs a further erratum and the partner's decision (E-24, ES2-3). The per-firm override
+  (`firm_feature_overrides`) is reserved and not yet read.
+- **Tests:** the test files that exercise the frozen chains are listed in `LEGACY_CHAIN_TEST_FILES` in
+  `tests/setup/legacy-chains.ts` (a Vitest setup file), which turns the flag on for those files only. Add a file
+  there only if it tests frozen code. Every other file sees the default; `tests/boot.all-layers-disabled.test.ts`
+  checks that the core boots and answers with every non-core flag off, and that the frozen routes answer
+  `feature_disabled`.
+- **`/ops` console:** a step that reaches a frozen route shows "<step>: disabled (LEGACY_GOVERNANCE_CHAINS is off)"
+  as a notice instead of failing.

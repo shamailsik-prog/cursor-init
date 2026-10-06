@@ -35,6 +35,7 @@ export const FEATURE_FLAGS = [
   { flag: "L9_2_BILLING", description: "Subscription invoicing (GATED)", defaultEnabled: false, layer: "L9_2" },
   { flag: "WA_31_CUT", description: "Deferred WhatsApp commands beyond the 8-command grammar", defaultEnabled: false, layer: "D2_1" },
   { flag: "L18_TEMPLATE_EXAMPLE", description: "Amendment-layer template", defaultEnabled: false, layer: "L18_X" },
+  { flag: "LEGACY_GOVERNANCE_CHAINS", description: "Frozen out-of-spec ops-reporting and filing-transport chains (Erratum E-24)", defaultEnabled: false, layer: "E_24" },
 ] as const
 
 export const OPEN_ITEMS = [

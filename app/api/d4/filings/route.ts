@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
+import { gateByFlag, isFilingsCoreRequest } from "@/platform/flags/routeGate"
+import { isFeatureEnabled } from "@/platform/flags/featureFlags"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   IdempotencyCache,
@@ -3700,8 +3702,12 @@ async function recomputeClosureComplianceState(
   }
 }
 
+// Erratum E-24 (L18 §9.1 rule 4): only the core package path (isFilingsCoreRequest) stays live
+// while LEGACY_GOVERNANCE_CHAINS is off. The gate runs inside withSession, so auth applies first.
+const handleGetGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handleGet, isFilingsCoreRequest)
+
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGetGated)
 }
 
 async function handleGet(request: Request) {
@@ -7280,8 +7286,12 @@ async function handleGet(request: Request) {
   }
 }
 
+// Erratum E-24 (L18 §9.1 rule 4): only the core package path (isFilingsCoreRequest) stays live
+// while LEGACY_GOVERNANCE_CHAINS is off. The gate runs inside withSession, so auth applies first.
+const handlePostGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handlePost, isFilingsCoreRequest)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost)
+  return withSession(request, handlePostGated)
 }
 
 async function handlePost(request: Request) {
@@ -7414,8 +7424,14 @@ async function handlePost(request: Request) {
       const packetArtifact = buildFilingPacketArtifactRow(filingPackage, draft)
       await repos.filingPacketArtifacts.upsert(packetArtifact)
       store.filingPacketArtifacts.set(packetArtifact.id, packetArtifact)
+      // Erratum E-24: the filing-transport pipeline (dispatch queue, annexures) is frozen behind
+      // LEGACY_GOVERNANCE_CHAINS. With the flag off an approval stops at filing readiness: no
+      // dispatch-queue or annexure row is written and neither field is returned.
+      const transportLive = isFeatureEnabled("LEGACY_GOVERNANCE_CHAINS", actor.firmId)
       const dispatchQueueRow =
-        filingPackage.status === "approved" ? buildFilingDispatchQueueRow(filingPackage) : null
+        transportLive && filingPackage.status === "approved"
+          ? buildFilingDispatchQueueRow(filingPackage)
+          : null
       const annexureRow =
         dispatchQueueRow && dispatchQueueRow.status !== "blocked"
           ? buildFilingAnnexureRow(filingPackage, dispatchQueueRow)
@@ -7433,10 +7449,15 @@ async function handlePost(request: Request) {
         action: "decide_package",
         filingPackage: (await repos.filings.get(filingPackage.id)) ?? filingPackage,
         packetArtifact: (await repos.filingPacketArtifacts.get(packetArtifact.id)) ?? packetArtifact,
-        dispatchQueue:
-          dispatchQueueRow &&
-          ((await repos.filingDispatchQueue.get(dispatchQueueRow.id)) ?? dispatchQueueRow),
-        annexure: annexureRow && ((await repos.filingAnnexures.get(annexureRow.id)) ?? annexureRow),
+        ...(transportLive
+          ? {
+              dispatchQueue:
+                dispatchQueueRow &&
+                ((await repos.filingDispatchQueue.get(dispatchQueueRow.id)) ?? dispatchQueueRow),
+              annexure:
+                annexureRow && ((await repos.filingAnnexures.get(annexureRow.id)) ?? annexureRow),
+            }
+          : {}),
       }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
