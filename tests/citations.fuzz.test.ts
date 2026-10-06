@@ -178,14 +178,19 @@ function variant(base: string, rnd: () => number, pools: Pools): string {
 
 /**
  * True when the gate's findings are all VERIFIED and every one is stated in the normalised text
- * as "<ref>, <digits>" with a plain space — the pinpoint form the round-3 ruling keeps ("2019
- * SCMR 1, 234" reads page 1 pinpoint 234; the stored body says exactly that).
+ * as "<ref>, <pinpoint>" with a plain space and page <= pinpoint <= page + 150 — the pinpoint form
+ * the rulings keep (R3, bounded by R5-3: "2019 SCMR 1, 234" is no longer one).
  */
 function isRuledPinpointOnly(normalised: string, findings: Array<{ ref: string; status: string }>): boolean {
   return findings.every((f) => {
     if (f.status !== "VERIFIED") return false
     const pattern = f.ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s+")
-    return new RegExp(`(?<![0-9A-Za-z])${pattern}, [0-9]`, "i").test(normalised)
+    // R5-3: only a plausible pinpoint (page <= pinpoint <= page + 150) is the ruled form
+    const page = Number(/(\d+)$/.exec(f.ref)?.[1] ?? Number.NaN)
+    return [...normalised.matchAll(new RegExp(`(?<![0-9A-Za-z])${pattern}, ([0-9]+)`, "gi"))].some((m) => {
+      const pin = Number(m[1])
+      return page <= pin && pin <= page + 150
+    })
   })
 }
 

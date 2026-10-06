@@ -111,3 +111,24 @@ describe("R5-2: a marker before the number taints it too", () => {
     expect(refs.every(isSuspect)).toBe(true)
   })
 })
+
+describe("R5-3: a ', n' pinpoint is accepted only when page <= pinpoint <= page + 150", () => {
+  it.each([
+    ["2015 SCMR 100, 105", ["2015 SCMR 100"]],
+    ["2019 SCMR 1234, 1240", ["2019 SCMR 1234"]],
+    ["2019 SCMR 1234, 1384", ["2019 SCMR 1234"]],
+    ["2019 SCMR 1, 23", ["2019 SCMR 1"]],
+    ["2019 SCMR 1, 1", ["2019 SCMR 1"]],
+    ["Reliance is placed on PLD 2010 SC 1, 2015 SCMR 100, 2018 CLC 789 (Lahore) and 2020 YLR 222.", ["PLD 2010 SC 1", "2015 SCMR 100", "2018 CLC 789", "2020 YLR 222"]],
+  ])("%j reads exactly", (text, expected) => {
+    expect(extractCitations(text)).toEqual(expected)
+  })
+  it.each(["2019 SCMR 1, 234", "2019 SCMR 1, 2345", "2019 SCMR 12, 345", "PLD 2019 SC 1, 234", "2019 SCMR 1234, 1385", "2019 SCMR 1234, 1200"])(
+    "%j is a suspect (implausible pinpoint)",
+    (text) => {
+      const refs = extractCitations(text)
+      expect(refs.length).toBeGreaterThan(0)
+      expect(refs.every(isSuspect), JSON.stringify(refs)).toBe(true)
+    }
+  )
+})

@@ -207,6 +207,8 @@ function trailingParen(rest: string): { length: number; key: string } | null {
   return { length: m[0].length, key: canonicalParen(m[1]) }
 }
 
+const PINPOINT_SPAN = 150
+
 function finishHit(
   folded: FoldedText,
   start: number,
@@ -227,6 +229,16 @@ function finishHit(
   // Likewise ". 34": the blanks after a period must be real spaces ("12.\u200a34").
   const sep = /^[,.]( +)\d/u.exec(text.slice(stop))
   if (sep?.[1] && folded.taint.slice(stop + 1, stop + 1 + sep[1].length).some(Boolean)) return null
+  // R5-3: ", n" is a pinpoint only when page <= n <= page + PINPOINT_SPAN ("2015 SCMR 100, 105");
+  // "2019 SCMR 1, 234" reads naturally as page 1,234 with a stray space, so it is ambiguous. A
+  // 4-digit year followed by a capitalised word is the next citation in a list, not a pinpoint.
+  const pin = /^, (\d+)(?![\d])/u.exec(text.slice(stop))
+  if (pin?.[1]) {
+    const nextCitation = /^(?:19|20)\d{2}\s+\p{Lu}/u.test(text.slice(stop + 2))
+    const page = Number(/(\d+)\D*$/u.exec(text.slice(start, end))?.[1] ?? Number.NaN)
+    const n = Number(pin[1])
+    if (!nextCitation && !(page <= n && n <= page + PINPOINT_SPAN)) return null
+  }
   const citation = build(trailingKey)
   return citation ? { start, end: stop, citation } : null
 }
