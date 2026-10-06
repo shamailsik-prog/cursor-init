@@ -41,10 +41,12 @@ service cloud.firestore {
         || rank(request.resource.data.classification)
            >= rank(get(/databases/$(database)/documents/matters/$(matterId)).data.classification);
     }
-    // R1 #9 / L17.3: client-sourced material (the WhatsApp channel) is privileged at minimum.
+    // R1 #9 / R2 N7 / L17.3: a client-SDK create cannot prove its channel (only the server, via the
+    // Admin SDK, stamps sourceChannel outside these rules), so every client-SDK document create is
+    // treated as client-sourced: privileged at minimum, and any sourceChannel must be a known one.
     function clientSourcedFloor() {
-      return request.resource.data.get('sourceChannel', '') != 'whatsapp'
-        || rank(request.resource.data.classification) >= 3;
+      return rank(request.resource.data.classification) >= 3
+        && request.resource.data.get('sourceChannel', 'web') in ['web', 'team_portal', 'whatsapp', 'bulk'];
     }
     function authorNew() { return sameFirmNew() && isAuthor() && clearedNew() && canAccessScope(request.resource.data.matterId); }
 

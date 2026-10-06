@@ -385,13 +385,15 @@ describe("M2 — role, clearance and membership on core collections", () => {
     it("member cannot create a document above own clearance", async () => {
       await assertFails(setDoc(doc(authed("member1", MEMBER_ASSOC), "documents", "d-hi"), matterDoc("privileged")))
     })
-    it("member associate can create a cleared matter-bound document", async () => {
-      await assertSucceeds(setDoc(doc(authed("member1", MEMBER_ASSOC), "documents", "d-ok"), matterDoc("internal")))
+    it("member associate can create a cleared matter-bound document (client SDK: privileged floor, R2 N7)", async () => {
+      await assertSucceeds(setDoc(doc(authed("m2-assoc-high", MEMBER_ASSOC_HIGH), "documents", "d-ok"), matterDoc("privileged")))
+      await assertFails(setDoc(doc(authed("member1", MEMBER_ASSOC), "documents", "d-low"), matterDoc("internal")))
     })
-    it("associate cannot create a loose-vault document; confidential clerk can", async () => {
-      const loose = { firmId: "firmA", matterId: null, classification: "confidential" }
+    it("associate cannot create a loose-vault document; a cleared clerk can (client SDK: privileged floor, R2 N7)", async () => {
+      const loose = { firmId: "firmA", matterId: null, classification: "privileged" }
       await assertFails(setDoc(doc(authed("m2-nonmember", NONMEMBER_ASSOC), "documents", "d-loose-a"), loose))
-      await assertSucceeds(setDoc(doc(authed("m2-clerk", CLERK_CONF), "documents", "d-loose-c"), loose))
+      await assertSucceeds(setDoc(doc(authed("m2-clerk", { ...CLERK_CONF, clearanceLevel: "privileged" }), "documents", "d-loose-c"), loose))
+      await assertFails(setDoc(doc(authed("m2-clerk", CLERK_CONF), "documents", "d-loose-low"), { ...loose, classification: "confidential" }))
     })
   })
 
@@ -1088,7 +1090,8 @@ describe("Review R1 #9 — documents create: matter floor and client-sourced flo
   it("a whatsapp (client-sourced) document below privileged is refused", async () => {
     await assertFails(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flWa"), { firmId: "firmA", matterId: "flInt", classification: "internal", sourceChannel: "whatsapp" }))
     await assertSucceeds(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flWa2"), { firmId: "firmA", matterId: "flInt", classification: "privileged", sourceChannel: "whatsapp" }))
-    await assertSucceeds(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flWeb"), { firmId: "firmA", matterId: "flInt", classification: "internal", sourceChannel: "web" }))
+    // R2 N7: a client-SDK create cannot prove its channel, so "web" is floored too.
+    await assertFails(setDoc(doc(authed("fl-assoc", ASSOC), "documents", "flWeb"), { firmId: "firmA", matterId: "flInt", classification: "internal", sourceChannel: "web" }))
   })
 })
 
@@ -1170,5 +1173,31 @@ describe("Review R2 N6 — escalation-closure digests are server-only; case numb
       await assertFails(updateDoc(doc(db, "matters", "n6M"), { courtId: "SC" }))
     }
     await assertSucceeds(updateDoc(doc(authed("n6-assoc", ASSOC), "matters", "n6M"), { title: "renamed" }))
+  })
+})
+
+describe("Review R2 N7 — client-SDK document creates are treated as client-sourced (privileged floor)", () => {
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "n7M"), { firmId: "firmA", title: "N7", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "n7M_n7-assoc"), { firmId: "firmA", matterId: "n7M", userId: "n7-assoc" })
+    })
+  })
+  it.each([
+    ["WhatsApp", "internal"],
+    ["web", "internal"],
+    ["team_portal", "confidential"],
+    ["bulk", "internal"],
+    [undefined, "internal"],
+  ])("sourceChannel %s labelled %s is refused", async (channel, classification) => {
+    const row: Record<string, unknown> = { firmId: "firmA", matterId: "n7M", classification }
+    if (channel) row.sourceChannel = channel
+    await assertFails(setDoc(doc(authed("n7-assoc", ASSOC), "documents", `n7-${channel}-${classification}`), row))
+  })
+  it("privileged is accepted; an unknown channel string is refused even when privileged", async () => {
+    await assertSucceeds(setDoc(doc(authed("n7-assoc", ASSOC), "documents", "n7-ok"), { firmId: "firmA", matterId: "n7M", classification: "privileged", sourceChannel: "web" }))
+    await assertFails(setDoc(doc(authed("n7-assoc", ASSOC), "documents", "n7-odd"), { firmId: "firmA", matterId: "n7M", classification: "privileged", sourceChannel: "WhatsApp" }))
   })
 })
