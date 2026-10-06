@@ -193,10 +193,12 @@ function ambiguousTail(rest: string): boolean {
   // mark after blanks ("7\t\u201989", "12 ,34"); a thousands-style mark then junk or odd blanks
   // on the same line before digits ("4,\u20144", "123\u2019<b>-4", "7,  89" — only ", 1240" with
   // one space is a pinpoint, and "." may be followed by plain spaces or an ellipsis); "<" / ">" before digits
-  // ("7 <89", "1> 234") — fuzz, R3 item 10.
+  // ("7 <89", "1> 234") — fuzz, R3 item 10. An apostrophe, Arabic separator or angle run may
+  // span a newline ("7'\f89", "1>\v234": page and line breaks) like the blank-then-digit rule;
+  // a period may not.
   // R4-3: any run of punctuation/symbols glued between the page and more digits ("12\u202634",
   // "12!!34", "12\u2a7434") is ambiguous.
-  return /^(?:[\p{P}\p{S}]+\d|[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}\n]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}\n]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
+  return /^(?:[\p{P}\p{S}]+\d|[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
 }
 
 function trailingParen(rest: string): { length: number; key: string } | null {
@@ -608,6 +610,32 @@ function editDistanceSuspects(folded: FoldedText): Array<Span & { raw: string }>
   return out
 }
 
+// ---- markup residue (fuzz, R4) ----------------------------------------------------------
+// Markup syntax glued to a letter ("PCrL<span", "<s>pan", "s=\"c\">R", "\"><CLC") with digits
+// on both sides within RESIDUE_WINDOW characters is a suspect: bodies are plain text, so tag or
+// attribute fragments inside a would-be citation are junk that can split a reporter for every
+// reading. Spaced prose angles ("loss < 5%") and quoted terms do not match.
+const RESIDUE = /\p{L}[<>]|[<>]\p{L}|[\p{L}\p{N}]="|"[<>]/gu
+const RESIDUE_WINDOW = 40
+function markupResidueSuspects(folded: FoldedText): Array<Span & { raw: string }> {
+  const text = folded.text
+  const out: Array<Span & { raw: string }> = []
+  for (const m of text.matchAll(RESIDUE)) {
+    const at = m.index ?? 0
+    const lo = Math.max(0, at - RESIDUE_WINDOW)
+    const hi = Math.min(text.length, at + m[0].length + RESIDUE_WINDOW)
+    const before = text.slice(lo, at)
+    const after = text.slice(at, hi)
+    // same line only, so a tag on one paragraph never taints numbers on another
+    const lineBefore = before.slice(before.lastIndexOf("\n\n") + 1)
+    const lineAfter = after.split("\n\n")[0] ?? ""
+    if (!/[0-9]/.test(lineBefore) || !/[0-9]/.test(lineAfter)) continue
+    const start = at - lineBefore.length
+    out.push({ start, end: at + lineAfter.length, raw: text.slice(start, at + lineAfter.length) })
+  }
+  return out
+}
+
 /** The generic pattern may include leading capitalised prose ("In C.P. No. …"): try each word suffix. */
 function isOwnCase(raw: string, options: AnalyseOptions, preceding = ""): boolean {
   if (!options.isOwnCaseReference) return false
@@ -658,6 +686,7 @@ function analyse(
   for (const hit of reporterFallback(folded)) addSuspect(hit.start, hit.end, hit.raw)
   for (const hit of shapeSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
   for (const hit of editDistanceSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
+  for (const hit of markupResidueSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
   for (const hit of urduSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
   // Mixed-script tokens are suspects even beside a strict hit: never map confusables.
   for (const token of mixedScriptTokens(text)) {

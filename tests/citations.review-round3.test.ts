@@ -39,7 +39,8 @@ describe("N8: plain-text '<' and '>' never hide a citation (raw and markup-strip
     ["Where loss < 5% the rule in 2019 SCMR 1234 applies; where > 5% it does not.", "2019 SCMR 1234"],
     ["<https://x.pk/2019-SCMR-1234>", null],
     ["Relying on 2019 SCMR 1234 <emphasis supplied>.", "2019 SCMR 1234"],
-    ["2019 SC<b>MR</b> 1234", "2019 SCMR 1234"],
+    // R4 fuzz: tag fragments glued to letters next to numbers are markup residue — fail-closed suspects
+    ["2019 SC<b>MR</b> 1234", null],
   ])("%j", (text, citation) => {
     const refs = extractCitations(text)
     expect(refs.length, text).toBeGreaterThan(0)
@@ -532,7 +533,10 @@ describe("fuzz round 3 (wide sweep): bare angles never pair into a fake tag; mar
   it("prose angles and real pinpoints are unaffected", () => {
     expect(extractCitations("where loss < 5% the rule in 2019 SCMR 1234 applies; where > 5% it does not")).toEqual(["2019 SCMR 1234"])
     expect(extractCitations("2019 SCMR 1234, 1240")).toEqual(["2019 SCMR 1234"])
-    expect(extractCitations("2019 <b>SCMR</b> 1234")).toContain("2019 SCMR 1234")
+    // R4 fuzz: tags glued to the reporter are markup residue; still never silent (fail-closed)
+    const tagged = extractCitations("2019 <b>SCMR</b> 1234")
+    expect(tagged.length).toBeGreaterThan(0)
+    expect(tagged.includes("2019 SCMR 1234") || tagged.every(isSuspect)).toBe(true)
   })
 })
 

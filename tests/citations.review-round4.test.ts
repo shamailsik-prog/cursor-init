@@ -110,3 +110,30 @@ describe("review round 4 gate4 probe bodies through compose", () => {
     expect((await compose(setup(), body)).status).toBe(422)
   })
 })
+
+// Found by the round-4 30-seed fuzz sweep: markup residue glued to letters inside a reporter.
+describe("fuzz round 4: markup residue glued to letters near numbers is a suspect", () => {
+  it.each([
+    'Relying on 2019 PCrL<span >class="c">J 4 4 for the proposition.',
+    'Relying on 2018 سی ایل <s>pan class="c">سی</span>  789 for the proposition.',
+    'Relying on 2019 SCM<span clas>s="c">R\r\n1⸚234.',
+    'Relying on 201—8 <span class="c"><CLC</span> 7’89 -> for the proposition.',
+    // a page break (FF, now a newline) after an apostrophe inside the page
+    "Relying on 2018 \u2004CLC\r\n7'\f89 for the proposition.",
+    // a Word line break (VT, now a newline) after ">" inside the page
+    "Relying on 2019 SCM\u{1cf20}R 1>\u000b234 for the proposition.",
+  ])("%j", (text) => {
+    const store = overruledStore()
+    seedJudgment(store, "d4", "Four", "full", "2019 PCrLJ 4")
+    seedJudgment(store, "d7", "Seven", "full", "2018 CLC 7")
+    const check = checkDraftCharset(text)
+    expect(check.ok).toBe(true)
+    const res = verifyCitations(store, extractCitations(check.ok ? check.normalised : text))
+    expect(res.status).not.toBe("OK")
+    expect(res.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+  })
+  it("prose angles, quoted terms and attribute-free text are unaffected", () => {
+    expect(extractCitations('where loss < 5% the rule in 2019 SCMR 1234 applies; where > 5% it does not')).toEqual(["2019 SCMR 1234"])
+    expect(extractCitations('The term "bayana" was paid in 2019 for 5 plots.')).toEqual([])
+  })
+})
