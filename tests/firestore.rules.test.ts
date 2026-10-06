@@ -11,10 +11,13 @@ import {
 } from "@firebase/rules-unit-testing"
 import {
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
+  runTransaction,
   setDoc,
   updateDoc,
+  writeBatch,
 } from "firebase/firestore"
 
 let testEnv: RulesTestEnvironment
@@ -1199,5 +1202,62 @@ describe("Review R2 N7 — client-SDK document creates are treated as client-sou
   it("privileged is accepted; an unknown channel string is refused even when privileged", async () => {
     await assertSucceeds(setDoc(doc(authed("n7-assoc", ASSOC), "documents", "n7-ok"), { firmId: "firmA", matterId: "n7M", classification: "privileged", sourceChannel: "web" }))
     await assertFails(setDoc(doc(authed("n7-assoc", ASSOC), "documents", "n7-odd"), { firmId: "firmA", matterId: "n7M", classification: "privileged", sourceChannel: "WhatsApp" }))
+  })
+})
+
+describe("Review R2 probes (secrev2/rules2.probe.test.ts) pinned as regressions", () => {
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "p2m1"), { firmId: "firmA", title: "t", classification: "privileged" })
+      await setDoc(doc(db, "matters", "p2m2"), { firmId: "firmA", title: "t2", classification: "internal" })
+      for (const [m, u] of [["p2m1", "p2-member"], ["p2m2", "p2-member"], ["p2m1", "p2-pm"], ["p2m2", "p2-outsider"]]) {
+        await setDoc(doc(db, "matter_members", `${m}_${u}`), { firmId: "firmA", matterId: m, userId: u })
+      }
+      await setDoc(doc(db, "users", "p2-x1"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "drafts", "p2d1"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "clean" })
+      await setDoc(doc(db, "drafts", "p2dl"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "clean", locked: true, title: "x" })
+      await setDoc(doc(db, "documents", "p2doc1"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", contentHash: "h", storagePath: "s" })
+    })
+  })
+
+  it("locked draft: every write path to the body or the lock is denied; title stays editable", async () => {
+    const db = authed("p2-member", ASSOC)
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { body: "evil" }))
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { locked: false }))
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { locked: deleteField() }))
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { body: "evil", locked: false }))
+    await assertFails(setDoc(doc(db, "drafts", "p2dl"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "evil", title: "x" }))
+    await assertFails((async () => {
+      const b = writeBatch(db)
+      b.update(doc(db, "drafts", "p2dl"), { locked: false })
+      b.update(doc(db, "drafts", "p2dl"), { body: "evil" })
+      await b.commit()
+    })())
+    await assertFails(runTransaction(db, async (tx) => {
+      await tx.get(doc(db, "drafts", "p2dl"))
+      tx.update(doc(db, "drafts", "p2dl"), { body: "evil" })
+    }))
+    await assertFails(setDoc(doc(db, "drafts", "p2copy1"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "evil", locked: false }))
+    await assertSucceeds(updateDoc(doc(db, "drafts", "p2dl"), { title: "y" }))
+  })
+
+  it("documents and drafts cannot be moved between matters", async () => {
+    await assertFails(updateDoc(doc(authed("p2-outsider", ASSOC), "documents", "p2doc1"), { matterId: "p2m2" }))
+    await assertFails(updateDoc(doc(authed("p2-member", ASSOC), "documents", "p2doc1"), { matterId: "p2m2" }))
+    await assertFails(updateDoc(doc(authed("p2-member", ASSOC), "drafts", "p2d1"), { matterId: "p2m2" }))
+  })
+
+  it("self-assignment inside a batch and id/userId mismatches are denied", async () => {
+    const db = authed("p2-p9", PARTNER)
+    await assertFails((async () => {
+      const b = writeBatch(db)
+      b.set(doc(db, "matter_members", "p2m1_p2-x1"), { firmId: "firmA", matterId: "p2m1", userId: "p2-x1" })
+      b.set(doc(db, "matter_members", "p2m1_p2-p9"), { firmId: "firmA", matterId: "p2m1", userId: "p2-p9" })
+      await b.commit()
+    })())
+    await assertFails(setDoc(doc(authed("p2-pm", PARTNER), "matter_members", "p2m1_victim"), { firmId: "firmA", matterId: "p2m1", userId: "p2-x1" }))
   })
 })
