@@ -1,0 +1,10 @@
+name: cursor-init CodeQL config
+# Generated, vendored and test-fixture trees: not product code.
+paths-ignore:
+  - node_modules
+  - functions/node_modules
+  - functions/lib
+  - .next
+  - reports
+  - .stryker-tmp
+  - artifacts
