@@ -25,7 +25,8 @@ describe("checkDraftCharset", () => {
     ["variation selector VS17", "2019 SCMR 12\u{E0100}34", "U+E0100", "Mn"],
     ["Mongolian FVS", "2019 SCMR 12᠋34", "U+180B", "Mn"],
     ["zero-width space", "2019 SCMR 1​234", "U+200B", "Cf"],
-    ["soft hyphen", "2019 SC­MR 1234", "U+00AD", "Cf"],
+    // R4 FP5: a soft hyphen between two letters of one script is a paste artefact (dropped); between digits it is refused
+    ["soft hyphen", "2019 SCMR 12­34", "U+00AD", "Cf"],
     ["CGJ", "2019 SC͏MR 1234", "U+034F", "Mn"],
     ["ZWNJ between Latin letters", "a‌b", "U+200C", "Cf"],
     ["bell control", "x\u0007y", "U+0007", "Cc"],

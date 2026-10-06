@@ -109,7 +109,7 @@ describe("R4-4: package creation and approval hash and analyse the normalised bo
     const { store, matterId } = setup()
     const draftId = await composed(matterId)
     const clean = store.drafts.get(draftId)!
-    store.drafts.set(draftId, { ...clean, body: "Clean ​pleading." })
+    store.drafts.set(draftId, { ...clean, body: "Clean 12\u200b34 pleading." })
     const created = await createPackage(matterId, draftId)
     expect(created.status).toBe(422)
     expect(((await created.json()) as { code: string }).code).toBe("unsupported_characters")
@@ -120,7 +120,7 @@ describe("R4-4: package creation and approval hash and analyse the normalised bo
     const changed = await approve(pkg.id)
     expect(changed.status).toBe(409)
     expect(((await changed.json()) as { code: string }).code).toBe("draft_changed")
-    store.drafts.set(draftId, { ...store.drafts.get(draftId)!, body: "Clean \u200bpleading." })
+    store.drafts.set(draftId, { ...store.drafts.get(draftId)!, body: "Clean 12\u200b34 pleading." })
     const refused = await approve(pkg.id)
     expect(refused.status).toBe(422)
     expect(((await refused.json()) as { code: string }).code).toBe("unsupported_characters")

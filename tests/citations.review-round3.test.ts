@@ -271,7 +271,8 @@ const PROBE3_EXPECTED: Record<string, Probe3Expectation> = {
   "RLI isolate + reversed": "suspect-or-refused",
   "Mongolian FVS in page": "suspect-or-refused",
   "Mongolian vowel sep U+180E in page": "suspect-or-refused",
-  "soft hyphen inside reporter": "suspect-or-refused",
+  // R4 FP5: the soft hyphen between letters is a paste artefact, dropped, so the reporter is read (and gated)
+  "soft hyphen inside reporter": ["2019 SCMR 1234"],
   "soft hyphen in page": "suspect-or-refused",
   "&#83;CMR": ["2019 SCMR 1234"],
   "&#x53;CMR": ["2019 SCMR 1234"],

@@ -117,7 +117,42 @@ function latinLetterProblem(ch: string): string | null {
   return "non-orthographic Latin letter (small capital / IPA / click)"
 }
 
-export function checkDraftCharset(body: string): CharsetCheck {
+/** The script family a letter belongs to, for the same-script artefact rule. */
+function letterScript(ch: string): string | null {
+  if (!RE_LETTER.test(ch)) return null
+  if (/\p{Script=Latin}/u.test(ch)) return "Latin"
+  if (/\p{Script=Arabic}/u.test(ch)) return "Arabic"
+  return "other"
+}
+
+/**
+ * R4 FP5: harmless artefacts of pasting from Word, PDF or the web, cleaned before the charset
+ * check (the stored body is the cleaned, normalised one): a leading BOM; VT (Word manual line
+ * break) and FF (page break) as newlines; Latin ligatures U+FB00-FB06 expanded; a soft hyphen
+ * or ZWSP between two letters of the same script dropped, and a ZWSP next to a blank. Anything
+ * else (between digits, across scripts, a BOM mid-text, bidi, other controls) stays refused.
+ */
+export function cleanPasteArtefacts(body: string): string {
+  const input = [...body.replace(/^\ufeff/u, "").replace(/[\u000b\u000c]/gu, "\n").replace(/[\ufb00-\ufb06]/gu, (c) => c.normalize("NFKC"))]
+  const out: string[] = []
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i] ?? ""
+    if (ch === "\u00ad" || ch === "\u200b") {
+      const prev = out[out.length - 1] ?? ""
+      let k = i + 1
+      while (input[k] === "\u00ad" || input[k] === "\u200b") k += 1
+      const next = input[k] ?? ""
+      const sameScript = letterScript(prev) !== null && letterScript(prev) === letterScript(next)
+      const besideBlank = ch === "\u200b" && (prev === "" || next === "" || /^\s$/u.test(prev) || /^\s$/u.test(next))
+      if (sameScript || besideBlank) continue
+    }
+    out.push(ch)
+  }
+  return out.join("")
+}
+
+export function checkDraftCharset(rawBody: string): CharsetCheck {
+  const body = cleanPasteArtefacts(rawBody)
   const cps = [...body]
   const violations: CharsetViolation[] = []
   const flag = (i: number, reason: string) => {
@@ -218,7 +253,7 @@ export function checkDraftCharset(body: string): CharsetCheck {
 /** CRLF -> LF, NFC, ASCII digits, ASCII dashes. Only for bodies that passed the check. */
 export function normaliseDraftBody(body: string): string {
   let out = ""
-  for (const ch of body.replace(/\r\n/g, "\n").normalize("NFC")) {
+  for (const ch of cleanPasteArtefacts(body).replace(/\r\n/g, "\n").normalize("NFC")) {
     const cp = ch.codePointAt(0) ?? 0
     if (cp >= 0x80 && /^\p{Nd}$/u.test(ch)) out += asciiDigit(cp)
     else if (cp === 0x2212 || /^\p{Pd}$/u.test(ch)) out += "-"
