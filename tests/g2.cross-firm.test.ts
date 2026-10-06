@@ -49,6 +49,7 @@ import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/run
 import { resetSessionStateForTests } from "@/platform/p5/session"
 import { getRuntimeRepositories, setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
 import type { Role, User } from "@/platform/spine/store"
+import { WHATSAPP_COMMANDS } from "@/services/d2-1/whatsapp"
 
 // ---------------------------------------------------------------------------
 // Firms, users, tokens
@@ -529,9 +530,7 @@ function discover(route: string): string[] {
     ])
     for (const a of actions) {
       if (a === "whatsapp_command") {
-        const grammar = src.slice(src.indexOf("function validateWhatsAppCommand"))
-        const body = grammar.slice(0, grammar.indexOf("\n}\n"))
-        for (const c of new Set(literals(body, /\/\^\\\/(\w+)/g))) found.add(`POST ${route} command=/${c}`)
+        for (const c of WHATSAPP_COMMANDS) found.add(`POST ${route} command=/${c.name}`)
       } else {
         found.add(`POST ${route} action=${a}`)
       }

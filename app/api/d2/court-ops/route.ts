@@ -12,7 +12,7 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildCourtOpsActivityRow, buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
-import { handleWhatsApp } from "@/services/d2-1/whatsapp"
+import { WHATSAPP_GRAMMAR_HELP, handleWhatsApp, whatsAppCommandName } from "@/services/d2-1/whatsapp"
 import {
   acknowledgeCourtOpsItem,
   listCourtOpsQueue,
@@ -71,15 +71,6 @@ function isWorkflowStatus(value: unknown): value is WorkflowStatus {
     value === "processing" ||
     value === "review_required" ||
     value === "complete"
-  )
-}
-
-function validateWhatsAppCommand(command: string): boolean {
-  const text = command.trim()
-  return (
-    /^\/matters$/i.test(text) ||
-    /^\/research\s+.+/i.test(text) ||
-    /^\/ops\s+queue$/i.test(text)
   )
 }
 
@@ -228,17 +219,12 @@ async function handlePost(request: Request) {
         return NextResponse.json({ error: "actorId and command are required" }, { status: 400 })
       }
       await syncCourtOpsState(store, parsed.actorId)
-      if (!validateWhatsAppCommand(parsed.command)) {
-        return NextResponse.json(
-          {
-            error:
-              "unsupported command grammar; allowed: /matters, /research <query>, /ops queue",
-          },
-          { status: 400 }
-        )
+      const command = whatsAppCommandName(parsed.command)
+      if (!command) {
+        return NextResponse.json({ error: WHATSAPP_GRAMMAR_HELP }, { status: 400 })
       }
       const text = parsed.command.trim()
-      if (/^\/ops\s+queue$/i.test(text)) {
+      if (command === "ops") {
         const queue = listCourtOpsQueue(store, parsed.actorId, {
           limit: 20,
           cursor: 0,
