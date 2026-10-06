@@ -133,6 +133,33 @@ function letterScript(ch: string): string | null {
  * or ZWSP between two letters of the same script dropped, and a ZWSP next to a blank. Anything
  * else (between digits, across scripts, a BOM mid-text, bidi, other controls) stays refused.
  */
+/** Why a single character is refused (null when allowed); neighbours matter for ZWNJ/ZWJ only. */
+function characterProblem(ch: string, before: string, after: string): string | null {
+  const cp = ch.codePointAt(0) ?? 0
+  const cat = category(ch)
+  if (cat === "Cc") return "control character"
+  if (BIDI_CONTROLS.has(cp)) return "bidi embedding/override/isolate control"
+  if (isTag(cp)) return "tag character"
+  if (isVariationSelector(cp)) return "variation selector"
+  if (cp === 0x200c || cp === 0x200d) {
+    return RE_ARABIC_LETTER.test(before) && RE_ARABIC_LETTER.test(after) ? null : "ZWNJ/ZWJ outside Arabic-script letters"
+  }
+  if (cat === "Cf" || RE_DI.test(ch)) return "format / default-ignorable character"
+  if (cat === "Zl" || cat === "Zp") return "line/paragraph separator"
+  if (cat === "Co") return "private-use character"
+  if (cat === "Cs") return "surrogate"
+  if (cat === "Cn") return "unassigned code point"
+  if (!RE_ALLOWED_SCRIPT.test(ch)) return "script not allowed (Latin, Arabic, Common, Inherited only)"
+  if (
+    RE_LETTER.test(ch) && !RE_LATIN_LETTER.test(ch) && !RE_ARABIC_LETTER.test(ch) && !COMPAT_ALLOWED.has(ch) &&
+    [...ch.normalize("NFKD")].some((d) => RE_LETTER.test(d) && !RE_ALLOWED_SCRIPT.test(d))
+  ) {
+    // a Common-script compatibility letter of a disallowed script (math Greek U+1D6B8 "P")
+    return "compatibility form of a letter in a disallowed script"
+  }
+  return null
+}
+
 export function cleanPasteArtefacts(body: string): string {
   const input = [...body.replace(/^\ufeff/u, "").replace(/[\u000b\u000c]/gu, "\n").replace(/[\ufb00-\ufb06]/gu, (c) => c.normalize("NFKC"))]
   const out: string[] = []
@@ -163,35 +190,30 @@ export function checkDraftCharset(rawBody: string): CharsetCheck {
   }
   for (let i = 0; i < cps.length; i += 1) {
     const ch = cps[i] ?? ""
-    const cp = ch.codePointAt(0) ?? 0
-    const cat = category(ch)
     if (ch === "\n" || ch === "\t") continue
     if (ch === "\r") {
       if (cps[i + 1] !== "\n") flag(i, "control character")
       continue
     }
-    if (BIDI_CONTROLS.has(cp)) flag(i, "bidi embedding/override/isolate control")
-    else if (isTag(cp)) flag(i, "tag character")
-    else if (isVariationSelector(cp)) flag(i, "variation selector")
-    else if (cp === 0x200c || cp === 0x200d) {
-      const before = cps[i - 1] ?? ""
-      const after = cps[i + 1] ?? ""
-      if (!(RE_ARABIC_LETTER.test(before) && RE_ARABIC_LETTER.test(after))) {
-        flag(i, "ZWNJ/ZWJ outside Arabic-script letters")
-      }
-    } else if (cat === "Cf" || RE_DI.test(ch)) flag(i, "format / default-ignorable character")
-    else if (cat === "Cc") flag(i, "control character")
-    else if (cat === "Zl" || cat === "Zp") flag(i, "line/paragraph separator")
-    else if (cat === "Co") flag(i, "private-use character")
-    else if (cat === "Cs") flag(i, "surrogate")
-    else if (cat === "Cn") flag(i, "unassigned code point")
-    else if (!RE_ALLOWED_SCRIPT.test(ch)) flag(i, "script not allowed (Latin, Arabic, Common, Inherited only)")
-    else if (RE_LETTER.test(ch) && !RE_LATIN_LETTER.test(ch) && !RE_ARABIC_LETTER.test(ch) && !COMPAT_ALLOWED.has(ch)
-      && [...ch.normalize("NFKD")].some((d) => RE_LETTER.test(d) && !RE_ALLOWED_SCRIPT.test(d))) {
-      // a Common-script compatibility letter of a disallowed script (math Greek U+1D6B8 "P")
-      flag(i, "compatibility form of a letter in a disallowed script")
+    const problem = characterProblem(ch, cps[i - 1] ?? "", cps[i + 1] ?? "")
+    if (problem) flag(i, problem)
+  }
+
+  // R5-5: a numeric HTML character reference (decimal or hex, ";" optional) that decodes to a
+  // character refused above is refused too, so the stored text can never render, say, a bidi
+  // control in an HTML export.
+  for (const m of body.matchAll(/&#(?:[xX]([0-9A-Fa-f]{1,8})|([0-9]{1,10}));?/gu)) {
+    const value = m[1] !== undefined ? Number.parseInt(m[1], 16) : Number.parseInt(m[2] ?? "", 10)
+    const decoded = value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff) ? String.fromCodePoint(value) : "\ufffd"
+    if (decoded === "\n" || decoded === "\t") continue
+    // no letter context for an encoded character: ZWNJ/ZWJ count as refused here
+    const problem = value > 0x10ffff ? "out-of-range code point" : characterProblem(decoded, "", "")
+    if (problem) {
+      const position = [...body.slice(0, m.index ?? 0)].length
+      violations.push({ codePoint: codePointLabel(Math.min(value, 0x10ffff)), position, category: category(decoded), reason: `HTML entity decodes to a refused character: ${problem}` })
     }
   }
+
 
   // Token rules (whitespace-separated): mixed Latin/non-Latin letters; Latin confusables.
   let start = 0

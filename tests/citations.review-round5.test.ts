@@ -215,3 +215,30 @@ describe("R5-4: spelled-out reporter names resolve to their abbreviations", () =
     expect(extractCitations("The Civil Law Cases series is published monthly.")).toEqual([])
   })
 })
+
+describe("R5-5: a numeric HTML entity that decodes to a disallowed character is refused", () => {
+  it.each([
+    "Relying on &#x202E;4321 RMCS 9102&#x202C;.",
+    "Relying on 2019 SCMR &#x202e;4321&#x202c;.",
+    "Relying on &#8238;4321 RMCS 9102&#8236;.",
+    "Relying on &#8238 4321 RMCS 9102.",
+    "Relying on 2019 SCMR 12&#x200B;34.",
+    "Tag &#xE0041; here",
+    "Greek &#x3BB; here",
+    "Bell &#7; here",
+  ])("%j -> unsupported_characters", (body) => {
+    const check = checkDraftCharset(body)
+    expect(check.ok).toBe(false)
+    if (!check.ok) expect(check.violations.some((v) => /entity/.test(v.reason))).toBe(true)
+  })
+  it("entities for allowed characters stay accepted", () => {
+    for (const body of ["&#169; 2024 Engro", "&#65;BC", "AT&amp;T", "line&#10;break", "&#x0627;", "Rs.&#160;500"]) {
+      expect(checkDraftCharset(body).ok, body).toBe(true)
+    }
+  })
+  it("compose refuses it with 422 unsupported_characters", async () => {
+    const res = await compose(composeSetup(), "Relying on &#x202E;4321 RMCS 9102&#x202C;.")
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe("unsupported_characters")
+  })
+})
