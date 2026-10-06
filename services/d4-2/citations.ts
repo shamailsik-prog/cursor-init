@@ -331,8 +331,9 @@ export type AnalyseOptions = {
 const REPORTER_TOKENS = ["SCMR", "PLD", "PLJ", "CLC", "YLR", "MLD", "PCrLJ", "PTD", "PTCL", "CLD", "PLC", "NLR", "KLR", "SCR", "GBLR"]
 const FALLBACK_WINDOW = 20
 // Reporter tokens that double as common acronyms (R3 item 6).
-const ACRONYM_REPORTERS = new Set(["PLC", "CLC", "CLD", "PTD", "SCR", "KLR", "NLR", "YLR"])
-const ACRONYM_YEAR_TOKENS = 4
+// R4 FP3: PTCL (the telecom company) too.
+const ACRONYM_REPORTERS = new Set(["PLC", "CLC", "CLD", "PTD", "SCR", "KLR", "NLR", "YLR", "PTCL"])
+const ACRONYM_AFTER_YEAR_TOKENS = 3
 const SKELETON_REPORTER = new RegExp(
   `(?<![\\p{L}])(?:${REPORTER_TOKENS.map((t) => [...t].join("\\s?")).join("|")})(?![\\p{L}])`,
   "giu"
@@ -370,18 +371,34 @@ function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
       const lo = Math.max(0, ms - FALLBACK_WINDOW)
       const hi = Math.min(skeleton.length, me + FALLBACK_WINDOW)
       if (!/[0-9]/.test(skeleton.slice(lo, ms) + skeleton.slice(me, hi))) continue
-      // R3 item 6: tokens that double as common acronyms ("Engro … PLC paid Rs. 5", "the CLC
-      // committee met on 5 May") need a 4-digit year within ACRONYM_YEAR_TOKENS skeleton tokens,
-      // or digits within that distance on both sides (a split year "201 8 CLC 789").
+      // Tokens that double as company names or acronyms ("Engro … PLC entered … 500", "The 2022
+      // PTCL bill of Rs. 4,500", "the CLC committee met on 5 May") need tight citation adjacency
+      // (R4 FP3, replacing R3 item 6's "a year within 4 tokens"): digits in the token right
+      // before and a number right after (optionally past one bracket group) — which still
+      // catches a split year "201 8 CLC 789" — or a number right after and a year within
+      // ACRONYM_AFTER_YEAR_TOKENS tokens after it ("CLC 789 Lahore 2018"). Glued digits count.
       if (ACRONYM_REPORTERS.has(m[0].replace(/\s/g, "").toUpperCase())) {
-        const before = skeleton.slice(0, ms).split(" ").filter(Boolean).slice(-ACRONYM_YEAR_TOKENS)
-        const after = skeleton.slice(me).split(" ").filter(Boolean).slice(0, ACRONYM_YEAR_TOKENS)
-        const nearYear = [...before, ...after].some((token) => /(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])/.test(token))
-        // A citation has numbers on both sides of the reporter (year and page); prose acronyms
-        // have a number on one side. Digits glued to the token count as that side.
-        const digitsBefore = /[0-9]/.test(skeleton[ms - 1] ?? "") || before.some((t) => /[0-9]/.test(t))
-        const digitsAfter = /[0-9]/.test(skeleton[me] ?? "") || after.some((t) => /[0-9]/.test(t))
-        if (!nearYear && !(digitsBefore && digitsAfter)) continue
+        const beforeToken = skeleton.slice(0, ms).split(" ").filter(Boolean).pop() ?? ""
+        const afterRaw = text.slice((map[me - 1] ?? 0) + 1).replace(/^\s*\([^()\n]{0,30}\)/u, "")
+        const afterTokens = afterRaw.split(/\s+/).filter(Boolean)
+        const digitsBefore = /[0-9]/.test(skeleton[ms - 1] ?? "") || /[0-9]/.test(beforeToken)
+        // the next token has digits ("789", "<789", "77,"), or is a connector ("page", "at", "p.")
+        // or bare punctuation followed by a token with digits
+        const first = afterTokens[0] ?? ""
+        const numberAfter =
+          /[0-9]/.test(first) ||
+          /[0-9]/.test(skeleton[me] ?? "") ||
+          ((/^(?:page|pp?\.?|at|vol\.?|no\.?)$/iu.test(first) || !/\p{L}/u.test(first)) && /[0-9]/.test(afterTokens[1] ?? ""))
+        const yearAfter = afterTokens
+          .slice(1, 1 + ACRONYM_AFTER_YEAR_TOKENS)
+          .some((token) => /(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])/.test(token))
+        // …or junk between the token and a nearby number (markup residue such as
+        // "CLC<s>pan class=\"c\"> 789" is never prose; "bill of Rs. 4,500" is)
+        const junkThenNumber = (() => {
+          const at = afterTokens.slice(0, 4).findIndex((token) => /[0-9]/.test(token))
+          return at > 0 && afterTokens.slice(0, at).some((token) => /[^\p{L}\p{N}.,;:'()\u2019-]/u.test(token))
+        })()
+        if (!((numberAfter || junkThenNumber) && (digitsBefore || yearAfter))) continue
       }
       const start = map[ms] ?? 0
       const end = (map[me - 1] ?? start) + 1
