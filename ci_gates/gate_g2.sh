@@ -10,10 +10,11 @@
 # out of scope) and fails on any allowed cross-firm attempt, any read path the
 # suites do not list, or a missing suite result.
 #
-# Ports: in CI (CI set) or with G2_USE_REPO_PORTS=1 the repo firebase.json is
-# used. Locally, if any of its emulator ports is taken (another checkout's
-# emulators), a temporary config with free ports is written instead
-# (functions/README.md "Port notes"); the repo firebase.json is never edited.
+# Ports: in CI (CI set) the repo firebase.json is used. Every local run writes
+# a temporary config with ephemeral ports (all five held at once while
+# picked, so they are distinct and were free), so concurrent emulators of
+# other checkouts or sessions cannot collide with it (functions/README.md
+# "Port notes"); the repo firebase.json is never edited.
 #
 # A green run prints `counts: {...}` and an `evidence: {...}` line (also written
 # to G2_EVIDENCE_OUT when set). A platform admin records the pass from a CI run
@@ -46,19 +47,18 @@ export no_proxy="$NO_PROXY"
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 
-port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-
 config="$ROOT/firebase.json"
-if [ -z "${CI:-}" ] && [ "${G2_USE_REPO_PORTS:-}" != "1" ]; then
-  busy=""
-  for p in 18088 19099 4400 4500 9150; do port_busy "$p" && busy="$busy $p"; done
-  if [ -n "$busy" ]; then
-    free=($(node -e '
-      const net = require("node:net")
-      const take = () => new Promise((ok) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)) }) })
-      Promise.all([1, 2, 3, 4, 5].map(take)).then((ps) => console.log(ps.join(" ")))'))
-    config="$out/firebase.json"
-    cat >"$config" <<JSON
+if [ -z "${CI:-}" ]; then
+  # Every local run gets its own ports: node binds each on :0 (the kernel hands
+  # out a free ephemeral port), reads it and releases it, and the config is
+  # written from those. No check-then-start window on the shared repo ports.
+  free=($(node -e '
+    const net = require("node:net")
+    const servers = []
+    const take = () => new Promise((ok) => { const s = net.createServer(); servers.push(s); s.listen(0, "127.0.0.1", () => ok(s.address().port)) })
+    Promise.all([1, 2, 3, 4, 5].map(take)).then((ps) => Promise.all(servers.map((s) => new Promise((r) => s.close(r)))).then(() => console.log(ps.join(" "))))'))
+  config="$out/firebase.json"
+  cat >"$config" <<JSON
 {
   "firestore": { "rules": "$ROOT/firestore.rules" },
   "emulators": {
@@ -70,8 +70,7 @@ if [ -z "${CI:-}" ] && [ "${G2_USE_REPO_PORTS:-}" != "1" ]; then
   }
 }
 JSON
-    echo "repo emulator ports busy:$busy; using a temporary config (firestore ${free[0]}, auth ${free[2]})"
-  fi
+  echo "local run: temporary emulator config (firestore ${free[0]}, auth ${free[2]})"
 fi
 
 npx firebase emulators:exec --config "$config" --only auth,firestore --project demo-sikander \
