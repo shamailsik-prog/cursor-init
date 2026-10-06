@@ -586,9 +586,12 @@ function editDistanceSuspects(folded: FoldedText): Array<Span & { raw: string }>
 }
 
 /** The generic pattern may include leading capitalised prose ("In C.P. No. …"): try each word suffix. */
-function isOwnCase(raw: string, options: AnalyseOptions): boolean {
+function isOwnCase(raw: string, options: AnalyseOptions, preceding = ""): boolean {
   if (!options.isOwnCaseReference) return false
-  const words = raw.split(/\s+/)
+  // R4 FP2: also try the match extended by up to 3 preceding words on the same line ("Family"
+  // before "Suit No. …", "Bail" before "Application No. …").
+  const before = (preceding.split("\n").pop() ?? "").split(/\s+/).filter(Boolean).slice(-3)
+  const words = [...before, ...raw.split(/\s+/)]
   for (let i = 0; i < words.length; i += 1) {
     if (options.isOwnCaseReference(words.slice(i).join(" "))) return true
   }
@@ -624,7 +627,7 @@ function analyse(
   for (const pattern of [CASE_REFERENCE, CASE_REFERENCE_GENERIC]) {
     for (const m of text.matchAll(pattern)) {
       if (isExcludedReference(text, m.index ?? 0, m[0])) continue
-      if (isOwnCase(m[0], options)) continue
+      if (isOwnCase(m[0], options, text.slice(Math.max(0, (m.index ?? 0) - 60), m.index ?? 0))) continue
       const start = m.index ?? 0
       addSuspect(start, start + m[0].length, m[0])
     }

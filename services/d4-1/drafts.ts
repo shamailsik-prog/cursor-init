@@ -15,6 +15,16 @@ import { loadCourts, normalise as normaliseCaseNumber } from "@/core/case-number
 const courts = loadCourts(courtsSeed)
 
 /** A case reference that normalises to the matter's own recorded case number is not an authority. */
+/** Case-number text with case, dots, "No."/"Number", "of"/"/" and spacing folded away. */
+function comparableCaseNumber(raw: string): string {
+  return raw
+    .toUpperCase()
+    .replace(/\./g, " ")
+    .replace(/\b(?:NO|NUMBER)\b/g, " ")
+    .replace(/\s+OF\s+/g, "/")
+    .replace(/[\s/]+/g, "")
+}
+
 export function ownCaseReferenceMatcher(matter: {
   courtId: string
   caseNumber: string | null
@@ -23,10 +33,13 @@ export function ownCaseReferenceMatcher(matter: {
     if (!matter.caseNumber) return false
     try {
       const result = normaliseCaseNumber(raw, matter.courtId, courts)
-      return result.status !== "REJECT" && result.canonical === matter.caseNumber
+      if (result.status !== "REJECT") return result.canonical === matter.caseNumber
     } catch {
-      return false
+      // fall through to the raw comparison
     }
+    // R4 FP2: the normaliser cannot parse this reference — accept it when it is written the
+    // same way as the recorded number (case, dots, "No.", "of"/"/" and spacing aside).
+    return comparableCaseNumber(raw) === comparableCaseNumber(matter.caseNumber)
   }
 }
 import { getDocumentTypes } from "@/lib/foundation-data"
