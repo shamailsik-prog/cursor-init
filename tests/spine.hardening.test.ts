@@ -371,6 +371,8 @@ describe("G-1 spine hardening", () => {
         partyNames: [party],
       })
       expect(result.blocked).toBe(false)
+      // L18 §4.7 event catalogue: ai.call.requested/completed/failed/blocked (spec audit U-15)
+      expect(result.event).toBe("ai.call.completed")
       expect(result.text).not.toContain(party)
       expect(result.text).toContain("[PARTY]")
     } finally {
