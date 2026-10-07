@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
@@ -16,11 +17,10 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import {
   IdempotencyError,
-  IdempotencyCache,
+  beginIdempotentRequest,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 /** Allowed `purpose` values (I1); anything else is 400 invalid_purpose. */
 const COMMITTEE_PURPOSES = ["committee-brain", "summarise", "research", "translate", "ops-audit"] as const
@@ -198,7 +198,7 @@ async function handlePost(request: Request) {
     )
   }
   const purpose: CommitteePurpose = isCommitteePurpose(parsed.purpose) ? parsed.purpose : "committee-brain"
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/p1/committee-brain",
     actorId: parsed.actorId,
     body: parsed.body,
@@ -208,16 +208,10 @@ async function handlePost(request: Request) {
     purpose,
     partyNames: requestedPartyNames,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     const actor = requireActor(parsed.actorId)
@@ -285,7 +279,7 @@ async function handlePost(request: Request) {
       outbound: result.outbound,
       agent: "sikander-ai",
     }
-    idempotency.set(key, payload, fingerprint)
+    claim.complete(payload)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
     const message = publicErrorMessage(err, "committee brain write failed")

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession, type HandlerSession } from "@/platform/http/withSession"
 import { errorResponse } from "@/platform/http/errors"
@@ -7,7 +8,7 @@ import { DraftCharsetError } from "@/services/d4-2/draftCharset"
 import type { SpineStore } from "@/platform/spine/store"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -33,7 +34,6 @@ import {
   type TemporalCitationInput,
 } from "@/services/d4-1/drafts"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 type PreflightBody = {
   action: "preflight"
@@ -296,21 +296,15 @@ async function handlePost(request: Request, session: HandlerSession | null) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d4/drafts",
     action: parsed.action,
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (parsed.action === "preflight") {
@@ -324,7 +318,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "preflight",
         result,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -383,7 +377,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         preflight: gate,
         draft: (await repos.drafts.get(draft.id)) ?? draft,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

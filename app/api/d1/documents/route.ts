@@ -6,7 +6,7 @@ import { actionOf, getQuery, refuseUndeclaredBody } from "@/platform/http/surfac
 import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -27,7 +27,6 @@ import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 
 type Body = z.infer<typeof BodySchema>
@@ -177,16 +176,10 @@ async function handlePost(request: Request) {
     action: actionOf(DOCUMENTS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     const actor = requireActor(parsed.actorId, parsed.firmId)
@@ -289,7 +282,7 @@ async function handlePost(request: Request) {
       ocrJobs: (await repos.jobs.listByDocument(doc.id)).filter((job) => job.jobType === "ocr")
         .length,
     }
-    idempotency.set(key, payload, fingerprint)
+    claim.complete(payload)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
     const message = publicErrorMessage(err, "document ingest failed")

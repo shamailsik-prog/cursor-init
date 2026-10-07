@@ -1513,7 +1513,7 @@ describe("GET/POST /api/p5/tenancy", () => {
     expect(a.result.user.id).toBe("clerk_a")
 
     const conflict = await post({ ...payload, nextClearance: "confidential" }, key)
-    expect(conflict.status).toBe(409)
+    expect(conflict.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
 
     const audit = getRuntimeStore().audit
     expect(audit.some((row) => row.action === "tenant_update_role" && row.target === "clerk_a")).toBe(

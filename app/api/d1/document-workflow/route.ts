@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
 import { BodySchema, DOCUMENT_WORKFLOW_SURFACE } from "./surface"
 import { canReadDocument } from "@/platform/p5/documentAccess"
 import { z } from "zod"
@@ -8,7 +9,7 @@ import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -25,7 +26,6 @@ import {
   transitionWorkflowStatus,
 } from "@/services/d1-7/documentWorkflow"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 
 type Body = z.infer<typeof BodySchema>
@@ -206,21 +206,15 @@ async function handlePost(request: Request) {
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/document-workflow",
     action: actionOf(DOCUMENT_WORKFLOW_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (isAction(DOCUMENT_WORKFLOW_SURFACE, parsed, "transition")) {
@@ -243,7 +237,7 @@ async function handlePost(request: Request) {
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_transition")
       const payload = { action: "transition", row }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -266,7 +260,7 @@ async function handlePost(request: Request) {
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_assign_reviewer")
       const payload = { action: "assign_reviewer", row }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -305,7 +299,7 @@ async function handlePost(request: Request) {
         }
       }
       const payload = { action: "review_decision", row }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

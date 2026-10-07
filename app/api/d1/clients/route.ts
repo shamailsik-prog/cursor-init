@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
 import { BodySchema, CLIENTS_SURFACE } from "./surface"
 import { z } from "zod"
 import { DEFAULT_JSON_BODY_BYTES, parseBody, readJsonLimited } from "@/platform/http/validation"
@@ -7,7 +8,7 @@ import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/h
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -19,7 +20,6 @@ import { syncFirmEntities } from "@/platform/persistence/entitySync"
 import { buildClientSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import { conflictCheck, createClient } from "@/services/d1-1/clients"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 
 type Body = z.infer<typeof BodySchema>
@@ -111,21 +111,15 @@ async function handlePost(request: Request) {
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/clients",
     action: actionOf(CLIENTS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (isAction(CLIENTS_SURFACE, parsed, "create")) {
@@ -181,7 +175,7 @@ async function handlePost(request: Request) {
         action: "create",
         entity,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -197,7 +191,7 @@ async function handlePost(request: Request) {
         entityId: parsed.entityId,
         result,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

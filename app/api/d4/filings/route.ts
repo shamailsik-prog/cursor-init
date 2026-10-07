@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession, type HandlerSession } from "@/platform/http/withSession"
 import { gateByFlag, isFilingsCoreRequest } from "@/platform/flags/routeGate"
@@ -8,7 +9,7 @@ import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
 import { closureRowVisible } from "@/services/d4-3/closureVisibility"
 import { DraftCharsetError } from "@/services/d4-2/draftCharset"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -236,7 +237,6 @@ import {
   planFilingPackageDecision,
 } from "@/services/d4-3/filingPackage"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 const HOUR_MS = 60 * 60 * 1000
 
 type CreateBody = {
@@ -7166,21 +7166,15 @@ async function handlePost(request: Request, session: HandlerSession | null) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d4/filings",
     action: parsed.action,
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (parsed.action === "create_package") {
@@ -7239,7 +7233,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         packetArtifact: (await repos.filingPacketArtifacts.get(packetArtifact.id)) ?? packetArtifact,
         preflight: created.preflight,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7336,7 +7330,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
             }
           : {}),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7440,7 +7434,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         dispatchQueue: (await repos.filingDispatchQueue.get(updated.id)) ?? updated,
         annexure: (await repos.filingAnnexures.get(annexure.id)) ?? annexure,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7563,7 +7557,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "annexure_checkpoint",
         annexure: (await repos.filingAnnexures.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7756,7 +7750,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           ? (await repos.filingDispatchQueue.get(updatedDispatchQueue.id)) ?? updatedDispatchQueue
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7881,7 +7875,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           submissionException &&
           ((await repos.filingSubmissionExceptions.get(submissionException.id)) ?? submissionException),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7949,7 +7943,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "claim_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8039,7 +8033,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "escalate_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8102,7 +8096,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "resolve_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8172,7 +8166,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "reopen_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8300,7 +8294,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         submissionException:
           (await repos.filingSubmissionExceptions.get(normalizedException.id)) ?? normalizedException,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8431,7 +8425,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         submissionException:
           (await repos.filingSubmissionExceptions.get(normalizedException.id)) ?? normalizedException,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8571,7 +8565,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           resolvedException &&
           ((await repos.filingSubmissionExceptions.get(resolvedException.id)) ?? resolvedException),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8646,7 +8640,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "acknowledge_breach",
         digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8730,7 +8724,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "defer_window",
         digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8806,7 +8800,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "clear_digest",
         digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8910,7 +8904,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "assign_primary_owner",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9000,7 +8994,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "set_backup_owner",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9067,7 +9061,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "acknowledge_handoff",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9130,7 +9124,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "revoke_assignment",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9212,7 +9206,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "acknowledge_owner_drift",
         workloadDigest: (await repos.filingEscalationWorkloadDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9330,7 +9324,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         workloadDigest:
           (await repos.filingEscalationWorkloadDigests.get(updatedDigest.id)) ?? updatedDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9412,7 +9406,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "snooze_workload_alert",
         workloadDigest: (await repos.filingEscalationWorkloadDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9495,7 +9489,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         action: "set_policy_baseline",
         policy: (await repos.filingEscalationPolicyBaselines.get(policy.id)) ?? policy,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9628,7 +9622,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         workloadDigest:
           (await repos.filingEscalationWorkloadDigests.get(workloadDigest.id)) ?? workloadDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9755,7 +9749,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         workloadDigest:
           (await repos.filingEscalationWorkloadDigests.get(workloadDigest.id)) ?? workloadDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9930,7 +9924,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationPolicyVarianceDigests.get(varianceDigest.id)) ??
           varianceDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10044,7 +10038,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         remediationExpiryDigest:
           (await repos.filingEscalationRemediationExpiryDigests.get(digest.id)) ?? digest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10131,7 +10125,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         remediationExpiryDigest:
           (await repos.filingEscalationRemediationExpiryDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10222,7 +10216,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         remediationExpiryDigest:
           (await repos.filingEscalationRemediationExpiryDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10308,7 +10302,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         rolloverBreachWatch:
           (await repos.filingEscalationRolloverBreachWatches.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10419,7 +10413,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationRolloverReaffirmationSlas.get(reaffirmationSla.id)) ??
           reaffirmationSla,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10505,7 +10499,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         rolloverReaffirmationSla:
           (await repos.filingEscalationRolloverReaffirmationSlas.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10579,7 +10573,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureSlaWindowConfig:
           (await repos.filingEscalationClosureSlaWindowConfigs.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10654,7 +10648,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureAutoAssignmentRule:
           (await repos.filingEscalationClosureAutoAssignmentRules.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10712,7 +10706,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureFollowupQueue: (await repos.filingEscalationClosureFollowupQueues.get(queue.id)) ?? queue,
         closureSlaWindow: slaWindowByOwner.get(ownerId) ?? null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10770,7 +10764,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10832,7 +10826,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10892,7 +10886,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10996,7 +10990,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
             null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11075,7 +11069,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
             null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11167,7 +11161,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
             null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11274,7 +11268,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           ? (await repos.filingEscalationClosureSlaExceptionEnforcement.get(enforcementRef.id)) ?? null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11401,7 +11395,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           ? (await repos.filingEscalationClosureSlaExceptionEnforcement.get(enforcementRef.id)) ?? null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11501,7 +11495,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           ? (await repos.filingEscalationClosureEnforcementRebalance.get(rebalanceRef.id)) ?? null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11647,7 +11641,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           ? (await repos.filingEscalationClosureEnforcementRebalance.get(rebalanceRef.id)) ?? null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11766,7 +11760,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(queue.id)) ?? queue,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11859,7 +11853,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureAdjudicationQuorum.get(quorumUpdated.id)) ??
           quorumUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12013,7 +12007,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureRebalanceSafeguards.get(safeguardUpdated.id)) ??
           safeguardUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12161,7 +12155,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureRebalanceSafeguards.get(safeguardUpdated.id)) ??
           safeguardUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12230,7 +12224,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureAdjudicationSlo:
           (await repos.filingEscalationClosureAdjudicationSlo.get(sloUpdated.id)) ?? sloUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12300,7 +12294,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureAdjudicationSlo:
           (await repos.filingEscalationClosureAdjudicationSlo.get(sloUpdated.id)) ?? sloUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12374,7 +12368,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         closureAdjudicationSlo:
           (await repos.filingEscalationClosureAdjudicationSlo.get(sloUpdated.id)) ?? sloUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12482,7 +12476,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureRebalanceSafeguards.get(safeguardUpdated.id)) ??
           safeguardUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12570,7 +12564,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureRebalanceSafeguards.get(safeguardUpdated.id)) ??
           safeguardUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12647,7 +12641,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get(remediationUpdated.id)) ??
           remediationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12760,7 +12754,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get(remediationUpdated.id)) ??
           remediationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12831,7 +12825,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get(remediationUpdated.id)) ??
           remediationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12928,7 +12922,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(expiryUpdated.id)) ??
           expiryUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13045,7 +13039,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(expiryUpdated.id)) ??
           expiryUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13154,7 +13148,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(expiryUpdated.id)) ??
           expiryUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13223,7 +13217,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureAdjudicationDebtBurndown.get(burndownUpdated.id)) ??
           burndownUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13287,7 +13281,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureAdjudicationDebtBurndown.get(burndownUpdated.id)) ??
           burndownUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13359,7 +13353,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureAdjudicationDebtBurndown.get(burndownUpdated.id)) ??
           burndownUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13448,7 +13442,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSafeguardExpiryAttestations.get(attestationUpdated.id)) ??
           attestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13543,7 +13537,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSafeguardExpiryAttestations.get(attestationUpdated.id)) ??
           attestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13633,7 +13627,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSafeguardExpiryAttestations.get(attestationUpdated.id)) ??
           attestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13711,7 +13705,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
           recalibrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13802,7 +13796,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
           recalibrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13877,7 +13871,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
           recalibrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13988,7 +13982,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
           queueUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14102,7 +14096,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
           queueUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14219,7 +14213,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
           queueUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14312,7 +14306,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureBurndownSettlement.get(settlementUpdated.id)) ??
           settlementUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14405,7 +14399,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureBurndownSettlement.get(settlementUpdated.id)) ??
           settlementUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14501,7 +14495,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureBurndownSettlement.get(settlementUpdated.id)) ??
           settlementUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14629,7 +14623,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(drainUpdated.id)) ??
           drainUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14761,7 +14755,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(drainUpdated.id)) ??
           drainUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14891,7 +14885,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(drainUpdated.id)) ??
           drainUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15007,7 +15001,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
             settlementAttestationUpdated.id
           )) ?? settlementAttestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15123,7 +15117,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
             settlementAttestationUpdated.id
           )) ?? settlementAttestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15241,7 +15235,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
             settlementAttestationUpdated.id
           )) ?? settlementAttestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15391,7 +15385,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueDrainReconciliation.get(reconciliationUpdated.id)) ??
           reconciliationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15543,7 +15537,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueDrainReconciliation.get(reconciliationUpdated.id)) ??
           reconciliationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15699,7 +15693,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueDrainReconciliation.get(reconciliationUpdated.id)) ??
           reconciliationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15834,7 +15828,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15968,7 +15962,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16104,7 +16098,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16240,7 +16234,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16376,7 +16370,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16512,7 +16506,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16648,7 +16642,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16784,7 +16778,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16926,7 +16920,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17095,7 +17089,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17270,7 +17264,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17439,7 +17433,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17609,7 +17603,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17785,7 +17779,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17960,7 +17954,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18131,7 +18125,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18305,7 +18299,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18481,7 +18475,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18569,7 +18563,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
             null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18645,7 +18639,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         policyVarianceDigest:
           (await repos.filingEscalationPolicyVarianceDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18723,7 +18717,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         policyVarianceDigest:
           (await repos.filingEscalationPolicyVarianceDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18796,7 +18790,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         waiverExpiryDigest:
           (await repos.filingEscalationWaiverExpiryDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -19045,7 +19039,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (await repos.filingEscalationWorkloadDigests.get(normalizedWorkloadDigest.id)) ??
           normalizedWorkloadDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

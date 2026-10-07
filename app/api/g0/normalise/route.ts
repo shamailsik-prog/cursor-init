@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
 import { withSession } from "@/platform/http/withSession"
 import courtsSeed from "@/data/courts.json"
 import { loadCourts, normalise } from "@/core/case-number-normaliser"
 import {
   IdempotencyError,
-  IdempotencyCache,
+  beginIdempotentRequest,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 
 const courts = loadCourts(courtsSeed)
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 export async function POST(request: Request) {
   return withSession(request, handlePost)
@@ -35,23 +35,17 @@ async function handlePost(request: Request) {
       { status: 400 }
     )
   }
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/g0/normalise",
     raw: body.raw,
     courtId: body.courtId,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   const result = normalise(body.raw, body.courtId, courts)
-  idempotency.set(key, result, fingerprint)
+  claim.complete(result)
   return NextResponse.json({ result, idempotencyKey: key, reused: false })
 }

@@ -38,6 +38,7 @@ import { attachParsedBody, maxUploadRequestBytes, readBodyLimited } from "@/plat
 import { undeclaredQueryParam, unknownParamResponse, type RouteSurface } from "@/platform/http/surface"
 import { runWithRequestAudit } from "@/platform/audit/requestAudit"
 import { flushRequestAudit } from "@/platform/persistence/requestAuditFlush"
+import { runWithIdempotencyScope, type IdempotencyScope } from "@/platform/http/idempotency"
 
 /**
  * The caller as seen by a handler. `null` only for public routes and for
@@ -91,6 +92,9 @@ function refuseUndeclaredQuery(request: Request, options: SessionRouteOptions): 
   const key = undeclaredQueryParam(options.surface, new URL(request.url))
   return key === undefined ? null : unknownParamResponse("query", key)
 }
+
+/** Idempotency scope of requests with no resolved caller (public routes, unknown dev identity). */
+const PUBLIC_SCOPE: IdempotencyScope = { firmId: "_", userId: "_" }
 
 const IDENTITY_KEYS = ["actorId", "userId"] as const
 const FIRM_KEY = "firmId"
@@ -232,7 +236,17 @@ function claimedIdentity(url: URL, parsed: unknown): string | null {
  * returned and the failure is logged; the true fix is an async P5 that awaits the durable
  * append before allowing (tracked as a follow-up).
  */
-async function runAudited(request: Request, run: () => Promise<Response> | Response): Promise<Response> {
+async function runAudited(
+  request: Request,
+  scope: IdempotencyScope,
+  run: () => Promise<Response> | Response
+): Promise<Response> {
+  // Idempotency claims taken by the handler are settled after the audit flush, whatever its
+  // outcome (platform/http/idempotency.ts).
+  return runWithIdempotencyScope(scope, () => runAuditedInner(request, run))
+}
+
+async function runAuditedInner(request: Request, run: () => Promise<Response> | Response): Promise<Response> {
   const outcome = await runWithRequestAudit(run)
   try {
     await flushRequestAudit(outcome.rows)
@@ -255,7 +269,7 @@ export async function withSession(
   options: SessionRouteOptions = {}
 ): Promise<Response> {
   try {
-    if (options.public) return await runAudited(request, () => handler(request, null))
+    if (options.public) return await runAudited(request, PUBLIC_SCOPE, () => handler(request, null))
 
     let session: Awaited<ReturnType<typeof resolveSession>>
     try {
@@ -296,7 +310,8 @@ export async function withSession(
             mode: "insecure-dev",
           }
         : null
-      return await runAudited(request, () => handler(devRequest, devSession))
+      const devScope = devSession ? { firmId: devSession.firmId, userId: devSession.userId } : PUBLIC_SCOPE
+      return await runAudited(request, devScope, () => handler(devRequest, devSession))
     }
 
     const bound = await bindRequestToSession(request, session, options)
@@ -314,7 +329,10 @@ export async function withSession(
     // for this request only.
     return await runWithSession(
       { userId: session.userId, firmId: session.firmId, clearance: session.clearance },
-      () => runAudited(request, () => handler(bound, handlerSession))
+      () =>
+        runAudited(request, { firmId: session.firmId, userId: session.userId }, () =>
+          handler(bound, handlerSession)
+        )
     )
   } catch (err) {
     return internalErrorResponse(err, describe(request))

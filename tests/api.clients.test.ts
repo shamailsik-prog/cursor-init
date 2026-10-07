@@ -72,7 +72,7 @@ describe("POST/GET /api/d1/clients", () => {
       key
     )
     expect(first.status).toBe(200)
-    expect(second.status).toBe(409)
+    expect(second.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
   })
 
   it("lists entities with pagination and enforces clearance filter", async () => {

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
 import { COURT_OPS_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -21,7 +22,6 @@ import {
   resolveWorkflowBlocker,
 } from "@/services/d2-2/courtOps"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 type WhatsAppBody = {
   action: "whatsapp_command"
@@ -200,21 +200,15 @@ async function handlePost(request: Request) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d2/court-ops",
     action: actionOf(COURT_OPS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (isAction(COURT_OPS_SURFACE, parsed, "whatsapp_command")) {
@@ -238,7 +232,7 @@ async function handlePost(request: Request) {
           queueCount: queue.total,
           queuePreview: queue.items.slice(0, 5),
         }
-        idempotency.set(key, payload, fingerprint)
+        claim.complete(payload)
         return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
       }
       const result = handleWhatsApp(store, parsed.actorId, text)
@@ -250,7 +244,7 @@ async function handlePost(request: Request) {
         command: text,
         result,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -290,7 +284,7 @@ async function handlePost(request: Request) {
         queueType: parsed.queueType,
         id: parsed.id,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -327,7 +321,7 @@ async function handlePost(request: Request) {
         )
       }
       const payload = { action: "resolve_follow_up", followUpId: parsed.followUpId }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -349,7 +343,7 @@ async function handlePost(request: Request) {
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents, "court_ops_resolve_workflow")
       const payload = { action: "resolve_workflow", row }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

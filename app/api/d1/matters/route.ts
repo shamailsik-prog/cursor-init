@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
 import { BodySchema, MATTERS_SURFACE } from "./surface"
 import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
@@ -7,7 +8,7 @@ import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -29,7 +30,6 @@ import {
 } from "@/services/d1-2/matters"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 
 type Body = z.infer<typeof BodySchema>
@@ -158,21 +158,15 @@ async function handlePost(request: Request) {
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/matters",
     action: actionOf(MATTERS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (isAction(MATTERS_SURFACE, parsed, "create")) {
@@ -236,7 +230,7 @@ async function handlePost(request: Request) {
         action: "create",
         matter,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -260,7 +254,7 @@ async function handlePost(request: Request) {
       }
       await repo.members.upsert(member)
       const payload = { action: "add_member", member }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -296,7 +290,7 @@ async function handlePost(request: Request) {
         action: "confirm_engagement",
         matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -344,7 +338,7 @@ async function handlePost(request: Request) {
         result,
         matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

@@ -105,7 +105,7 @@ describe("POST /api/p1/committee-brain", () => {
       key
     )
     expect(first.status).toBe(200)
-    expect(second.status).toBe(409)
+    expect(second.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
     const json = (await second.json()) as { error: string }
     expect(json.error).toMatch(/different request payload/i)
   })
