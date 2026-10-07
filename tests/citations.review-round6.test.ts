@@ -21,3 +21,39 @@ describe("F-1: a court name in the clause defeats the FIR-sense مقدمہ exclu
     expect(extractCitations("مقدمہ نمبر 123 سال 2024 زیر دفعہ 302 ت پ تھانہ صدر لاہور میں درج ہوا۔")).toEqual([])
   })
 })
+
+describe("F-2: own-case court check knows seat cities, benches and apex phrases, over the whole sentence", () => {
+  const shc = { isOwnCaseReference: ownCaseReferenceMatcher({ courtId: "SHC", caseNumber: "CP 12/2019" }) }
+  it.each([
+    "The learned Lahore bench in C.P. No. 12 of 2019 held that …",
+    "In Islamabad C.P. No. 12 of 2019 the court held …",
+    "In LHC C.P. No. 12 of 2019 it was held …",
+    "The Supreme Court of Pakistan, in its detailed judgment in C.P. No. 12 of 2019, held …",
+    "The apex court in C.P. No. 12 of 2019 held …",
+    "In C.P. No. 12 of 2019 the Honourable Supreme Court held …",
+    "The Hon'ble Supreme Court, after hearing both sides at length over several dates, in C.P. No. 12 of 2019 held …",
+    "The Multan bench in C.P. No. 12 of 2019 held …",
+    "The Peshawar High Court at Abbottabad in C.P. No. 12 of 2019 held …",
+    "The bench at D.I. Khan in C.P. No. 12 of 2019 held …",
+    "The learned bench at Quetta in C.P. No. 12 of 2019 held …",
+    "عدالت عظمیٰ نے C.P. No. 12 of 2019 میں قرار دیا",
+  ])("SHC matter, other court: %j is not exempted", (text) => {
+    expect(blocked(extractCitations(text, shc)), JSON.stringify(extractCitations(text, shc))).toBe(true)
+  })
+  it.each([
+    "This Honourable Sindh High Court in C.P. No. 12 of 2019 …",
+    "The Hyderabad bench of this Court in C.P. No. 12 of 2019 …",
+    "IN THE HIGH COURT OF SINDH AT KARACHI\nC.P. No. 12 of 2019",
+    "C.P. No. 12 of 2019 was heard at Sukkur.",
+    "C.P. No. 12 of 2019",
+  ])("SHC matter, own court or no court: %j stays exempted", (text) => {
+    expect(extractCitations(text, shc)).toEqual([])
+  })
+  it("a city seating both a High Court and the district courts does not block either tier; a city seating only another tier does", () => {
+    const dsj = { isOwnCaseReference: ownCaseReferenceMatcher({ courtId: "DSJ_KHI", caseNumber: "SUIT 812/2025" }) }
+    expect(extractCitations("IN THE COURT OF SENIOR CIVIL JUDGE, KARACHI (SOUTH)\nSuit No. 812 of 2025", dsj)).toEqual([])
+    expect(blocked(extractCitations("The Sukkur bench in Suit No. 812 of 2025 held", dsj))).toBe(true)
+    const lhc = { isOwnCaseReference: ownCaseReferenceMatcher({ courtId: "LHC", caseNumber: "CRM 456/2025" }) }
+    expect(extractCitations("IN THE COURT OF SESSIONS JUDGE, LAHORE\nBail Application No. 456 of 2025", lhc)).toEqual([])
+  })
+})

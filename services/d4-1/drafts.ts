@@ -15,18 +15,39 @@ import { loadCourts, normalise as normaliseCaseNumber } from "@/core/case-number
 const courts = loadCourts(courtsSeed)
 
 /** A case reference that normalises to the matter's own recorded case number is not an authority. */
-// Explicit court names (not bare city names, which also name district courts) -> court ids.
-const COURT_MENTIONS: ReadonlyArray<readonly [string, RegExp]> = [
-  ["SC_PK", /\bsupreme\s+court\b/iu],
-  ["FSC", /\bfederal\s+shariat\s+court\b|\bFSC\b/u],
+// Court mentions -> the courts each one can mean (R5-4, widened by R6 F-2). Explicit names and
+// apex phrases name one court; a seat city or bench names every court seated there
+// (data/courts.json "seats"), so "Karachi" is consistent with both SHC and the Karachi district
+// courts, while "Sukkur" excludes a Karachi district-court matter.
+const COURT_NAME_MENTIONS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["SC_PK", /\b(?:supreme\s+court|apex\s+court)\b|\bhon(?:'|\u2019)?ble\s+supreme\b|سپریم\s+کورٹ|عدالت\s+عظمی/iu],
+  ["FSC", /\bfederal\s+shariat\s+court\b|\bFSC\b|وفاقی\s+شرعی\s+عدالت/u],
   ["LHC", /\blahore\s+high\s+court\b|\bhigh\s+court\s+of\s+(?:the\s+)?punjab\b|\bLHC\b/iu],
   ["SHC", /\bsindh\s+high\s+court\b|\bhigh\s+court\s+of\s+sindh\b|\bSHC\b/iu],
   ["IHC", /\bislamabad\s+high\s+court\b|\bIHC\b/iu],
   ["PHC", /\bpeshawar\s+high\s+court\b|\bPHC\b/iu],
   ["BHC", /\bbalochistan\s+high\s+court\b|\bhigh\s+court\s+of\s+balochistan\b|\bBHC\b/iu],
 ]
-function mentionedCourts(text: string): string[] {
-  return COURT_MENTIONS.filter(([, pattern]) => pattern.test(text)).map(([courtId]) => courtId)
+const SEAT_MENTIONS: ReadonlyArray<readonly [Set<string>, RegExp]> = (() => {
+  const bySeat = new Map<string, Set<string>>()
+  for (const court of (courtsSeed as { courts: Array<{ id: string; seats?: string[] }> }).courts) {
+    for (const seat of court.seats ?? []) {
+      const ids = bySeat.get(seat) ?? new Set<string>()
+      ids.add(court.id)
+      bySeat.set(seat, ids)
+    }
+  }
+  return [...bySeat.entries()].map(([seat, ids]) => {
+    const words = seat.split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s*")
+    return [ids, new RegExp(`(?<![\\p{L}])${words}(?![\\p{L}])`, "iu")] as const
+  })
+})()
+/** Each court mention in the text, as the set of courts it can mean. */
+function courtMentions(text: string): Array<ReadonlySet<string>> {
+  const named = COURT_NAME_MENTIONS.filter(([, pattern]) => pattern.test(text)).map(([id]) => new Set([id]))
+  // a seat city inside an explicit court name ("Lahore High Court") adds nothing new
+  const seats = SEAT_MENTIONS.filter(([, pattern]) => pattern.test(text)).map(([ids]) => ids)
+  return [...named, ...seats]
 }
 
 /** Case-number text with case, dots, "No."/"Number", "of"/"/" and spacing folded away. */
@@ -45,11 +66,11 @@ export function ownCaseReferenceMatcher(matter: {
 }): (raw: string, context?: OwnCaseContext) => boolean {
   return (raw, context) => {
     if (!matter.caseNumber) return false
-    // R5-4: a court named within 6 tokens of the reference must be the matter's own court
+    // R5-4 / R6 F-2: every court mentioned in the reference's sentence must admit the matter's court
     // ("The Supreme Court in C.P. No. 12 of 2019" is not an SHC matter's C.P. No. 12 of 2019).
     if (context) {
-      const mentioned = mentionedCourts(`${context.before} ${raw} ${context.after}`)
-      if (mentioned.some((courtId) => courtId !== matter.courtId)) return false
+      const mentions = courtMentions(`${context.before} ${raw} ${context.after}`)
+      if (mentions.some((ids) => !ids.has(matter.courtId))) return false
     }
     try {
       const result = normaliseCaseNumber(raw, matter.courtId, courts)

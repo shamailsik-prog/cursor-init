@@ -337,7 +337,7 @@ export type CitationAnalysis = {
   suspects: string[]
 }
 
-/** Up to 6 tokens either side of a case reference (R5-4: court mentions near it). */
+/** The sentence around a case reference, split at the reference (R5-4, R6 F-2: court mentions). */
 export type OwnCaseContext = { before: string; after: string }
 
 export type AnalyseOptions = {
@@ -695,14 +695,29 @@ function markupResidueSuspects(folded: FoldedText): Array<Span & { raw: string }
 }
 
 /** The generic pattern may include leading capitalised prose ("In C.P. No. …"): try each word suffix. */
-const OWN_CASE_CONTEXT_TOKENS = 6
+const OWN_CASE_CONTEXT_CHARS = 400
+// A sentence ends at a newline or at . ! ? ۔ before a blank — unless the word ending there is an
+// abbreviation ("No.", "C.P.", "v.", "Art.", "Hon.", a single letter).
+const ABBREVIATION_END = /(?:^|\s)(?:No|Nos|v|vs|Art|Arts|Sec|pp?|Vol|Mr|Mrs|Ms|Dr|M\/s|St|Hon|Crl|Civ|Const|Pet|Misc|\p{L}|(?:\p{L}{1,4}\.)+\p{L}{0,4})$/u
+function isSentenceEnd(text: string, at: number): boolean {
+  const ch = text[at] ?? ""
+  if (ch === "\n") return true
+  if (!/[.!?\u06d4]/u.test(ch) || !/\s/u.test(text[at + 1] ?? "")) return false
+  return ch !== "." || !ABBREVIATION_END.test(text.slice(Math.max(0, at - 20), at))
+}
+function sentenceTail(before: string): string {
+  for (let i = before.length - 1; i >= 0; i -= 1) if (isSentenceEnd(before, i)) return before.slice(i + 1)
+  return before
+}
+function sentenceHead(after: string): string {
+  for (let i = 0; i < after.length; i += 1) if (isSentenceEnd(after, i)) return after.slice(0, i)
+  return after
+}
 
 function isOwnCase(raw: string, options: AnalyseOptions, preceding = "", following = ""): boolean {
   if (!options.isOwnCaseReference) return false
-  const context: OwnCaseContext = {
-    before: preceding.split(/\s+/).filter(Boolean).slice(-OWN_CASE_CONTEXT_TOKENS).join(" "),
-    after: following.split(/\s+/).filter(Boolean).slice(0, OWN_CASE_CONTEXT_TOKENS).join(" "),
-  }
+  // R6 F-2: the whole sentence around the reference
+  const context: OwnCaseContext = { before: sentenceTail(preceding), after: sentenceHead(following) }
   // R4 FP2: also try the match extended by up to 3 preceding words on the same line ("Family"
   // before "Suit No. …", "Bail" before "Application No. …").
   const before = (preceding.split("\n").pop() ?? "").split(/\s+/).filter(Boolean).slice(-3)
@@ -743,7 +758,7 @@ function analyse(
     for (const m of text.matchAll(pattern)) {
       if (isExcludedReference(text, m.index ?? 0, m[0])) continue
       const mEnd = (m.index ?? 0) + m[0].length
-      if (isOwnCase(m[0], options, text.slice(Math.max(0, (m.index ?? 0) - 80), m.index ?? 0), text.slice(mEnd, mEnd + 80))) continue
+      if (isOwnCase(m[0], options, text.slice(Math.max(0, (m.index ?? 0) - OWN_CASE_CONTEXT_CHARS), m.index ?? 0), text.slice(mEnd, mEnd + OWN_CASE_CONTEXT_CHARS))) continue
       const start = m.index ?? 0
       addSuspect(start, start + m[0].length, m[0])
     }
