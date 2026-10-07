@@ -28,12 +28,12 @@ export const FIRM_B = "firmB"
 export const ROLES: readonly Role[] = ["partner", "associate", "clerk", "intern", "accounts", "client"]
 
 export const FIRM_A_USERS: User[] = [
-  { id: "partner_a", firmId: FIRM_A, role: "partner", clearanceLevel: "privileged-restricted" },
-  { id: "associate_a", firmId: FIRM_A, role: "associate", clearanceLevel: "privileged" },
-  { id: "clerk_a", firmId: FIRM_A, role: "clerk", clearanceLevel: "confidential" },
-  { id: "intern_a", firmId: FIRM_A, role: "intern", clearanceLevel: "internal" },
-  { id: "accounts_a", firmId: FIRM_A, role: "accounts", clearanceLevel: "internal" },
-  { id: "client_a", firmId: FIRM_A, role: "client", clearanceLevel: "internal" },
+  { id: "partner_a", firmId: FIRM_A, role: "partner", clearanceLevel: "privileged-restricted", active: true },
+  { id: "associate_a", firmId: FIRM_A, role: "associate", clearanceLevel: "privileged", active: true },
+  { id: "clerk_a", firmId: FIRM_A, role: "clerk", clearanceLevel: "confidential", active: true },
+  { id: "intern_a", firmId: FIRM_A, role: "intern", clearanceLevel: "internal", active: true },
+  { id: "accounts_a", firmId: FIRM_A, role: "accounts", clearanceLevel: "internal", active: true },
+  { id: "client_a", firmId: FIRM_A, role: "client", clearanceLevel: "internal", active: true },
 ]
 /** Every firm-B caller holds the top clearance, so only the firm boundary can refuse it. */
 export const FIRM_B_USERS: User[] = ROLES.map((role) => ({
@@ -41,6 +41,7 @@ export const FIRM_B_USERS: User[] = ROLES.map((role) => ({
   firmId: FIRM_B,
   role,
   clearanceLevel: "privileged-restricted",
+  active: true,
 }))
 export const tokenOf = (uid: string) => `g2-token-${uid}`
 export const user = (id: string): User => {

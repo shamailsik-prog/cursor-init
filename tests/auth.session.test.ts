@@ -19,14 +19,16 @@ import { resetSessionStateForTests, resolveSession } from "@/platform/p5/session
 import { withSession } from "@/platform/http/withSession"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 
+// SEC-2 / E-27: a token carries all three identity claims (firmId, role, clearanceLevel) or it
+// is refused (403 NO_CLAIMS); the claims below are the ones P5 issues for the seeded records.
 const TOKENS: Record<string, Record<string, unknown>> = {
-  "token-partner-a": { uid: "partner_a", firmId: "firmA", role: "partner" },
-  "token-clerk-a": { uid: "clerk_a", firmId: "firmA", clearanceLevel: "privileged-restricted" },
-  "token-partner-b": { uid: "partner_b", firmId: "firmB" },
-  "token-ghost": { uid: "ghost_user" },
+  "token-partner-a": { uid: "partner_a", firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" },
+  "token-clerk-a": { uid: "clerk_a", firmId: "firmA", role: "clerk", clearanceLevel: "privileged-restricted" },
+  "token-partner-b": { uid: "partner_b", firmId: "firmB", role: "partner", clearanceLevel: "privileged-restricted" },
+  "token-ghost": { uid: "ghost_user", firmId: "firmA", role: "associate", clearanceLevel: "internal" },
   // partner_a's record is privileged-restricted; this claim restricts it to internal.
-  "token-partner-a-internal": { uid: "partner_a", firmId: "firmA", clearanceLevel: "internal" },
-  "token-repo-only": { uid: "repo_only_user", firmId: "firmA" },
+  "token-partner-a-internal": { uid: "partner_a", firmId: "firmA", role: "partner", clearanceLevel: "internal" },
+  "token-repo-only": { uid: "repo_only_user", firmId: "firmA", role: "associate", clearanceLevel: "internal" },
 }
 
 function authed(
@@ -87,10 +89,10 @@ describe("firebase auth mode (default)", () => {
     expect(verifyIdToken).toHaveBeenCalledWith("token-partner-a", true)
   })
 
-  it("returns 403 for a verified uid that is not provisioned", async () => {
+  it("returns 403 INACTIVE_USER for a verified uid with no users record (SEC-2 / E-27)", async () => {
     const res = await mattersGet(authed("http://127.0.0.1/api/d1/matters", { token: "token-ghost" }))
     expect(res.status).toBe(403)
-    expect(((await res.json()) as { code: string }).code).toBe("USER_NOT_PROVISIONED")
+    expect(((await res.json()) as { code: string }).code).toBe("INACTIVE_USER")
   })
 
   it("fails closed with 503 when firebase-admin is not configured", async () => {
@@ -119,7 +121,7 @@ describe("firebase auth mode (default)", () => {
   })
 
   it("rejects a firmId claim that disagrees with the provisioned record", async () => {
-    TOKENS["token-bad-claim"] = { uid: "partner_a", firmId: "firmB" }
+    TOKENS["token-bad-claim"] = { uid: "partner_a", firmId: "firmB", role: "partner", clearanceLevel: "privileged-restricted" }
     const res = await mattersGet(
       authed("http://127.0.0.1/api/d1/matters", { token: "token-bad-claim", firm: "firmB" })
     )
@@ -436,6 +438,7 @@ describe("handlers authorise against the session (#5)", () => {
       firmId: "firmA",
       role: "associate",
       clearanceLevel: "internal",
+      active: true,
     })
     const { getRuntimeRepositories } = await import("@/platform/persistence/runtimeRepositories")
     const repos = await getRuntimeRepositories(store)
@@ -495,7 +498,7 @@ describe("session references and identity lookups (round 2)", () => {
 })
 
 describe("round 3 follow-ups (firebase mode)", () => {
-  it("R1: a repository 'not found' is 403 USER_NOT_PROVISIONED and evicts the cached user", async () => {
+  it("R1: a repository 'not found' is 403 INACTIVE_USER and evicts the cached user", async () => {
     expect(getRuntimeStore().users.has("partner_a")).toBe(true)
     const repoModule = await import("@/platform/persistence/runtimeRepositories")
     const real = await repoModule.getRuntimeRepositories(getRuntimeStore())
@@ -505,7 +508,7 @@ describe("round 3 follow-ups (firebase mode)", () => {
     })
     const res = await mattersGet(authed("http://127.0.0.1/api/d1/matters?limit=10&cursor=0"))
     expect(res.status).toBe(403)
-    expect(((await res.json()) as { code: string }).code).toBe("USER_NOT_PROVISIONED")
+    expect(((await res.json()) as { code: string }).code).toBe("INACTIVE_USER")
     expect(getRuntimeStore().users.has("partner_a")).toBe(false)
     spy.mockRestore()
   })

@@ -1,18 +1,25 @@
 import type { CallableRequest } from "firebase-functions/v2/https"
 import type { DecodedIdToken } from "firebase-admin/auth"
 import type { Classification } from "@/platform/p1/types"
+import {
+  bindClaims,
+  bindRecords,
+  hasSecondFactor,
+  IDENTITY_ROLES,
+  isIdentityRole,
+  type IdentityRefusal,
+  type IdentityRole,
+} from "@/platform/p5/identityPolicy"
 import { adminAuth, adminDb } from "../admin"
 import { HttpError } from "../http/errors"
-import { isKnownClassification, rankOf } from "./classification"
 import { header, type Headers } from "../http/headers"
 
 /**
- * Mirrors `Role` in platform/spine/store.ts (guarded by test/p5.role.test.ts).
- * Defined here rather than imported because pulling that file into the
- * functions typecheck surfaces its own unrelated type errors.
+ * `Role` in platform/spine/store.ts, from the shared identity policy (guarded by
+ * test/p5.role.test.ts and the root identity parity test).
  */
-export const ROLES = ["partner", "associate", "clerk", "intern", "accounts", "client"] as const
-export type Role = (typeof ROLES)[number]
+export const ROLES = IDENTITY_ROLES
+export type Role = IdentityRole
 
 /**
  * Verified identity. `users/{uid}` is authoritative for role and clearance; the
@@ -20,24 +27,20 @@ export type Role = (typeof ROLES)[number]
  */
 export type Caller = { uid: string; firmId: string; role: Role; clearanceLevel: Classification }
 
-const ROLE_SET: ReadonlySet<string> = new Set<string>(ROLES)
+export const isRole = isIdentityRole
+export { hasSecondFactor }
 
-export function isRole(value: unknown): value is Role {
-  return typeof value === "string" && ROLE_SET.has(value)
-}
-
+const refusal = (r: IdentityRefusal): HttpError => new HttpError(r.status, r.code)
 
 /**
- * Builds a Caller from verified token claims and binds it to the requested firm.
+ * Builds a Caller from verified token claims and binds it to the requested firm
+ * (identityPolicy.bindClaims, shared with the Next.js session — SEC-2 / E-27).
  * Missing or malformed claims → 403 no_claims; firm header ≠ claims.firmId → 403 firm_mismatch.
  */
 function callerFromClaims(uid: string, claims: Record<string, unknown>, firmIdHeader: string | undefined): Caller {
-  const { firmId, role, clearanceLevel } = claims
-  if (typeof firmId !== "string" || firmId === "" || !isRole(role) || !isKnownClassification(clearanceLevel)) {
-    throw new HttpError(403, "no_claims")
-  }
-  if (firmIdHeader !== firmId) throw new HttpError(403, "firm_mismatch")
-  return { uid, firmId, role, clearanceLevel }
+  const claimed = bindClaims(claims, firmIdHeader)
+  if (!claimed.ok) throw refusal(claimed)
+  return { uid, firmId: claimed.firmId, role: claimed.role, clearanceLevel: claimed.clearanceLevel }
 }
 
 /** HTTP (onRequest) identity: verified, revocation-checked Bearer token + X-Firm-Id binding. */
@@ -127,24 +130,19 @@ export async function firmlessFromToken(decoded: DecodedIdToken): Promise<Firmle
   return { uid: decoded.uid, claims: customClaims, verifiedEmail }
 }
 
-/** True when the verified token records a second-factor sign-in (`firebase.sign_in_second_factor`). */
-export function hasSecondFactor(claims: object): boolean {
-  const firebase = (claims as { firebase?: { sign_in_second_factor?: unknown } }).firebase
-  return typeof firebase?.sign_in_second_factor === "string" && firebase.sign_in_second_factor !== ""
-}
-
 /** How a session relates to the firm's MFA policy (`firms/{firmId}.mfaEnforcedRoles`). */
 type MfaContext = { secondFactor: boolean; mfaExempt: boolean }
 
 /**
- * Applies the authoritative `users/{uid}` doc to a token-derived Caller:
+ * Applies the authoritative `users/{uid}` doc to a token-derived Caller
+ * (identityPolicy.bindRecords, shared with the Next.js session — SEC-2 / E-27):
  * missing doc or not `active: true` → 403 inactive_user; doc in another firm →
  * 403 firm_mismatch; malformed doc role/clearance → 403 no_claims; doc role ≠
  * token role → 401 claims_stale (refresh the token). Clearance is the lower of
  * the doc's and the token's, so a demotion takes effect before revocation does.
  * Then the firm's MFA policy (E-19): if the doc role is listed in
  * `firms/{firmId}.mfaEnforcedRoles` and the session has no second factor →
- * 403 mfa_required, unless the caller is an MFA-recovery callable (`mfaExempt`).
+ * 403 mfa_required, unless the operation is MFA recovery (`mfaExempt`).
  * Unreadable users or firm doc → 503 store_unavailable.
  */
 async function bindToUserDoc(
@@ -161,19 +159,9 @@ async function bindToUserDoc(
   } catch {
     throw new HttpError(503, "store_unavailable")
   }
-  if (!doc || doc.active !== true) throw new HttpError(403, "inactive_user")
-  if (doc.firmId !== caller.firmId) throw new HttpError(403, "firm_mismatch")
-  if (!isRole(doc.role) || !isKnownClassification(doc.clearanceLevel)) throw new HttpError(403, "no_claims")
-  if (doc.role !== caller.role) throw new HttpError(401, "claims_stale")
-  if (!mfa.mfaExempt && !mfa.secondFactor && isMfaEnforced(firm, doc.role)) throw new HttpError(403, "mfa_required")
-  const clearanceLevel =
-    rankOf(doc.clearanceLevel) < rankOf(caller.clearanceLevel) ? doc.clearanceLevel : caller.clearanceLevel
-  return { caller: { ...caller, clearanceLevel }, firm }
-}
-
-function isMfaEnforced(firm: Record<string, unknown> | undefined, role: Role): boolean {
-  const enforced = firm?.mfaEnforcedRoles
-  return Array.isArray(enforced) && enforced.includes(role)
+  const decision = bindRecords(caller, { user: doc, firm }, mfa)
+  if (!decision.ok) throw refusal(decision)
+  return { caller: { ...caller, role: decision.role, clearanceLevel: decision.clearanceLevel }, firm }
 }
 
 /**

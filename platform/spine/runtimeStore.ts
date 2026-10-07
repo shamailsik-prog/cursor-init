@@ -23,30 +23,35 @@ function buildSeededStore(): SpineStore {
     firmId: "firmA",
     role: "partner",
     clearanceLevel: "privileged-restricted",
+    active: true,
   })
   store.users.set("associate_a", {
     id: "associate_a",
     firmId: "firmA",
     role: "associate",
     clearanceLevel: "privileged",
+    active: true,
   })
   store.users.set("clerk_a", {
     id: "clerk_a",
     firmId: "firmA",
     role: "clerk",
     clearanceLevel: "confidential",
+    active: true,
   })
   store.users.set("client_a", {
     id: "client_a",
     firmId: "firmA",
     role: "client",
     clearanceLevel: "internal",
+    active: true,
   })
   store.users.set("partner_b", {
     id: "partner_b",
     firmId: "firmB",
     role: "partner",
     clearanceLevel: "privileged-restricted",
+    active: true,
   })
   return store
 }

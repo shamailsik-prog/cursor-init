@@ -3,13 +3,16 @@
  *
  * Mode is chosen by `SIKANDER_AUTH_MODE`:
  *   - "firebase" (DEFAULT when unset — fail closed): verifies
- *     `Authorization: Bearer <Firebase ID token>` with firebase-admin, requires
- *     `X-Firm-Id` (Layer 18 §4.1) to equal the caller's firm, and maps the token
- *     uid to the user record. firmId / role / clearanceLevel come from the
- *     token's custom claims (Layer 18 §4.5), falling back to the user record when
- *     a claim is absent. A claim may restrict but never elevate the record: a
- *     firmId claim must match the record, clearance is the stricter of claim and
- *     record, and a differing role claim is ignored in favour of the record.
+ *     `Authorization: Bearer <Firebase ID token>` with firebase-admin (revocation
+ *     checked), requires `X-Firm-Id` (Layer 18 §4.1), then applies the shared P5
+ *     identity policy (platform/p5/identityPolicy.ts, the same code the Cloud
+ *     Functions API runs — SEC-2 / E-27): firmId, role and clearanceLevel claims
+ *     must all be present (403 NO_CLAIMS) and the firm claim must equal
+ *     X-Firm-Id (403 FIRM_MISMATCH); users/{uid} must exist with active === true
+ *     (403 INACTIVE_USER) in that firm; its role must equal the role claim (401
+ *     CLAIMS_STALE); the firm's MFA policy applies (firms/{firmId}
+ *     .mfaEnforcedRoles without a second factor: 403 MFA_REQUIRED); clearance is
+ *     the lower of record and claim. Codes are the policy's, upper-cased.
  *   - "insecure-dev": local development and tests ONLY. Trusts the
  *     `actorId` / `userId` the request carries, exactly as routes did before
  *     authentication existed. Must be set explicitly, and is allowed only when
@@ -19,8 +22,9 @@
  *
  * Any other value fails closed.
  */
-import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
-import type { Role, SpineStore, User } from "@/platform/spine/store"
+import type { Classification } from "@/platform/p1/types"
+import type { FirmRecord, Role, SpineStore, User } from "@/platform/spine/store"
+import { bindClaims, bindRecords, hasSecondFactor, type IdentityRefusal } from "@/platform/p5/identityPolicy"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 
@@ -41,7 +45,10 @@ export type AuthErrorCode =
   | "AUTH_MISCONFIGURED"
   | "FIRM_HEADER_REQUIRED"
   | "FIRM_MISMATCH"
-  | "USER_NOT_PROVISIONED"
+  | "NO_CLAIMS"
+  | "INACTIVE_USER"
+  | "CLAIMS_STALE"
+  | "MFA_REQUIRED"
   | "IDENTITY_UNAVAILABLE"
 
 export class AuthError extends Error {
@@ -59,15 +66,6 @@ export class AuthError extends Error {
 export type InsecureDevSession = { mode: "insecure-dev" }
 
 export const FIRM_HEADER = "X-Firm-Id"
-
-const KNOWN_ROLES: ReadonlySet<string> = new Set<Role>([
-  "partner",
-  "associate",
-  "clerk",
-  "intern",
-  "accounts",
-  "client",
-])
 
 let insecureDevWarned = false
 
@@ -211,8 +209,27 @@ export async function loadUserRecord(
   return cached ?? null
 }
 
-function stricterClearance(a: Classification, b: Classification): Classification {
-  return classificationRank(a) <= classificationRank(b) ? a : b
+/** firms/{firmId} through the repository layer (authoritative; a failed read fails closed). */
+async function loadFirmRecord(firmId: string): Promise<FirmRecord | null> {
+  try {
+    const repos = await getRuntimeRepositories(getRuntimeStore())
+    return await repos.firms.get(firmId)
+  } catch (err) {
+    console.error("[auth] firm lookup failed", err)
+    throw new AuthError(503, "IDENTITY_UNAVAILABLE", "identity service unavailable")
+  }
+}
+
+const REFUSAL_MESSAGES: Record<IdentityRefusal["code"], string> = {
+  no_claims: "missing or malformed identity claims",
+  firm_mismatch: "firm scope mismatch",
+  inactive_user: "user is not active",
+  claims_stale: "identity claims are stale; refresh the token",
+  mfa_required: "a second factor is required for this role",
+}
+
+function refusalError(refusal: IdentityRefusal): AuthError {
+  return new AuthError(refusal.status, refusal.code.toUpperCase() as AuthErrorCode, REFUSAL_MESSAGES[refusal.code])
 }
 
 /**
@@ -240,48 +257,33 @@ export async function resolveSession(request: Request): Promise<Session | Insecu
     throw new AuthError(401, "AUTH_INVALID", "invalid or expired token")
   }
 
+  // Step 1 (identityPolicy.bindClaims): the token's claims, bound to X-Firm-Id.
+  const headerFirm = request.headers.get(FIRM_HEADER)?.trim() || undefined
+  const claimed = bindClaims(decoded, headerFirm)
+  if (!claimed.ok) {
+    // L18 §4.1: a missing header is the caller's request error, not a tenancy mismatch
+    if (claimed.code === "firm_mismatch" && !headerFirm) {
+      throw new AuthError(400, "FIRM_HEADER_REQUIRED", `${FIRM_HEADER} header required`)
+    }
+    throw refusalError(claimed)
+  }
+
+  // Step 2 (identityPolicy.bindRecords): the authoritative users/{uid} and firms/{firmId}.
   const record = await loadUserRecord(decoded.uid, { preferRepository: true })
-  if (!record) {
-    throw new AuthError(403, "USER_NOT_PROVISIONED", "user not provisioned")
-  }
-
-  const claimFirm = typeof decoded.firmId === "string" ? decoded.firmId : undefined
-  const claimRole =
-    typeof decoded.role === "string" && KNOWN_ROLES.has(decoded.role)
-      ? (decoded.role as Role)
-      : undefined
-  const claimClearance = isClassification(decoded.clearanceLevel)
-    ? decoded.clearanceLevel
-    : undefined
-
-  if (claimFirm && claimFirm !== record.firmId) {
-    // Token and record disagree about tenancy: refuse rather than guess.
-    throw new AuthError(403, "FIRM_MISMATCH", "firm scope mismatch")
-  }
-  const firmId = claimFirm ?? record.firmId
-
-  const headerFirm = request.headers.get(FIRM_HEADER)?.trim()
-  if (!headerFirm) {
-    throw new AuthError(400, "FIRM_HEADER_REQUIRED", `${FIRM_HEADER} header required`)
-  }
-  if (headerFirm !== firmId) {
-    throw new AuthError(403, "FIRM_MISMATCH", "firm scope mismatch")
-  }
-
-  if (claimRole && claimRole !== record.role) {
-    // Roles are unordered, so a stale claim cannot be "restricted" safely:
-    // the provisioned record (what every handler authorises against) wins.
-    console.warn(`[auth] role claim for ${record.id} differs from record; using record`)
-  }
+  const firm = await loadFirmRecord(claimed.firmId)
+  const decision = bindRecords(
+    claimed,
+    { user: record as Record<string, unknown> | null, firm: firm as Record<string, unknown> | null },
+    // Next.js serves no MFA-recovery operation, so nothing here is exempt.
+    { secondFactor: hasSecondFactor(decoded), mfaExempt: false }
+  )
+  if (!decision.ok) throw refusalError(decision)
 
   return {
     mode,
-    userId: record.id,
-    firmId,
-    role: record.role,
-    // A claim may restrict but never elevate the provisioned clearance.
-    clearance: claimClearance
-      ? stricterClearance(claimClearance, record.clearanceLevel)
-      : record.clearanceLevel,
+    userId: decoded.uid,
+    firmId: decision.firmId,
+    role: decision.role as Role,
+    clearance: decision.clearanceLevel as Classification,
   }
 }
