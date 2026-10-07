@@ -28,6 +28,18 @@ Baseline taken 2026-10-06 (`npm audit` against the lockfiles at `feat/forensic`)
 note that `requirements.txt` is unpinned, so pip-audit audits whatever the
 latest resolvable versions are on the day it runs, not a fixed set.
 
+Re-checked 2026-10-07 against the lockfiles after `feat/forensic` was merged
+into the Phase 1 branch (with the final-audit fixes):
+- `npm:root`: 16 advisories (2 critical, 11 high, 3 moderate). The high and
+  critical ones are the same 9 advisory ids as the rows below. 13 package
+  entries map to them, some only through a dependency.
+- `npm:functions`: 8 moderate, no high or critical.
+- `pip:corpus_service`: none.
+
+The gate passes, with no unlisted advisory and no stale row. The reasons below
+were re-verified: no `next/og` or `next/image` import in app/, components/,
+lib/ or platform/, and no `dangerouslyAllowSVG` in `next.config.ts`.
+
 | scope | advisory | package | severity | reason | owner | review by |
 | --- | --- | --- | --- | --- | --- | --- |
 | npm:root | GHSA-vcvr-r3jv-pc5j | next | critical | **fix available**: next 16.4.0 (minor; eslint-config-next must move with it). RCE is in `next/og` `ImageResponse`, which the app does not import (no `next/og` use in app/, components/, lib/, platform/). Upgrade next + eslint-config-next together and re-run the full suite. | Shamail Sikander | 2026-10-20 |
