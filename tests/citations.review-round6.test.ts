@@ -92,3 +92,12 @@ describe("F-4: a sentence starting with a numeral after a citation is prose; amb
     expect(blocked(extractCitations(text)), JSON.stringify(extractCitations(text))).toBe(true)
   })
 })
+
+describe("F-5: × between two capitalised tokens reads as 'versus' and is allowed", () => {
+  it.each(["The parties are ABC × XYZ in this matter.", "Muhammad Akram × The State", "M/s Engro Fertilizers PLC × NADRA"])("%j is accepted", (text) => {
+    expect(checkDraftCharset(text).ok).toBe(true)
+  })
+  it.each(["Item ⊤ SECP filing", "Clause (a) ∣ ABC", "AB ⋁ CD", "2018 × LC 789", "ABC×XYZ", "2018 \u{1f74c} LC 789"])("contrived symbol forms stay refused: %j", (text) => {
+    expect(checkDraftCharset(text).ok).toBe(false)
+  })
+})

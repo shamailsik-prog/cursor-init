@@ -220,7 +220,11 @@ export function checkDraftCharset(rawBody: string): CharsetCheck {
     chars.forEach((c, k) => {
       if (!RE_SYMBOL_OR_PUNCT.test(c) || !SYMBOL_LETTER_LOOKALIKE.has(c)) return
       const glued = isLatinLike(chars[k - 1] ?? "") || isLatinLike(chars[k + 1] ?? "")
-      const alone = chars.length === 1 && (abbreviationLike(tokens[t - 1]?.text) || abbreviationLike(tokens[t + 1]?.text))
+      // R6 F-5: "×" standing between two capitalised tokens is "versus" in a party line
+      // ("ABC × XYZ", "Akram × The State")
+      const capitalised = (token: string | undefined) => /^[("'\u201c]?[A-Z]/.test(token ?? "")
+      const versus = c === "\u00d7" && chars.length === 1 && capitalised(tokens[t - 1]?.text) && capitalised(tokens[t + 1]?.text)
+      const alone = !versus && chars.length === 1 && (abbreviationLike(tokens[t - 1]?.text) || abbreviationLike(tokens[t + 1]?.text))
       if (glued || alone) {
         violations.push({ codePoint: codePointLabel(c.codePointAt(0) ?? 0), position: token.at + k, category: category(c), reason: `symbol look-alike of the letter "${CONFUSABLE[(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")]}"` })
       }
