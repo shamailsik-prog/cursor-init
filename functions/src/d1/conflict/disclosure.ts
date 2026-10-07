@@ -7,9 +7,13 @@ import type { Hit, IdentityBasis, Outcome, Subject } from "./match"
  * every response goes through `discloseFor`. A non-partner sees a hit's matter (`matterId`,
  * `matterNo`, `matterClassification`) only for a matter they are a member of and cleared for;
  * a partner sees it when their clearance covers the matter's classification. Otherwise those
- * fields read "restricted". Outcome, hit count, subject, hit role, conflict type, identity
- * basis and matched name are always shown. No rule number is ever part of a check.
+ * fields read "restricted". A hit with no matter shows its classification only to a reader
+ * cleared for it. Outcome, hit count, subject, hit role, conflict type, identity basis and matched
+ * name are always shown; a hit's internal candidate id never is. The partner waiver is shown to a
+ * reader cleared for the check's classification. No rule number is ever part of a check.
  */
+
+export type Waiver = { partnerId: string; note: string; clientConsent: true; consentReference: string; at: string }
 
 export const RESTRICTED = "restricted"
 
@@ -27,9 +31,12 @@ export type StoredCheck = {
   boundMatterId: string | null
   stale: boolean
   createdAt?: string | null
+  waiver?: Waiver | null
+  /** How many times a review resolution changed the result or decision (numbers conflict.decided re-emits). */
+  decidedChanges?: number
 }
 
-export type DisclosedHit = Omit<Hit, "matterId" | "matterNo" | "matterClassification"> & {
+export type DisclosedHit = Omit<Hit, "matterId" | "matterNo" | "matterClassification" | "candidateId"> & {
   matterId: string | null
   matterNo: string | null
   matterClassification: string
@@ -47,6 +54,8 @@ export type DisclosedCheck = {
   subjects: Subject[]
   hits: DisclosedHit[]
   createdAt: string | null
+  /** Present only for a reader cleared for the check's classification. */
+  waiver?: Waiver | null
 }
 
 export type Reader = { role: string; clearanceLevel: Classification | string }
@@ -65,8 +74,10 @@ function maySee(reader: Reader, matterId: string, classification: unknown, membe
 
 /** The check as `reader` may see it; `memberMatterIds` are the matters the reader is a member of. */
 export function discloseFor(reader: Reader, check: StoredCheck, memberMatterIds: ReadonlySet<string>): DisclosedCheck {
-  const hits = check.hits.map((hit): DisclosedHit => {
-    if (hit.matterId === null || maySee(reader, hit.matterId, hit.matterClassification, memberMatterIds)) return { ...hit }
+  const hits = check.hits.map((stored): DisclosedHit => {
+    const { candidateId: _internal, ...hit } = stored
+    if (hit.matterId === null) return cleared(reader, hit.matterClassification) ? hit : { ...hit, matterClassification: RESTRICTED }
+    if (maySee(reader, hit.matterId, hit.matterClassification, memberMatterIds)) return hit
     return { ...hit, matterId: RESTRICTED, matterNo: RESTRICTED, matterClassification: RESTRICTED }
   })
   const bound = check.boundMatterId
@@ -84,6 +95,7 @@ export function discloseFor(reader: Reader, check: StoredCheck, memberMatterIds:
     subjects: check.subjects,
     hits,
     createdAt: check.createdAt ?? null,
+    ...(cleared(reader, check.classification) ? { waiver: check.waiver ?? null } : {}),
   }
 }
 

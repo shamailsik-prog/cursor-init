@@ -5,9 +5,9 @@ import type { Caller } from "../../p5/auth"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { requirePermission } from "../../p5/permission"
-import { consumeDailyConflict } from "../dailyLimit"
+import { assertDailyConflictOpen, consumeDailyConflict } from "../dailyLimit"
 import { parseKeys, parseName } from "../validate"
-import { discloseFor, matterIdsOf, type DisclosedCheck, type StoredCheck } from "./disclosure"
+import { discloseFor, matterIdsOf, type DisclosedCheck, type StoredCheck, type Waiver } from "./disclosure"
 import { clientKeys, loadRegistry, runEngine } from "./engine"
 import { summarise, type Hit, type Subject } from "./match"
 
@@ -97,6 +97,8 @@ function storedCheck(id: string, row: DocumentData): StoredCheck {
     boundMatterId: row.boundMatterId ?? null,
     stale: row.stale === true,
     createdAt,
+    waiver: isObject(row.waiver) ? (row.waiver as Waiver) : null,
+    decidedChanges: Number.isInteger(row.decidedChanges) && row.decidedChanges >= 0 ? row.decidedChanges : 0,
   }
 }
 
@@ -127,6 +129,8 @@ export const runConflictCheckOp: FirmOperation<DisclosedCheck> = {
     const subjects: Subject[] = [resolved.subject, ...opposing]
     const subjectEntityIds = [resolved.entityId, ...opposing.map(() => undefined)]
 
+    // A firm already at its cap is refused before the registry read; the transaction below stays authoritative.
+    await assertDailyConflictOpen(caller.firmId, now)
     const registry = await loadRegistry(caller.firmId, now)
     const { hits, result, identityBasis, classification } = runEngine(registry, subjects, subjectEntityIds)
     const decision = result === "CLEAR" ? "cleared" : "pending"
@@ -255,7 +259,9 @@ function trailRow(caller: Caller, check: StoredCheck, kind: "review_resolved" | 
  * (P2-7). A hit still awaiting review is resolved by a partner or associate: `different_person`
  * → outcome NONE; `same_person` → FLAG with confirmed identity when the hit crosses sides, NONE
  * when it is an informational same-role hit. The result is recomputed with the match.ts
- * precedence; the check is cleared when it becomes CLEAR. Returns the disclosed check.
+ * precedence; the check is cleared when it becomes CLEAR. A resolution that changes the result
+ * or the decision emits `conflict.decided` again (P2-20) as `events/{checkId}_decided_{n}`, n the
+ * check's count of such changes (`decidedChanges`). Returns the disclosed check.
  */
 export const resolveReviewItemOp: FirmOperation<DisclosedCheck> = {
   auth: "firm",
@@ -294,11 +300,23 @@ export const resolveReviewItemOp: FirmOperation<DisclosedCheck> = {
       const hits = check.hits.map((h, i) => (i === hitIndex ? resolved : h))
       const { result, identityBasis } = summarise(hits)
       const decision = result === "CLEAR" ? "cleared" : "pending"
+      const changed = result !== check.result || decision !== check.decision
+      const n = (check.decidedChanges ?? 0) + (changed ? 1 : 0)
 
       await audit.stage(tx, "allow", "ok")
-      tx.update(checks().doc(checkId), plain({ hits, result, identityBasis, decision }))
+      tx.update(checks().doc(checkId), plain({ hits, result, identityBasis, decision, ...(changed ? { decidedChanges: n } : {}) }))
       tx.create(db.collection("conflict_events").doc(), trailRow(caller, check, "review_resolved", { hitIndex, resolution, note, result, identityBasis }))
-      return { ...check, hits, result, identityBasis, decision }
+      if (changed) {
+        tx.create(db.collection("events").doc(`${checkId}_decided_${n}`), {
+          name: "conflict.decided",
+          firmId: caller.firmId,
+          payload: { checkId, result, identityBasis },
+          classification: check.classification,
+          occurredAt: FieldValue.serverTimestamp(),
+          idempotencyKey: `${checkId}:decided:${n}`,
+        })
+      }
+      return { ...check, hits, result, identityBasis, decision, decidedChanges: n }
     })
     audit.committed()
     return disclosed(caller, updated)
@@ -340,8 +358,12 @@ export const recordPartnerWaiverOp: FirmOperation<DisclosedCheck> = {
       if (data.clientConsent !== true || consentReference === "") throw new HttpError(400, "consent_required")
 
       await audit.stage(tx, "allow", "ok")
-      tx.update(ref, { waiver: { partnerId: caller.uid, note, clientConsent: true, consentReference, at }, decision: "cleared" })
-      tx.create(db.collection("conflict_events").doc(), trailRow(caller, check, "waived", { partnerId: caller.uid, requestedBy: check.requestedBy, consentReference }))
+      const waiver: Waiver = { partnerId: caller.uid, note, clientConsent: true, consentReference, at }
+      tx.update(ref, { waiver, decision: "cleared" })
+      tx.create(
+        db.collection("conflict_events").doc(),
+        trailRow(caller, check, "waived", { partnerId: caller.uid, requestedBy: check.requestedBy, note, clientConsent: true, consentReference })
+      )
       tx.create(db.collection("events").doc(`${checkId}_waived`), {
         name: "conflict.waived",
         firmId: caller.firmId,
@@ -350,7 +372,7 @@ export const recordPartnerWaiverOp: FirmOperation<DisclosedCheck> = {
         occurredAt: FieldValue.serverTimestamp(),
         idempotencyKey: `${checkId}:waived`,
       })
-      return { ...check, decision: "cleared" }
+      return { ...check, decision: "cleared", waiver }
     })
     audit.committed()
     return disclosed(caller, updated)

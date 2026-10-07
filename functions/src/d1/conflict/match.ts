@@ -26,11 +26,15 @@ export type Hit = {
   reliedOnLinkIds: string[]
   /** The matched candidate's unresolved entity links (P2-5), so a reviewer can find the evidence. */
   unresolvedLinkIds?: string[]
+  /** The candidate's registry identity ("client:{id}" or "party:{id}"), for the re-screen at open; never disclosed. */
+  candidateId?: string
   review?: { resolution: "different_person" | "same_person"; by: string; note: string; at: string }
 }
 
 /** One registry row to screen against: a firm client or an opposing `matter_parties` row. */
 export type Candidate = {
+  /** Registry identity: "client:{clientId}" or "party:{matter_parties id}". */
+  candidateId?: string
   role: Role
   name: string
   forms: string[][]
@@ -199,7 +203,8 @@ export function screen(
         matterNo: c.matterNo,
         matterClassification: c.matterClassification,
         reliedOnLinkIds: keyHit && keyEqual ? [...c.linkIds] : [],
-        ...(unresolved ? { unresolvedLinkIds: [...c.unresolvedLinkIds] } : {})
+        ...(unresolved ? { unresolvedLinkIds: [...c.unresolvedLinkIds] } : {}),
+        ...(c.candidateId !== undefined ? { candidateId: c.candidateId } : {})
       })
     }
   })

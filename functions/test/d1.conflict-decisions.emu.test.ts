@@ -15,6 +15,7 @@ type Check = { checkId: string; result: string; identityBasis: string; decision:
 const resolve = viaApi<Check>("resolveReviewItem")
 const waive = viaApi<Check>("recordPartnerWaiver")
 const trail = viaApi<{ items: { kind: string; actorId: string }[]; nextCursor: null }>("getConflictTrail")
+const getResult = viaApi<Check & { waiver?: unknown }>("getConflictResult")
 
 const claims = (firmId: string, role: string, clearanceLevel = "privileged-restricted") => ({ firmId, role, clearanceLevel })
 const NOTE20 = "Different people: CNIC differs on file."
@@ -352,5 +353,59 @@ describe.skipIf(!EMULATORS)("read gate and clearance (controller ruling)", () =>
     await apiErrorOf(waive({ token: partner.token, data: wbody(firmId, checkId, { note: "short" }) } as never))
     await apiErrorOf(waive({ token: partner.token, data: wbody(firmId, checkId, { clientConsent: false }) } as never))
     expect(await snapshot(checkId, firmId)).toEqual(before)
+  })
+})
+
+describe.skipIf(!EMULATORS)("conflict.decided on a decision change (final review I6)", () => {
+  const decidedEvents = async (firmId: string) =>
+    (await adminDb().collection("events").where("firmId", "==", firmId).where("name", "==", "conflict.decided").get()).docs.map((d) => ({ id: d.id, ...d.data() }))
+
+  it("a resolve that changes the result emits conflict.decided as {checkId}_decided_1; one that changes neither result nor decision emits none", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const checkId = await seedCheck(firmId, partner.uid, [hit("former_client", "POSSIBLE_CANDIDATE_REVIEW"), hit("adverse_history", "POSSIBLE_CANDIDATE_REVIEW")])
+    await review(checkId, partner.token, firmId, 0, "same_person") // POSSIBLE_CANDIDATE_REVIEW → FLAG
+    expect(await decidedEvents(firmId)).toEqual([
+      expect.objectContaining({
+        id: `${checkId}_decided_1`,
+        payload: { checkId, result: "FLAG", identityBasis: "candidate_only" },
+        classification: "confidential",
+        idempotencyKey: `${checkId}:decided:1`,
+      }),
+    ])
+    await review(checkId, partner.token, firmId, 1, "different_person") // FLAG stays FLAG, pending stays pending
+    expect((await decidedEvents(firmId)).map((e) => e.id)).toEqual([`${checkId}_decided_1`])
+  })
+
+  it("the n-th decision change is numbered n, from the counter stored on the check", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const checkId = await seedCheck(firmId, partner.uid, [hit("direct_adverse", "POSSIBLE_CANDIDATE_REVIEW")], { decidedChanges: 2 })
+    const out = await review(checkId, partner.token, firmId, 0, "different_person") // → CLEAR, cleared
+    expect(out).toMatchObject({ result: "CLEAR", decision: "cleared" })
+    const events = await decidedEvents(firmId)
+    expect(events).toEqual([
+      expect.objectContaining({ id: `${checkId}_decided_3`, payload: { checkId, result: "CLEAR", identityBasis: "confirmed_identity" }, idempotencyKey: `${checkId}:decided:3` }),
+    ])
+    expect((await adminDb().collection("conflict_checks").doc(checkId).get()).data()?.decidedChanges).toBe(3)
+  })
+})
+
+describe.skipIf(!EMULATORS)("waiver record (final review M3)", () => {
+  it("the waived trail row carries note, clientConsent and consentReference; readers cleared for the check see the waiver", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const low = await mintIdToken(claims(firmId, "partner", "internal"))
+    const checkId = await seedCheck(firmId, partner.uid, [hit("direct_adverse", "FLAG")])
+    const out = await waive({ token: partner.token, data: { firmId, checkId, note: NOTE50, clientConsent: true, consentReference: "Letter 2026-10-01" } } as never)
+    const waiver = { partnerId: partner.uid, note: NOTE50, clientConsent: true, consentReference: "Letter 2026-10-01" }
+    expect((out as Check & { waiver?: unknown }).waiver).toMatchObject(waiver)
+
+    const rows = (await adminDb().collection("conflict_events").where("checkId", "==", checkId).where("kind", "==", "waived").get()).docs
+    expect(rows).toHaveLength(1)
+    expect(rows[0].data().detail).toMatchObject({ partnerId: partner.uid, requestedBy: partner.uid, note: NOTE50, clientConsent: true, consentReference: "Letter 2026-10-01" })
+
+    expect((await getResult({ token: partner.token, data: { firmId, checkId } } as never)).waiver).toMatchObject(waiver)
+    expect(await getResult({ token: low.token, data: { firmId, checkId } } as never)).not.toHaveProperty("waiver")
   })
 })

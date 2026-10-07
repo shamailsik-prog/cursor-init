@@ -4,6 +4,7 @@ import { Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { discloseFor, type StoredCheck } from "../src/d1/conflict/disclosure"
 import { secondsToKarachiMidnight } from "../src/d1/dailyLimit"
+import { unseenHits } from "../src/d1/conflict/engine"
 import { RateLimitedError } from "../src/http/errors"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
@@ -124,6 +125,49 @@ describe("discloseFor (no emulator needed)", () => {
   })
   it("never names a rule number", () => {
     expect(JSON.stringify(discloseFor({ role: "partner", clearanceLevel: "privileged" }, check, new Set()))).not.toMatch(/Rule\s*\d/i)
+  })
+  it("a hit with no matter masks its classification when the reader is cleared below it (final review M2)", () => {
+    const noMatter: StoredCheck = {
+      ...check,
+      hits: [{ ...check.hits[0], matterId: null, matterNo: null, matterClassification: "privileged" }],
+    }
+    const low = discloseFor({ role: "associate", clearanceLevel: "confidential" }, noMatter, new Set())
+    expect(low.hits[0]).toMatchObject({ matterId: null, matterNo: null, matterClassification: "restricted" })
+    const high = discloseFor({ role: "associate", clearanceLevel: "privileged" }, noMatter, new Set())
+    expect(high.hits[0]).toMatchObject({ matterId: null, matterNo: null, matterClassification: "privileged" })
+  })
+  it("never discloses a hit's internal candidate id", () => {
+    const withId: StoredCheck = { ...check, hits: check.hits.map((h) => ({ ...h, candidateId: "client:secret-client-id" })) }
+    const out = discloseFor({ role: "partner", clearanceLevel: "privileged-restricted" }, withId, new Set())
+    expect(JSON.stringify(out)).not.toContain("secret-client-id")
+  })
+  it("includes the waiver for a reader cleared for the check, never for one below it (final review M3)", () => {
+    const waiver = { partnerId: "p1", note: "n".repeat(60), clientConsent: true as const, consentReference: "REF-1", at: "2026-10-07T00:00:00.000Z" }
+    const waived: StoredCheck = { ...check, result: "FLAG", decision: "cleared", waiver }
+    expect(discloseFor({ role: "partner", clearanceLevel: "privileged" }, waived, new Set()).waiver).toEqual(waiver)
+    expect(discloseFor({ role: "partner", clearanceLevel: "confidential" }, waived, new Set())).not.toHaveProperty("waiver")
+    expect(discloseFor({ role: "partner", clearanceLevel: "privileged" }, check, new Set()).waiver).toBeNull()
+  })
+})
+
+describe("unseenHits: the re-screen comparison at open (no emulator needed)", () => {
+  const h = (over: Partial<StoredCheck["hits"][number]>): StoredCheck["hits"][number] => ({
+    subjectIndex: 1, hitRole: "client", type: "direct_adverse", basis: "name", score: 1, identityBasis: "candidate_only",
+    outcome: "POSSIBLE_CANDIDATE_REVIEW", matchedName: "X", matterId: "m1", matterNo: "N", matterClassification: "confidential",
+    reliedOnLinkIds: [], candidateId: "client:c1", ...over,
+  })
+  it("a fresh non-NONE hit on a new candidate, subject or type is unseen; NONE fresh hits never are", () => {
+    expect(unseenHits([h({})], [h({})])).toEqual([])
+    expect(unseenHits([h({ candidateId: "client:c2" })], [h({})])).toHaveLength(1)
+    expect(unseenHits([h({ subjectIndex: 2 })], [h({})])).toHaveLength(1)
+    expect(unseenHits([h({ type: "former_client" })], [h({ type: "direct_adverse" })])).toHaveLength(1)
+    expect(unseenHits([h({ outcome: "NONE" })], [])).toEqual([])
+  })
+  it("a stored hit resolved by review counts as seen; an unreviewed stored NONE does not; a stored hit without an id matches nothing", () => {
+    const review = { resolution: "different_person" as const, by: "u", note: "n", at: "t" }
+    expect(unseenHits([h({})], [h({ outcome: "NONE", review })])).toEqual([])
+    expect(unseenHits([h({})], [h({ outcome: "NONE" })])).toHaveLength(1)
+    expect(unseenHits([h({})], [h({ candidateId: undefined })])).toHaveLength(1)
   })
 })
 
@@ -416,6 +460,18 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
     expect(stored?.classification).toBe("privileged")
     const events = await adminDb().collection("events").where("payload.checkId", "==", out.checkId).get()
     expect(events.docs[0].data().classification).toBe("privileged")
+  })
+
+  it("a client hit takes the higher of the matter's and the client record's classification (final review I2c)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const a = await register(partner.token, firmId, { classification: "privileged" })
+    await seedMatter(firmId, a.clientId, { classification: "confidential" })
+    const out = await runCheck({ token: partner.token, data: { firmId, client: { name: "Bashir Ahmed" }, opposingParties: [opposing("Muhammad Ali")] } } as never)
+    expect(out.hits).toEqual([expect.objectContaining({ type: "direct_adverse", matterClassification: "privileged" })])
+    const stored = (await adminDb().collection("conflict_checks").doc(out.checkId).get()).data()
+    expect(stored?.classification).toBe("privileged")
+    expect(stored?.hits[0].matterClassification).toBe("privileged")
   })
 
   it("0 or 21 opposing parties, a bad key, a missing client or an unknown clientId → 400 invalid_subjects; nothing written", async () => {

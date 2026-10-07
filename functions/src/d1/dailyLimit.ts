@@ -47,6 +47,23 @@ export function secondsToKarachiMidnight(now: Date): number {
 
 const counterRef = (firmId: string, now: Date) => adminDb().collection("counters").doc(`${firmId}_conflictday_${karachiDay(now)}`)
 
+/** The stored count; a malformed one reads as infinite (fails closed). */
+function countOf(data: Record<string, unknown> | undefined): number {
+  if (data === undefined) return 0
+  const raw = data.count
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : Number.POSITIVE_INFINITY
+}
+
+/**
+ * A cheap non-transactional look at the day counter, before the registry is read: refuses with
+ * RateLimitedError(secondsToKarachiMidnight, "daily_limit") when the firm is already at the cap.
+ * Advisory only; consumeDailyConflict in the check's transaction stays authoritative.
+ */
+export async function assertDailyConflictOpen(firmId: string, now: Date): Promise<void> {
+  const data = (await counterRef(firmId, now).get()).data()
+  if (countOf(data) >= DAILY_CONFLICT_LIMIT) throw new RateLimitedError(secondsToKarachiMidnight(now), "daily_limit")
+}
+
 /**
  * Counts one conflict check for the firm's Karachi day, or refuses it with
  * RateLimitedError(secondsToKarachiMidnight, "daily_limit") once DAILY_CONFLICT_LIMIT are counted.
@@ -57,9 +74,7 @@ export async function consumeDailyConflict(firmId: string, now: Date, tx?: Trans
   if (!tx) return adminDb().runTransaction((own) => consumeDailyConflict(firmId, now, own))
   const ref = counterRef(firmId, now)
   const data = (await tx.get(ref)).data()
-  const raw = data?.count
-  const count = data === undefined ? 0 : typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : Number.POSITIVE_INFINITY
-  if (count >= DAILY_CONFLICT_LIMIT) throw new RateLimitedError(secondsToKarachiMidnight(now), "daily_limit")
+  if (countOf(data) >= DAILY_CONFLICT_LIMIT) throw new RateLimitedError(secondsToKarachiMidnight(now), "daily_limit")
   const expiresAt = Timestamp.fromMillis(nextKarachiMidnight(now) + COUNTER_TTL_MS)
   if (data) tx.update(ref, { count: FieldValue.increment(1) })
   else tx.create(ref, { firmId, count: 1, expiresAt, classification: "internal", createdAt: FieldValue.serverTimestamp() })

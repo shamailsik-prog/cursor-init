@@ -37,6 +37,13 @@ const PRIVILEGED_RESTRICTED: Classification = "privileged-restricted"
 /** An unreadable classification counts as the highest rank (monotonic, fail closed). */
 export const knownOrHighest = (raw: unknown): Classification => (isKnownClassification(raw) ? raw : PRIVILEGED_RESTRICTED)
 
+/** The higher of two labels (each read with knownOrHighest, so an unknown one wins). */
+export function maxLabel(a: unknown, b: unknown): Classification {
+  const x = knownOrHighest(a)
+  const y = knownOrHighest(b)
+  return rankOf(y) > rankOf(x) ? y : x
+}
+
 const millisOf = (value: unknown): number | null => (value instanceof Timestamp ? value.toMillis() : null)
 
 /**
@@ -150,12 +157,24 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
     })
   }
 
+  // Each client's matters, grouped once (not a scan of every matter per client).
+  const mattersByClient = new Map<string, Array<[string, MatterInfo]>>()
+  for (const entry of matters.entries()) {
+    const clientId = entry[1].clientId
+    if (typeof clientId !== "string") continue
+    const list = mattersByClient.get(clientId)
+    if (list) list.push(entry)
+    else mattersByClient.set(clientId, [entry])
+  }
+
   const candidates: BaseCandidate[] = []
   for (const d of clientSnap.docs) {
     const c = d.data()
     if (typeof c.canonicalName !== "string") continue
-    const own = [...matters.entries()].filter(([, m]) => m.clientId === d.id)
+    const own = mattersByClient.get(d.id) ?? []
+    const clientClass = knownOrHighest(c.classification)
     const base = {
+      candidateId: `client:${d.id}`,
       role: "client" as const,
       name: c.canonicalName,
       forms: nameForms(c.canonicalName, firmMap),
@@ -168,12 +187,13 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
     }
     if (own.length === 0) {
       // A client with no matter yet: the hit names no matter; the client's own label stands in.
-      candidates.push({ ...base, matterId: null, matterNo: null, matterClassification: knownOrHighest(c.classification), matterStatus: null })
+      candidates.push({ ...base, matterId: null, matterNo: null, matterClassification: clientClass, matterStatus: null })
       continue
     }
     // One candidate per matter, so every matter the hit touches is reported (and classifies the check).
+    // The hit is classified at the higher of the matter's and the client record's label (L17.3 #20, monotonic).
     for (const [matterId, m] of own) {
-      candidates.push({ ...base, matterId, matterNo: m.matterNo, matterClassification: m.classification, matterStatus: m.status })
+      candidates.push({ ...base, matterId, matterNo: m.matterNo, matterClassification: maxLabel(m.classification, clientClass), matterStatus: m.status })
     }
   }
 
@@ -184,6 +204,7 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
     const matter = matterId ? matters.get(matterId) : undefined
     const entityId = typeof p.entityId === "string" && p.entityId !== "" ? p.entityId : undefined
     candidates.push({
+      candidateId: `party:${d.id}`,
       role: "opposing",
       name: p.name,
       forms: nameForms(p.name, firmMap),
@@ -201,11 +222,6 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
   }
 
   return { candidates, links, firmMap, l17_2Enabled: enabled }
-}
-
-/** All firm candidates (clients, opposing parties) with their unresolved links; link state is per subject (see `tailor`). */
-export async function loadCandidates(firmId: string, now: Date): Promise<Candidate[]> {
-  return (await loadRegistry(firmId, now)).candidates
 }
 
 /**
@@ -274,4 +290,17 @@ export function runEngine(registry: Registry, subjects: Subject[], subjectEntity
     for (const h of r.hits) hits.push({ ...h, subjectIndex: i })
   })
   return { hits, ...summarise(hits), classification: checkClassification(hits) }
+}
+
+/** A hit's identity for the re-screen at open: subject, conflict type and registry candidate. */
+const hitIdentity = (h: Hit): string => `${h.subjectIndex}|${h.type}|${h.candidateId ?? ""}`
+
+/**
+ * The hits of a fresh screen that a stored check does not account for (spec P2-6, final review I5):
+ * non-NONE fresh hits whose (subject, type, candidate) is not among the stored non-NONE or
+ * review-resolved hits. A stored hit without a candidate id matches nothing (fails toward stale).
+ */
+export function unseenHits(fresh: readonly Hit[], stored: readonly Hit[]): Hit[] {
+  const known = new Set(stored.filter((h) => h.outcome !== "NONE" || h.review !== undefined).map(hitIdentity))
+  return fresh.filter((h) => h.outcome !== "NONE" && !known.has(hitIdentity(h)))
 }
