@@ -133,7 +133,7 @@ describe.skipIf(!EMULATORS)("resolveReviewItem", () => {
     expectKind(await apiErrorOf(review(bound, partner.token, firmId, 0, "different_person")), "failed-precondition", "check_already_bound")
     const open = await seedCheck(firmId, partner.uid, [hit("direct_adverse", "POSSIBLE_CANDIDATE_REVIEW")])
     const clerk = await mintIdToken(claims(firmId, "clerk"))
-    expect((await apiErrorOf(review(open, clerk.token, firmId, 0, "different_person"))).status).toBe(403)
+    expectKind(await apiErrorOf(review(open, clerk.token, firmId, 0, "different_person")), "permission-denied", "role_not_permitted")
     const otherFirm = await newFirm()
     const outsider = await mintIdToken(claims(otherFirm, "partner"))
     expectKind(await apiErrorOf(review(open, outsider.token, otherFirm, 0, "different_person")), "not-found", "not_found")
@@ -177,7 +177,7 @@ describe.skipIf(!EMULATORS)("recordPartnerWaiver", () => {
     const partner = await mintIdToken(claims(firmId, "partner"))
     const associate = await mintIdToken(claims(firmId, "associate"))
     const checkId = await seedCheck(firmId, associate.uid, [hit("direct_adverse", "FLAG")])
-    expect((await apiErrorOf(waive({ token: associate.token, data: body(firmId, checkId) } as never))).status).toBe(403)
+    expectKind(await apiErrorOf(waive({ token: associate.token, data: body(firmId, checkId) } as never)), "permission-denied", "role_not_permitted")
     await waive({ token: partner.token, data: body(firmId, checkId) } as never)
     expectKind(await apiErrorOf(waive({ token: partner.token, data: body(firmId, checkId) } as never)), "failed-precondition", "already_waived")
   })
@@ -238,14 +238,14 @@ describe.skipIf(!EMULATORS)("getConflictTrail", () => {
     expect(out.items[2].actorId).toBe(partner.uid)
   })
 
-  it("an associate reads only the trail of a check they requested; a non-requester → 403 role_not_permitted", async () => {
+  it("an associate reads only the trail of a check they requested; a non-requester → 404 not_found", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
     const associate = await mintIdToken(claims(firmId, "associate"))
     const mine = await seedCheck(firmId, associate.uid, [hit("direct_adverse", "FLAG")])
     const theirs = await seedCheck(firmId, partner.uid, [hit("direct_adverse", "FLAG")])
     expect((await trail({ token: associate.token, data: { firmId, checkId: mine } } as never)).items).toHaveLength(1)
-    expectKind(await apiErrorOf(trail({ token: associate.token, data: { firmId, checkId: theirs } } as never)), "permission-denied", "role_not_permitted")
+    expectKind(await apiErrorOf(trail({ token: associate.token, data: { firmId, checkId: theirs } } as never)), "not-found", "not_found")
     expect((await trail({ token: partner.token, data: { firmId, checkId: mine } } as never)).items).toHaveLength(1)
   })
 
@@ -258,6 +258,99 @@ describe.skipIf(!EMULATORS)("getConflictTrail", () => {
     expectKind(await apiErrorOf(trail({ token: outsider.token, data: { firmId: otherFirm, checkId } } as never)), "not-found", "not_found")
     expectKind(await apiErrorOf(trail({ token: partner.token, data: { firmId, checkId: "nope" } } as never)), "not-found", "not_found")
     const clerk = await mintIdToken(claims(firmId, "clerk"))
-    expect((await apiErrorOf(trail({ token: clerk.token, data: { firmId, checkId } } as never))).status).toBe(403)
+    expectKind(await apiErrorOf(trail({ token: clerk.token, data: { firmId, checkId } } as never)), "permission-denied", "role_not_permitted")
+  })
+})
+
+describe.skipIf(!EMULATORS)("read gate and clearance (controller ruling)", () => {
+  const snapshot = async (checkId: string, firmId: string) => ({
+    check: (await adminDb().collection("conflict_checks").doc(checkId).get()).data(),
+    trail: (await adminDb().collection("conflict_events").where("checkId", "==", checkId).get()).size,
+    events: (await adminDb().collection("events").where("firmId", "==", firmId).get()).size,
+  })
+  const wbody = (firmId: string, checkId: string, extra: Record<string, unknown> = {}) => ({
+    firmId, checkId, note: NOTE50, clientConsent: true, consentReference: "Letter 1", ...extra,
+  })
+
+  it("trail: requester below the check's classification → 403 exceeds_own_clearance; low-clearance partner → 403; non-requesting associate → 404", async () => {
+    const firmId = await newFirm()
+    const low = await mintIdToken(claims(firmId, "associate", "internal"))
+    const lowPartner = await mintIdToken(claims(firmId, "partner", "internal"))
+    const other = await mintIdToken(claims(firmId, "associate"))
+    const checkId = await seedCheck(firmId, low.uid, [hit("direct_adverse", "FLAG")])
+    expectKind(await apiErrorOf(trail({ token: low.token, data: { firmId, checkId } } as never)), "permission-denied", "exceeds_own_clearance")
+    expectKind(await apiErrorOf(trail({ token: lowPartner.token, data: { firmId, checkId } } as never)), "permission-denied", "exceeds_own_clearance")
+    expectKind(await apiErrorOf(trail({ token: other.token, data: { firmId, checkId } } as never)), "not-found", "not_found")
+  })
+
+  it("resolve: non-requesting associate → 404 and unchanged; requester below the classification → 403 and unchanged", async () => {
+    const firmId = await newFirm()
+    const requester = await mintIdToken(claims(firmId, "associate", "internal"))
+    const other = await mintIdToken(claims(firmId, "associate"))
+    const checkId = await seedCheck(firmId, requester.uid, [hit("direct_adverse", "POSSIBLE_CANDIDATE_REVIEW")])
+    const before = await snapshot(checkId, firmId)
+    expectKind(await apiErrorOf(review(checkId, other.token, firmId, 0, "different_person")), "not-found", "not_found")
+    expectKind(await apiErrorOf(review(checkId, requester.token, firmId, 0, "different_person")), "permission-denied", "exceeds_own_clearance")
+    expect(await snapshot(checkId, firmId)).toEqual(before)
+  })
+
+  it("the clearance check precedes state checks (no oracle): a low-clearance requester on a bound check gets 403", async () => {
+    const firmId = await newFirm()
+    const requester = await mintIdToken(claims(firmId, "associate", "internal"))
+    const checkId = await seedCheck(firmId, requester.uid, [hit("direct_adverse", "POSSIBLE_CANDIDATE_REVIEW")], { boundMatterId: "m1" })
+    expectKind(await apiErrorOf(review(checkId, requester.token, firmId, 0, "different_person")), "permission-denied", "exceeds_own_clearance")
+  })
+
+  it("core flow: same_person on a role-crossing hit → FLAG confirmed, partner waiver clears it; trail decided → review_resolved → waived; one waive allow audit row", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const associate = await mintIdToken(claims(firmId, "associate"))
+    const checkId = await seedCheck(firmId, associate.uid, [hit("direct_adverse", "POSSIBLE_CANDIDATE_REVIEW")])
+    const flagged = await review(checkId, associate.token, firmId, 0, "same_person")
+    expect(flagged).toMatchObject({ result: "FLAG", identityBasis: "confirmed_identity", decision: "pending" })
+    expect(flagged.hits[0]).toMatchObject({ outcome: "FLAG", identityBasis: "confirmed_identity" })
+    const out = await waive({ token: partner.token, data: wbody(firmId, checkId) } as never)
+    expect(out.decision).toBe("cleared")
+    const stored = (await adminDb().collection("conflict_checks").doc(checkId).get()).data()
+    expect(stored).toMatchObject({ decision: "cleared", waiver: { partnerId: partner.uid, clientConsent: true } })
+    const t = await trail({ token: partner.token, data: { firmId, checkId } } as never)
+    expect(t.items.map((i) => i.kind)).toEqual(["decided", "review_resolved", "waived"])
+    const ev = await adminDb().collection("events").where("firmId", "==", firmId).where("name", "==", "conflict.waived").get()
+    expect(ev.size).toBe(1)
+    const rows = await adminDb().collection("audit_log").where("actorId", "==", partner.uid).where("action", "==", "conflict.waive").get()
+    expect(rows.docs.map((d) => d.data()).filter((r) => r.target === `conflict_checks/${checkId}`).map((r) => r.decision)).toEqual(["allow"])
+  })
+
+  it("boundaries: review note 19 → note_too_short, 20 → ok; waiver note 50 → ok", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const checkId = await seedCheck(firmId, partner.uid, [hit("direct_adverse", "POSSIBLE_CANDIDATE_REVIEW")])
+    expectKind(await apiErrorOf(review(checkId, partner.token, firmId, 0, "same_person", "x".repeat(19))), "invalid-argument", "note_too_short")
+    expect((await review(checkId, partner.token, firmId, 0, "same_person", "x".repeat(20))).result).toBe("FLAG")
+    expect((await waive({ token: partner.token, data: wbody(firmId, checkId, { note: "y".repeat(50) }) } as never)).decision).toBe("cleared")
+  })
+
+  it("invalid resolution, out-of-range or non-integer hitIndex → 400 invalid_query (out of range → 409 not_review_item)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const checkId = await seedCheck(firmId, partner.uid, [hit("direct_adverse", "POSSIBLE_CANDIDATE_REVIEW")])
+    for (const [i, r] of [[0, "maybe"], [0, undefined], [-1, "same_person"], [1.5, "same_person"], ["0", "same_person"], [undefined, "same_person"]] as const) {
+      expectKind(await apiErrorOf(resolve({ token: partner.token, data: { firmId, checkId, hitIndex: i, resolution: r, note: NOTE20 } } as never)), "invalid-argument", "invalid_query")
+    }
+    expectKind(await apiErrorOf(review(checkId, partner.token, firmId, 5, "same_person")), "failed-precondition", "not_review_item")
+  })
+
+  it("a rejected waiver leaves the check and the events collection untouched", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const low = await mintIdToken(claims(firmId, "partner", "internal"))
+    const associate = await mintIdToken(claims(firmId, "associate"))
+    const checkId = await seedCheck(firmId, partner.uid, [hit("direct_adverse", "FLAG")])
+    const before = await snapshot(checkId, firmId)
+    await apiErrorOf(waive({ token: low.token, data: wbody(firmId, checkId) } as never))
+    await apiErrorOf(waive({ token: associate.token, data: wbody(firmId, checkId) } as never))
+    await apiErrorOf(waive({ token: partner.token, data: wbody(firmId, checkId, { note: "short" }) } as never))
+    await apiErrorOf(waive({ token: partner.token, data: wbody(firmId, checkId, { clientConsent: false }) } as never))
+    expect(await snapshot(checkId, firmId)).toEqual(before)
   })
 })

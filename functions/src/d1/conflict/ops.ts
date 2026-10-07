@@ -211,11 +211,26 @@ const ROLE_CROSSING = new Set(["direct_adverse", "former_client", "adverse_histo
 
 const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "")
 
-/** The check for a decision, read inside `tx`; another firm's or a missing check is 404 not_found (existence not revealed). */
+/**
+ * The read gate shared with getConflictResult, then clearance. Another firm's or a missing check,
+ * or one the caller neither requested nor (as a partner) may read, is 404 not_found; a caller
+ * cleared below the check's classification (an unknown label fails closed) is 403
+ * exceeds_own_clearance. Runs before any state check, so state codes are no oracle.
+ */
+function gateCheck(caller: Caller, checkId: string, row: DocumentData | undefined): StoredCheck {
+  if (!row || row.firmId !== caller.firmId || (row.requestedBy !== caller.uid && caller.role !== "partner")) {
+    throw new HttpError(404, "not_found")
+  }
+  const check = storedCheck(checkId, row)
+  if (!isKnownClassification(check.classification) || rankOf(check.classification) > rankOf(caller.clearanceLevel)) {
+    throw new HttpError(403, "exceeds_own_clearance")
+  }
+  return check
+}
+
+/** The gated check, read inside `tx`. */
 async function readCheck(tx: Transaction, caller: Caller, checkId: string): Promise<StoredCheck> {
-  const row = (await tx.get(checks().doc(checkId))).data()
-  if (!row || row.firmId !== caller.firmId) throw new HttpError(404, "not_found")
-  return storedCheck(checkId, row)
+  return gateCheck(caller, checkId, (await tx.get(checks().doc(checkId))).data())
 }
 
 /** The decided check as the caller may see it, once the transaction has committed. */
@@ -316,17 +331,13 @@ export const recordPartnerWaiverOp: FirmOperation<DisclosedCheck> = {
     const updated = await db.runTransaction(async (tx): Promise<StoredCheck> => {
       const ref = checks().doc(checkId)
       const row = (await tx.get(ref)).data()
-      if (!row || row.firmId !== caller.firmId) throw new HttpError(404, "not_found")
-      const check = storedCheck(checkId, row)
+      const check = gateCheck(caller, checkId, row)
       if (check.boundMatterId !== null) throw new HttpError(409, "check_already_bound")
-      if (row.waiver !== undefined) throw new HttpError(409, "already_waived")
+      if (row?.waiver !== undefined) throw new HttpError(409, "already_waived")
       if (check.result !== "FLAG") throw new HttpError(409, "not_waivable")
       if (check.hits.some((h) => h.outcome === "POSSIBLE_CANDIDATE_REVIEW" && h.review === undefined)) throw new HttpError(409, "review_pending")
       if (note.length < MIN_WAIVER_NOTE) throw new HttpError(400, "note_too_short")
       if (data.clientConsent !== true || consentReference === "") throw new HttpError(400, "consent_required")
-      if (!isKnownClassification(check.classification) || rankOf(check.classification) > rankOf(caller.clearanceLevel)) {
-        throw new HttpError(403, "exceeds_own_clearance")
-      }
 
       await audit.stage(tx, "allow", "ok")
       tx.update(ref, { waiver: { partnerId: caller.uid, note, clientConsent: true, consentReference, at }, decision: "cleared" })
@@ -350,8 +361,8 @@ type TrailItem = { kind: string; actorId: string; detail: unknown; createdAt: st
 
 /**
  * getConflictTrail(?checkId=) (P2-8, P2-14) → the check's `conflict_events` rows, oldest first.
- * A partner reads any check of the firm; an associate only a check they requested (403
- * role_not_permitted otherwise). Another firm's or a missing check → 404 not_found.
+ * Same read gate as getConflictResult (requester or partner of the firm, else 404 not_found),
+ * then clearance at least the check's classification (403 exceeds_own_clearance).
  */
 export const getConflictTrailOp: FirmOperation<{ items: TrailItem[]; nextCursor: null }> = {
   auth: "firm",
@@ -366,8 +377,7 @@ export const getConflictTrailOp: FirmOperation<{ items: TrailItem[]; nextCursor:
     if (!isSafeDocId(checkId)) throw new HttpError(400, "invalid_query")
     audit.target = `conflict_checks/${checkId}`
     const row = (await checks().doc(checkId).get()).data()
-    if (!row || row.firmId !== caller.firmId) throw new HttpError(404, "not_found")
-    if (caller.role !== "partner" && row.requestedBy !== caller.uid) throw new HttpError(403, "role_not_permitted")
+    gateCheck(caller, checkId, row)
 
     const snap = await adminDb().collection("conflict_events").where("firmId", "==", caller.firmId).where("checkId", "==", checkId).get()
     const millis = (d: DocumentData) => (d.createdAt instanceof Timestamp ? d.createdAt.toMillis() : 0)
