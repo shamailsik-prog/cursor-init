@@ -5,6 +5,16 @@ import { adminApp, adminAuth, adminDb } from "../src/admin"
 export const EMULATORS =
   Boolean(process.env.FIRESTORE_EMULATOR_HOST) && Boolean(process.env.FIREBASE_AUTH_EMULATOR_HOST)
 
+// Locally the emulator suites skip without emulators (`describe.skipIf(!EMULATORS)`). In CI a
+// skip would turn `test:emu` into a vacuous green, so a missing emulator env fails the run instead.
+const ON_CI = Boolean(process.env.CI) && !/^(false|0)$/i.test(process.env.CI ?? "")
+if (ON_CI && !EMULATORS) {
+  throw new Error(
+    "functions emulator suites require FIRESTORE_EMULATOR_HOST and FIREBASE_AUTH_EMULATOR_HOST in CI " +
+      "(run them through `npm --prefix functions run test:emu` or `npm run gate:g2`)"
+  )
+}
+
 export function uniq(prefix: string): string {
   return `${prefix}-${randomUUID().slice(0, 8)}`
 }
