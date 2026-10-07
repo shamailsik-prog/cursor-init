@@ -642,7 +642,12 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
     ).resolves.toMatchObject({ mfaEnabled: false })
   })
 
-  it("the attempt cap holds under concurrency: 30 parallel wrong codes → at most 5 invalid_code, the rest approval_voided", async () => {
+  // 30 transactions contend on one approval doc (reserveCodeAttempt). On the emulator each
+  // contention round costs about 3.5 s (lock wait, then the SDK's ABORTED backoff), and the SDK
+  // allows up to 5 attempts, so the designed worst case is about 4 x 3.5 s + backoff, roughly 16 s.
+  // Measured over 15 rounds: 2 attempts (3.7-4.0 s) in 9, 3 (7.7-8.0 s) in 5, 4 (12.7 s) in 1.
+  // The suite's 15 s default sits below that bound, so this test gets a budget above it.
+  it("the attempt cap holds under concurrency: 30 parallel wrong codes → at most 5 invalid_code, the rest approval_voided", { timeout: 45_000 }, async () => {
     const { firmId, subject, approve } = await setup()
     const approvalId = await approve()
     const auth = subject.firstFactorToken
