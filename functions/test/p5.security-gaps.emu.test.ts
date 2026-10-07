@@ -89,10 +89,19 @@ describe.skipIf(!EMULATORS)("checkPermission: exact decision and audit row per b
     })
   })
 
-  it("a client's other actions still pass the matter checks", async () => {
+  it("a client's other actions still pass the matter checks, and a member client may read", async () => {
     const client = caller({ role: "client" })
     const m = await matter(client.firmId, "internal")
     expect((await decide(client, "read_matter", m)).decision).toEqual({ allow: false, reason: "not-member" })
+    const member = caller({ role: "client" })
+    const own = await matter(member.firmId, "internal", [member.uid])
+    expect((await decide(member, "read_matter", own)).decision).toEqual({ allow: true, reason: "ok" })
+  })
+
+  it("staff list_matters is allowed before any matter check, even with another firm's matter id", async () => {
+    const staff = caller()
+    const foreign = await matter(uniq("firm"), "internal")
+    expect((await decide(staff, "list_matters", foreign)).decision).toEqual({ allow: true, reason: "ok" })
   })
 
   it("a firm-level action without a matter is allowed and audited as internal", async () => {
@@ -112,7 +121,7 @@ describe.skipIf(!EMULATORS)("checkPermission: exact decision and audit row per b
   })
 
   it("ids that only resemble reserved ones are ordinary ids", async () => {
-    for (const id of [`__x${uniq("m")}`, `x${uniq("m")}__`]) {
+    for (const id of [`__x${uniq("m")}`, `x${uniq("m")}__`, `a__${uniq("m")}__`, `__${uniq("m")}__b`]) {
       const c = caller()
       expect((await decide(c, "read_matter", id)).decision).toEqual({ allow: false, reason: "cross-firm" })
     }
@@ -245,6 +254,31 @@ describe.skipIf(!EMULATORS)("identity input and firm checks", () => {
     await adminDb().collection("users").doc(ghost).set({ firmId, role: "associate", clearanceLevel: "internal", active: true })
     const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: ghost, role: "clerk" })))
     expect(detail(err)).toBe("cross_firm")
+  })
+
+  it("setUserClaims counts from 0 when the stored claimsVersion is not an integer", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    for (const claimsVersion of [2.5, "7"]) {
+      const target = await mintIdToken({ firmId, role: "associate", clearanceLevel: "internal" }, { userDoc: false })
+      await adminDb().collection("users").doc(target.uid).set({ firmId, role: "associate", clearanceLevel: "internal", active: true, claimsVersion })
+      await setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
+      expect((await adminDb().collection("users").doc(target.uid).get()).data()?.claimsVersion).toBe(1)
+      expect((await adminAuth().getUser(target.uid)).customClaims?.claimsVersion).toBe(1)
+    }
+  })
+
+  it("setUserClaims prefers the server-only claims_sync version over the users doc", async () => {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await mintIdToken({ firmId, role: "associate", clearanceLevel: "internal" }, { userDoc: false })
+    await adminDb().collection("users").doc(target.uid).set({ firmId, role: "associate", clearanceLevel: "internal", active: true, claimsVersion: 1 })
+    await adminDb().collection("claims_sync").doc(target.uid).set({ firmId, role: "associate", clearanceLevel: "internal", version: 4 })
+    await setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
+    expect((await adminDb().collection("users").doc(target.uid).get()).data()?.claimsVersion).toBe(5)
+    await adminDb().collection("claims_sync").doc(target.uid).set({ firmId, role: "clerk", clearanceLevel: "internal", version: 7.5 })
+    await setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "intern" }))
+    expect((await adminDb().collection("users").doc(target.uid).get()).data()?.claimsVersion).toBe(6)
   })
 
   it("createFirmUser trims a valid email, refuses malformed or over-long ones, and an email already in use", async () => {

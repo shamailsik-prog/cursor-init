@@ -256,6 +256,9 @@ describe("idempotency helpers (boundaries)", () => {
     expect(isStorableResult(r(409))).toBe(false)
     expect(isStorableResult(r(409, { code: 5 }))).toBe(false)
     expect(isStorableResult(r(409, "already_exists"))).toBe(false)
+    // A stored-409 code only counts on a 409.
+    expect(isStorableResult(r(401, { code: "already_exists" }))).toBe(false)
+    expect(isStorableResult(r(503, { code: "last_partner" }))).toBe(false)
   })
 
   it("isUuidV4 is anchored and needs a string", () => {
