@@ -1,4 +1,4 @@
-import { FieldPath, FieldValue, Timestamp, type DocumentData, type Query } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, Timestamp, type DocumentData, type Query, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../../admin"
@@ -166,6 +166,11 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
         const checkRef = checks().doc(checkId)
         const check = (await tx.get(checkRef)).data()
         if (!check || check.firmId !== caller.firmId) throw new HttpError(404, "check_not_found")
+        // The clearance gate every check-consuming route applies (conflict/ops.ts gateCheck), before any
+        // state code so those are no oracle; an unknown label fails closed.
+        if (!isKnownClassification(check.classification) || rankOf(check.classification) > rankOf(caller.clearanceLevel)) {
+          throw new HttpError(403, "exceeds_own_clearance")
+        }
         if (!isCleared(check)) throw new HttpError(409, "check_not_cleared")
         if (check.boundMatterId !== null && check.boundMatterId !== undefined) throw new HttpError(409, "check_already_bound")
         if (check.stale === true) throw new HttpError(409, "check_stale")
@@ -191,7 +196,7 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
         const { matterPrefix } = await readPrefixes(tx, caller.firmId)
         const n = await allocateNumber(tx, caller.firmId, "matter", now)
         const matterNo = formatMatterNo(matterPrefix, karachiYear(now), n)
-        const checkClass = isKnownClassification(check.classification) ? check.classification : "privileged-restricted"
+        const checkClass: Classification = check.classification
 
         const matter = {
           firmId: caller.firmId,
@@ -266,6 +271,28 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
     audit.committed()
     return present(matterId, { ...row, createdAt: Timestamp.fromDate(now) })
   },
+}
+
+/**
+ * A D1-2 matter event row (the matter.created payload shape), written in the caller's transaction
+ * under a doc id derived from its idempotency key.
+ */
+function matterEvent(
+  tx: Transaction,
+  name: "matter.updated" | "matter.closed",
+  matterId: string,
+  matter: DocumentData,
+  idempotencyKey: string
+): void {
+  const courtId = typeof matter.courtId === "string" ? matter.courtId : undefined
+  tx.create(adminDb().collection("events").doc(idempotencyKey.replaceAll(":", "_")), {
+    name,
+    firmId: matter.firmId,
+    payload: { matterId, clientId: matter.clientId ?? null, ...(courtId !== undefined ? { courtId } : {}), caseNumber: null, relevant_law_dates: [] },
+    classification: matter.classification,
+    occurredAt: FieldValue.serverTimestamp(),
+    idempotencyKey,
+  })
 }
 
 /**
@@ -412,6 +439,7 @@ export const advanceStageOp: FirmOperation<Record<string, unknown>> = {
         classification: matter.classification,
         createdAt: FieldValue.serverTimestamp(),
       })
+      matterEvent(tx, "matter.updated", matterId, matter, `${matterId}:stage:${to}`)
       return { ...matter, stage: to }
     })
     audit.committed()
@@ -462,6 +490,7 @@ export const closeMatterOp: FirmOperation<Record<string, unknown>> = {
         classification: matter.classification,
         createdAt: FieldValue.serverTimestamp(),
       })
+      matterEvent(tx, "matter.closed", matterId, matter, `${matterId}:closed`)
       return { ...matter, status: "closed", closedBy: caller.uid }
     })
     audit.committed()

@@ -242,6 +242,19 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
     expect((await open(associate.token, firmId, checkId)).classification).toBe("confidential")
   })
 
+  it("a caller cleared below the check's classification → 403 exceeds_own_clearance before any state code; the check stays unbound, no matter", async () => {
+    const { firmId, partner, checkId } = await setup()
+    await checkRef(checkId).update({ classification: "privileged" })
+    const low = await mintIdToken(claims(firmId, "associate", "internal"))
+    expectKind(await apiErrorOf(open(low.token, firmId, checkId, { classification: "internal" })), "permission-denied", "exceeds_own_clearance")
+    expect((await checkRef(checkId).get()).data()?.boundMatterId).toBeNull()
+    expect((await adminDb().collection("matters").where("firmId", "==", firmId).get()).size).toBe(0)
+    await checkRef(checkId).update({ boundMatterId: "some-matter" })
+    expectKind(await apiErrorOf(open(low.token, firmId, checkId, { classification: "internal" })), "permission-denied", "exceeds_own_clearance")
+    await checkRef(checkId).update({ boundMatterId: null, classification: "unknown-label" })
+    expectKind(await apiErrorOf(open(partner.token, firmId, checkId)), "permission-denied", "exceeds_own_clearance")
+  })
+
   it("a missing or over-long title → 400 invalid_query", async () => {
     const { firmId, partner, checkId } = await setup()
     expectKind(await apiErrorOf(open(partner.token, firmId, checkId, { title: "   " })), "invalid-argument", "invalid_query")
@@ -292,6 +305,23 @@ describe.skipIf(!EMULATORS)("stage flow and closure", () => {
     expect(events.find((e) => e.kind === "closed")).toMatchObject({ firmId, actorId: partner.uid, from: "filed", reason: "x".repeat(20) })
     expectKind(await apiErrorOf(closeMatter({ token: partner.token, data: { firmId, matterId, reason: REASON20 } } as never)), "failed-precondition", "invalid_stage_transition")
     expectKind(await apiErrorOf(advanceStage({ token: partner.token, data: { firmId, matterId, to: "hearing" } } as never)), "failed-precondition", "invalid_stage_transition")
+  })
+
+  it("advanceStage emits matter.updated and closeMatter emits matter.closed (D1-2), one row each, in the matter's classification", async () => {
+    const { firmId, partner, client, checkId } = await setup()
+    const { matterId } = await open(partner.token, firmId, checkId, { courtId: "LHC" })
+    await advanceStage({ token: partner.token, data: { firmId, matterId, to: "filed" } } as never)
+    await closeMatter({ token: partner.token, data: { firmId, matterId, reason: REASON20 } } as never)
+    const rows = (await adminDb().collection("events").where("firmId", "==", firmId).get()).docs
+      .map((d) => d.data())
+      .filter((e) => e.payload?.matterId === matterId && e.name !== "conflict.decided")
+    const payload = { matterId, clientId: client.clientId, courtId: "LHC", caseNumber: null, relevant_law_dates: [] }
+    expect(rows.filter((e) => e.name === "matter.updated")).toEqual([
+      expect.objectContaining({ firmId, payload, classification: "confidential", idempotencyKey: `${matterId}:stage:filed`, occurredAt: expect.any(Timestamp) }),
+    ])
+    expect(rows.filter((e) => e.name === "matter.closed")).toEqual([
+      expect.objectContaining({ firmId, payload, classification: "confidential", idempotencyKey: `${matterId}:closed`, occurredAt: expect.any(Timestamp) }),
+    ])
   })
 
   it("a decided matter closes without a reason", async () => {
