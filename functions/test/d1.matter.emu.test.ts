@@ -255,6 +255,71 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
     expectKind(await apiErrorOf(open(partner.token, firmId, checkId)), "permission-denied", "exceeds_own_clearance")
   })
 
+  it("binding raises the check's classification to the matter's when higher; the bound trail row carries it (final review I2a)", async () => {
+    const { firmId, partner, checkId } = await setup()
+    expect((await checkRef(checkId).get()).data()?.classification).toBe("confidential")
+    const { matterId } = await open(partner.token, firmId, checkId, { classification: "privileged" })
+    expect((await checkRef(checkId).get()).data()?.classification).toBe("privileged")
+    const bound = (await adminDb().collection("conflict_events").where("checkId", "==", checkId).where("kind", "==", "bound").get()).docs
+    expect(bound.map((d) => d.data())).toEqual([expect.objectContaining({ classification: "privileged", detail: { matterId } })])
+
+    const lower = await clearCheck(partner.token, firmId, (await register(partner.token, firmId, { name: "Babar Azam" })).clientId, { name: "Yasir Shah" })
+    await open(partner.token, firmId, lower, { classification: "internal" })
+    expect((await checkRef(lower).get()).data()?.classification).toBe("confidential")
+  })
+
+  it("every matter_parties row is classified at the highest of the matter, the client record and the check (final review I2b)", async () => {
+    const { firmId, partner, checkId } = await setup()
+    const { matterId } = await open(partner.token, firmId, checkId, { classification: "internal" })
+    const rows = (await adminDb().collection("matter_parties").where("matterId", "==", matterId).get()).docs.map((d) => d.data())
+    expect(rows).toHaveLength(2)
+    for (const r of rows) expect(r).toMatchObject({ classification: "confidential", matterClassification: "internal" })
+
+    const secret = await register(partner.token, firmId, { name: "Babar Azam", classification: "privileged" })
+    const second = await clearCheck(partner.token, firmId, secret.clientId, { name: "Yasir Shah" })
+    await checkRef(second).update({ classification: "confidential" }) // only the client record is privileged
+    const other = await open(partner.token, firmId, second, { classification: "confidential" })
+    const rows2 = (await adminDb().collection("matter_parties").where("matterId", "==", other.matterId).get()).docs.map((d) => d.data())
+    expect(rows2).toHaveLength(2)
+    for (const r of rows2) expect(r).toMatchObject({ classification: "privileged", matterClassification: "confidential" })
+  })
+
+  it("re-screen at open: a CLEAR check whose opposing party has since become a client with a live matter → 409 check_stale, check marked stale (final review I5)", async () => {
+    const { firmId, partner, checkId } = await setup() // Shahid Afridi vs Kamran Akmal, CLEAR
+    const q = await register(partner.token, firmId, { name: "Kamran Akmal" })
+    await open(partner.token, firmId, await clearCheck(partner.token, firmId, q.clientId, { name: "Babar Azam" }))
+
+    const counters = async () => (await adminDb().collection("counters").where("firmId", "==", firmId).get()).docs.map((d) => [d.id, d.data().count ?? d.data().next])
+    const checksBefore = (await adminDb().collection("conflict_checks").where("firmId", "==", firmId).get()).size
+    const countersBefore = await counters()
+
+    expectKind(await apiErrorOf(open(partner.token, firmId, checkId)), "failed-precondition", "check_stale")
+    const stored = (await checkRef(checkId).get()).data()
+    expect(stored).toMatchObject({ stale: true, boundMatterId: null })
+    expect((await adminDb().collection("matters").where("firmId", "==", firmId).get()).size).toBe(1)
+    // The re-screen neither writes a check nor spends the daily limit (nor a matter number).
+    expect((await adminDb().collection("conflict_checks").where("firmId", "==", firmId).get()).size).toBe(checksBefore)
+    expect(await counters()).toEqual(countersBefore)
+    expectKind(await apiErrorOf(open(partner.token, firmId, checkId)), "failed-precondition", "check_stale")
+  })
+
+  it("re-screen at open: a hit already on the check (resolved by review) does not make it stale", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const q = await register(partner.token, firmId, { name: "Kamran Akmal" })
+    await open(partner.token, firmId, await clearCheck(partner.token, firmId, q.clientId, { name: "Babar Azam" }))
+    const p = await register(partner.token, firmId)
+    const check = await runCheck({ token: partner.token, data: { firmId, client: { clientId: p.clientId }, opposingParties: [{ name: "Kamran Akmal" }] } } as never)
+    expect(check.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+    const hitIndex = check.hits.findIndex((h) => h.outcome === "POSSIBLE_CANDIDATE_REVIEW")
+    const resolved = await viaApi<Check>("resolveReviewItem")({
+      token: partner.token,
+      data: { firmId, checkId: check.checkId, hitIndex, resolution: "different_person", note: "Different people: CNIC differs on file." },
+    } as never)
+    expect(resolved).toMatchObject({ result: "CLEAR", decision: "cleared" })
+    expect((await open(partner.token, firmId, check.checkId)).conflictCheckId).toBe(check.checkId)
+  })
+
   it("a missing or over-long title → 400 invalid_query", async () => {
     const { firmId, partner, checkId } = await setup()
     expectKind(await apiErrorOf(open(partner.token, firmId, checkId, { title: "   " })), "invalid-argument", "invalid_query")

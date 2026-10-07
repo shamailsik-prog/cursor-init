@@ -7,8 +7,9 @@ import type { Caller } from "../../p5/auth"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { checkPermission, requirePermission } from "../../p5/permission"
+import { loadRegistry, maxLabel, runEngine, unseenHits } from "../conflict/engine"
 import { nameForms } from "../conflict/normalise"
-import type { Subject } from "../conflict/match"
+import type { Hit, Subject } from "../conflict/match"
 import { allocateNumber, formatMatterNo, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
 import { parseKeys, type Keys } from "../validate"
@@ -112,17 +113,37 @@ function storedSubjects(raw: unknown): Subject[] {
   })
 }
 
-/** The firm's transliteration additions (read by nameForms for the parties' normalised names). */
-async function firmMap(firmId: string): Promise<Map<string, string[]>> {
-  const map = new Map<string, string[]>()
-  const snap = await adminDb().collection("transliteration_map").where("firmId", "==", firmId).get()
-  for (const d of snap.docs) {
-    const { script, roman } = d.data()
-    if (typeof script !== "string" || script === "" || !Array.isArray(roman)) continue
-    const spellings = roman.filter((r): r is string => typeof r === "string" && r.trim() !== "")
-    if (spellings.length > 0) map.set(script, [...(map.get(script) ?? []), ...spellings])
+/**
+ * The checks every open applies to the stored check, in order (before any state code, the clearance
+ * gate, so those are no oracle): missing or another firm's 404 check_not_found; a clearance below the
+ * check's (an unknown label fails closed) 403 exceeds_own_clearance; not cleared, bound, stale,
+ * expired 409; then its subjects, which must name exactly one registered client first.
+ */
+function gateOpen(caller: Caller, check: DocumentData | undefined, now: Date): { subjects: Subject[]; clientId: string } {
+  if (!check || check.firmId !== caller.firmId) throw new HttpError(404, "check_not_found")
+  if (!isKnownClassification(check.classification) || rankOf(check.classification) > rankOf(caller.clearanceLevel)) {
+    throw new HttpError(403, "exceeds_own_clearance")
   }
-  return map
+  if (!isCleared(check)) throw new HttpError(409, "check_not_cleared")
+  if (check.boundMatterId !== null && check.boundMatterId !== undefined) throw new HttpError(409, "check_already_bound")
+  if (check.stale === true) throw new HttpError(409, "check_stale")
+  // P2-6: the stored server timestamp, never a client value; an unreadable one fails closed.
+  if (!(check.createdAt instanceof Timestamp) || now.getTime() - check.createdAt.toMillis() > CHECK_VALIDITY_MS) {
+    throw new HttpError(409, "check_expired")
+  }
+  const subjects = storedSubjects(check.subjects)
+  const clientSubjects = subjects.filter((s) => s.role === "client")
+  if (clientSubjects.length !== 1 || subjects[0].role !== "client") throw mismatch()
+  const clientId = clientSubjects[0].clientId
+  if (!isSafeDocId(clientId)) throw mismatch()
+  return { subjects, clientId }
+}
+
+/** The check's client record in the caller's firm (else subjects_mismatch) and its entity. */
+function clientOf(caller: Caller, client: DocumentData | undefined): { entityId: string | undefined; classification: unknown } {
+  if (!client || client.firmId !== caller.firmId) throw mismatch()
+  const entityId = typeof client.entityId === "string" && client.entityId !== "" ? client.entityId : undefined
+  return { entityId, classification: client.classification }
 }
 
 /**
@@ -132,9 +153,13 @@ async function firmMap(firmId: string): Promise<Map<string, string[]>> {
  * already bound 409 check_already_bound; stale 409 check_stale; older than 30 days by its stored
  * createdAt 409 check_expired; a client subject that is not an existing client of the firm 409
  * subjects_mismatch; a listed member who is not an active same-firm staff user 400 invalid_member.
+ * Before the transaction the stored subjects are re-screened against the current registry (the
+ * runConflictCheck engine, no daily-limit spend, no check written); a non-NONE hit the check does not
+ * already hold (or hold resolved) marks the check stale in the transaction and answers 409 check_stale.
  * Then it allocates `{matterPrefix}/{YYYY}/{NNNN}` and writes the matter, the members (caller and
- * listed), one `matter_parties` row per check subject, the `opened` event, the binding with its
- * `bound` trail row, `matter.created` and the call's audit row.
+ * listed), one `matter_parties` row per check subject (classified at the highest of the matter, the
+ * client record and the check), the `opened` event, the binding (raising the check's classification
+ * to the matter's when higher) with its `bound` trail row, `matter.created` and the call's audit row.
  */
 export const openMatterOp: FirmOperation<Record<string, unknown>> = {
   auth: "firm",
@@ -153,9 +178,16 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
     const courtId = parseCourtId(data.courtId)
     const classification = parseClassification(data.classification, caller.clearanceLevel)
     const memberIds = parseMemberIds(data.memberUserIds, caller.uid)
-    const map = await firmMap(caller.firmId)
 
     const db = adminDb()
+    const checkRef = checks().doc(checkId)
+    // Re-screen (spec P2-6, final review I5): the stored subjects against today's registry, through the
+    // same engine as runConflictCheck, after the same gate the transaction applies again below.
+    const pre = gateOpen(caller, (await checkRef.get()).data(), now)
+    const preClient = clientOf(caller, (await db.collection("clients").doc(pre.clientId).get()).data())
+    const registry = await loadRegistry(caller.firmId, now)
+    const fresh: Hit[] = runEngine(registry, pre.subjects, pre.subjects.map((_, i) => (i === 0 ? preClient.entityId : undefined))).hits
+
     const matterRef = matters().doc()
     const matterId = matterRef.id
     audit.target = `matters/${matterId}`
@@ -163,29 +195,16 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
     const row = await db.runTransaction(
       async (tx) => {
         // Reads first: the check, its client, the listed members, the prefixes, then the counter.
-        const checkRef = checks().doc(checkId)
         const check = (await tx.get(checkRef)).data()
-        if (!check || check.firmId !== caller.firmId) throw new HttpError(404, "check_not_found")
-        // The clearance gate every check-consuming route applies (conflict/ops.ts gateCheck), before any
-        // state code so those are no oracle; an unknown label fails closed.
-        if (!isKnownClassification(check.classification) || rankOf(check.classification) > rankOf(caller.clearanceLevel)) {
-          throw new HttpError(403, "exceeds_own_clearance")
+        const { subjects, clientId } = gateOpen(caller, check, now)
+        const client = clientOf(caller, (await tx.get(db.collection("clients").doc(clientId))).data())
+        const entityId = client.entityId
+        if (unseenHits(fresh, Array.isArray(check?.hits) ? check.hits : []).length > 0) {
+          // A hit the check never saw: the check no longer describes the registry. Marked stale atomically with the deny row.
+          await audit.stage(tx, "deny", "check_stale")
+          tx.update(checkRef, { stale: true })
+          return null
         }
-        if (!isCleared(check)) throw new HttpError(409, "check_not_cleared")
-        if (check.boundMatterId !== null && check.boundMatterId !== undefined) throw new HttpError(409, "check_already_bound")
-        if (check.stale === true) throw new HttpError(409, "check_stale")
-        // P2-6: the stored server timestamp, never a client value; an unreadable one fails closed.
-        if (!(check.createdAt instanceof Timestamp) || now.getTime() - check.createdAt.toMillis() > CHECK_VALIDITY_MS) {
-          throw new HttpError(409, "check_expired")
-        }
-        const subjects = storedSubjects(check.subjects)
-        const clientSubjects = subjects.filter((s) => s.role === "client")
-        if (clientSubjects.length !== 1 || subjects[0].role !== "client") throw mismatch()
-        const clientId = clientSubjects[0].clientId
-        if (!isSafeDocId(clientId)) throw mismatch()
-        const client = (await tx.get(db.collection("clients").doc(clientId))).data()
-        if (!client || client.firmId !== caller.firmId) throw mismatch()
-        const entityId = typeof client.entityId === "string" && client.entityId !== "" ? client.entityId : undefined
 
         const users = memberIds.length > 0 ? await tx.getAll(...memberIds.map((uid) => db.collection("users").doc(uid))) : []
         for (const u of users) {
@@ -196,7 +215,10 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
         const { matterPrefix } = await readPrefixes(tx, caller.firmId)
         const n = await allocateNumber(tx, caller.firmId, "matter", now)
         const matterNo = formatMatterNo(matterPrefix, karachiYear(now), n)
-        const checkClass: Classification = check.classification
+        const checkClass: Classification = check?.classification
+        // L17.3 #20 (monotonic): the bound check rises to the matter's label; party rows carry the highest of all three.
+        const boundClass = maxLabel(checkClass, classification)
+        const partyClass = maxLabel(boundClass, client.classification)
 
         const matter = {
           firmId: caller.firmId,
@@ -228,12 +250,12 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
             matterId,
             role: s.role,
             name: s.name,
-            names: nameForms(s.name, map).map((tokens) => tokens.join(" ")),
+            names: nameForms(s.name, registry.firmMap).map((tokens) => tokens.join(" ")),
             keys: s.keys,
             ...(s.role === "client" ? { clientId, ...(entityId ? { entityId } : {}) } : {}),
             matterClassification: classification,
             matterStatus: "live",
-            classification,
+            classification: partyClass,
             createdAt: FieldValue.serverTimestamp(),
           })
         }
@@ -246,14 +268,14 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
           classification,
           createdAt: FieldValue.serverTimestamp(),
         })
-        tx.update(checkRef, { boundMatterId: matterId })
+        tx.update(checkRef, { boundMatterId: matterId, classification: boundClass })
         tx.create(db.collection("conflict_events").doc(), {
           firmId: caller.firmId,
           checkId,
           kind: "bound",
           actorId: caller.uid,
           detail: { matterId },
-          classification: checkClass,
+          classification: boundClass,
           createdAt: FieldValue.serverTimestamp(),
         })
         tx.create(db.collection("events").doc(`${matterId}_created`), {
@@ -269,6 +291,7 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
       { maxAttempts: OPEN_TX_ATTEMPTS }
     )
     audit.committed()
+    if (row === null) throw new HttpError(409, "check_stale")
     return present(matterId, { ...row, createdAt: Timestamp.fromDate(now) })
   },
 }
