@@ -25,6 +25,8 @@ import {
   assignMatterMember,
   confirmEngagement,
   MembershipAssignmentError,
+  recordMatterMemberAdd,
+  validateMatterAssignee,
 } from "@/services/d1-2/matters"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
@@ -58,16 +60,6 @@ function ensureActor(actorId: string, firmId?: string) {
     throw new PublicError("actor role not allowed for matter operations")
   }
   return actor
-}
-
-function ensureMemberUsersInFirm(userIds: Iterable<string>, firmId: string) {
-  const store = getRuntimeStore()
-  for (const userId of userIds) {
-    const user = store.users.get(userId)
-    // A cross-firm user is reported exactly like a nonexistent one (no id echoed), so
-    // the response is not an oracle for which ids exist in other firms.
-    if (!user || user.firmId !== firmId) throw new PublicError("unknown member user")
-  }
 }
 
 function ensureClientIdentityInFirm(clientId: string, firmId: string) {
@@ -203,9 +195,18 @@ async function handlePost(request: Request) {
       }
       ensureClientIdentityInFirm(parsed.clientId, parsed.firmId)
       // Validate every member before anything is persisted, so a bad member id cannot
-      // leave an orphaned matter behind.
+      // leave an orphaned matter behind. Final audit F1: the same assignee rule as
+      // add_member (same-firm staff only; client/accounts -> 403 assignee_role_forbidden).
+      // The creator seats themselves (ensureActor already refused client/intern/accounts).
       const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
-      ensureMemberUsersInFirm(memberIds, parsed.firmId)
+      try {
+        for (const userId of memberIds) validateMatterAssignee(store, parsed.firmId, userId)
+      } catch (err) {
+        if (err instanceof MembershipAssignmentError) {
+          return NextResponse.json({ error: err.message, code: err.code }, { status: 403 })
+        }
+        throw err
+      }
       const priorAuditCount = store.audit.length
       const matter = {
         id: store.id("mat"),
@@ -225,6 +226,7 @@ async function handlePost(request: Request) {
       for (const userId of memberIds) {
         addMember(store, matter.id, userId, parsed.firmId)
         await repo.members.upsert({ matterId: matter.id, userId, firmId: parsed.firmId })
+        recordMatterMemberAdd(store, parsed.actorId, matter, userId)
       }
       store.audit.push({
         action: "matter_create",
