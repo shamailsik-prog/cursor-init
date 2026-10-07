@@ -16,6 +16,8 @@ import {
   type Role,
 } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
+import { requirePermission } from "./permission"
+import type { FirmAdminAction } from "@/platform/p5/permissionDecision"
 
 /**
  * Shared scaffolding for the P5 operations (identity.ts, mfa.ts): the
@@ -212,8 +214,14 @@ export function callableHandler<T>(
   }
 }
 
-export function requirePartner(caller: Caller): void {
-  if (caller.role !== "partner") throw new HttpError(403, "partner_only")
+/**
+ * Authorises a firm-administration operation through P5 checkPermission with its explicit
+ * action (identity.manage_users, identity.set_claims, identity.deactivate, mfa.enforce,
+ * mfa.approve_disable): partner only, decided by the shared table and audited (U-2 / I-3).
+ * Deny → 403 partner_only.
+ */
+export async function requirePartner(caller: Caller, action: FirmAdminAction): Promise<void> {
+  await requirePermission(caller, action)
 }
 
 /** A safe single Firestore document id: non-empty, ≤128 chars, no "/", not "." / "..", not reserved `__*__`. */

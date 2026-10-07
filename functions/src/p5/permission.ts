@@ -1,19 +1,22 @@
 import type { Classification } from "@/platform/p1/types"
+import { decide, type FirmAdminAction, type PermissionDecision } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../admin"
+import { HttpError } from "../http/errors"
 import { appendAudit } from "./audit"
 import type { Caller } from "./auth"
-import { isKnownClassification, rankOf } from "./classification"
+import { isKnownClassification } from "./classification"
 
-export type PermissionDecision = { allow: boolean; reason: string }
+export type { PermissionDecision }
 
 type Evaluation = PermissionDecision & { classification: Classification }
 
 /**
- * Decision table ported from platform/p5/checkPermission.ts (reasons kept identical),
- * reading matters/{id} and matter_members/{matterId}_{uid} from Firestore.
- * Fails closed: a malformed matterId denies with "invalid-matter-id", a read
- * error denies with "store-unavailable"; every decision is
- * audited, and if the audit write fails the result is deny "audit_unavailable".
+ * P5 permission check (Layer 18 §4.5) for Cloud Functions: the shared decision table
+ * (platform/p5/permissionDecision.ts — the same one the Next.js checkPermission evaluates,
+ * I-3 / U-2) over matters/{id} and matter_members/{matterId}_{uid} read from Firestore.
+ * Fails closed: a malformed matterId denies with "invalid-matter-id", a read error denies with
+ * "store-unavailable"; every decision is audited (one audit_log row: action, decision, reason),
+ * and if the audit write fails the result is deny "audit_unavailable".
  */
 export async function checkPermission(
   caller: Caller,
@@ -47,6 +50,20 @@ export async function checkPermission(
   return { allow: evaluation.allow, reason: evaluation.reason }
 }
 
+/**
+ * Authorises a firm-administration action (identity and MFA administration: partner only)
+ * through checkPermission, so it is decided by the shared table and audited like every other
+ * decision. Deny → 403 partner_only (the operations' existing error code); an audit failure →
+ * 503 audit_unavailable. The operations keep their own extra guards (self-change, clearance
+ * cap, last partner).
+ */
+export async function requirePermission(caller: Caller, action: FirmAdminAction): Promise<void> {
+  const decision = await checkPermission(caller, action)
+  if (decision.allow) return
+  if (decision.reason === "audit_unavailable") throw new HttpError(503, "audit_unavailable")
+  throw new HttpError(403, decision.reason === "partner-only" ? "partner_only" : decision.reason.replaceAll("-", "_"))
+}
+
 /** A single Firestore document id: non-empty, no "/", not "." / "..", not reserved `__*__`. */
 function isValidMatterId(id: string): boolean {
   return id !== "" && !id.includes("/") && id !== "." && id !== ".." && !/^__.*__$/.test(id)
@@ -58,48 +75,24 @@ async function evaluate(
   matterId: string | undefined,
   extra: { scope?: "own_matters" } | undefined
 ): Promise<Evaluation> {
-  const deny = (reason: string, classification: Classification = "internal"): Evaluation => ({
-    allow: false,
-    reason,
-    classification,
-  })
-  const allow = (reason: string, classification: Classification = "internal"): Evaluation => ({
-    allow: true,
-    reason,
-    classification,
-  })
-
-  if (caller.role === "intern" && (action === "research" || action === "draft")) {
-    return deny("intern-channel-denied")
-  }
-
-  if (extra?.scope === "own_matters" || caller.role === "client") {
-    if (action === "research" || action === "draft") return deny("client-channel-denied")
-    if (action === "list_matters") return allow("client-own-matters")
-  }
-
-  if (action === "list_matters") return allow("ok")
-
-  let classification: Classification = "internal"
+  let matter: { firmId: string; classification: unknown } | null | undefined
+  let isMember = false
   if (matterId) {
     const db = adminDb()
-    const matterSnap = await db.collection("matters").doc(matterId).get()
-    const matter = matterSnap.data()
-    if (!matter || matter.firmId !== caller.firmId) return deny("cross-firm")
-
-    const raw: unknown = matter.classification
-    // Unknown classification: cannot prove clearance, so treat as the highest rank.
-    classification = isKnownClassification(raw) ? raw : "privileged-restricted"
-
-    const member = await db.collection("matter_members").doc(`${matterId}_${caller.uid}`).get()
-    if (!member.exists) return deny("not-member", classification)
-
-    if (!isKnownClassification(raw) || !(rankOf(caller.clearanceLevel) >= rankOf(raw))) {
-      return deny("clearance", classification)
+    const data = (await db.collection("matters").doc(matterId).get()).data()
+    matter = data ? { firmId: data.firmId as string, classification: data.classification } : null
+    if (matter && matter.firmId === caller.firmId) {
+      isMember = (await db.collection("matter_members").doc(`${matterId}_${caller.uid}`).get()).exists
     }
   }
-
-  if (action === "research" && caller.role === "client") return deny("client-research-denied", classification)
-
-  return allow("ok", classification)
+  const decision = decide(caller, action, matter, isMember, extra)
+  // The audit row carries the matter's classification once the matter is known to be in the
+  // caller's firm (an unreadable one as the highest rank), otherwise "internal".
+  const classification: Classification =
+    matter && matter.firmId === caller.firmId
+      ? isKnownClassification(matter.classification)
+        ? matter.classification
+        : "privileged-restricted"
+      : "internal"
+  return { ...decision, classification }
 }

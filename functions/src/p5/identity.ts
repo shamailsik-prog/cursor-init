@@ -287,7 +287,7 @@ export const createFirmUserOp: FirmOperation<{ uid: string }> = {
   target: "users",
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
-    requirePartner(caller)
+    await requirePartner(caller, "identity.manage_users")
     forbidPlatformAdmin(data)
     const email = parseEmail(data.email)
     const role = parseRole(data.role)
@@ -348,7 +348,7 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
   target: "users",
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
-    requirePartner(caller)
+    await requirePartner(caller, "identity.set_claims")
     forbidPlatformAdmin(data)
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
@@ -490,7 +490,7 @@ export const deactivateUserOp: FirmOperation<{ uid: string; active: false }> = {
   target: "users",
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
-    requirePartner(caller)
+    await requirePartner(caller, "identity.deactivate")
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
     if (uid === caller.uid) throw new HttpError(403, "self_change_forbidden")

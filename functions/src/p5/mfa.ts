@@ -108,7 +108,7 @@ export const enforceMfaForRoleOp: FirmOperation<{ firmId: string; role: Role; en
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
-    requirePartner(caller)
+    await requirePartner(caller, "mfa.enforce")
     const role = parseRole(data.role)
     if (typeof data.enforced !== "boolean") throw new HttpError(400, "invalid_enforced")
     const enforced = data.enforced
@@ -181,7 +181,7 @@ export const approveMfaDisableOp: FirmOperation<{ approvalId: string; expiresAt:
   target: "users",
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
-    requirePartner(caller)
+    await requirePartner(caller, "mfa.approve_disable")
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
     if (uid === caller.uid) throw new HttpError(403, "second_partner_required")
