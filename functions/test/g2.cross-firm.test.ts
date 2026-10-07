@@ -15,6 +15,7 @@ import * as index from "../src/index"
 import * as identity from "../src/p5/identity"
 import * as mfa from "../src/p5/mfa"
 import * as gates from "../src/p5/gates"
+import * as numbering from "../src/d1/client/numberingOp"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -66,9 +67,10 @@ const PROBES: Record<string, Probe> = {
   disableMfa: { data: (a) => ({ uid: a.victim, approvalId: a.approvalId, recoveryCode: "AAAA-BBBB-CCCC" }), target: true },
   generateRecoveryCodes: { data: () => ({}), target: false },
   syncMfaStatus: { data: () => ({}), target: false },
+  setFirmNumbering: { data: () => ({ clientPrefix: "XX", matterPrefix: "XX" }), target: false },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
