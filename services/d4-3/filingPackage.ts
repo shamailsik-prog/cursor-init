@@ -16,7 +16,7 @@ import {
   type DraftPreflightInput,
 } from "@/services/d4-1/drafts"
 import { extractCitations } from "@/services/d4-2/citations"
-import { requireSupportedDraftBody } from "@/services/d4-2/draftCharset"
+import { requireSupportedDraftBody, requireSupportedDraftTitle } from "@/services/d4-2/draftCharset"
 import { verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import type { PartnerOverride } from "@/services/d4-2/partnerOverride"
 
@@ -185,7 +185,7 @@ export function planFilingPackageDecision(
     // title (R4-2: client-SDK title edits are allowed on locked drafts, so it is re-read here).
     // R4-4: hash and analyse the normalised body (a raw client-SDK body is normalised here).
     const body = requireSupportedDraftBody(draftBody)
-    const draftTitle = requireSupportedDraftBody(input.draftTitle ?? store.drafts.get(filingPackage.draftId)?.title ?? "")
+    const draftTitle = requireSupportedDraftTitle(input.draftTitle ?? store.drafts.get(filingPackage.draftId)?.title ?? "")
     // The body being approved must be the body the gate checked at creation (fails closed for
     // a legacy package without a pinned hash).
     if (!filingPackage.draftBodySha256 || draftBodySha256(body) !== filingPackage.draftBodySha256) {

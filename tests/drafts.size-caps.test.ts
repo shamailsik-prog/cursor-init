@@ -4,8 +4,10 @@
 // the process for 19 s — now answers in well under the 2 s it asked for.
 import { afterEach, describe, expect, it } from "vitest"
 import { POST as DRAFTS } from "@/app/api/d4/drafts/route"
+import { POST as FILINGS } from "@/app/api/d4/filings/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
+import { composeDraft } from "@/services/d4-1/drafts"
 import {
   DraftSizeError,
   MAX_DRAFT_BODY_CHARS,
@@ -20,6 +22,14 @@ const key = () => `5ec1ca95-0000-4000-8000-${String(++n).padStart(12, "0")}`
 const post = (body: unknown) =>
   DRAFTS(
     new Request("http://127.0.0.1/api/d4/drafts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key() },
+      body: JSON.stringify(body),
+    })
+  )
+const filing = (body: unknown) =>
+  FILINGS(
+    new Request("http://127.0.0.1/api/d4/filings", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Idempotency-Key": key() },
       body: JSON.stringify(body),
@@ -91,6 +101,42 @@ describe("SEC-1 draft size caps", () => {
     const started = performance.now()
     const res = await post({ action: "preflight", actorId: "associate_a", matterId, classification: "internal", body: "S.C.M.R. ".repeat(2500) })
     expect(performance.now() - started).toBeLessThan(2000)
+    expect(res.status).toBe(200)
+  })
+
+  it("approving a filing package re-reads the stored title under the title cap: 501 characters is 422 title_too_long", async () => {
+    // R4-2: a client-SDK title edit is allowed on a locked draft, so approval re-checks the
+    // stored title. It must be held to the title cap (500), not the body cap (500,000).
+    const { store, matterId } = setup()
+    addMember(store, matterId, "partner_a", "firmA")
+    const draft = composeDraft(store, {
+      actorId: "associate_a", matterId, templateId: getDocumentTypes()[0]!.id, title: "Plaint", body: "Clean pleading.",
+      classification: "internal",
+      preflight: { actorId: "associate_a", matterId, classification: "internal", citedJudgmentIds: [], temporalCitations: [] },
+    })
+    const created = await filing({ action: "create_package", actorId: "associate_a", matterId, draftId: draft.id, classification: "internal" })
+    expect(created.status).toBe(200)
+    const pkg = ((await created.json()) as { result: { filingPackage: { id: string } } }).result.filingPackage
+    const stored = store.drafts.get(draft.id)!
+    store.drafts.set(draft.id, { ...stored, title: "t".repeat(MAX_DRAFT_TITLE_CHARS + 1) })
+    const res = await filing({ action: "decide_package", actorId: "partner_a", packageId: pkg.id, decision: "approve", reason: "ok" })
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { code: string }).code).toBe("title_too_long")
+    expect(store.filingPackages.get(pkg.id)?.status).toBe("pending_partner_approval")
+  })
+
+  it("approving a filing package with a stored title at the cap succeeds", async () => {
+    const { store, matterId } = setup()
+    addMember(store, matterId, "partner_a", "firmA")
+    const draft = composeDraft(store, {
+      actorId: "associate_a", matterId, templateId: getDocumentTypes()[0]!.id, title: "t".repeat(MAX_DRAFT_TITLE_CHARS), body: "Clean pleading.",
+      classification: "internal",
+      preflight: { actorId: "associate_a", matterId, classification: "internal", citedJudgmentIds: [], temporalCitations: [] },
+    })
+    const created = await filing({ action: "create_package", actorId: "associate_a", matterId, draftId: draft.id, classification: "internal" })
+    expect(created.status).toBe(200)
+    const pkg = ((await created.json()) as { result: { filingPackage: { id: string } } }).result.filingPackage
+    const res = await filing({ action: "decide_package", actorId: "partner_a", packageId: pkg.id, decision: "approve", reason: "ok" })
     expect(res.status).toBe(200)
   })
 })
