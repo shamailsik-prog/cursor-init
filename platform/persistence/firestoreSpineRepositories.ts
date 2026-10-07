@@ -362,6 +362,19 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       async update(id, patch) {
         return updateById<FilingPackage>(db, "filing_packages", id, patch)
       },
+      async decideIfPending(id, patch) {
+        // Final audit F2: the status check and the write are one transaction, so of two
+        // concurrent decisions exactly one applies.
+        const ref = doc(db, "filing_packages", id)
+        return runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref)
+          if (!snap.exists()) return { kind: "missing" as const }
+          const current = snap.data() as FilingPackage
+          if (current.status !== "pending_partner_approval") return { kind: "already_decided" as const }
+          tx.update(ref, patch as Record<string, unknown>)
+          return { kind: "decided" as const, row: { ...current, ...patch } }
+        })
+      },
       async listByFirm(firmId) {
         return listByFirm<FilingPackage>(db, "filing_packages", firmId)
       },

@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto"
-import { rankOf, rankOfStoredOrMax, type FilingPackage, type SpineStore } from "@/platform/spine/store"
+import {
+  rankOf,
+  rankOfStoredOrMax,
+  type AuditEntry,
+  type FilingPackage,
+  type SpineStore,
+} from "@/platform/spine/store"
 import { PublicError } from "@/platform/http/publicError"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { checkPermission } from "@/platform/p5/checkPermission"
@@ -25,6 +31,18 @@ export class DraftChangedError extends PublicError {
   constructor() {
     super("draft changed since the filing package was created; create a new package")
     this.name = "DraftChangedError"
+  }
+}
+
+/**
+ * The package was already approved or rejected (final audit F2): a decision is one-shot, so a
+ * later or concurrent decision is refused (409 package_already_decided) and changes nothing.
+ */
+export class PackageAlreadyDecidedError extends PublicError {
+  readonly code = "package_already_decided"
+  constructor() {
+    super("filing package already decided")
+    this.name = "PackageAlreadyDecidedError"
   }
 }
 
@@ -112,24 +130,39 @@ export function createFilingPackage(
   return { filingPackage, preflight: gate }
 }
 
-export function decideFilingPackage(
+export type FilingPackageDecisionInput = {
+  actorId: string
+  packageId: string
+  decision: "approve" | "reject"
+  reason: string
+  /**
+   * Draft text loaded from the durable repository by the caller; defaults to the stored draft.
+   * Approval requires sha256(draftBody) to equal the package's pinned draftBodySha256.
+   */
+  draftBody?: string
+  /** Draft title from the durable repository (R4-2); defaults to the stored draft's title. */
+  draftTitle?: string
+  /** The approving partner's own override of a non-VERIFIED gate result (resolved from the session). */
+  partnerOverride?: PartnerOverride
+}
+
+/** A validated decision not yet applied: the decided package (a copy) and its audit rows. */
+export type FilingPackageDecision = {
+  decided: FilingPackage
+  /** Pushed to the audit log only when the decision is applied (the winner's rows only). */
+  auditRows: AuditEntry[]
+}
+
+/**
+ * Validates a decision against the package as stored now and returns it without changing
+ * anything (final audit F2). Refuses with PackageAlreadyDecidedError unless the package is
+ * still pending_partner_approval. The caller applies it with `applyFilingPackageDecision`
+ * once the durable conditional update (`FilingRepository.decideIfPending`) has won.
+ */
+export function planFilingPackageDecision(
   store: SpineStore,
-  input: {
-    actorId: string
-    packageId: string
-    decision: "approve" | "reject"
-    reason: string
-    /**
-     * Draft text loaded from the durable repository by the caller; defaults to the stored draft.
-     * Approval requires sha256(draftBody) to equal the package's pinned draftBodySha256.
-     */
-    draftBody?: string
-    /** Draft title from the durable repository (R4-2); defaults to the stored draft's title. */
-    draftTitle?: string
-    /** The approving partner's own override of a non-VERIFIED gate result (resolved from the session). */
-    partnerOverride?: PartnerOverride
-  }
-): FilingPackage {
+  input: FilingPackageDecisionInput
+): FilingPackageDecision {
   const actor = store.users.get(input.actorId)
   if (!actor) throw new PublicError("unknown actor")
   if (actor.role !== "partner") throw new PublicError("partner role required")
@@ -139,6 +172,8 @@ export function decideFilingPackage(
   if (filingPackage.firmId !== actor.firmId) throw new PublicError("cross-firm decision denied")
   const permission = checkPermission(store, actor.id, "draft", filingPackage.matterId)
   if (!permission.allow) throw new PublicError(`permission denied: ${permission.reason}`)
+  if (filingPackage.status !== "pending_partner_approval") throw new PackageAlreadyDecidedError()
+  const auditRows: AuditEntry[] = []
   if (input.decision === "approve") {
     // E-22: approval is blocked on any non-VERIFIED result, re-checked now (treatments can
     // change between package creation and approval). Fails closed without the draft text.
@@ -173,7 +208,7 @@ export function decideFilingPackage(
       throw new PublicError(`preflight blocked approval: citation gate ${gate.status}`)
     }
     if (gate.overridden && input.partnerOverride) {
-      store.audit.push({
+      auditRows.push({
         action: "citation_gate_override",
         actorId: actor.id,
         target: filingPackage.matterId,
@@ -185,13 +220,13 @@ export function decideFilingPackage(
       })
     }
   }
-  filingPackage.status =
-    input.decision === "approve" ? "approved" : "rejected"
-  filingPackage.approvedBy = actor.id
-  filingPackage.approvalReason = input.reason
-  const draft = store.drafts.get(filingPackage.draftId)
-  if (draft) store.drafts.set(draft.id, { ...draft, locked: draftShouldBeLocked(store, draft.id) })
-  store.audit.push({
+  const decided: FilingPackage = {
+    ...filingPackage,
+    status: input.decision === "approve" ? "approved" : "rejected",
+    approvedBy: actor.id,
+    approvalReason: input.reason,
+  }
+  auditRows.push({
     action:
       input.decision === "approve"
         ? "filing_package_approve"
@@ -201,7 +236,35 @@ export function decideFilingPackage(
     classification: filingPackage.classification,
     reason: input.reason,
   })
-  return filingPackage
+  return { decided, auditRows }
+}
+
+/** The fields a decision writes (the durable conditional update's patch). */
+export function filingPackageDecisionPatch(
+  decided: FilingPackage
+): Pick<FilingPackage, "status" | "approvedBy" | "approvalReason"> {
+  return { status: decided.status, approvedBy: decided.approvedBy, approvalReason: decided.approvalReason }
+}
+
+/**
+ * Applies a decision that won: the package in the spine, the draft lock (following this
+ * decision only), and the decision's audit rows.
+ */
+export function applyFilingPackageDecision(store: SpineStore, decision: FilingPackageDecision): FilingPackage {
+  const { decided } = decision
+  store.filingPackages.set(decided.id, decided)
+  const draft = store.drafts.get(decided.draftId)
+  if (draft) store.drafts.set(draft.id, { ...draft, locked: draftShouldBeLocked(store, draft.id) })
+  store.audit.push(...decision.auditRows)
+  return decided
+}
+
+/**
+ * Plans and applies a decision in one synchronous step (in-process callers; atomic in the
+ * single-threaded spine). Routes that persist use plan + decideIfPending + apply instead.
+ */
+export function decideFilingPackage(store: SpineStore, input: FilingPackageDecisionInput): FilingPackage {
+  return applyFilingPackageDecision(store, planFilingPackageDecision(store, input))
 }
 
 export function listFilingPackages(

@@ -228,10 +228,13 @@ import {
 } from "@/platform/persistence/filingEscalationExpiryAndWatchDigests"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
+  applyFilingPackageDecision,
   createFilingPackage,
-  decideFilingPackage,
   DraftChangedError,
   draftShouldBeLocked,
+  filingPackageDecisionPatch,
+  PackageAlreadyDecidedError,
+  planFilingPackageDecision,
 } from "@/services/d4-3/filingPackage"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -7265,13 +7268,16 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       await syncFirmMembers(store, repos, actor.firmId)
       // Captured before the decision so its audit rows (approve/reject, gate override) persist.
       const priorAuditCount = store.audit.length
+      // Final audit F2: decide against the durable package status, never a stale spine copy.
+      const durablePackage = await repos.filings.get(parsed.packageId)
+      if (durablePackage) store.filingPackages.set(durablePackage.id, durablePackage)
       const pendingPackage = store.filingPackages.get(parsed.packageId)
       // Review R1 #5: approve against the durable copy of the draft, never a stale in-memory one.
       const pendingDraft = pendingPackage
         ? ((await repos.drafts.get(pendingPackage.draftId)) ??
           store.drafts.get(pendingPackage.draftId))
         : undefined
-      const filingPackage = decideFilingPackage(store, {
+      const decision = planFilingPackageDecision(store, {
         actorId: parsed.actorId,
         packageId: parsed.packageId,
         decision: parsed.decision,
@@ -7279,16 +7285,19 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         ...(pendingDraft ? { draftBody: pendingDraft.body, draftTitle: pendingDraft.title } : {}),
         ...(resolvedOverride.override ? { partnerOverride: resolvedOverride.override } : {}),
       })
-      const persisted = await repos.filings.get(filingPackage.id)
-      if (persisted) {
-        await repos.filings.update(filingPackage.id, {
-          status: filingPackage.status,
-          approvedBy: filingPackage.approvedBy,
-          approvalReason: filingPackage.approvalReason,
-        })
-      } else {
-        await repos.filings.create(filingPackage)
-      }
+      // One-shot: the decision applies only if the durable package is still pending (a
+      // conditional update; a transaction in Firestore mode). A concurrent decision that lost
+      // the race is refused and changes nothing (no lock change, no decision audit row).
+      const won = await repos.filings.decideIfPending(
+        decision.decided.id,
+        filingPackageDecisionPatch(decision.decided)
+      )
+      if (won.kind === "already_decided") throw new PackageAlreadyDecidedError()
+      if (won.kind === "missing") await repos.filings.create(decision.decided)
+      const filingPackage = applyFilingPackageDecision(store, {
+        ...decision,
+        decided: won.kind === "decided" ? won.row : decision.decided,
+      })
       await repos.drafts.setLocked(
         filingPackage.draftId,
         draftShouldBeLocked(store, filingPackage.draftId)
@@ -19266,7 +19275,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         { status: 422 }
       )
     }
-    if (err instanceof DraftChangedError) {
+    if (err instanceof DraftChangedError || err instanceof PackageAlreadyDecidedError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: 409 })
     }
     const message = publicErrorMessage(err, "filing package write failed")

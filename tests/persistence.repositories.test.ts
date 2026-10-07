@@ -5084,3 +5084,38 @@ describe("Firestore repository adapters", () => {
     })
   })
 })
+
+describe("Firestore filings.decideIfPending (final audit F2)", () => {
+  it("of two concurrent decisions exactly one applies; a decided package is left unchanged", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      const repos = createFirestoreRepositories(
+        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
+      )
+      await repos.filings.create({
+        id: "pkg_one_shot",
+        firmId: "firmA",
+        matterId: "mat_1",
+        draftId: "drf_1",
+        classification: "internal",
+        citationStatus: "OK",
+        temporalAllOk: true,
+        status: "pending_partner_approval",
+        createdBy: "associate_a",
+        createdAt: 3,
+        approvedBy: null,
+        approvalReason: null,
+      })
+      const outcomes = await Promise.all([
+        repos.filings.decideIfPending("pkg_one_shot", { status: "approved", approvedBy: "partner_a", approvalReason: "ok" }),
+        repos.filings.decideIfPending("pkg_one_shot", { status: "rejected", approvedBy: "partner_c", approvalReason: "no" }),
+      ])
+      expect(outcomes.map((o) => o.kind).sort()).toEqual(["already_decided", "decided"])
+      const winner = outcomes.find((o) => o.kind === "decided") as { row: { status: string; approvedBy: string } }
+      const stored = await repos.filings.get("pkg_one_shot")
+      expect(stored?.status).toBe(winner.row.status)
+      expect(stored?.approvedBy).toBe(winner.row.approvedBy)
+      expect(await repos.filings.decideIfPending("pkg_missing", { status: "approved", approvedBy: "partner_a", approvalReason: "ok" })).toEqual({ kind: "missing" })
+    })
+  })
+})
