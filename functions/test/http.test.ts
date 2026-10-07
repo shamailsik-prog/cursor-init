@@ -24,6 +24,7 @@ type ReqInit = {
   spoof?: string
   headers?: Record<string, string>
   raw?: Buffer
+  query?: Record<string, unknown>
 }
 
 function makeReq(r: ReqInit) {
@@ -34,7 +35,7 @@ function makeReq(r: ReqInit) {
   if (r.firmId) headers["x-firm-id"] = r.firmId
   if (r.key !== null) headers["idempotency-key"] = r.key ?? randomUUID()
   if (r.ip) headers["x-forwarded-for"] = `${r.spoof ?? "10.9.9.9"}, ${r.ip}`
-  return { method: r.method ?? "POST", path: r.path, headers, body, rawBody, ip: "127.0.0.1" }
+  return { method: r.method ?? "POST", path: r.path, headers, body, rawBody, ip: "127.0.0.1", query: r.query ?? {} }
 }
 
 async function send(router: ReturnType<typeof createRouter>, r: ReqInit) {
@@ -958,5 +959,45 @@ describe.skipIf(!EMULATORS)("fix round 1", () => {
     const out = await send(router, { path: "/api/t/f/deact", token, firmId, key })
     expect(out.status).toBe(403)
     expect(out.body).toEqual({ error: { code: "inactive_user" } })
+  })
+})
+
+describe("router: GET query data", () => {
+  it("a repeated query parameter (array value) → 400 invalid_query, before auth", async () => {
+    const { op, calls } = countingOp()
+    const router = createRouter([route("/api/t/u/get", op, "general", "GET")])
+    const out = await send(router, { method: "GET", path: "/api/t/u/get", key: null, query: { a: ["1", "2"] } })
+    expect(out.status).toBe(400)
+    expect(errorOf(out)).toBe("invalid_query")
+    expect(calls.n).toBe(0)
+  })
+
+  it("a non-string query value (nested object) → 400 invalid_query", async () => {
+    const { op } = countingOp()
+    const router = createRouter([route("/api/t/u/get", op, "general", "GET")])
+    const out = await send(router, { method: "GET", path: "/api/t/u/get", key: null, query: { a: { b: "1" } } })
+    expect(errorOf(out)).toBe("invalid_query")
+  })
+})
+
+describe.skipIf(!EMULATORS)("router: GET over the emulators", () => {
+  it("passes the parsed query as data and needs no Idempotency-Key", async () => {
+    const firmId = uniq("firm")
+    await adminDb().collection("firms").doc(firmId).set({ name: "T" })
+    const { token } = await mintIdToken(partnerClaims(firmId))
+    const { op, calls } = countingOp((d) => ({ got: d }))
+    const router = createRouter([route("/api/t/u/getq", op, "general", "GET")])
+    const out = await send(router, {
+      method: "GET",
+      path: "/api/t/u/getq",
+      token,
+      firmId,
+      key: null,
+      query: { limit: "5" },
+      ip: `198.51.101.${Math.floor(Math.random() * 250)}`,
+    })
+    expect(out.status).toBe(200)
+    expect(out.body).toEqual({ got: { limit: "5" } })
+    expect(calls.n).toBe(1)
   })
 })

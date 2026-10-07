@@ -34,7 +34,8 @@ import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKin
  * is not audited) → handler.
  *
  * Responses: 2xx → the operation's JSON result; errors → `{ error: { code } }`.
- * Pagination (§4.3) has no list GET yet (follow-up).
+ * GET data is the parsed query (string values only; 400 invalid_query otherwise); list GETs
+ * paginate with d1/pagination.ts (§4.3).
  */
 
 export type Method = "GET" | "POST" | "PUT"
@@ -90,7 +91,7 @@ export function buildRouteTable(routes: readonly Route[]): RouteTable {
   return table
 }
 
-type ApiRequest = Pick<Request, "method" | "path" | "headers" | "body" | "ip"> & { rawBody?: Buffer }
+type ApiRequest = Pick<Request, "method" | "path" | "headers" | "body" | "ip"> & { rawBody?: Buffer; query?: unknown }
 type Authenticated =
   | { kind: "firm"; session: Session; firm: Record<string, unknown> | undefined }
   | { kind: "firmless"; who: FirmlessIdentity }
@@ -111,6 +112,18 @@ function normalisePath(path: string): string {
 
 function isJson(contentType: string | undefined): boolean {
   return /^application\/json\s*(;|$)/i.test(contentType ?? "")
+}
+
+/** GET data: the parsed query, string values only (a repeated or nested parameter is invalid_query). */
+function queryData(query: unknown): Data {
+  if (query === undefined || query === null) return {}
+  if (!isObject(query)) throw new HttpError(400, "invalid_query")
+  const data: Data = {}
+  for (const [name, value] of Object.entries(query)) {
+    if (typeof value !== "string") throw new HttpError(400, "invalid_query")
+    data[name] = value
+  }
+  return data
 }
 
 function isObject(value: unknown): value is Data {
@@ -220,6 +233,8 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
         if (!isJson(header(headers, "content-type"))) return send(res, { status: 415, body: errorBody("unsupported_media_type") })
         if (!isObject(req.body)) return send(res, { status: 400, body: errorBody("invalid_body") })
         body = req.body
+      } else {
+        body = queryData(req.query)
       }
 
       const now = clock()
