@@ -34,7 +34,11 @@ export const DEFAULT_LIMITS: Readonly<Record<RateKind, number>> = { general: 60,
 /** Requests per minute per client IP that fail authentication (keeps anonymous calls from flooding audit_log). */
 export const ANONYMOUS_IP_LIMIT = 60
 
-/** Upper bound for a per-firm override in `firms/{firmId}.rateLimits` (that doc is partner-writable). */
+/**
+ * Upper bound for a per-firm override in `firms/{firmId}.rateLimits`. That doc is server-only:
+ * the rules deny every client write, so only Cloud Functions (Admin SDK) set an override (E-34).
+ * The cap is defence in depth against a bad server-side value, not against a client.
+ */
 export const MAX_LIMIT_OVERRIDE = 1000
 
 const WINDOW_MS = 60_000
