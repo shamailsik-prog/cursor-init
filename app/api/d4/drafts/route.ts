@@ -270,8 +270,15 @@ async function handleGet(request: Request) {
   })
 }
 
+/**
+ * SEC-1: drafts carry the draft body (up to 500,000 characters, enforced by the drafts
+ * service; multi-byte Urdu is 2-3 bytes per character in UTF-8), so this route allows 2 MB
+ * instead of the 1 MB default.
+ */
+const DRAFTS_MAX_BODY_BYTES = 2 * 1024 * 1024
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost)
+  return withSession(request, handlePost, { maxBodyBytes: DRAFTS_MAX_BODY_BYTES })
 }
 
 async function handlePost(request: Request, session: HandlerSession | null) {

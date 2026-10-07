@@ -34,7 +34,7 @@
 import { AuthError, loadUserRecord, resolveSession, type Session } from "@/platform/p5/session"
 import { runWithSession } from "@/platform/p5/requestSession"
 import { errorResponse, internalErrorResponse } from "@/platform/http/errors"
-import { attachParsedBody, maxUploadRequestBytes, readBodyLimited } from "@/platform/http/validation"
+import { attachParsedBody, DEFAULT_JSON_BODY_BYTES, readBodyLimited } from "@/platform/http/validation"
 import { undeclaredQueryParam, unknownParamResponse, type RouteSurface } from "@/platform/http/surface"
 import { runWithRequestAudit } from "@/platform/audit/requestAudit"
 import { flushRequestAudit } from "@/platform/persistence/requestAuditFlush"
@@ -72,8 +72,9 @@ export type SessionRouteOptions = {
    * Byte cap on the request body. The boundary reads the body exactly once, from
    * the network stream, under this cap (413 payload_too_large above it) before
    * binding identity; the parsed value is handed to the handler's
-   * `readJsonLimited`, which re-checks its own cap. Defaults to the upload
-   * ceiling (`maxUploadRequestBytes()`) so no route buffers an unbounded body.
+   * `readJsonLimited`, which re-checks its own cap. Defaults to 1 MB
+   * (DEFAULT_JSON_BODY_BYTES; SEC-1): only routes that genuinely need more opt
+   * in — document upload (the upload ceiling) and drafts (2 MB).
    */
   maxBodyBytes?: number
   /** Limit named in the 413 message (e.g. the decoded upload size). Defaults to `maxBodyBytes`. */
@@ -121,7 +122,7 @@ async function readBoundedBody(request: Request, options: SessionRouteOptions): 
   if (!hasBody(request)) {
     return { ok: true, text: undefined, bytes: 0, parsed: undefined, parsedOk: false }
   }
-  const limit = options.maxBodyBytes ?? maxUploadRequestBytes()
+  const limit = options.maxBodyBytes ?? DEFAULT_JSON_BODY_BYTES
   const read = await readBodyLimited(request, limit, options.reportedBodyLimit ?? limit)
   if (!read.ok) return read
   const base = { ok: true as const, text: read.text, bytes: read.bytes }
