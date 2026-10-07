@@ -17,6 +17,7 @@
     "gate:g0": "bash ci_gates/gate_g0.sh",
     "gate:g1": "python3 ci_gates/gate_g1.py",
     "gate:g2": "bash ci_gates/gate_g2.sh",
+    "gate:g4:phase2a": "bash ci_gates/gate_g4_phase2a.sh",
     "mutation": "stryker run stryker.config.mjs",
     "mutation:functions": "npm --prefix functions run mutation",
     "eve:dev": "eve dev",

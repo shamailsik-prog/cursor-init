@@ -123,3 +123,17 @@ Open items that need the partner are in ES2-4 of the erratum (O-15 to O-24). Eng
 | --- | --- | --- | --- |
 | O-1 | GitHub (`shamailsik-prog/cursor-init`) is the master copy. The "port to Origin" step in PR #4 is withdrawn; AGENTS.md no longer refers to an Origin forge. | Owner instruction: "GitHub is the master copy". | None known; if an upstream mirror reappears, merges on GitHub could again be overwritten. |
 | O-2 | The first-firm founder email is `ss@nhslegal.com`, committed as `SIKANDER_BOOTSTRAP_FOUNDER_EMAIL` in `functions/.env`. | Owner instruction. Firebase loads `functions/.env` for every project on deploy; the value is an address, not a secret. | Changing the founder means editing one line before the first deploy. |
+
+## Phase 2a rulings
+
+The matter spine and Module 6 conflict engine rulings are P2-1 to P2-22 in
+`docs/superpowers/specs/2026-10-07-phase2a-matter-spine-conflict-design.md` (each with its reason and cost if
+wrong). They are recorded there and not repeated here. The architecture records are Erratum E-40 (new events and
+collections) and open item O-25 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`.
+
+| # | Open item | Reason | Cost if wrong |
+| --- | --- | --- | --- |
+| O-25 | Corporate-group and related-person conflict screening is not built (P2-22). `corporateGroup` is stored, not screened. | Unmodelled in the architecture; YAGNI for 2a. | A group-company conflict is missed until a later part adds it. |
+
+Phase 2a close is Gate G-4 (`npm run gate:g4:phase2a`): route coverage, boot with every layer flag off, forensic
+test 3, and Gate G-2 over all routes.

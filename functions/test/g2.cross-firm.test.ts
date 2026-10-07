@@ -72,15 +72,15 @@ const PROBES: Record<string, Probe> = {
   syncMfaStatus: { data: () => ({}), target: false },
   setFirmNumbering: { data: () => ({ clientPrefix: "XX", matterPrefix: "XX" }), target: false },
   registerClient: { data: () => ({ name: "G2 Probe Client", type: "individual", primaryMobile: "03001234567", classification: "internal" }), target: false },
-  getClient: { data: () => ({ clientId: "g2-probe-client" }), target: false },
+  getClient: { data: (a) => ({ clientId: a.clientId }), target: false },
   listClients: { data: () => ({}), target: false },
   runConflictCheck: { data: () => ({ client: { name: "G2 Probe Client" }, opposingParties: [{ name: "G2 Probe Opponent" }] }), target: false },
-  getConflictResult: { data: () => ({ checkId: "g2-probe-check" }), target: false },
+  getConflictResult: { data: (a) => ({ checkId: a.checkId }), target: false },
   resolveReviewItem: { data: () => ({ checkId: "g2-probe-check", hitIndex: 0, resolution: "different_person", note: "G2 probe note of at least twenty characters" }), target: false },
   recordPartnerWaiver: { data: () => ({ checkId: "g2-probe-check", note: "G2 probe waiver note that is comfortably longer than fifty characters", clientConsent: true, consentReference: "G2-REF" }), target: false },
-  getConflictTrail: { data: () => ({ checkId: "g2-probe-check" }), target: false },
+  getConflictTrail: { data: (a) => ({ checkId: a.checkId }), target: false },
   openMatter: { data: () => ({ conflictCheckId: "g2-probe-check", title: "G2 probe matter", classification: "internal" }), target: false },
-  getMatter: { data: () => ({ matterId: "g2-probe-matter" }), target: false },
+  getMatter: { data: (a) => ({ matterId: a.matterId }), target: false },
   listMatters: { data: () => ({}), target: false },
   advanceStage: { data: () => ({ matterId: "g2-probe-matter", to: "filed" }), target: false },
   closeMatter: { data: () => ({ matterId: "g2-probe-matter", reason: "G2 probe closure reason, long enough" }), target: false },
@@ -101,7 +101,7 @@ const OTHER_EXPORTS = Object.keys(index)
   .sort()
 
 type Member = { uid: string; token: string; email: string }
-type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[] }
+type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string }
 type FirmB = { firmId: string; members: Record<Role, Member> }
 
 async function seedFirm(firmId: string, name: string): Promise<Record<Role, Member>> {
@@ -137,7 +137,7 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
 function firmATokens(a: FirmA): string[] {
-  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, "G2 Alpha Chambers"]
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001"]
 }
 
 function leaked(body: unknown, tokens: string[]): string[] {
@@ -164,8 +164,20 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       expiresAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
       used: false,
     })
+    // Real firm-A records, so the GET probes aim at data that exists (a same-firm read would find it).
+    const clientId = uniq("g2clientA")
+    const matterId = uniq("g2matterA")
+    const checkId = uniq("g2checkA")
+    const stamp = { firmId: firmA, classification: "internal", createdAt: Timestamp.now() }
+    await adminDb().collection("clients").doc(clientId).set({ ...stamp, name: "G2 Alpha Client", clientCode: "ALPHA-0001" })
+    await adminDb().collection("matters").doc(matterId).set({ ...stamp, title: "G2 Alpha Matter", clientId, stage: "intake", status: "open" })
+    await adminDb().collection("matter_members").doc(`${matterId}_${aMembers.partner.uid}`).set({ ...stamp, matterId, userId: aMembers.partner.uid })
+    await adminDb().collection("conflict_checks").doc(checkId).set({ ...stamp, status: "CLEAR", subjects: [{ role: "client", name: "G2 Alpha Client" }] })
     A = {
       firmId: firmA,
+      clientId,
+      matterId,
+      checkId,
       partner: aMembers.partner,
       victim: victim.uid,
       victimEmail: victim.email,

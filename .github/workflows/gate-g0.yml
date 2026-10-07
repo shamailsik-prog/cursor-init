@@ -170,6 +170,9 @@ jobs:
       - name: Gate G-2 cross-firm isolation (L18 §10)
         if: ${{ !cancelled() }}
         run: npm run gate:g2
+      - name: Gate G-4 Phase 2a close (routes, boot, forensic test 3)
+        if: ${{ !cancelled() }}
+        run: npm run gate:g4:phase2a
 
   next-build:
     name: Next.js build

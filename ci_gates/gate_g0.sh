@@ -50,7 +50,7 @@ python3 ci_gates/check_classification_calls.py || fail=1
 
 echo "[10] firestore rules cover every Phase 0 collection"
 if [ -f firestore.rules ]; then
-  for c in firms users matter_members clients matters documents document_versions entities entity_aliases merge_events evidence_items custody_events propositions drafts draft_versions change_proposals master_versions routing_queue follow_ups intimation_register notifications jobs api_keys audit_log; do
+  for c in firms users matter_members clients matters documents document_versions entities entity_aliases merge_events evidence_items custody_events propositions drafts draft_versions change_proposals master_versions routing_queue follow_ups intimation_register notifications jobs api_keys audit_log conflict_checks conflict_events matter_parties matter_events entity_links counters events transliteration_map; do
     grep -q "match /$c/" firestore.rules || { echo "FAIL: no rule for $c"; fail=1; }; done
   grep -q "allow read, write: if false" firestore.rules || { echo "FAIL: no default deny"; fail=1; }
 fi
