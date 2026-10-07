@@ -96,6 +96,9 @@ service cloud.firestore {
       // a new matter is written server-side (matters API create).
       allow create: if sameFirmNew() && isPartner() && id == request.resource.data.matterId + '_' + request.resource.data.userId
         && isMember(request.resource.data.matterId) && request.resource.data.userId != request.auth.uid
+        // Phase 2a: listMatters orders memberships by createdAt, so a client-SDK create must stamp it
+        // with the server time (serverTimestamp()); a missing or client-chosen time is refused.
+        && request.resource.data.get('createdAt', null) == request.time
         // R2 N5: the assignee must be an existing same-firm staff user (never client or accounts).
         && exists(/databases/$(database)/documents/users/$(request.resource.data.userId))
         && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.firmId == request.auth.token.firmId
@@ -144,9 +147,10 @@ service cloud.firestore {
       allow update, delete: if false; // append-only
     }
     match /entities/{id} {
-      allow read: if sameFirm() && isStaff();
-      allow create, update: if sameFirmNew() && role() in ['partner', 'associate'] && (resource == null || firmIdUnchanged());
-      allow delete: if false;
+      // Phase 2a: entities feed the conflict engine; registerClient (Cloud Functions) is the only
+      // writer, so the client SDK never creates or edits one. Missing classification fails closed.
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      allow create, update, delete: if false;
     }
     match /entity_aliases/{id} {
       allow read: if sameFirm() && isStaff();
@@ -160,6 +164,35 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reverted', 'revertedBy', 'revertedAt']);
       allow delete: if false;
     }
+    // Phase 2a (matter spine + Module 6 conflict engine, spec §5): every collection below is written
+    // only by Cloud Functions (Admin SDK). Reads are scoped by firm, role and clearance on the row's
+    // classification; a row without classification fails closed (rank() of an absent field errors).
+    match /entity_links/{id} {
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      allow create, update, delete: if false;
+    }
+    match /conflict_checks/{id} {
+      // The requester or a partner; detail disclosure stays server-side (the stored per-requester view).
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification)
+        && (isPartner() || resource.data.get('requestedBy', '') == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+    match /conflict_events/{id} {
+      allow read: if sameFirm() && isPartner() && cleared(resource.data.classification);
+      allow create, update, delete: if false;
+    }
+    match /matter_parties/{id} {
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      allow create, update, delete: if false;
+    }
+    match /matter_events/{id} {
+      allow read: if sameFirm() && memberReader(resource.data.matterId) && cleared(resource.data.classification);
+      allow create, update, delete: if false;
+    }
+    // Server-only: numbering and daily-cap counters, the firm transliteration map, the domain event outbox.
+    match /counters/{id} { allow read, write: if false; }
+    match /transliteration_map/{id} { allow read, write: if false; }
+    match /events/{id} { allow read, write: if false; }
     match /evidence_items/{id} {
       allow read: if sameFirm() && memberReader(resource.data.matterId) && cleared(resource.data.classification);
       allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);
