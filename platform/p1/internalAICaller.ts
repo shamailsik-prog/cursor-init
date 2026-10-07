@@ -6,10 +6,13 @@
 import { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
 import { gatewayTransport, readGatewayApiKey } from "@/platform/p1/gatewayTransport"
 import { maskOutboundPII, type MaskOptions } from "@/platform/p1/maskOutboundPII"
-import { providerAllowedFor, type ProviderId } from "@/platform/p1/providerPolicy"
+import { assertMinimised, providerAllowedFor, type ProviderId } from "@/platform/p1/providerPolicy"
 import { isClassification, type Classification } from "@/platform/p1/types"
 
 export { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
+
+/** Fixed reason recorded when the transport fails for any other cause. */
+export const TRANSPORT_ERROR_REASON = "transport_error"
 
 export type OutboundRequest = {
   /** Masked prompt/transcript/document text. Never includes classification. */
@@ -24,6 +27,8 @@ export type OutboundRequest = {
 
 export type OutboundResponse = {
   blocked: boolean
+  /** Set on every blocked call (L18 §4.6 / L19.11: ai.call.blocked). */
+  event?: "ai.call.blocked"
   reason?: string
   provider?: ProviderId
   text?: string
@@ -90,7 +95,18 @@ export async function callCommitteeBrain(
 
   const policy = providerAllowedFor(input.provider, input.classification)
   if (!policy.allowed) {
-    return { blocked: true, reason: policy.reason, outbound }
+    return { blocked: true, event: "ai.call.blocked", reason: policy.reason, outbound }
+  }
+  // L18 §4.6 rank >= 3: content minimisation and a PII-scrubbed trace are
+  // obligations of the allow decision. The mask above provides both; verify it
+  // actually did before anything leaves.
+  if (policy.requirements && !assertMinimised(outbound, input.partyNames)) {
+    return {
+      blocked: true,
+      event: "ai.call.blocked",
+      reason: "L18 §4.6: content minimisation not applied",
+      outbound,
+    }
   }
 
   try {
@@ -105,9 +121,13 @@ export async function callCommitteeBrain(
       outbound,
     }
   } catch (err) {
-    const reason =
-      err instanceof Error ? err.message : PHASE0_NO_CREDENTIALS
-    return { blocked: true, reason, outbound }
+    // The reason is returned to callers and persisted with committee outputs,
+    // so never echo provider/gateway error text: use a fixed code, log detail.
+    if (err instanceof Error && err.message === PHASE0_NO_CREDENTIALS) {
+      return { blocked: true, event: "ai.call.blocked", reason: PHASE0_NO_CREDENTIALS, outbound }
+    }
+    console.error("[p1] transport error", err)
+    return { blocked: true, event: "ai.call.blocked", reason: TRANSPORT_ERROR_REASON, outbound }
   }
 }
 

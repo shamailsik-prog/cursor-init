@@ -1,0 +1,38 @@
+# gitleaks configuration (.github/workflows/security.yml "Secret scan").
+# The default ruleset applies in full; the allowlists below only drop known,
+# non-secret test fixtures. Every entry is narrowed by path AND by the shape of
+# the matched value, so a real key in the same file is still reported.
+# Baseline (full history, 2026-10-06, gitleaks 8.30.1): every finding was one
+# of these fixtures; see docs/audits/README.md "Secret scanning".
+
+title = "cursor-init gitleaks config"
+
+[extend]
+useDefault = true
+
+# Idempotency keys in tests are random UUIDs passed as `key = "..."`,
+# `idempotencyKey: "..."` or an `Idempotency-Key` header; generic-api-key
+# matches them by keyword. A UUID is not a credential format.
+[[allowlists]]
+description = "UUID idempotency keys in test files"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
+paths = ['''^tests/.+\.test\.ts$''', '''^functions/test/.+\.ts$''']
+
+# .env.example is a template whose values are deliberately empty; the generic
+# rule captures the next line's variable name (`ENCRYPTION_KEY=`) as the value.
+[[allowlists]]
+description = "empty placeholders in .env.example templates"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^[A-Z][A-Z0-9_]*=$''']
+paths = ['''(^|/)\.env\.example$''']
+
+# Firebase emulator fixtures: the Auth emulator accepts any API key and the
+# tests use the literal "fake-api-key"; demo-* project ids never reach a real
+# project. Neither is a credential.
+[[allowlists]]
+description = "Firebase emulator fake API key and demo project ids"
+regexTarget = "secret"
+regexes = ['''^fake-api-key$''', '''^demo-[a-z0-9-]+$''']

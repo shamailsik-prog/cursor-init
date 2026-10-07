@@ -1,4 +1,5 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
+import { PublicError } from "@/platform/http/publicError"
 import type { SpineStore } from "@/platform/spine/store"
 
 const CNIC = /^\d{13}$|^\d{5}-\d{7}-\d$/
@@ -18,10 +19,10 @@ export function createClient(
   }
 ) {
   if (!isClassification(input.classification)) {
-    throw new Error("artefact write omitted classification")
+    throw new PublicError("artefact write omitted classification")
   }
   const cnic = normaliseCnic(input.cnic)
-  if (cnic.length !== 13) throw new Error("CNIC must be 13 digits")
+  if (cnic.length !== 13) throw new PublicError("CNIC must be 13 digits")
   void CNIC
   const id = store.id("ent")
   const entity = {
@@ -66,7 +67,7 @@ export function conflictCheck(
 ): { status: "CLEAR" | "POSSIBLE_CANDIDATE_REVIEW"; identityBasis?: "cnic" } {
   const named = store.entities.get(namedEntityId)
   if (!named || named.firmId !== firmId) {
-    throw new Error("unknown entity")
+    throw new PublicError("unknown entity")
   }
   const linked = store.links.find(
     (l) => l.leftId === namedEntityId || l.rightId === namedEntityId

@@ -9,8 +9,9 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
-  formatApiErrorMessage,
+  apiCallError,
   runApiCallAllowingStatuses as runApiCallAllowingStatusesImpl,
+  stepFailureOutcome,
   type ApiCallResult,
 } from "@/app/ops/api-call-helpers"
 
@@ -117,7 +118,7 @@ export function OperatorAuditConsole() {
   async function runApiCall(options: ApiCallOptions): Promise<unknown> {
     const result = await runApiCallWithStatus(options)
     if (!result.ok) {
-      throw new Error(formatApiErrorMessage(options.step, result.status, result.body))
+      throw apiCallError(options.step, result.status, result.body)
     }
     return result.body
   }
@@ -189,7 +190,10 @@ export function OperatorAuditConsole() {
       await fn()
       setNotice(name)
     } catch (err) {
-      setError(err instanceof Error ? err.message : `${name} failed`)
+      // A frozen layer (Erratum E-24) is a disabled state, not a failure.
+      const outcome = stepFailureOutcome(name, err)
+      if (outcome.kind === "notice") setNotice(outcome.message)
+      else setError(outcome.message)
     } finally {
       setBusy(false)
     }
@@ -3233,7 +3237,9 @@ export function OperatorAuditConsole() {
 
     await runApiCallAllowingStatuses(
       {
-        step: "Batch D: tenancy role update for audit trail",
+        // Re-audit N-3: retired (409 use_identity_api); role changes go through
+        // POST /api/platform/identity/setUserClaims. Kept as a probe of the refusal.
+        step: "Batch D: tenancy role update is refused (use the identity API)",
         method: "POST",
         path: "/api/p5/tenancy",
         body: {
@@ -3246,7 +3252,7 @@ export function OperatorAuditConsole() {
           reason: "Batch D /ops frontend wiring audit trail",
         },
       },
-      [200, 400, 403, 404, 409, 422]
+      [403, 409]
     )
 
     await runApiCallAllowingStatuses(

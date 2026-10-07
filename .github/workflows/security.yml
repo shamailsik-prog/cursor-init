@@ -1,0 +1,126 @@
+name: Security scans
+
+# What each job proves and how to run it locally: docs/audits/README.md.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      security-events: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # javascript-typescript covers the Next app and functions/; python covers
+        # corpus_service/ (and ci_gates/). Neither needs a build.
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          # The default suite always runs; this adds the security-extended queries.
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+      # Code scanning (SARIF upload) needs GitHub Code Security on this private
+      # repository and is not enabled; analyse without uploading and gate on the
+      # SARIF here instead (ci_gates/check_codeql_sarif.py, severity >= 7.0 high).
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}
+          upload: never
+          output: sarif-results
+      - name: Gate on high-severity CodeQL results
+        run: python3 ci_gates/check_codeql_sarif.py sarif-results 7.0
+      - name: Keep the SARIF as a run artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-${{ matrix.language }}-sarif
+          path: sarif-results
+          if-no-files-found: ignore
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a push or PR is scanned commit by commit, not just its tip.
+          fetch-depth: 0
+      # The gitleaks CLI, pinned and checksum-verified, scans the full history.
+      # (gitleaks-action lists PR commits through the API, which needs
+      # pull-requests: read; this job keeps contents: read only.)
+      - name: Install gitleaks 8.30.1 (sha256-verified)
+        run: |
+          curl -sSfL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          rm gitleaks.tgz
+      - name: Scan full git history
+        run: ./gitleaks git --config .gitleaks.toml --redact --no-banner --exit-code 1 .
+
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      # Report-only: the repo carries advisories that need major bumps
+      # (docs/audits/known-advisories.md). The gate is the last step.
+      - name: npm audit (root, production dependencies)
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+      - name: npm audit (functions, production dependencies)
+        continue-on-error: true
+        run: npm --prefix functions audit --omit=dev --audit-level=high
+      - name: pip-audit (corpus_service)
+        continue-on-error: true
+        run: |
+          python -m pip install --disable-pip-version-check pip-audit==2.10.1
+          pip-audit -r corpus_service/requirements.txt --progress-spinner off
+      - name: Collect audit reports
+        run: |
+          mkdir -p audit
+          # npm audit exits non-zero when it finds anything; the JSON is what matters.
+          npm audit --omit=dev --json > audit/npm-root.json || true
+          npm --prefix functions audit --omit=dev --json > audit/npm-functions.json || true
+          pip-audit -r corpus_service/requirements.txt -f json -o audit/pip-corpus_service.json --progress-spinner off || true
+      - name: Gate - no new high/critical advisory outside the allowlist
+        run: >
+          node ci_gates/check_known_advisories.mjs
+          --npm npm:root=audit/npm-root.json
+          --npm npm:functions=audit/npm-functions.json
+          --pip pip:corpus_service=audit/pip-corpus_service.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: dependency-audit
+          path: audit/
+          retention-days: 30

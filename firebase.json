@@ -7,6 +7,22 @@
       "port": 18088,
       "host": "127.0.0.1"
     },
-    "ui": { "enabled": false }
+    "ui": {
+      "enabled": false
+    },
+    "auth": {
+      "port": 19099,
+      "host": "127.0.0.1"
+    },
+    "functions": {
+      "port": 15001,
+      "host": "127.0.0.1"
+    }
+  },
+  "functions": {
+    "source": "functions",
+    "predeploy": [
+      "npm --prefix \"$RESOURCE_DIR\" run build"
+    ]
   }
 }

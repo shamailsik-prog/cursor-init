@@ -1,15 +1,21 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
+import { COURT_OPS_SURFACE } from "./surface"
+import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildCourtOpsActivityRow, buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
-import { handleWhatsApp } from "@/services/d2-1/whatsapp"
+import { WHATSAPP_GRAMMAR_HELP, handleWhatsApp, whatsAppCommandName } from "@/services/d2-1/whatsapp"
 import {
   acknowledgeCourtOpsItem,
   listCourtOpsQueue,
@@ -17,7 +23,6 @@ import {
   resolveWorkflowBlocker,
 } from "@/services/d2-2/courtOps"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 type WhatsAppBody = {
   action: "whatsapp_command"
@@ -50,18 +55,6 @@ type ResolveWorkflowBody = {
 
 type Body = WhatsAppBody | AcknowledgeBody | ResolveFollowUpBody | ResolveWorkflowBody
 
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
-
 function isWorkflowStatus(value: unknown): value is WorkflowStatus {
   return (
     value === "queued" ||
@@ -71,22 +64,13 @@ function isWorkflowStatus(value: unknown): value is WorkflowStatus {
   )
 }
 
-function validateWhatsAppCommand(command: string): boolean {
-  const text = command.trim()
-  return (
-    /^\/matters$/i.test(text) ||
-    /^\/research\s+.+/i.test(text) ||
-    /^\/ops\s+queue$/i.test(text)
-  )
-}
-
 async function syncCourtOpsState(
   store: ReturnType<typeof getRuntimeStore>,
   actorId: string
 ) {
   const repos = await getRuntimeRepositories(store)
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
+  if (!actor) throw new PublicError("unknown actor")
 
   const firmDocs = await repos.documents.listByFirm(actor.firmId)
   for (const row of firmDocs) {
@@ -148,12 +132,16 @@ async function persistWorkflowEventsSince(
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet, { surface: COURT_OPS_SURFACE })
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const url = new URL(request.url)
-  const userId = url.searchParams.get("userId")
-  const matterId = url.searchParams.get("matterId") ?? undefined
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const userId = getQuery(COURT_OPS_SURFACE, url, "userId")
+  const matterId = getQuery(COURT_OPS_SURFACE, url, "matterId") ?? undefined
+  const limit = parseLimit(getQuery(COURT_OPS_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(COURT_OPS_SURFACE, url, "cursor"))
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
   }
@@ -169,12 +157,16 @@ export async function GET(request: Request) {
       nextCursor: queue.nextCursor,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "queue read failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "queue read failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { surface: COURT_OPS_SURFACE })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   let key: string
   try {
@@ -191,43 +183,34 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
   }
-  if (!parsed.action) {
+  const undeclared = refuseUndeclaredBody(COURT_OPS_SURFACE, parsed)
+  if (undeclared) return undeclared
+  if (actionOf(COURT_OPS_SURFACE, parsed) === null) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d2/court-ops",
-    action: parsed.action,
+    action: actionOf(COURT_OPS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
-    if (parsed.action === "whatsapp_command") {
+    if (isAction(COURT_OPS_SURFACE, parsed, "whatsapp_command")) {
       if (!parsed.actorId || !parsed.command) {
         return NextResponse.json({ error: "actorId and command are required" }, { status: 400 })
       }
       await syncCourtOpsState(store, parsed.actorId)
-      if (!validateWhatsAppCommand(parsed.command)) {
-        return NextResponse.json(
-          {
-            error:
-              "unsupported command grammar; allowed: /matters, /research <query>, /ops queue",
-          },
-          { status: 400 }
-        )
+      const command = whatsAppCommandName(parsed.command)
+      if (!command) {
+        return NextResponse.json({ error: WHATSAPP_GRAMMAR_HELP }, { status: 400 })
       }
       const text = parsed.command.trim()
-      if (/^\/ops\s+queue$/i.test(text)) {
+      if (command === "ops") {
         const queue = listCourtOpsQueue(store, parsed.actorId, {
           limit: 20,
           cursor: 0,
@@ -238,7 +221,7 @@ export async function POST(request: Request) {
           queueCount: queue.total,
           queuePreview: queue.items.slice(0, 5),
         }
-        idempotency.set(key, payload, fingerprint)
+        claim.complete(payload)
         return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
       }
       const result = handleWhatsApp(store, parsed.actorId, text)
@@ -250,11 +233,11 @@ export async function POST(request: Request) {
         command: text,
         result,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "acknowledge_item") {
+    if (isAction(COURT_OPS_SURFACE, parsed, "acknowledge_item")) {
       if (!parsed.actorId || !parsed.queueType || !parsed.id) {
         return NextResponse.json(
           { error: "actorId, queueType, and id are required" },
@@ -262,7 +245,6 @@ export async function POST(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
-      const priorAuditCount = store.audit.length
       acknowledgeCourtOpsItem(store, {
         actorId: parsed.actorId,
         queueType: parsed.queueType,
@@ -270,7 +252,7 @@ export async function POST(request: Request) {
         reason: parsed.reason,
       })
       const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await repos.workflowOpsActivity.upsert(
         buildCourtOpsActivityRow({
           id: `ops:court_ops:ack:${parsed.queueType}:${parsed.id}`,
@@ -286,17 +268,16 @@ export async function POST(request: Request) {
           detail: parsed.reason ?? "acknowledged by operator",
         })
       )
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_item",
         queueType: parsed.queueType,
         id: parsed.id,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "resolve_follow_up") {
+    if (isAction(COURT_OPS_SURFACE, parsed, "resolve_follow_up")) {
       if (!parsed.actorId || !parsed.followUpId) {
         return NextResponse.json(
           { error: "actorId and followUpId are required" },
@@ -304,7 +285,6 @@ export async function POST(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
-      const priorAuditCount = store.audit.length
       resolveFollowUp(store, {
         actorId: parsed.actorId,
         followUpId: parsed.followUpId,
@@ -329,13 +309,12 @@ export async function POST(request: Request) {
           })
         )
       }
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "resolve_follow_up", followUpId: parsed.followUpId }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "resolve_workflow") {
+    if (isAction(COURT_OPS_SURFACE, parsed, "resolve_workflow")) {
       if (!parsed.actorId || !parsed.documentId || !isWorkflowStatus(parsed.nextStatus)) {
         return NextResponse.json(
           { error: "actorId, documentId, and valid nextStatus are required" },
@@ -343,7 +322,6 @@ export async function POST(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
-      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = resolveWorkflowBlocker(store, {
         actorId: parsed.actorId,
@@ -353,15 +331,14 @@ export async function POST(request: Request) {
       })
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents, "court_ops_resolve_workflow")
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "resolve_workflow", row }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "court ops write failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "court ops write failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

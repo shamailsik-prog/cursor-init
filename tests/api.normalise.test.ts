@@ -9,7 +9,8 @@ function post(body: unknown, key = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") {
         "Content-Type": "application/json",
         "Idempotency-Key": key,
       },
-      body: typeof body === "string" ? body : JSON.stringify(body),
+      // Re-audit N-2: the route authorises its actor (a staff tool); insecure-dev requests carry it.
+      body: typeof body === "string" ? body : JSON.stringify({ actorId: "associate_a", ...(body as object) }),
     })
   )
 }
@@ -48,7 +49,7 @@ describe("POST /api/g0/normalise", () => {
     const first = await post({ raw: "C.P. No. D-1234 of 2025", courtId: "SHC" }, key)
     const second = await post({ raw: "Cr. Bail Appln. No. 456 of 2026", courtId: "SHC" }, key)
     expect(first.status).toBe(200)
-    expect(second.status).toBe(409)
+    expect(second.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
     const json = (await second.json()) as { error: string }
     expect(json.error).toMatch(/different request payload/i)
   })

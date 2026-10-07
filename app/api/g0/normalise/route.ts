@@ -1,16 +1,23 @@
 import { NextResponse } from "next/server"
+import { fingerprintOf } from "@/platform/http/validation"
+import { withSession } from "@/platform/http/withSession"
 import courtsSeed from "@/data/courts.json"
+import { checkPermission } from "@/platform/p5/checkPermission"
+import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { loadCourts, normalise } from "@/core/case-number-normaliser"
 import {
   IdempotencyError,
-  IdempotencyCache,
+  beginIdempotentRequest,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 
 const courts = loadCourts(courtsSeed)
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost)
+}
+
+async function handlePost(request: Request) {
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -18,11 +25,20 @@ export async function POST(request: Request) {
     const message = err instanceof IdempotencyError ? err.message : "Idempotency-Key header required"
     return NextResponse.json({ error: message }, { status: 400 })
   }
-  let body: { raw?: string; courtId?: string }
+  let body: { actorId?: string; raw?: string; courtId?: string }
   try {
-    body = (await request.json()) as { raw?: string; courtId?: string }
+    body = (await request.json()) as { actorId?: string; raw?: string; courtId?: string }
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
+  }
+  // Re-audit N-2: a staff tool (partner, associate, clerk, intern), never a client. withSession
+  // binds actorId to the verified caller in firebase mode; insecure-dev requests carry it.
+  if (typeof body.actorId !== "string" || body.actorId === "") {
+    return NextResponse.json({ error: "actorId is required" }, { status: 400 })
+  }
+  const perm = checkPermission(getRuntimeStore(), body.actorId, "normalise_case_number")
+  if (!perm.allow) {
+    return NextResponse.json({ error: `permission denied: ${perm.reason}` }, { status: 403 })
   }
   if (!body.raw || !body.courtId) {
     return NextResponse.json(
@@ -30,23 +46,17 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/g0/normalise",
     raw: body.raw,
     courtId: body.courtId,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   const result = normalise(body.raw, body.courtId, courts)
-  idempotency.set(key, result, fingerprint)
+  claim.complete(result)
   return NextResponse.json({ result, idempotencyKey: key, reused: false })
 }

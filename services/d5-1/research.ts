@@ -1,4 +1,5 @@
 import type { SpineStore } from "@/platform/spine/store"
+import { PublicError } from "@/platform/http/publicError"
 
 export function searchCorpus(
   store: SpineStore,
@@ -6,16 +7,16 @@ export function searchCorpus(
 ): { items: { entityId: string }[] } {
   const live = store.corpusMetadata.embedding_model
   if (Number(store.corpusMetadata.embedding_dim) !== 1536) {
-    throw new Error("search refuses: embedding_dim mismatch")
+    throw new PublicError("search refuses: embedding_dim mismatch")
   }
   if (queryModel !== live) {
-    throw new Error("search refuses: embedding_model mismatch")
+    throw new PublicError("search refuses: embedding_model mismatch")
   }
   if (
     store.embeddings.length > 0 &&
     store.embeddings.some((e) => e.model !== live || e.vector.length !== 1536)
   ) {
-    throw new Error("search refuses: embedding_model mismatch")
+    throw new PublicError("search refuses: embedding_model mismatch")
   }
   return {
     items: store.embeddings

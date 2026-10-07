@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
+import { REPORTING_SURFACE } from "./surface"
+import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import {
-  rankOf,
+  rankOf, rankOfStoredOrMax,
   type Matter,
   type MatterReportExportAnalyticsRow,
   type MatterReportRelevanceFreshnessStatus,
@@ -19,23 +26,9 @@ import {
   buildClientSearchIndexRow,
   buildMatterSearchIndexRow,
 } from "@/platform/persistence/matterClientSearchIndex"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 const RELEVANCE_FRESH_WINDOW_MS = 24 * 60 * 60 * 1000
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function normalizeTerms(value: string | null): string[] {
   if (!value) return []
@@ -51,20 +44,6 @@ type RowType = "matter" | "client"
 
 function parseRowType(value: string | null): RowType | undefined {
   if (value === "matter" || value === "client") return value
-  return undefined
-}
-
-type ReportingView = "search" | "matter_report_export_analytics" | "matter_report_relevance_snapshots"
-
-function parseView(value: string | null): ReportingView | undefined {
-  if (!value) return "search"
-  if (
-    value === "search" ||
-    value === "matter_report_export_analytics" ||
-    value === "matter_report_relevance_snapshots"
-  ) {
-    return value
-  }
   return undefined
 }
 
@@ -88,12 +67,12 @@ function reportRelevanceSnapshotId(matterId: string): string {
 
 function parseExportFormat(value: unknown): "csv" | "json" | "pdf" {
   if (value === "csv" || value === "json" || value === "pdf") return value
-  throw new Error("exportFormat must be csv, json, or pdf")
+  throw new PublicError("exportFormat must be csv, json, or pdf")
 }
 
 function parseExportScope(value: unknown): "summary" | "detailed" | "relevance_review" {
   if (value === "summary" || value === "detailed" || value === "relevance_review") return value
-  throw new Error("exportScope must be summary, detailed, or relevance_review")
+  throw new PublicError("exportScope must be summary, detailed, or relevance_review")
 }
 
 function normalizeReason(value: unknown, fallback: string): string {
@@ -267,19 +246,23 @@ type RecomputeMatterReportRelevanceBody = {
 type Body = RecordMatterReportExportBody | RecomputeMatterReportRelevanceBody
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet, { surface: REPORTING_SURFACE })
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
-  const view = parseView(url.searchParams.get("view"))
+  const view = selectView(REPORTING_SURFACE, url)
   if (!view) {
     return NextResponse.json({ error: "unknown view" }, { status: 400 })
   }
-  const actorId = url.searchParams.get("actorId")
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
-  const matterId = url.searchParams.get("matterId")
-  const scoreBand = parseScoreBand(url.searchParams.get("scoreBand"))
-  const freshnessStatus = parseFreshness(url.searchParams.get("freshnessStatus"))
+  const actorId = getQuery(REPORTING_SURFACE, url, "actorId")
+  const limit = parseLimit(getQuery(REPORTING_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(REPORTING_SURFACE, url, "cursor"))
+  const matterId = getQuery(REPORTING_SURFACE, url, "matterId")
+  const scoreBand = parseScoreBand(getQuery(REPORTING_SURFACE, url, "scoreBand"))
+  const freshnessStatus = parseFreshness(getQuery(REPORTING_SURFACE, url, "freshnessStatus"))
 
   if (!actorId) {
     return NextResponse.json({ error: "actorId is required" }, { status: 400 })
@@ -288,7 +271,7 @@ export async function GET(request: Request) {
   if (!actor) {
     return NextResponse.json({ error: "unknown actor" }, { status: 404 })
   }
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     return NextResponse.json({ error: "actor role not allowed for reporting search" }, { status: 403 })
   }
 
@@ -301,8 +284,8 @@ export async function GET(request: Request) {
   for (const matter of matters) store.matters.set(matter.id, matter)
 
   if (view === "search") {
-    const rowType = parseRowType(url.searchParams.get("rowType"))
-    const terms = normalizeTerms(url.searchParams.get("q"))
+    const rowType = parseRowType(getQuery(REPORTING_SURFACE, url, "rowType"))
+    const terms = normalizeTerms(getQuery(REPORTING_SURFACE, url, "q"))
     const clients = await repos.entities.listByFirm(refreshedActor.firmId)
     for (const matter of matters) {
       await repos.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
@@ -312,7 +295,7 @@ export async function GET(request: Request) {
     }
 
     const all = (await repos.reportingIndex.listByFirm(refreshedActor.firmId))
-      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+      .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (rowType ? row.rowType === rowType : true))
       .filter((row) => terms.every((term) => row.tags.includes(term)))
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -348,7 +331,7 @@ export async function GET(request: Request) {
       ...row,
       freshnessStatus: asFreshnessStatus(row.recomputedAt, now),
     }))
-    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
     .filter((row) => (scoreBand ? row.scoreBand === scoreBand : true))
     .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -369,7 +352,7 @@ export async function GET(request: Request) {
 
   const relevanceByMatter = new Map(normalizedRelevance.map((row) => [row.matterId, row]))
   const exportRows = (await repos.matterReportExportAnalytics.listByFirm(refreshedActor.firmId))
-    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOf(row.classification))
+    .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
     .filter((row) => (matterId ? row.matterId === matterId : true))
     .filter((row) => {
       const relevance = relevanceByMatter.get(row.matterId)
@@ -396,6 +379,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { surface: REPORTING_SURFACE })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -412,32 +399,28 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
   }
+  const undeclared = refuseUndeclaredBody(REPORTING_SURFACE, parsed)
+  if (undeclared) return undeclared
 
-  if (!parsed.action) {
+  if (actionOf(REPORTING_SURFACE, parsed) === null) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
   if (
-    parsed.action !== "record_matter_report_export" &&
-    parsed.action !== "recompute_matter_report_relevance"
+    !isAction(REPORTING_SURFACE, parsed, "record_matter_report_export") &&
+    !isAction(REPORTING_SURFACE, parsed, "recompute_matter_report_relevance")
   ) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/reporting",
-    action: parsed.action,
+    action: actionOf(REPORTING_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   const actorId = parsed.actorId
   const matterId = parsed.matterId
@@ -473,7 +456,7 @@ export async function POST(request: Request) {
   })
 
   try {
-    if (parsed.action === "record_matter_report_export") {
+    if (isAction(REPORTING_SURFACE, parsed, "record_matter_report_export")) {
       const now = Date.now()
       const nextRow: MatterReportExportAnalyticsRow = {
         ...baseline.exportAnalytics,
@@ -487,7 +470,6 @@ export async function POST(request: Request) {
       }
       await repos.matterReportExportAnalytics.upsert(nextRow)
       store.matterReportExportAnalytics.set(nextRow.id, nextRow)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "reporting_matter_export_recorded",
         actorId: actor.id,
@@ -495,13 +477,12 @@ export async function POST(request: Request) {
         classification: matter.classification,
         reason: `${nextRow.lastExportScope}:${nextRow.lastExportFormat}:${nextRow.lastExportReason}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
-        action: parsed.action,
+        action: actionOf(REPORTING_SURFACE, parsed),
         exportAnalytics: nextRow,
         relevanceSnapshot: baseline.relevanceSnapshot,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -517,7 +498,6 @@ export async function POST(request: Request) {
     )
     await repos.matterReportRelevanceSnapshots.upsert(nextSnapshot)
     store.matterReportRelevanceSnapshots.set(nextSnapshot.id, nextSnapshot)
-    const priorAuditCount = store.audit.length
     store.audit.push({
       action: "reporting_matter_relevance_recomputed",
       actorId: actor.id,
@@ -525,16 +505,15 @@ export async function POST(request: Request) {
       classification: matter.classification,
       reason: recomputeReason,
     })
-    await persistAuditEntriesSince(store, repos, priorAuditCount)
     const payload = {
-      action: parsed.action,
+      action: actionOf(REPORTING_SURFACE, parsed),
       relevanceSnapshot: nextSnapshot,
       exportAnalytics: baseline.exportAnalytics,
     }
-    idempotency.set(key, payload, fingerprint)
+    claim.complete(payload)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "reporting operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "reporting operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

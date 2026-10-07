@@ -2,6 +2,14 @@ import { afterEach, describe, expect, it } from "vitest"
 import { GET, POST } from "@/app/api/p5/tenancy/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
+import {
+  arbitrateLineageReconciliationQueue,
+  assignLineageReconciliationArbitration,
+  attestLineageDigestClosureCheckpoint,
+  ensureLineageReconciliationMonitoringRows,
+  governLineageClosureAdjudication,
+  reopenLineageDigestClosureCheckpoint,
+} from "@/platform/p5/tenancyAdmin"
 
 afterEach(() => {
   resetRuntimeStoreForTests()
@@ -91,7 +99,8 @@ describe("GET/POST /api/p5/tenancy", () => {
         firmId: "firmB",
       })
     )
-    expect(crossFirmRefDenied.status).toBe(400)
+    // Foreign / cross-firm references answer like unknown ones (no existence oracle).
+    expect(crossFirmRefDenied.status).toBe(404)
   })
 
   it("lists users and memberships for partner admins with pagination", async () => {
@@ -169,22 +178,21 @@ describe("GET/POST /api/p5/tenancy", () => {
       sessionReference: { id: string }
     }
 
-    const writeRes = await post(
-      {
-        action: "update_role",
-        actorId: "partner_a",
-        firmId: "firmA",
-        targetUserId: "clerk_a",
-        nextRole: "clerk",
-        nextClearance: "internal",
-        reason: "Audit list verification",
-        sessionReferenceId: sessionJson.sessionReference.id,
-        authBoundary: "external_session_hint",
-        externalSessionId: "ext-audit-actor",
-      },
-      "bf379f5f-5e99-4f3b-9617-72d3f3c10f2d"
-    )
-    expect(writeRes.status).toBe(200)
+    // Re-audit N-3: update_role no longer writes (409 use_identity_api), so the tenant row this
+    // listing must show with its session-boundary fields is seeded directly.
+    getRuntimeStore().audit.push({
+      id: "aud_tenant_probe",
+      firmId: "firmA",
+      action: "tenant_update_role",
+      actorId: "partner_a",
+      target: "clerk_a",
+      classification: "internal",
+      reason: "Audit list verification",
+      authBoundary: "external_session_hint",
+      sessionReferenceId: sessionJson.sessionReference.id,
+      externalSessionId: "ext-audit-actor",
+      at: Date.now(),
+    })
 
     const auditRes = await get(
       new URLSearchParams({
@@ -278,30 +286,11 @@ describe("GET/POST /api/p5/tenancy", () => {
       sessionReference: { id: string }
     }
 
-    const driftUpdate = await post(
-      {
-        action: "update_role",
-        actorId: "partner_a",
-        firmId: "firmA",
-        targetUserId: "clerk_a",
-        nextRole: "clerk",
-        nextClearance: "internal",
-        reason: "Privilege drift invalidation check",
-        sessionReferenceId: actorSessionJson.sessionReference.id,
-      },
-      "556fcac3-ebf8-4474-92a9-583003648f18"
-    )
-    expect(driftUpdate.status).toBe(200)
-    const driftJson = (await driftUpdate.json()) as {
-      result: {
-        privilegedBoundaryDriftCount: number
-        privilegedBoundaryDriftSessionReferenceIds: string[]
-      }
-    }
-    expect(driftJson.result.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
-    expect(driftJson.result.privilegedBoundaryDriftSessionReferenceIds).toContain(
-      clerkSessionJson.sessionReference.id
-    )
+    // Re-audit N-3: the clerk's clearance changes through the identity API (Cloud Functions
+    // setUserClaims writes users/{uid}), not through update_role; simulate that write landing.
+    const clerk = getRuntimeStore().users.get("clerk_a")
+    if (!clerk) throw new Error("expected clerk seed")
+    getRuntimeStore().users.set("clerk_a", { ...clerk, clearanceLevel: "internal" })
 
     const staleReplay = await get(
       new URLSearchParams({
@@ -311,7 +300,10 @@ describe("GET/POST /api/p5/tenancy", () => {
     )
     expect(staleReplay.status).toBe(410)
     const staleReplayJson = (await staleReplay.json()) as { error: string }
-    expect(staleReplayJson.error).toContain("revoked")
+    expect(staleReplayJson.error).toBe("session reference stale due privilege drift")
+    const revoked = getRuntimeStore().tenancySessionReferences.get(clerkSessionJson.sessionReference.id)
+    expect(revoked).toMatchObject({ revokedReason: "privileged_boundary_drift" })
+    expect(typeof revoked?.revokedAt).toBe("number")
 
     const associateSession = await get(
       new URLSearchParams({
@@ -1272,13 +1264,9 @@ describe("GET/POST /api/p5/tenancy", () => {
         delegatedBoundaryDivergenceReasons?: string[]
       }>
     }
-    const driftAudit = auditJson.items.find(
-      (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
-    )
-    expect(driftAudit?.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
-    expect(driftAudit?.privilegedBoundaryDriftSessionReferenceIds).toContain(
-      clerkSessionJson.sessionReference.id
-    )
+    // The drift was detected on replay (the revoked reference above), not by an update_role
+    // write: no tenant_update_role row exists (re-audit N-3).
+    expect(auditJson.items.some((row) => row.action === "tenant_update_role")).toBe(false)
     expect(
       auditJson.items.some(
         (row) =>
@@ -1444,7 +1432,7 @@ describe("GET/POST /api/p5/tenancy", () => {
     ).toBe(true)
   })
 
-  it("blocks role escalation and cross-firm role changes", async () => {
+  it("refuses every role change, escalation and cross-firm alike, with 409 use_identity_api (re-audit N-3)", async () => {
     const promotePartner = await post(
       {
         action: "update_role",
@@ -1456,7 +1444,12 @@ describe("GET/POST /api/p5/tenancy", () => {
       },
       "24bfadbe-492f-42d6-aef6-8e9f30a140e8"
     )
-    expect(promotePartner.status).toBe(400)
+    expect(promotePartner.status).toBe(409)
+    expect(await promotePartner.json()).toEqual({
+      code: "use_identity_api",
+      error: "update_role is retired: identity fields are written only by Cloud Functions (E-27); use POST /api/platform/identity/setUserClaims",
+    })
+    expect(getRuntimeStore().users.get("associate_a")?.role).toBe("associate")
 
     const crossFirm = await post(
       {
@@ -1469,10 +1462,16 @@ describe("GET/POST /api/p5/tenancy", () => {
       },
       "8f7d3cff-979a-4f4d-b24f-11c1069f4208"
     )
-    expect(crossFirm.status).toBe(400)
+    // The same answer for another firm's user: no cross-firm existence oracle.
+    expect(crossFirm.status).toBe(409)
+    expect(await crossFirm.json()).toEqual({
+      code: "use_identity_api",
+      error: "update_role is retired: identity fields are written only by Cloud Functions (E-27); use POST /api/platform/identity/setUserClaims",
+    })
+    expect(getRuntimeStore().users.get("partner_b")?.role).toBe("partner")
   })
 
-  it("supports idempotent role updates and writes audit entries", async () => {
+  it("an update_role request changes nothing, writes no tenant row, and is never stored for replay (re-audit N-3)", async () => {
     const sessionRes = await get(
       new URLSearchParams({
         view: "session",
@@ -1493,22 +1492,121 @@ describe("GET/POST /api/p5/tenancy", () => {
       reason: "Temporary reduced clearance",
       sessionReferenceId: sessionJson.sessionReference.id,
     }
+    const before = { ...getRuntimeStore().users.get("clerk_a") }
     const first = await post(payload, key)
     const second = await post(payload, key)
-    expect(first.status).toBe(200)
-    expect(second.status).toBe(200)
-    const a = (await first.json()) as { reused: boolean; result: { user: { id: string } } }
-    const b = (await second.json()) as { reused: boolean; result: { user: { id: string } } }
-    expect(a.reused).toBe(false)
-    expect(b.reused).toBe(true)
-    expect(a.result.user.id).toBe("clerk_a")
-
-    const conflict = await post({ ...payload, nextClearance: "confidential" }, key)
-    expect(conflict.status).toBe(409)
+    expect(first.status).toBe(409)
+    expect(second.status).toBe(409)
+    expect(await first.json()).toEqual({
+      code: "use_identity_api",
+      error: "update_role is retired: identity fields are written only by Cloud Functions (E-27); use POST /api/platform/identity/setUserClaims",
+    })
+    expect(await second.json()).toEqual({
+      code: "use_identity_api",
+      error: "update_role is retired: identity fields are written only by Cloud Functions (E-27); use POST /api/platform/identity/setUserClaims",
+    })
+    expect(getRuntimeStore().users.get("clerk_a")).toEqual(before)
 
     const audit = getRuntimeStore().audit
-    expect(audit.some((row) => row.action === "tenant_update_role" && row.target === "clerk_a")).toBe(
-      true
-    )
+    expect(audit.some((row) => row.action === "tenant_update_role")).toBe(false)
+  })
+
+  describe("cross-firm lineage root (G-2)", () => {
+    /** Firm A's lineage: partner_a's session, a diverged reissue, an open dispute (so digest and monitoring rows exist). */
+    async function firmALineage(): Promise<string> {
+      const session = await get(new URLSearchParams({ view: "session", userId: "partner_a", firmId: "firmA" }))
+      const root = ((await session.json()) as { sessionReference: { id: string } }).sessionReference.id
+      const reissued = await post(
+        {
+          action: "reissue_session_reference",
+          actorId: "partner_a",
+          firmId: "firmA",
+          sessionReferenceId: root,
+          authBoundary: "external_session_hint",
+          externalSessionId: "ext-firm-a-g2",
+        },
+        crypto.randomUUID()
+      )
+      const child = ((await reissued.json()) as { result: { sessionReference: { id: string } } }).result.sessionReference.id
+      const dispute = await post(
+        { action: "attest_session_lineage_dispute", actorId: "partner_a", firmId: "firmA", sessionReferenceId: child, reason: "g2" },
+        crypto.randomUUID()
+      )
+      expect(dispute.status).toBe(200)
+      return root
+    }
+
+    /** Every firm-A row keyed by the lineage root, as (id, firmId). */
+    function rootRows(root: string) {
+      const store = getRuntimeStore()
+      return [
+        store.tenancyLineageReconciliationDigests,
+        store.tenancyLineageReconciliationQueueArbitrations,
+        store.tenancyLineageDigestClosureCheckpoints,
+        store.tenancyLineageClosureAdjudications,
+        store.tenancyLineageArbitrationDebtRetirementLedgers,
+        store.tenancyLineageClosureAdjudicationSettlements,
+        store.tenancyLineageArbitrationDebtRetirementDisputeLedgers,
+      ].flatMap((rows) =>
+        [...rows.values()]
+          .filter((row) => row.lineageRootSessionReferenceId === root)
+          .map((row) => JSON.stringify(row))
+      )
+    }
+
+    it("second line: root-keyed monitoring rows of another firm are refused even if a digest was re-stamped to the caller's firm", async () => {
+      const root = await firmALineage()
+      const store = getRuntimeStore()
+      const digestId = `tenancy-lineage-digest:${root}`
+      const aDigest = store.tenancyLineageReconciliationDigests.get(digestId)!
+      // A future caller that skipped recomputeLineageReconciliationDigest's root check.
+      const planted = { ...aDigest, firmId: "firmB" }
+      store.tenancyLineageReconciliationDigests.set(digestId, planted)
+      const before = rootRows(root).filter((row) => !row.includes("tenancy-lineage-digest:"))
+      const input = { actorId: "partner_b", firmId: "firmB", lineageRootSessionReferenceId: root }
+      const calls: Array<[string, () => unknown]> = [
+        ["ensure", () => ensureLineageReconciliationMonitoringRows(store, { firmId: "firmB", digest: planted })],
+        ["assign", () => assignLineageReconciliationArbitration(store, { ...input, assignedPartnerId: "partner_b" })],
+        ["arbitrate", () => arbitrateLineageReconciliationQueue(store, { ...input, disposition: "confirm_needs_review" })],
+        ["attest closure", () => attestLineageDigestClosureCheckpoint(store, { ...input, closureReason: "x" })],
+        ["reopen closure", () => reopenLineageDigestClosureCheckpoint(store, { ...input, reopenTrigger: "x" })],
+        ["govern", () => governLineageClosureAdjudication(store, { ...input, panelPartnerIds: ["partner_b"], requiredPanelQuorum: 1 })],
+      ]
+      for (const [label, call] of calls) {
+        expect(call, label).toThrow(/unknown lineage root session reference/)
+      }
+      expect(rootRows(root).filter((row) => !row.includes("tenancy-lineage-digest:"))).toEqual(before)
+    })
+
+    it.each([
+      ["assign_lineage_reconciliation_queue", { assignedPartnerId: "partner_b", slaWindowMinutes: 90 }],
+      ["arbitrate_lineage_reconciliation_queue", { disposition: "confirm_needs_review" }],
+      ["attest_lineage_digest_closure", { closureReason: "x" }],
+      ["reopen_lineage_digest_closure", { reopenTrigger: "x" }],
+      ["govern_lineage_closure_adjudication", { panelPartnerIds: ["partner_b"], requiredPanelQuorum: 1, verdictWindowMinutes: 60 }],
+      ["record_lineage_closure_adjudication_verdict", { disposition: "mark_reconciled", dispositionDriftReasons: ["x"] }],
+      ["attest_lineage_arbitration_debt_retirement", { retirementNote: "x" }],
+      ["reopen_lineage_arbitration_debt_retirement", { carryoverSignal: "x" }],
+      ["checkpoint_lineage_closure_adjudication_settlement_publication", { publicationChannel: "partner_workboard" }],
+      ["log_lineage_closure_adjudication_settlement_correction", { correctionNote: "x" }],
+      ["confirm_lineage_closure_adjudication_settlement_sla", {}],
+      ["open_lineage_arbitration_debt_retirement_dispute", { challengeReason: "x" }],
+      ["assign_lineage_arbitration_debt_retirement_dispute_reviewer", { reviewerId: "partner_b" }],
+      ["resolve_lineage_arbitration_debt_retirement_dispute", { resolutionOutcome: "uphold_retirement" }],
+      ["control_lineage_arbitration_debt_retirement_dispute_rollback", { rollbackControlNote: "x" }],
+    ])("%s on another firm's lineage root: refused as unknown, firm A's rows untouched and not returned", async (action, extra) => {
+      const root = await firmALineage()
+      const before = rootRows(root)
+      expect(before.length).toBeGreaterThan(0)
+      const res = await post(
+        { action, actorId: "partner_b", firmId: "firmB", lineageRootSessionReferenceId: root, ...extra },
+        crypto.randomUUID()
+      )
+      const text = await res.text()
+      expect(res.status).toBe(400)
+      expect(text).toMatch(/unknown lineage root/)
+      expect(text).not.toContain("firmA")
+      expect(rootRows(root)).toEqual(before)
+    })
   })
 })

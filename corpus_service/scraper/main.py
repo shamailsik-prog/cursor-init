@@ -1,12 +1,14 @@
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+import logging
 import pathlib
 from scraper.auth import require_admin_api_key
 from scraper.routers import sources, jobs, quarantine, search, export
 from scraper.database import init_db
 from scraper.config import settings
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="Blackletter Legal Scraper")
 # Restrict CORS: wildcard origins are unsafe next to admin write routes.
 _cors_origins = [o.strip() for o in getattr(settings, "CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
@@ -44,14 +46,18 @@ async def health():
         async with SessionLocal() as db:
             c=await db.execute(select(func.count(CaseLawMaster.id)))
             return {"status":"ok","db_connected":True,"total_cases":c.scalar(),"total_pdfs":total_pdfs,"seen":seen}
-    except Exception as e:
-        return {"status":"degraded","db_connected":False,"total_pdfs":total_pdfs,"seen":seen,"error":str(e)}
+    except Exception:
+        # Never echo the exception: driver errors can embed the DATABASE_URL (credentials, host).
+        logger.warning("health: database probe failed", exc_info=True)
+        return {"status":"degraded","db_connected":False,"total_pdfs":total_pdfs,"seen":seen}
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
+    # Static shell only; the page prompts for the admin key and sends it as X-API-Key.
     p=pathlib.Path(__file__).parent/"templates"/"dashboard.html"
-    return p.read_text() if p.exists() else "<h1>Dashboard missing</h1>"
+    html = p.read_text() if p.exists() else "<h1>Dashboard missing</h1>"
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 @app.get("/api/live-feed")
-async def live_feed():
+async def live_feed(_: None = Depends(require_admin_api_key)):
     import pathlib
     STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
     logs=[]
@@ -74,7 +80,7 @@ async def stop_h(_: None = Depends(require_admin_api_key)):
     (STATE_DIR/"harvest.stopped").write_text("stopped")
     return {"status":"stopped"}
 @app.get("/api/vault")
-async def vault():
+async def vault(_: None = Depends(require_admin_api_key)):
     import pathlib
     LIVE_DIR = pathlib.Path("/app/live" if pathlib.Path("/app/live").exists() else "./live")
     files=[]

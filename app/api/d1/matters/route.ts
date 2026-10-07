@@ -1,77 +1,51 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
+import { BodySchema, MATTERS_SURFACE } from "./surface"
+import { z } from "zod"
+import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
+import { withSession } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { checkPermission } from "@/platform/p5/checkPermission"
-import { rankOf } from "@/platform/spine/store"
+import { DEFAULT_JSON_BODY_BYTES, parseBody, readJsonLimited } from "@/platform/http/validation"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import {
   addMember,
+  assignMatterMember,
   confirmEngagement,
+  MembershipAssignmentError,
+  recordMatterMemberAdd,
+  validateMatterAssignee,
 } from "@/services/d1-2/matters"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-type CreateBody = {
-  action: "create"
-  actorId?: string
-  firmId?: string
-  clientId?: string
-  title?: string
-  courtId?: string
-  classification?: string
-  memberUserIds?: string[]
-}
 
-type ConfirmBody = {
-  action: "confirm_engagement"
-  actorId?: string
-  matterId?: string
-  atMs?: number
-}
-
-type CaseBody = {
-  action: "record_case_number"
-  actorId?: string
-  matterId?: string
-  raw?: string
-  courtId?: string
-}
-
-type Body = CreateBody | ConfirmBody | CaseBody
+type Body = z.infer<typeof BodySchema>
 
 function deny(message: string, status = 403) {
   return NextResponse.json({ error: message }, { status })
 }
 
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
-
 function ensureActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
-  if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for matter operations")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
+    throw new PublicError("actor role not allowed for matter operations")
   }
   return actor
 }
@@ -79,12 +53,12 @@ function ensureActor(actorId: string, firmId?: string) {
 function ensureClientIdentityInFirm(clientId: string, firmId: string) {
   const store = getRuntimeStore()
   const client = store.users.get(clientId)
-  if (!client) return
+  if (!client) throw new PublicError("unknown client")
   if (client.firmId !== firmId) {
-    throw new Error("cross-firm client denied")
+    throw new PublicError("cross-firm client denied")
   }
   if (client.role !== "client") {
-    throw new Error("clientId must reference a client user")
+    throw new PublicError("clientId must reference a client user")
   }
 }
 
@@ -96,25 +70,29 @@ async function ensureMatterAccess(
   const store = getRuntimeStore()
   const actor = ensureActor(actorId)
   const matter = store.matters.get(matterId) ?? (await repos.matters.get(matterId))
-  if (!matter) throw new Error("unknown matter")
+  if (!matter) throw new PublicError("unknown matter")
   store.matters.set(matter.id, matter)
-  if (matter.firmId !== actor.firmId) throw new Error("cross-firm access denied")
+  if (matter.firmId !== actor.firmId) throw new PublicError("cross-firm access denied")
   if (!store.members.has(store.memberKey(matterId, actorId))) {
-    throw new Error("actor is not a member of this matter")
+    throw new PublicError("actor is not a member of this matter")
   }
-  if (rankOf(actor.clearanceLevel) < rankOf(matter.classification)) {
-    throw new Error("actor clearance is below matter classification")
+  if (rankOf(actor.clearanceLevel) < rankOfStoredOrMax(matter.classification)) {
+    throw new PublicError("actor clearance is below matter classification")
   }
   return { actor, matter }
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet, { surface: MATTERS_SURFACE })
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repo = await getRuntimeRepositories(store)
   const url = new URL(request.url)
-  const userId = url.searchParams.get("userId")
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const userId = getQuery(MATTERS_SURFACE, url, "userId")
+  const limit = parseLimit(getQuery(MATTERS_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(MATTERS_SURFACE, url, "cursor"))
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
   }
@@ -146,6 +124,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: MATTERS_SURFACE })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repo = await getRuntimeRepositories(store)
   let key: string
@@ -157,35 +139,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
-  try {
-    parsed = (await request.json()) as Body
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
-  }
+  const raw = await readJsonLimited(request)
+  if (!raw.ok) return raw.response
+  const undeclared = refuseUndeclaredBody(MATTERS_SURFACE, raw.data)
+  if (undeclared) return undeclared
+  const body = parseBody(BodySchema, raw.data)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
 
-  if (!parsed.action) {
-    return NextResponse.json({ error: "action is required" }, { status: 400 })
-  }
-
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/matters",
-    action: parsed.action,
+    action: actionOf(MATTERS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
-    if (parsed.action === "create") {
+    if (isAction(MATTERS_SURFACE, parsed, "create")) {
       if (!parsed.actorId || !parsed.firmId || !parsed.clientId || !parsed.title || !parsed.courtId) {
         return NextResponse.json(
           { error: "actorId, firmId, clientId, title, and courtId are required" },
@@ -203,7 +176,19 @@ export async function POST(request: Request) {
         return deny("actor clearance is below requested matter classification")
       }
       ensureClientIdentityInFirm(parsed.clientId, parsed.firmId)
-      const priorAuditCount = store.audit.length
+      // Validate every member before anything is persisted, so a bad member id cannot
+      // leave an orphaned matter behind. Final audit F1: the same assignee rule as
+      // add_member (same-firm staff only; client/accounts -> 403 assignee_role_forbidden).
+      // The creator seats themselves (ensureActor already refused client/intern/accounts).
+      const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
+      try {
+        for (const userId of memberIds) validateMatterAssignee(store, parsed.firmId, userId)
+      } catch (err) {
+        if (err instanceof MembershipAssignmentError) {
+          return NextResponse.json({ error: err.message, code: err.code }, { status: 403 })
+        }
+        throw err
+      }
       const matter = {
         id: store.id("mat"),
         firmId: parsed.firmId,
@@ -219,10 +204,10 @@ export async function POST(request: Request) {
       await repo.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
       // Keep in-memory mirror in sync for flows that still read the spine directly.
       store.matters.set(matter.id, matter)
-      const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
       for (const userId of memberIds) {
         addMember(store, matter.id, userId, parsed.firmId)
         await repo.members.upsert({ matterId: matter.id, userId, firmId: parsed.firmId })
+        recordMatterMemberAdd(store, parsed.actorId, matter, userId)
       }
       store.audit.push({
         action: "matter_create",
@@ -230,23 +215,45 @@ export async function POST(request: Request) {
         target: matter.id,
         classification: matter.classification,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "create",
         matter,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "confirm_engagement") {
+    if (isAction(MATTERS_SURFACE, parsed, "add_member")) {
+      const actor = ensureActor(parsed.actorId)
+      await syncFirmMembers(store, repo, actor.firmId)
+      const matter = store.matters.get(parsed.matterId) ?? (await repo.matters.get(parsed.matterId))
+      if (matter) store.matters.set(matter.id, matter)
+      let member: { matterId: string; userId: string; firmId: string }
+      try {
+        member = assignMatterMember(store, {
+          actorId: parsed.actorId,
+          matterId: parsed.matterId,
+          userId: parsed.memberUserId,
+        })
+      } catch (err) {
+        if (err instanceof MembershipAssignmentError) {
+          return NextResponse.json({ error: err.message, code: err.code }, { status: 403 })
+        }
+        throw err
+      }
+      await repo.members.upsert(member)
+      const payload = { action: "add_member", member }
+      claim.complete(payload)
+      return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    }
+
+    if (isAction(MATTERS_SURFACE, parsed, "confirm_engagement")) {
       if (!parsed.actorId || !parsed.matterId) {
         return NextResponse.json({ error: "actorId and matterId are required" }, { status: 400 })
       }
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
-      const priorAuditCount = store.audit.length
       const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
       const updatedMatter = store.matters.get(parsed.matterId)
@@ -268,16 +275,15 @@ export async function POST(request: Request) {
         target: parsed.matterId,
         classification: matter.classification,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "confirm_engagement",
         matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    if (parsed.action === "record_case_number") {
+    if (isAction(MATTERS_SURFACE, parsed, "record_case_number")) {
       if (!parsed.actorId || !parsed.matterId || !parsed.raw || !parsed.courtId) {
         return NextResponse.json(
           { error: "actorId, matterId, raw, and courtId are required" },
@@ -287,7 +293,14 @@ export async function POST(request: Request) {
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
-      const priorAuditCount = store.audit.length
+      // R2 N6: the case number feeds the citation gate's own-case exemption; only a partner
+      // member records it (D6-1 owns it, L18 §3.2), and it is audited below.
+      if (actor.role !== "partner") {
+        return NextResponse.json(
+          { error: "only a partner records the case number", code: "partner_required" },
+          { status: 403 }
+        )
+      }
       const priorFollowUpIds = new Set(store.followUps.map((row) => row.id))
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)
       const updatedMatter = store.matters.get(parsed.matterId)
@@ -309,19 +322,18 @@ export async function POST(request: Request) {
         classification: matter.classification,
         reason: result.status,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "record_case_number",
         result,
         matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "matter operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "matter operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

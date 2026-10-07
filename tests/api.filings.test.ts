@@ -80,6 +80,164 @@ describe("GET/POST /api/d4/filings", () => {
       "58de6792-a8d0-4964-8440-9e8d48cecbab"
     )
     expect(blocked.status).toBe(422)
+
+    const spoofed = await post(
+      {
+        action: "create_package",
+        actorId: "associate_a",
+        matterId,
+        draftId,
+        classification: "internal",
+        citedJudgmentIds: ["j-old"],
+        temporalCitations: [],
+        partnerOverride: { partnerId: "partner_a", reason: "named partner" },
+      },
+      "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e04"
+    )
+    expect(spoofed.status).toBe(403)
+    expect([...store.filingPackages.values()]).toHaveLength(0)
+
+    const partnerSelf = await post(
+      {
+        action: "create_package",
+        actorId: "partner_a",
+        matterId,
+        draftId,
+        classification: "internal",
+        citedJudgmentIds: ["j-old"],
+        temporalCitations: [],
+        partnerOverride: { reason: "Distinguished; later bench on different statute" },
+      },
+      "8d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f05"
+    )
+    expect(partnerSelf.status).toBe(200)
+    const overrides = store.audit.filter((row) => row.action === "citation_gate_override")
+    expect(overrides).toHaveLength(1)
+    expect(overrides[0]).toMatchObject({
+      actorId: "partner_a",
+      target: matterId,
+      reason: "Distinguished; later bench on different statute",
+    })
+  })
+
+  it("re-runs the citation gate at approval: a newly overruled authority blocks approval unless the approving partner overrides with a reason (E-22)", async () => {
+    const store = getRuntimeStore()
+    seedJudgment(store, "j-cited", "Cited authority", "single", "2019 SCMR 1234")
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Filing matter",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "partner_a", "firmA")
+    addMember(store, matter.id, "associate_a", "firmA")
+    const firstTemplate = getDocumentTypes()[0]
+    if (!firstTemplate) throw new Error("missing template seed")
+    const draft = composeDraft(store, {
+      actorId: "associate_a",
+      matterId: matter.id,
+      templateId: firstTemplate.id,
+      title: "Draft pleading",
+      body: "Relies on 2019 SCMR 1234.",
+      classification: "internal",
+      preflight: {
+        actorId: "associate_a",
+        matterId: matter.id,
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+        draftBody: "Relies on 2019 SCMR 1234.",
+      },
+    })
+    const created = await post(
+      {
+        action: "create_package",
+        actorId: "associate_a",
+        matterId: matter.id,
+        draftId: draft.id,
+        classification: "internal",
+      },
+      "9e3c5a1b-6f8d-4c0e-9a2b-5d4e6f7a8b10"
+    )
+    expect(created.status).toBe(200)
+    const packageId = ((await created.json()) as { result: { filingPackage: { id: string } } })
+      .result.filingPackage.id
+
+    seedJudgment(store, "j-larger", "Larger bench", "larger", "PLD 2026 SC 1")
+    seedTreatment(store, "j-larger", "j-cited", "overruled", "larger")
+
+    const blocked = await post(
+      { action: "decide_package", actorId: "partner_a", packageId, decision: "approve", reason: "Ready" },
+      "af4d6b2c-7a9e-4d1f-8b3c-6e5f7a8b9c11"
+    )
+    expect(blocked.status).toBe(422)
+    expect(store.filingPackages.get(packageId)?.status).toBe("pending_partner_approval")
+
+    const rejected = await post(
+      { action: "decide_package", actorId: "partner_a", packageId, decision: "reject", reason: "Authority overruled" },
+      "b05e7c3d-8b0f-4e2a-9c4d-7f6a8b9c0d12"
+    )
+    expect(rejected.status).toBe(200)
+  })
+
+  it("approval over a non-VERIFIED authority needs the approving partner's own override reason", async () => {
+    const store = getRuntimeStore()
+    seedJudgment(store, "j-cited", "Cited authority", "single", "2019 SCMR 1234")
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Filing matter",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "partner_a", "firmA")
+    addMember(store, matter.id, "associate_a", "firmA")
+    const firstTemplate = getDocumentTypes()[0]
+    if (!firstTemplate) throw new Error("missing template seed")
+    const draft = composeDraft(store, {
+      actorId: "associate_a",
+      matterId: matter.id,
+      templateId: firstTemplate.id,
+      title: "Draft pleading",
+      body: "Relies on 2019 SCMR 1234.",
+      classification: "internal",
+      preflight: {
+        actorId: "associate_a",
+        matterId: matter.id,
+        classification: "internal",
+        citedJudgmentIds: [],
+        temporalCitations: [],
+        draftBody: "Relies on 2019 SCMR 1234.",
+      },
+    })
+    const created = await post(
+      { action: "create_package", actorId: "associate_a", matterId: matter.id, draftId: draft.id, classification: "internal" },
+      "c16f8d4e-9c1a-4f3b-8d5e-8a7b9c0d1e13"
+    )
+    const packageId = ((await created.json()) as { result: { filingPackage: { id: string } } })
+      .result.filingPackage.id
+    seedJudgment(store, "j-larger", "Larger bench", "larger", "PLD 2026 SC 1")
+    seedTreatment(store, "j-larger", "j-cited", "overruled", "larger")
+
+    const approved = await post(
+      {
+        action: "decide_package",
+        actorId: "partner_a",
+        packageId,
+        decision: "approve",
+        reason: "Ready",
+        partnerOverride: { reason: "Overruling judgment distinguished on statute" },
+      },
+      "d2708e5f-0d2b-4a4c-9e6f-9b8c0d1e2f14"
+    )
+    expect(approved.status).toBe(200)
+    expect(store.filingPackages.get(packageId)?.status).toBe("approved")
+    const overrides = store.audit.filter((row) => row.action === "citation_gate_override")
+    expect(overrides.at(-1)).toMatchObject({
+      actorId: "partner_a",
+      reason: "Overruling judgment distinguished on statute",
+    })
   })
 
   it("creates pending filing package and supports partner approval", async () => {
@@ -166,10 +324,6 @@ describe("GET/POST /api/d4/filings", () => {
         classification: "internal",
         citedJudgmentIds: [],
         temporalCitations: [],
-        partnerOverride: {
-          partnerId: "partner_a",
-          reason: "allow duplicate package for test",
-        },
       },
       "b1e5eaa7-74d4-43ef-a578-c6d5ad2654fc"
     )
@@ -1056,6 +1210,13 @@ describe("GET/POST /api/d4/filings", () => {
     expect(snoozeVarianceJson.result.policyVarianceDigest.status).toBe("snoozed")
     expect(typeof snoozeVarianceJson.result.policyVarianceDigest.snoozeUntil).toBe("number")
 
+    // Four-eyes: the second approver must be a different partner in the firm.
+    getRuntimeStore().users.set("partner_a2", {
+      id: "partner_a2",
+      firmId: "firmA",
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+    })
     const recordRemediation = await post(
       {
         action: "record_variance_remediation",
@@ -1064,12 +1225,14 @@ describe("GET/POST /api/d4/filings", () => {
         decision: "temporary_override",
         justification: "Controlled override while court transport backlog is resolved",
         expiresInHours: 4,
-        secondApproverId: "partner_a",
+        secondApproverId: "partner_a2",
         note: "Remediation ledger capture for policy variance governance",
       },
       "f0c3020d-65a8-4f6c-8bb9-6e8ce8b8ef31"
     )
     expect(recordRemediation.status).toBe(200)
+    // Only needed as the approver; keep later owner auto-assignment unchanged.
+    getRuntimeStore().users.delete("partner_a2")
     const remediationJson = (await recordRemediation.json()) as {
       result: {
         remediation: { decision: string; status: string }
@@ -2167,13 +2330,20 @@ describe("GET/POST /api/d4/filings", () => {
     }
     expect(acknowledgeWaiverExpiryJson.result.waiverExpiryDigest.status).toBe("acknowledged")
 
+    // Four-eyes: the second approver must be a different partner in the firm.
+    getRuntimeStore().users.set("partner_a2", {
+      id: "partner_a2",
+      firmId: "firmA",
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+    })
     const extendWaiver = await post(
       {
         action: "extend_breach_waiver",
         actorId: "partner_a",
         packageId,
         extendHours: 8,
-        secondApproverId: "partner_a",
+        secondApproverId: "partner_a2",
         rolloverJustification: "Waiver cap exceeded due documented registry closure period",
         rolloverNote: "Rollover attestation captured with partner signoff",
         note: "Extending waiver pending registry reopening",
@@ -2181,6 +2351,8 @@ describe("GET/POST /api/d4/filings", () => {
       "0b2da76f-47d7-4902-b5cd-faf6c2af9a56"
     )
     expect(extendWaiver.status).toBe(200)
+    // Only needed as the approver; keep later owner auto-assignment unchanged.
+    getRuntimeStore().users.delete("partner_a2")
     const extendWaiverJson = (await extendWaiver.json()) as {
       result: {
         waiver: { status: string }
@@ -3591,6 +3763,6 @@ describe("GET/POST /api/d4/filings", () => {
     expect(a.result.filingPackage.id).toBe(b.result.filingPackage.id)
 
     const conflict = await post({ ...payload, classification: "confidential" }, key)
-    expect(conflict.status).toBe(409)
+    expect(conflict.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
   })
 })

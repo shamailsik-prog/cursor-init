@@ -1,32 +1,209 @@
 name: Gate G-0
 
+# One workflow, independent jobs: a red unit run no longer hides the functions, rules or gate
+# results, and every job has its own time limit. Run any job locally with the commands in
+# docs/architecture/README.md ("Running the gates and scans locally").
+# Third-party actions are pinned to commit SHAs (tag in the trailing comment).
+
 on:
   pull_request:
   push:
     branches: [main, correction-pack-10sep2026]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # A newer push to a PR supersedes the older run; pushes to main always run to the end.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # functions/ declares engines.node 22 and deploys on 22; every Node job runs on it.
+  NODE_VERSION: "22"
+  JAVA_VERSION: "21"
+  PYTHON_VERSION: "3.12"
+
 jobs:
-  g0-static:
+  lint-typecheck:
+    name: Lint and typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
-      - uses: actions/setup-java@v4
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: npm run lint
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - run: npm ci
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+
+  rules:
+    name: Firestore rules (emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
       - run: npm ci
+      - name: Rules and persistence suites (Firestore emulator)
+        run: npm run test:rules
+
+  functions:
+    name: Cloud Functions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+      # Root install: firebase-tools (emulators:exec) and the shared code functions/ bundles.
+      - run: npm ci
+      - name: Functions install
+        run: npm --prefix functions ci
+      - name: Functions typecheck
+        run: npm --prefix functions run typecheck
+      - name: Functions build
+        run: npm --prefix functions run build
+      # test/g2.cross-firm.test.ts is excluded here (functions/vitest.config.ts): it runs once, in the gates job.
+      # Under CI a missing emulator env fails the run instead of skipping (functions/test/emu.ts).
+      - name: Functions tests (Auth + Firestore emulators)
+        run: npm --prefix functions run test:emu
+
+  gates:
+    name: Gates G-0, G-1, G-2
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the product + phase-audit-doc guard (G-0 [15]) diffs against the PR base.
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+      # G-0 is static (grep + python + git) and runs before node_modules exists.
       - name: Gate G-0 static
+        env:
+          # pull_request: the PR's base commit; push: origin/main (present because fetch-depth is 0).
+          BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
         run: bash ci_gates/gate_g0.sh
-      - name: Lint
-        run: npm run lint
-      - name: Unit tests
-        run: npm run test:all
-      - name: Gate G-1 forensic
+      # The gates are independent: a G-0 failure must not hide the G-1 and G-2 results.
+      - name: Install
+        if: ${{ !cancelled() }}
+        run: npm ci && npm --prefix functions ci
+      - name: Gate G-1 spine
+        if: ${{ !cancelled() }}
         run: python3 ci_gates/gate_g1.py
+      - name: Gate G-2 cross-firm isolation (L18 §10)
+        if: ${{ !cancelled() }}
+        run: npm run gate:g2
+
+  next-build:
+    name: Next.js build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - run: npm ci
+      - name: next build
+        run: npm run build
+
+  corpus-service:
+    name: corpus_service pytest
+    # corpus_service/ pytest, including the security-hardening regression tests. Runs until
+    # the service moves to its own repository (E-25); the pinned test set is requirements-test.txt.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: corpus_service/requirements-test.txt
+      # test_security_hardening runs tests/dashboard_harness.mjs under node.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: python -m pip install -r corpus_service/requirements-test.txt
+      - run: python -m pytest corpus_service/tests -q

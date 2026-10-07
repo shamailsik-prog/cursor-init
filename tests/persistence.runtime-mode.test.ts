@@ -803,6 +803,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(snoozeVariance.status).toBe(200)
+      // Four-eyes: the second approver must be a different partner in the firm.
+      getRuntimeStore().users.set("partner_a2", {
+        id: "partner_a2",
+        firmId: "firmA",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      })
       const recordRemediation = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -817,12 +824,14 @@ describe("Runtime persistence mode", () => {
             decision: "temporary_override",
             justification: "runtime controlled override while transport stabilizes",
             expiresInHours: 4,
-            secondApproverId: "partner_a",
+            secondApproverId: "partner_a2",
             note: "runtime remediation ledger row",
           }),
         })
       )
       expect(recordRemediation.status).toBe(200)
+      // Only needed as the approver; keep later owner auto-assignment unchanged.
+      getRuntimeStore().users.delete("partner_a2")
       const acknowledgeRemediationExpiry = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -889,6 +898,13 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(acknowledgeExpiry.status).toBe(200)
+      // Four-eyes: the second approver must be a different partner in the firm.
+      getRuntimeStore().users.set("partner_a2", {
+        id: "partner_a2",
+        firmId: "firmA",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      })
       const extendWaiver = await filingsPost(
         new Request("http://127.0.0.1/api/d4/filings", {
           method: "POST",
@@ -901,7 +917,7 @@ describe("Runtime persistence mode", () => {
             actorId: "partner_a",
             packageId,
             extendHours: 8,
-            secondApproverId: "partner_a",
+            secondApproverId: "partner_a2",
             rolloverJustification: "runtime waiver extension exceeds baseline cap due closure",
             rolloverNote: "runtime rollover attestation row",
             note: "runtime waiver extended",
@@ -909,6 +925,8 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(extendWaiver.status).toBe(200)
+      // Only needed as the approver; keep later owner auto-assignment unchanged.
+      getRuntimeStore().users.delete("partner_a2")
       const rolloverAttestationDoc = await getDoc(
         doc(ctx.firestore(), "filing_escalation_waiver_rollover_attestations", `rollover:${packageId}:1`)
       )
@@ -4863,15 +4881,23 @@ describe("Runtime persistence mode", () => {
       expect(
         firmAScopeQueueReentryComplianceJson.items.some((item) => item.ownerId === "partner_b")
       ).toBe(false)
-      getRuntimeStore().audit = []
-      const auditView = await tenancyGet(
-        new Request(
-          "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=100&cursor=0"
+      getRuntimeStore().audit.replaceAll([])
+      // Every permission decision is now persisted to the firm's audit log (review R1 #4), so
+      // the rows asserted below may be beyond the first page: read the whole view.
+      const auditViewJson: { items: Array<{ action: string; target: string }> } = { items: [] }
+      for (let auditCursor: string | null = "0"; auditCursor !== null; ) {
+        const auditView = await tenancyGet(
+          new Request(
+            `http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=100&cursor=${auditCursor}`
+          )
         )
-      )
-      expect(auditView.status).toBe(200)
-      const auditViewJson = (await auditView.json()) as {
-        items: Array<{ action: string; target: string }>
+        expect(auditView.status).toBe(200)
+        const page = (await auditView.json()) as {
+          items: Array<{ action: string; target: string }>
+          nextCursor: string | null
+        }
+        auditViewJson.items.push(...page.items)
+        auditCursor = page.nextCursor
       }
       expect(
         auditViewJson.items.some(
@@ -6931,7 +6957,24 @@ describe("Runtime persistence mode", () => {
     })
   })
 
-  it("persists workflow/court-ops activity index and rehydrates reporting after reset", async () => {
+  // One cumulative ops-alert lifecycle, split into sequential parts so no single test nears
+  // the timeout: every ops-reporting request costs ~215 Firestore round-trips in the route.
+  // Later parts continue from the Firestore state persisted by earlier parts (the runtime
+  // store is reset between parts, so each part also exercises rehydration).
+  // (Body not re-indented to keep the diff small in this frequently edited file.)
+  describe.sequential("activity index lifecycle", () => {
+  let activityFlow: { matterId: string; docId: string } | null = null
+  let completedParts = 0
+  function requireActivityFlow(part: number) {
+    if (!activityFlow || completedParts !== part - 1) {
+      throw new Error(
+        `activity flow part ${part} needs parts 1-${part - 1} to have completed (completed: ${completedParts})`
+      )
+    }
+    return activityFlow
+  }
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 1/6)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
       const matterId = await createMatterViaRoute(
@@ -7437,6 +7480,15 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(enforcementAttestationReopen.status).toBe(200)
+      activityFlow = { matterId, docId }
+      completedParts = 1
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 2/6)", async () => {
+    const { matterId } = requireActivityFlow(2)
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       const enforcementRecomplete = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -7745,6 +7797,14 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(remediationSlaBreachEscalationOpen.status).toBe(200)
+      completedParts = 2
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 3/6)", async () => {
+    const { matterId } = requireActivityFlow(3)
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       const remediationSlaBreachEscalationAssign = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -8042,6 +8102,14 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(waiverExpiryDisputeAdjudicationResolve.status).toBe(200)
+      completedParts = 3
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 4/6)", async () => {
+    const { matterId } = requireActivityFlow(4)
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       const remediationSlaBreachResolutionCheckpointOpen = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -8409,6 +8477,14 @@ describe("Runtime persistence mode", () => {
         })
       )
       expect(remediationSlaResolve.status).toBe(200)
+      completedParts = 4
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 5/6)", async () => {
+    const { matterId } = requireActivityFlow(5)
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       getRuntimeStore().workflowOpsAlertDigests = new Map()
       getRuntimeStore().workflowOpsAlertAttestations = new Map()
@@ -8665,6 +8741,14 @@ describe("Runtime persistence mode", () => {
             row.extendedBy === "partner_a"
         )
       ).toBe(true)
+      completedParts = 5
+    })
+  }, 120_000)
+
+  it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 6/6)", async () => {
+    const { matterId, docId } = requireActivityFlow(6)
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
 
       const remediationSlaView = await opsReportingGet(
         new Request(
@@ -9914,8 +9998,10 @@ describe("Runtime persistence mode", () => {
             entry.id.length <= 1500
         )
       ).toBe(true)
+      completedParts = 6
     })
   }, 120_000)
+  })
 
   it("persists follow-up and intimation creation at source through matters route", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
@@ -10447,7 +10533,7 @@ describe("Runtime persistence mode", () => {
       expect(resolveRes.status).toBe(200)
 
       // Simulate fresh runtime cycle without in-memory audit cache.
-      getRuntimeStore().audit = []
+      getRuntimeStore().audit.replaceAll([])
       const auditViewRes = await tenancyGet(
         new Request(
           "http://127.0.0.1/api/p5/tenancy?view=audit&actorId=partner_a&firmId=firmA&limit=100&cursor=0"
@@ -10479,6 +10565,35 @@ describe("Runtime persistence mode", () => {
   it("persists committee-brain outputs and rehydrates listing after in-memory reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       setFirestorePersistenceForTests(ctx.firestore())
+      // Committee classification is derived from the referenced matter (H1) and
+      // listings are filtered by matter membership (M4).
+      const internalMatterId = await createMatterViaRoute(
+        "Committee internal matter",
+        "0c7c2b8e-3f0a-4c55-9d7e-6a1f2b3c4d51"
+      )
+      const privilegedMatterRes = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": "5e2f9a61-8b7c-4d3e-a1f0-9c8b7a6d5e42",
+          },
+          body: JSON.stringify({
+            action: "create",
+            actorId: "partner_a",
+            firmId: "firmA",
+            clientId: "client_a",
+            title: "Committee privileged matter",
+            courtId: "SHC",
+            classification: "privileged",
+            memberUserIds: ["associate_a", "clerk_a"],
+          }),
+        })
+      )
+      expect(privilegedMatterRes.status).toBe(200)
+      const privilegedMatterId = (
+        (await privilegedMatterRes.json()) as { result: { matter: { id: string } } }
+      ).result.matter.id
       const first = await committeePost(
         new Request("http://127.0.0.1/api/p1/committee-brain", {
           method: "POST",
@@ -10489,6 +10604,7 @@ describe("Runtime persistence mode", () => {
           body: JSON.stringify({
             actorId: "partner_a",
             body: "Partner committee summary",
+            matterId: privilegedMatterId,
             classification: "privileged",
             purpose: "committee-brain",
           }),
@@ -10506,6 +10622,7 @@ describe("Runtime persistence mode", () => {
           body: JSON.stringify({
             actorId: "associate_a",
             body: "Associate committee summary",
+            matterId: internalMatterId,
             classification: "internal",
             purpose: "summarise",
           }),
@@ -10705,17 +10822,18 @@ describe("Runtime persistence mode", () => {
           }),
         })
       )
-      expect(roleUpdate.status).toBe(200)
-      const roleUpdateJson = (await roleUpdate.json()) as {
-        result: {
-          privilegedBoundaryDriftCount: number
-          privilegedBoundaryDriftSessionReferenceIds: string[]
-        }
-      }
-      expect(roleUpdateJson.result.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
-      expect(roleUpdateJson.result.privilegedBoundaryDriftSessionReferenceIds).toContain(
-        clerkSessionJson.sessionReference.id
-      )
+      // Re-audit N-3: the Next tenancy route no longer writes identity fields (E-27).
+      expect(roleUpdate.status).toBe(409)
+      expect(((await roleUpdate.json()) as { code: string }).code).toBe("use_identity_api")
+      // The change arrives the way it does in production: Cloud Functions setUserClaims writes
+      // users/{uid} (simulated here with the Admin-equivalent context).
+      await setDoc(doc(ctx.firestore(), "users", "clerk_a"), {
+        id: "clerk_a",
+        firmId: "firmA",
+        role: "clerk",
+        clearanceLevel: "internal",
+        active: true,
+      })
 
       const associateSession = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
@@ -10751,7 +10869,7 @@ describe("Runtime persistence mode", () => {
         clearanceLevel: "confidential",
       })
       getRuntimeStore().members = new Map()
-      getRuntimeStore().audit = []
+      getRuntimeStore().audit.replaceAll([])
       getRuntimeStore().tenancySessionReferences = new Map()
 
       const staleReplayRes = await tenancyGet(
@@ -11553,17 +11671,8 @@ describe("Runtime persistence mode", () => {
           delegatedBoundaryDivergenceReasons?: string[]
         }>
       }
-      const roleAudit = auditJson.items.find(
-        (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
-      )
-      expect(roleAudit).toBeDefined()
-      expect(roleAudit?.authBoundary).toBe("external_session_hint")
-      expect(roleAudit?.sessionReferenceId).toBe(actorSessionJson.sessionReference.id)
-      expect(roleAudit?.externalSessionId).toBe("ext-runtime-actor")
-      expect(roleAudit?.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
-      expect(roleAudit?.privilegedBoundaryDriftSessionReferenceIds).toContain(
-        clerkSessionJson.sessionReference.id
-      )
+      // The refused update_role wrote no tenant row.
+      expect(auditJson.items.some((row) => row.action === "tenant_update_role")).toBe(false)
       expect(
         auditJson.items.some((row) => row.action === "tenant_revoke_session_reference")
       ).toBe(true)
@@ -11730,17 +11839,7 @@ describe("Runtime persistence mode", () => {
       expect(persistedClerk.data()?.clearanceLevel).toBe("internal")
 
       const persistedAudit = await getDocs(collection(ctx.firestore(), "audit_log"))
-      expect(
-        persistedAudit.docs.some(
-          (entry) =>
-            entry.data()?.action === "tenant_update_role" &&
-            entry.data()?.target === "clerk_a" &&
-            entry.data()?.firmId === "firmA" &&
-            entry.data()?.authBoundary === "external_session_hint" &&
-            entry.data()?.sessionReferenceId === actorSessionJson.sessionReference.id &&
-            entry.data()?.externalSessionId === "ext-runtime-actor"
-        )
-      ).toBe(true)
+      expect(persistedAudit.docs.some((entry) => entry.data()?.action === "tenant_update_role")).toBe(false)
 
       const persistedSessionRef = await getDoc(
         doc(ctx.firestore(), "tenancy_session_references", actorSessionJson.sessionReference.id)

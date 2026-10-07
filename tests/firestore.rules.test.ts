@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { afterAll, beforeAll, describe, it, vi } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 
 /** PR315-M2: `npm run test:rules` co-runs persistence.runtime-mode mega tests; harden bundle timeouts. */
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 })
@@ -10,10 +10,14 @@ import {
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
 import {
+  deleteDoc,
+  deleteField,
   doc,
   getDoc,
+  runTransaction,
   setDoc,
   updateDoc,
+  writeBatch,
 } from "firebase/firestore"
 
 let testEnv: RulesTestEnvironment
@@ -31,6 +35,7 @@ beforeAll(async () => {
     await setDoc(doc(db, "matters", "m1"), {
       firmId: "firmA",
       title: "NHS v Example",
+      classification: "internal",
     })
     await setDoc(doc(db, "matter_members", "m1_member1"), {
       firmId: "firmA",
@@ -61,13 +66,32 @@ afterAll(async () => {
   await testEnv?.cleanup()
 })
 
-function authed(uid: string, claims: Record<string, string>) {
+/**
+ * A live, second-factor signed-in client whose users/{uid} record matches its token (SEC-3:
+ * the rules require an active users record whose firmId, role and clearanceLevel equal the
+ * token's claims, and a second factor where the firm enforces MFA for the role). The record is
+ * written (merged) before the context is returned. Use `rawAuthed` to test tokens that do not
+ * match their record or have no second factor.
+ */
+async function authed(uid: string, claims: Record<string, string>) {
+  const record: Record<string, unknown> = { active: true }
+  for (const key of ["firmId", "role", "clearanceLevel"]) if (claims[key] !== undefined) record[key] = claims[key]
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "users", uid), record, { merge: true })
+  })
+  // (TokenOptions does not type sign_in_second_factor; the emulator passes it to the rules as is)
+  const firebase = { sign_in_provider: "password", sign_in_second_factor: "phone" } as unknown as { sign_in_provider: "password" }
+  return testEnv.authenticatedContext(uid, { ...claims, firebase }).firestore()
+}
+
+/** A signed-in client with exactly these token claims; its users/{uid} record is left as it is. */
+function rawAuthed(uid: string, claims: Record<string, unknown>) {
   return testEnv.authenticatedContext(uid, claims).firestore()
 }
 
 describe("Job E — Firestore rules", () => {
   it("cross-firm matter read = deny", async () => {
-    const db = authed("firmB-assoc", {
+    const db = await authed("firmB-assoc", {
       firmId: "firmB",
       role: "associate",
       clearanceLevel: "privileged",
@@ -76,7 +100,7 @@ describe("Job E — Firestore rules", () => {
   })
 
   it("intern cannot read loose-vault docs", async () => {
-    const intern = authed("intern1", {
+    const intern = await authed("intern1", {
       firmId: "firmA",
       role: "intern",
       clearanceLevel: "confidential",
@@ -85,7 +109,7 @@ describe("Job E — Firestore rules", () => {
   })
 
   it("master_versions client write = deny", async () => {
-    const partner = authed("partner1", {
+    const partner = await authed("partner1", {
       firmId: "firmA",
       role: "partner",
       clearanceLevel: "privileged",
@@ -106,7 +130,7 @@ describe("Job E — Firestore rules", () => {
 
   it("non-member cannot read a matter regardless of role", async () => {
     for (const role of ["partner", "associate", "clerk", "intern", "accounts"] as const) {
-      const db = authed(`nonmember-${role}`, {
+      const db = await authed(`nonmember-${role}`, {
         firmId: "firmA",
         role,
         clearanceLevel: "privileged-restricted",
@@ -116,7 +140,7 @@ describe("Job E — Firestore rules", () => {
   })
 
   it("same-firm member can read the matter", async () => {
-    const db = authed("member1", {
+    const db = await authed("member1", {
       firmId: "firmA",
       role: "associate",
       clearanceLevel: "internal",
@@ -125,7 +149,7 @@ describe("Job E — Firestore rules", () => {
   })
 
   it("non-member partner cannot update a matter-bound document", async () => {
-    const partner = authed("partner1", {
+    const partner = await authed("partner1", {
       firmId: "firmA",
       role: "partner",
       clearanceLevel: "privileged",
@@ -138,7 +162,7 @@ describe("Job E — Firestore rules", () => {
   })
 
   it("same-firm member can monotonically update a matter-bound document", async () => {
-    const db = authed("member1", {
+    const db = await authed("member1", {
       firmId: "firmA",
       role: "associate",
       clearanceLevel: "privileged",
@@ -203,9 +227,34 @@ describe("Job E — Firestore rules", () => {
 ] as const
 
   it.each(TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS)(
+    "tb ack-recon pd freeze seal dedicated view collection %s: a same-firm cleared partner member reads; a non-member partner and another firm's partner are denied",
+    async (collectionPath) => {
+      // The rows are matter-bound: fix/sec-gaps (R1 #6) adds membership (memberReader) to the
+      // read rule, so the reader is a member of m1 (matter_members m1_member1).
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), collectionPath, "row-read"), {
+          firmId: "firmA",
+          matterId: "m1",
+          classification: "internal",
+        })
+      })
+      const sameFirm = await authed("member1", { firmId: "firmA", role: "partner", clearanceLevel: "privileged" })
+      const nonMember = await authed("partner1", { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" })
+      const otherFirm = await authed("partnerB", {
+        firmId: "firmB",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      })
+      await assertSucceeds(getDoc(doc(sameFirm, collectionPath, "row-read")))
+      await assertFails(getDoc(doc(nonMember, collectionPath, "row-read")))
+      await assertFails(getDoc(doc(otherFirm, collectionPath, "row-read")))
+    }
+  )
+
+  it.each(TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS)(
     "tb ack-recon pd freeze seal dedicated view collection %s client write = deny",
     async (collectionPath) => {
-      const partner = authed("partner1", {
+      const partner = await authed("partner1", {
         firmId: "firmA",
         role: "partner",
         clearanceLevel: "privileged",
@@ -221,8 +270,8 @@ describe("Job E — Firestore rules", () => {
 })
 
 describe("TB ack-recon lattice dedicated collections — client write deny", () => {
-  const partner = () =>
-    authed("partner1", {
+  const partner = async () =>
+    await authed("partner1", {
       firmId: "firmA",
       role: "partner",
       clearanceLevel: "privileged",
@@ -305,7 +354,7 @@ describe("TB ack-recon lattice dedicated collections — client write deny", () 
     "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attestation_acknowledgement_seal_verifications_outbound_registry_attestation_ledgers_partner_handoff_attestation_acknowledgements_partner_handoff_attestation_acknowledgements_partner_handoff_attestation_acknowledgement_seal_verifications_tb_ack_recon_pd_freeze_seal_view550",] as const
 
   it("client write denied for dedicated _view485 lineage parent collection", async () => {
-    const db = partner()
+    const db = await partner()
     await assertFails(
       setDoc(doc(db, denyWritePaths[0], "row1"), {
         firmId: "firmA",
@@ -315,7 +364,7 @@ describe("TB ack-recon lattice dedicated collections — client write deny", () 
   })
 
   it("client write denied for dedicated _view486 lineage parent collection", async () => {
-    const db = partner()
+    const db = await partner()
     await assertFails(
       setDoc(doc(db, denyWritePaths[1], "row1"), {
         firmId: "firmA",
@@ -325,7 +374,7 @@ describe("TB ack-recon lattice dedicated collections — client write deny", () 
   })
 
   it("client write denied for dedicated _view487 lineage parent collection", async () => {
-    const db = partner()
+    const db = await partner()
     await assertFails(
       setDoc(doc(db, denyWritePaths[2], "row1"), {
         firmId: "firmA",
@@ -335,12 +384,1061 @@ describe("TB ack-recon lattice dedicated collections — client write deny", () 
   })
 
   it.each(denyWritePaths)("client write denied for %s", async (collectionPath) => {
-    const db = partner()
+    const db = await partner()
     await assertFails(
       setDoc(doc(db, collectionPath, "row1"), {
         firmId: "firmA",
         classification: "internal",
       })
     )
+  })
+})
+
+describe("M2 — role, clearance and membership on core collections", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+  const MEMBER_ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const MEMBER_ASSOC_HIGH = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const MEMBER_INTERN = { firmId: "firmA", role: "intern", clearanceLevel: "privileged" }
+  const MEMBER_CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+  const NONMEMBER_ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const CLERK_CONF = { firmId: "firmA", role: "clerk", clearanceLevel: "confidential" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "mPriv"), {
+        firmId: "firmA",
+        title: "Privileged matter",
+        classification: "privileged",
+      })
+      for (const uid of ["member1", "m2-assoc-high", "m2-intern", "m2-client"]) {
+        await setDoc(doc(db, "matter_members", `m1_${uid}`), { firmId: "firmA", matterId: "m1", userId: uid })
+      }
+      await setDoc(doc(db, "matter_members", "mPriv_member1"), { firmId: "firmA", matterId: "mPriv", userId: "member1" })
+      await setDoc(doc(db, "clients", "c1"), { firmId: "firmA", name: "Acme" })
+      await setDoc(doc(db, "users", "partner1"), { firmId: "firmA", role: "partner", clearanceLevel: "privileged", active: true })
+      await setDoc(doc(db, "users", "u2"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "users", "top1"), { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted", active: true })
+      await setDoc(doc(db, "users", "m2-client"), { firmId: "firmA", role: "client", clearanceLevel: "internal", active: true })
+    })
+  })
+
+  const matterDoc = (classification: string) => ({ firmId: "firmA", matterId: "m1", classification })
+
+  describe("documents create", () => {
+    it("non-member associate cannot create a matter-bound document", async () => {
+      await assertFails(setDoc(doc(await authed("m2-nonmember", NONMEMBER_ASSOC), "documents", "d-nm"), matterDoc("internal")))
+    })
+    it("member cannot create a document above own clearance", async () => {
+      await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), "documents", "d-hi"), matterDoc("privileged")))
+    })
+    it("member associate can create a cleared matter-bound document (client SDK: privileged floor, R2 N7)", async () => {
+      await assertSucceeds(setDoc(doc(await authed("m2-assoc-high", MEMBER_ASSOC_HIGH), "documents", "d-ok"), matterDoc("privileged")))
+      await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), "documents", "d-low"), matterDoc("internal")))
+    })
+    it("associate cannot create a loose-vault document; a cleared clerk can (client SDK: privileged floor, R2 N7)", async () => {
+      const loose = { firmId: "firmA", matterId: null, classification: "privileged" }
+      await assertFails(setDoc(doc(await authed("m2-nonmember", NONMEMBER_ASSOC), "documents", "d-loose-a"), loose))
+      await assertSucceeds(setDoc(doc(await authed("m2-clerk", { ...CLERK_CONF, clearanceLevel: "privileged" }), "documents", "d-loose-c"), loose))
+      await assertFails(setDoc(doc(await authed("m2-clerk", CLERK_CONF), "documents", "d-loose-low"), { ...loose, classification: "confidential" }))
+    })
+  })
+
+  describe.each(["document_versions", "draft_versions"])("%s create", (coll) => {
+    it("client-role member cannot create", async () => {
+      await assertFails(setDoc(doc(await authed("m2-client", MEMBER_CLIENT), coll, "v-client"), matterDoc("internal")))
+    })
+    it("intern member cannot create", async () => {
+      await assertFails(setDoc(doc(await authed("m2-intern", MEMBER_INTERN), coll, "v-intern"), matterDoc("internal")))
+    })
+    it("non-member associate cannot create", async () => {
+      await assertFails(setDoc(doc(await authed("m2-nonmember", NONMEMBER_ASSOC), coll, "v-nm"), matterDoc("internal")))
+    })
+    it("member cannot create above own clearance", async () => {
+      await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), coll, "v-hi"), matterDoc("privileged")))
+    })
+    it("cleared member associate can create", async () => {
+      await assertSucceeds(setDoc(doc(await authed("m2-assoc-high", MEMBER_ASSOC_HIGH), coll, "v-ok"), matterDoc("privileged")))
+    })
+    it("client-role member cannot read", async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), coll, "v-seed"), matterDoc("internal"))
+      })
+      await assertFails(getDoc(doc(await authed("m2-client", MEMBER_CLIENT), coll, "v-seed")))
+    })
+  })
+
+  describe("change_proposals create", () => {
+    const proposal = (proposedBy: string, classification = "internal") => ({
+      firmId: "firmA",
+      sourceModule: "p3",
+      classification,
+      payload: {},
+      proposedBy,
+      status: "pending",
+    })
+    it("client and intern cannot create", async () => {
+      await assertFails(setDoc(doc(await authed("m2-client", MEMBER_CLIENT), "change_proposals", "p-c"), proposal("m2-client")))
+      await assertFails(setDoc(doc(await authed("m2-intern", MEMBER_INTERN), "change_proposals", "p-i"), proposal("m2-intern")))
+    })
+    it("associate cannot propose on behalf of another user or above own clearance", async () => {
+      await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), "change_proposals", "p-other"), proposal("partner1")))
+      await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), "change_proposals", "p-hi"), proposal("member1", "privileged")))
+    })
+    it("associate can propose as self within clearance", async () => {
+      await assertSucceeds(setDoc(doc(await authed("member1", MEMBER_ASSOC), "change_proposals", "p-ok"), proposal("member1")))
+    })
+  })
+
+  describe("matters read clearance", () => {
+    it("member below the matter classification cannot read it", async () => {
+      await assertFails(getDoc(doc(await authed("member1", MEMBER_ASSOC), "matters", "mPriv")))
+    })
+  })
+
+  describe("client-role users excluded from internal collections", () => {
+    it("client cannot read clients; associate can", async () => {
+      await assertFails(getDoc(doc(await authed("m2-client", MEMBER_CLIENT), "clients", "c1")))
+      await assertSucceeds(getDoc(doc(await authed("member1", MEMBER_ASSOC), "clients", "c1")))
+    })
+    it("client cannot read other users; can read own profile; associate can read users", async () => {
+      await assertFails(getDoc(doc(await authed("m2-client", MEMBER_CLIENT), "users", "u2")))
+      await assertSucceeds(getDoc(doc(await authed("m2-client", MEMBER_CLIENT), "users", "m2-client")))
+      await assertSucceeds(getDoc(doc(await authed("member1", MEMBER_ASSOC), "users", "u2")))
+    })
+  })
+
+  describe("partner clearance ceiling on users", () => {
+    it("partner cannot grant a clearance above their own", async () => {
+      await assertFails(updateDoc(doc(await authed("partner1", PARTNER), "users", "u2"), { clearanceLevel: "privileged-restricted" }))
+    })
+    it("partner cannot change clearance even within their own ceiling (round 3: Functions-only)", async () => {
+      await assertFails(updateDoc(doc(await authed("partner1", PARTNER), "users", "u2"), { clearanceLevel: "privileged" }))
+    })
+    it("partner cannot modify a user cleared above them", async () => {
+      await assertFails(updateDoc(doc(await authed("partner1", PARTNER), "users", "top1"), { role: "associate" }))
+    })
+    it("partner cannot change own role or clearance", async () => {
+      await assertFails(updateDoc(doc(await authed("partner1", PARTNER), "users", "partner1"), { clearanceLevel: "internal" }))
+      await assertFails(updateDoc(doc(await authed("partner1", PARTNER), "users", "partner1"), { role: "associate" }))
+    })
+    it("partner cannot set an unknown role", async () => {
+      await assertFails(updateDoc(doc(await authed("partner1", PARTNER), "users", "u2"), { role: "superuser" }))
+    })
+  })
+})
+
+describe("Review round 1 — update/read paths, proposals, members", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+  const ASSOC_LOW = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const ASSOC_HIGH = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const INTERN = { firmId: "firmA", role: "intern", clearanceLevel: "privileged" }
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "r1"), { firmId: "firmA", title: "R1", classification: "internal" })
+      await setDoc(doc(db, "matters", "r1Priv"), { firmId: "firmA", title: "R1P", classification: "privileged" })
+      await setDoc(doc(db, "matters", "r1NoCls"), { firmId: "firmA", title: "legacy" })
+      for (const uid of ["rv-low", "rv-high", "rv-intern", "rv-client"]) {
+        for (const m of ["r1", "r1Priv", "r1NoCls"]) {
+          await setDoc(doc(db, "matter_members", `${m}_${uid}`), { firmId: "firmA", matterId: m, userId: uid })
+        }
+      }
+      const base = { firmId: "firmA", storagePath: "r2://x", contentHash: "h", isImmutable: false }
+      await setDoc(doc(db, "documents", "rvDoc"), { ...base, matterId: "r1", classification: "internal" })
+      await setDoc(doc(db, "documents", "rvDocPriv"), { ...base, matterId: "r1", classification: "privileged" })
+      await setDoc(doc(db, "users", "rvU"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true, mfaEnabled: true, displayName: "U" })
+      await setDoc(doc(db, "entities", "e1"), { firmId: "firmA", canonicalName: "Acme", cnic: "1" })
+      await setDoc(doc(db, "entity_aliases", "a1"), { firmId: "firmA", alias: "ACME" })
+      await setDoc(doc(db, "merge_events", "x1"), { firmId: "firmA" })
+      await setDoc(doc(db, "follow_ups", "f1"), { firmId: "firmA", matterId: "r1" })
+    })
+  })
+
+  describe("change_proposals initial state (#3)", () => {
+    const base = { firmId: "firmA", sourceModule: "p3", classification: "internal", payload: {}, proposedBy: "rv-low" }
+    it("cannot be created already decided", async () => {
+      const db = await authed("rv-low", ASSOC_LOW)
+      await assertFails(setDoc(doc(db, "change_proposals", "rp-approved"), { ...base, status: "approved" }))
+      await assertFails(setDoc(doc(db, "change_proposals", "rp-nostatus"), base))
+      await assertFails(
+        setDoc(doc(db, "change_proposals", "rp-decided"), { ...base, status: "pending", decidedBy: "partner1", decidedAt: 1 })
+      )
+      await assertFails(setDoc(doc(db, "change_proposals", "rp-reason"), { ...base, status: "pending", reason: "x" }))
+    })
+    it("can be created pending", async () => {
+      await assertSucceeds(setDoc(doc(await authed("rv-low", ASSOC_LOW), "change_proposals", "rp-ok"), { ...base, status: "pending" }))
+    })
+  })
+
+  describe("documents update (#4)", () => {
+    it("intern and client members cannot update", async () => {
+      await assertFails(updateDoc(doc(await authed("rv-intern", INTERN), "documents", "rvDoc"), { classification: "confidential" }))
+      await assertFails(updateDoc(doc(await authed("rv-client", CLIENT), "documents", "rvDoc"), { classification: "confidential" }))
+    })
+    it("member cannot update a document above own clearance", async () => {
+      await assertFails(updateDoc(doc(await authed("rv-low", ASSOC_LOW), "documents", "rvDocPriv"), { title: "x" }))
+    })
+    it("member cannot raise classification above own clearance", async () => {
+      await assertFails(updateDoc(doc(await authed("rv-low", ASSOC_LOW), "documents", "rvDoc"), { classification: "privileged" }))
+    })
+    it("matterId is immutable", async () => {
+      const db = await authed("rv-high", ASSOC_HIGH)
+      await assertFails(updateDoc(doc(db, "documents", "rvDoc"), { matterId: "r1Priv" }))
+      await assertFails(updateDoc(doc(db, "documents", "rvDoc"), { matterId: null }))
+    })
+    it("cleared author member can monotonically update", async () => {
+      await assertSucceeds(updateDoc(doc(await authed("rv-high", ASSOC_HIGH), "documents", "rvDoc"), { classification: "confidential" }))
+    })
+  })
+
+  describe("matters create/update (#4)", () => {
+    it("client-SDK create is denied at any classification (R3 N14 supersedes the #4 clearance check)", async () => {
+      const db = await authed("rv-low", ASSOC_LOW)
+      await assertFails(setDoc(doc(db, "matters", "rNewPriv"), { firmId: "firmA", title: "n", classification: "privileged" }))
+      await assertFails(setDoc(doc(db, "matters", "rNewOk"), { firmId: "firmA", title: "n", classification: "internal" }))
+    })
+    it("member below the matter classification cannot update it", async () => {
+      await assertFails(updateDoc(doc(await authed("rv-low", ASSOC_LOW), "matters", "r1Priv"), { title: "x" }))
+    })
+    it("classification cannot be downgraded", async () => {
+      await assertFails(updateDoc(doc(await authed("rv-high", ASSOC_HIGH), "matters", "r1Priv"), { classification: "internal" }))
+    })
+    it("cleared member can update", async () => {
+      await assertSucceeds(updateDoc(doc(await authed("rv-high", ASSOC_HIGH), "matters", "r1"), { title: "renamed" }))
+    })
+  })
+
+  describe.each(["drafts", "evidence_items", "custody_events"])("%s create (#4)", (coll) => {
+    const row = (classification: string) => ({ firmId: "firmA", matterId: "r1", classification })
+    it("client and intern members cannot create", async () => {
+      await assertFails(setDoc(doc(await authed("rv-client", CLIENT), coll, "c-client"), row("internal")))
+      await assertFails(setDoc(doc(await authed("rv-intern", INTERN), coll, "c-intern"), row("internal")))
+    })
+    it("member cannot create above own clearance", async () => {
+      await assertFails(setDoc(doc(await authed("rv-low", ASSOC_LOW), coll, "c-hi"), row("privileged")))
+    })
+    it("cleared author member can create", async () => {
+      await assertSucceeds(setDoc(doc(await authed("rv-low", ASSOC_LOW), coll, "c-ok"), row("internal")))
+    })
+  })
+
+  describe.each([
+    ["entities", "e1"],
+    ["entity_aliases", "a1"],
+    ["merge_events", "x1"],
+    ["master_versions", "v1"],
+    ["follow_ups", "f1"],
+  ])("%s read excludes clients (#4)", (coll, id) => {
+    it("client cannot read; associate can", async () => {
+      await assertFails(getDoc(doc(await authed("rv-client", CLIENT), coll, id)))
+      await assertSucceeds(getDoc(doc(await authed("rv-low", ASSOC_LOW), coll, id)))
+    })
+  })
+
+  describe("partner field whitelist on users (#7)", () => {
+    it("partner may update displayName only (round 3: role/clearanceLevel/active are Functions-only)", async () => {
+      await assertSucceeds(updateDoc(doc(await authed("partner1", PARTNER), "users", "rvU"), { displayName: "New" }))
+      await assertFails(
+        updateDoc(doc(await authed("partner1", PARTNER), "users", "rvU"), { displayName: "New2", active: false, role: "clerk", clearanceLevel: "confidential" })
+      )
+    })
+    it("partner may not touch mfaEnabled or other keys", async () => {
+      await assertFails(updateDoc(doc(await authed("partner1", PARTNER), "users", "rvU"), { mfaEnabled: false }))
+      await assertFails(updateDoc(doc(await authed("partner1", PARTNER), "users", "rvU"), { notes: "x" }))
+    })
+  })
+
+  describe("matters without classification (#8)", () => {
+    it("fail closed: a member cannot read a matter missing classification", async () => {
+      await assertFails(getDoc(doc(await authed("rv-high", ASSOC_HIGH), "matters", "r1NoCls")))
+    })
+  })
+
+  describe("matter_members id binding (#9)", () => {
+    it("create requires id == matterId_userId", async () => {
+      // R1 #6: the adding partner must already be a member of the matter.
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "matter_members", "r1_partner1"), { firmId: "firmA", matterId: "r1", userId: "partner1" })
+        // R2 N5: the assignee must be an existing same-firm staff user.
+        await setDoc(doc(ctx.firestore(), "users", "rv-new"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
+      })
+      const db = await authed("partner1", PARTNER)
+      await assertFails(setDoc(doc(db, "matter_members", "r1_someoneElse"), { firmId: "firmA", matterId: "r1", userId: "rv-new" }))
+      await assertSucceeds(setDoc(doc(db, "matter_members", "r1_rv-new"), { firmId: "firmA", matterId: "r1", userId: "rv-new" }))
+    })
+    it("update cannot rebind matterId or userId", async () => {
+      const db = await authed("partner1", PARTNER)
+      await assertFails(updateDoc(doc(db, "matter_members", "r1_rv-low"), { userId: "rv-other" }))
+      await assertFails(updateDoc(doc(db, "matter_members", "r1_rv-low"), { matterId: "r1Priv" }))
+    })
+  })
+})
+
+describe.each(["drafts", "evidence_items"])("Review round 2 — %s update (N3)", (coll) => {
+  const ASSOC_LOW = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const ASSOC_HIGH = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const INTERN = { firmId: "firmA", role: "intern", clearanceLevel: "privileged" }
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      for (const m of ["n3", "n3Other"]) {
+        await setDoc(doc(db, "matters", m), { firmId: "firmA", title: m, classification: "internal" })
+        for (const uid of ["n3-low", "n3-high", "n3-intern", "n3-client"]) {
+          await setDoc(doc(db, "matter_members", `${m}_${uid}`), { firmId: "firmA", matterId: m, userId: uid })
+        }
+      }
+      await setDoc(doc(db, coll, "n3Row"), { firmId: "firmA", matterId: "n3", classification: "internal" })
+      await setDoc(doc(db, coll, "n3RowPriv"), { firmId: "firmA", matterId: "n3", classification: "privileged" })
+    })
+  })
+
+  it("intern and client members cannot update", async () => {
+    await assertFails(updateDoc(doc(await authed("n3-intern", INTERN), coll, "n3Row"), { note: "x" }))
+    await assertFails(updateDoc(doc(await authed("n3-client", CLIENT), coll, "n3Row"), { note: "x" }))
+  })
+  it("member cannot update a row above own clearance", async () => {
+    await assertFails(updateDoc(doc(await authed("n3-low", ASSOC_LOW), coll, "n3RowPriv"), { note: "x" }))
+  })
+  it("member cannot raise classification above own clearance", async () => {
+    await assertFails(updateDoc(doc(await authed("n3-low", ASSOC_LOW), coll, "n3Row"), { classification: "privileged" }))
+  })
+  it("matterId and firmId are immutable", async () => {
+    const db = await authed("n3-high", ASSOC_HIGH)
+    await assertFails(updateDoc(doc(db, coll, "n3Row"), { matterId: "n3Other" }))
+    await assertFails(updateDoc(doc(db, coll, "n3Row"), { firmId: "firmB" }))
+  })
+  it("cleared author member can monotonically update", async () => {
+    await assertSucceeds(updateDoc(doc(await authed("n3-high", ASSOC_HIGH), coll, "n3Row"), { classification: "confidential" }))
+  })
+})
+
+describe("Round 3 — users/{uid} is the authoritative identity record", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "internal" }
+  const OTHER_FIRM_PARTNER = { firmId: "firmB", role: "partner", clearanceLevel: "privileged-restricted" }
+  const seed = (role: string) => ({
+    firmId: "firmA",
+    role,
+    clearanceLevel: "internal",
+    active: true,
+    mfaEnabled: true,
+    claimsVersion: 1,
+    deactivatedAt: null,
+    updatedAt: 1,
+    createdAt: 1,
+    displayName: "Seed",
+  })
+  const PROTECTED: [string, unknown][] = [
+    ["role", "clerk"],
+    ["clearanceLevel", "public"],
+    ["active", false],
+    ["firmId", "firmB"],
+    ["mfaEnabled", false],
+    ["claimsVersion", 2],
+    ["deactivatedAt", 123],
+    ["updatedAt", 2],
+    ["createdAt", 2],
+  ]
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "users", "r3-partner"), { ...seed("partner"), clearanceLevel: "privileged-restricted" })
+      await setDoc(doc(db, "users", "r3-assoc"), seed("associate"))
+      await setDoc(doc(db, "users", "r3-client"), seed("client"))
+      await setDoc(doc(db, "users", "r3-target"), seed("associate"))
+    })
+  })
+
+  it.each(PROTECTED)("partner cannot change %s on another user", async (field, value) => {
+    await assertFails(updateDoc(doc(await authed("r3-partner", PARTNER), "users", "r3-target"), { [field]: value }))
+  })
+
+  it.each(PROTECTED)("user cannot change own %s", async (field, value) => {
+    await assertFails(updateDoc(doc(await authed("r3-assoc", ASSOC), "users", "r3-assoc"), { [field]: value }))
+    await assertFails(updateDoc(doc(await authed("r3-partner", PARTNER), "users", "r3-partner"), { [field]: value }))
+  })
+
+  it("self may update own displayName (any role)", async () => {
+    await assertSucceeds(updateDoc(doc(await authed("r3-assoc", ASSOC), "users", "r3-assoc"), { displayName: "Me" }))
+    await assertSucceeds(updateDoc(doc(await authed("r3-client", CLIENT), "users", "r3-client"), { displayName: "Me" }))
+  })
+
+  it("self displayName edit cannot smuggle other keys", async () => {
+    await assertFails(updateDoc(doc(await authed("r3-assoc", ASSOC), "users", "r3-assoc"), { displayName: "Me", notes: "x" }))
+  })
+
+  it("partner may update displayName of a same-firm user; non-partners and other firms may not", async () => {
+    await assertSucceeds(updateDoc(doc(await authed("r3-partner", PARTNER), "users", "r3-target"), { displayName: "Renamed" }))
+    await assertFails(updateDoc(doc(await authed("r3-assoc", ASSOC), "users", "r3-target"), { displayName: "Nope" }))
+    await assertFails(updateDoc(doc(await authed("r3-client", CLIENT), "users", "r3-target"), { displayName: "Nope" }))
+    await assertFails(updateDoc(doc(await authed("r3-otherfirm", OTHER_FIRM_PARTNER), "users", "r3-target"), { displayName: "Nope" }))
+  })
+
+  it("client SDK cannot create users docs (self or partner)", async () => {
+    await assertFails(setDoc(doc(await authed("r3-new", ASSOC), "users", "r3-new"), seed("associate")))
+    await assertFails(setDoc(doc(await authed("r3-partner", PARTNER), "users", "r3-created"), seed("associate")))
+  })
+})
+
+describe("Round 4 — firms are Cloud Functions-owned; identity side collections default-deny", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "firms", "firmA"), {
+        name: "Firm A",
+        mfaEnforcedRoles: ["partner"],
+        dataResidency: "pk",
+        plan: "standard",
+      })
+      await setDoc(doc(db, "mfa_recovery", "r4-partner"), { firmId: "firmA", codes: ["x"] })
+      await setDoc(doc(db, "mfa_disable_approvals", "a1"), { firmId: "firmA", userId: "r4-partner" })
+      await setDoc(doc(db, "platform", "config"), { firmId: "firmA", flag: true })
+      await setDoc(doc(db, "claims_sync", "r4-partner"), { firmId: "firmA", claimsVersion: 1 })
+    })
+  })
+
+  it("same-firm users can still read their firm", async () => {
+    await assertSucceeds(getDoc(doc(await authed("r4-partner", PARTNER), "firms", "firmA")))
+    await assertSucceeds(getDoc(doc(await authed("r4-assoc", ASSOC), "firms", "firmA")))
+  })
+
+  it.each([
+    ["mfaEnforcedRoles", []],
+    ["dataResidency", "us"],
+    ["plan", "enterprise"],
+    ["name", "Renamed"],
+  ])("partner cannot update firm %s", async (field, value) => {
+    await assertFails(updateDoc(doc(await authed("r4-partner", PARTNER), "firms", "firmA"), { [field]: value }))
+  })
+
+  it("partner cannot create, overwrite or delete firm records", async () => {
+    const db = await authed("r4-partner", PARTNER)
+    await assertFails(setDoc(doc(db, "firms", "firmA"), { name: "Overwritten", mfaEnforcedRoles: [] }))
+    await assertFails(setDoc(doc(await authed("r4-newfirm", { ...PARTNER, firmId: "firmNew" }), "firms", "firmNew"), { name: "New" }))
+    await assertFails(deleteDoc(doc(db, "firms", "firmA")))
+  })
+
+  it.each([
+    ["mfa_recovery", "r4-partner"],
+    ["mfa_disable_approvals", "a1"],
+    ["platform", "config"],
+    ["claims_sync", "r4-partner"],
+  ])("%s/{id} has no match: default deny for read and write", async (coll, id) => {
+    for (const [uid, claims] of [["r4-partner", PARTNER], ["r4-assoc", ASSOC]] as const) {
+      const db = await authed(uid, claims)
+      await assertFails(getDoc(doc(db, coll, id)))
+      await assertFails(setDoc(doc(db, coll, id), { firmId: "firmA", x: 1 }))
+      await assertFails(setDoc(doc(db, coll, `${id}-new`), { firmId: "firmA", x: 1 }))
+      await assertFails(deleteDoc(doc(db, coll, id)))
+    }
+  })
+
+  it("no explicit match block exists for the default-deny collections", () => {
+    for (const coll of ["mfa_recovery", "mfa_disable_approvals", "platform", "claims_sync"]) {
+      expect(RULES).not.toMatch(new RegExp(`match /${coll}/`))
+    }
+  })
+})
+
+describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 R-2)", () => {
+  const PARTNER_NONMEMBER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC_MEMBER = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const ASSOC_NONMEMBER = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+  const ASSOC_LOW_MEMBER = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  const CLERK_MEMBER = { firmId: "firmA", role: "clerk", clearanceLevel: "confidential" }
+  const CLERK_NONMEMBER = { firmId: "firmA", role: "clerk", clearanceLevel: "confidential" }
+  const INTERN_NONMEMBER = { firmId: "firmA", role: "intern", clearanceLevel: "privileged" }
+  const CLIENT_MEMBER = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "r2m"), { firmId: "firmA", title: "R2", classification: "internal" })
+      for (const uid of ["r2-assoc", "r2-assoc-low", "r2-clerk", "r2-client"]) {
+        await setDoc(doc(db, "matter_members", `r2m_${uid}`), { firmId: "firmA", matterId: "r2m", userId: uid })
+      }
+      const version = { firmId: "firmA", matterId: "r2m", version: 1, storagePath: "r2://v", createdBy: "r2-assoc" }
+      await setDoc(doc(db, "document_versions", "r2dv"), { ...version, classification: "internal" })
+      await setDoc(doc(db, "document_versions", "r2dvPriv"), { ...version, classification: "privileged" })
+      await setDoc(doc(db, "document_versions", "r2dvLoose"), { ...version, matterId: null, classification: "confidential" })
+      await setDoc(doc(db, "draft_versions", "r2drv"), { ...version, classification: "internal" })
+      await setDoc(doc(db, "follow_ups", "r2fu"), { firmId: "firmA", matterId: "r2m", courtId: "SHC", raw: "CP 1" })
+      // Exactly the writer shape (services/d1-6/uploadDocument.ts -> repos.jobs.create).
+      const job = { firmId: "firmA", jobType: "ocr", documentId: "d", idempotencyKey: "k", matterId: "r2m" }
+      await setDoc(doc(db, "jobs", "r2job"), { ...job, id: "r2job", classification: "internal" })
+      await setDoc(doc(db, "jobs", "r2jobPriv"), { ...job, id: "r2jobPriv", classification: "privileged" })
+      // Legacy row written before jobs carried matterId (pre-backfill).
+      const { matterId: _omit, ...legacy } = job
+      void _omit
+      await setDoc(doc(db, "jobs", "r2jobLegacy"), { ...legacy, id: "r2jobLegacy", classification: "internal" })
+      await setDoc(doc(db, "jobs", "r2jobLoose"), { ...job, id: "r2jobLoose", matterId: null, classification: "confidential" })
+      await setDoc(doc(db, "follow_ups", "r2fuLegacy"), { firmId: "firmA", courtId: "SHC", raw: "CP 2" })
+    })
+  })
+
+  describe.each(["document_versions", "draft_versions"])("%s read", (coll) => {
+    const id = coll === "document_versions" ? "r2dv" : "r2drv"
+    it("non-member staff cannot read, whatever the role or clearance", async () => {
+      await assertFails(getDoc(doc(await authed("r2-nonmember", ASSOC_NONMEMBER), coll, id)))
+      await assertFails(getDoc(doc(await authed("r2-intern", INTERN_NONMEMBER), coll, id)))
+      await assertFails(getDoc(doc(await authed("r2-partner", PARTNER_NONMEMBER), coll, id)))
+    })
+    it("member with clearance can read; client-role member cannot", async () => {
+      await assertSucceeds(getDoc(doc(await authed("r2-assoc", ASSOC_MEMBER), coll, id)))
+      await assertFails(getDoc(doc(await authed("r2-client", CLIENT_MEMBER), coll, id)))
+    })
+  })
+
+  it("document_versions: member below the version's classification cannot read", async () => {
+    await assertFails(getDoc(doc(await authed("r2-assoc-low", ASSOC_LOW_MEMBER), "document_versions", "r2dvPriv")))
+    await assertSucceeds(getDoc(doc(await authed("r2-assoc", ASSOC_MEMBER), "document_versions", "r2dvPriv")))
+  })
+
+  it("document_versions: loose-vault versions follow the loose-vault rule (clerk/partner, confidential+)", async () => {
+    await assertFails(getDoc(doc(await authed("r2-assoc", ASSOC_MEMBER), "document_versions", "r2dvLoose")))
+    await assertSucceeds(getDoc(doc(await authed("r2-clerk-x", CLERK_NONMEMBER), "document_versions", "r2dvLoose")))
+  })
+
+  it("matter_members: a partner who is not a member cannot read the matter's membership (no role exempt)", async () => {
+    await assertFails(getDoc(doc(await authed("r2-partner", PARTNER_NONMEMBER), "matter_members", "r2m_r2-assoc")))
+    await assertFails(getDoc(doc(await authed("r2-nonmember", ASSOC_NONMEMBER), "matter_members", "r2m_r2-assoc")))
+    await assertSucceeds(getDoc(doc(await authed("r2-clerk", CLERK_MEMBER), "matter_members", "r2m_r2-assoc")))
+  })
+
+  it("follow_ups carrying matterId: members only", async () => {
+    await assertFails(getDoc(doc(await authed("r2-nonmember", ASSOC_NONMEMBER), "follow_ups", "r2fu")))
+    await assertSucceeds(getDoc(doc(await authed("r2-assoc", ASSOC_MEMBER), "follow_ups", "r2fu")))
+  })
+
+  it("jobs without matterId (legacy rows) are denied to everyone, members included (review R1 #2)", async () => {
+    await assertFails(getDoc(doc(await authed("r2-clerk", CLERK_MEMBER), "jobs", "r2jobLegacy")))
+    await assertFails(getDoc(doc(await authed("r2-partner", PARTNER_NONMEMBER), "jobs", "r2jobLegacy")))
+  })
+
+  it("loose-vault jobs (matterId null) follow the loose-vault rule", async () => {
+    await assertSucceeds(getDoc(doc(await authed("r2-clerk-x", CLERK_NONMEMBER), "jobs", "r2jobLoose")))
+    await assertFails(getDoc(doc(await authed("r2-assoc", { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }), "jobs", "r2jobLoose")))
+  })
+
+  it("follow_ups without matterId are denied (the check is unconditional)", async () => {
+    await assertFails(getDoc(doc(await authed("r2-assoc", ASSOC_MEMBER), "follow_ups", "r2fuLegacy")))
+  })
+
+  it("jobs carrying matterId: members with clearance only", async () => {
+    await assertFails(getDoc(doc(await authed("r2-clerk-x", CLERK_NONMEMBER), "jobs", "r2job")))
+    await assertSucceeds(getDoc(doc(await authed("r2-clerk", CLERK_MEMBER), "jobs", "r2job")))
+    await assertFails(getDoc(doc(await authed("r2-clerk", CLERK_MEMBER), "jobs", "r2jobPriv")))
+  })
+})
+
+describe("L17.6 #41 — accounts reads the intimation register only", () => {
+  const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "accM"), { firmId: "firmA", title: "Acc", classification: "internal" })
+      for (const uid of ["acc1", "acc-assoc"]) {
+        await setDoc(doc(db, "matter_members", `accM_${uid}`), { firmId: "firmA", matterId: "accM", userId: uid })
+      }
+      const base = { firmId: "firmA", classification: "internal" }
+      await setDoc(doc(db, "documents", "accDoc"), { ...base, matterId: "accM", storagePath: "r2://a", contentHash: "a", isImmutable: false })
+      await setDoc(doc(db, "documents", "accLoose"), { ...base, matterId: null, classification: "confidential" })
+      await setDoc(doc(db, "document_versions", "accDv"), { ...base, matterId: "accM", version: 1 })
+      await setDoc(doc(db, "drafts", "accDr"), { ...base, matterId: "accM" })
+      await setDoc(doc(db, "draft_versions", "accDrv"), { ...base, matterId: "accM", version: 1 })
+      await setDoc(doc(db, "evidence_items", "accEv"), { ...base, matterId: "accM" })
+      await setDoc(doc(db, "custody_events", "accCe"), { firmId: "firmA", matterId: "accM" })
+      await setDoc(doc(db, "propositions", "accPr"), { firmId: "firmA", matterId: "accM" })
+      await setDoc(doc(db, "users", "acc1"), { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted", active: true })
+      await setDoc(doc(db, "users", "acc-other"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "clients", "accC"), { firmId: "firmA", name: "Client" })
+      await setDoc(doc(db, "entities", "accE"), { firmId: "firmA", canonicalName: "E" })
+      await setDoc(doc(db, "entity_aliases", "accA"), { firmId: "firmA", alias: "E" })
+      await setDoc(doc(db, "merge_events", "accMe"), { firmId: "firmA" })
+      await setDoc(doc(db, "change_proposals", "accCp"), { firmId: "firmA", status: "pending" })
+      await setDoc(doc(db, "master_versions", "accMv"), { firmId: "firmA" })
+      await setDoc(doc(db, "follow_ups", "accFu"), { firmId: "firmA" })
+      await setDoc(doc(db, "follow_ups", "accFuM"), { firmId: "firmA", matterId: "accM" })
+      await setDoc(doc(db, "intimation_register", "accIr"), { firmId: "firmA", matterId: "accM", status: "asked" })
+    })
+  })
+
+  it.each([
+    ["matters", "accM"],
+    ["matter_members", "accM_acc-assoc"],
+    ["documents", "accDoc"],
+    ["documents", "accLoose"],
+    ["document_versions", "accDv"],
+    ["drafts", "accDr"],
+    ["draft_versions", "accDrv"],
+    ["evidence_items", "accEv"],
+    ["custody_events", "accCe"],
+    ["propositions", "accPr"],
+    ["users", "acc-other"],
+    ["clients", "accC"],
+    ["entities", "accE"],
+    ["entity_aliases", "accA"],
+    ["merge_events", "accMe"],
+    ["change_proposals", "accCp"],
+    ["master_versions", "accMv"],
+    ["follow_ups", "accFu"],
+    ["follow_ups", "accFuM"],
+  ])("accounts (even as a matter member) cannot read %s/%s", async (coll, id) => {
+    await assertFails(getDoc(doc(await authed("acc1", ACCOUNTS), coll, id)))
+  })
+
+  it("accounts reads the intimation register and its own user record", async () => {
+    await assertSucceeds(getDoc(doc(await authed("acc1", ACCOUNTS), "intimation_register", "accIr")))
+    await assertSucceeds(getDoc(doc(await authed("acc1", ACCOUNTS), "users", "acc1")))
+  })
+
+  it("the same rows stay readable to a member associate (control)", async () => {
+    await assertSucceeds(getDoc(doc(await authed("acc-assoc", ASSOC), "documents", "accDoc")))
+    await assertSucceeds(getDoc(doc(await authed("acc-assoc", ASSOC), "matters", "accM")))
+  })
+})
+
+describe("Review R1 #5 — a draft under a filing package is locked against body edits", () => {
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "lkM"), { firmId: "firmA", title: "L", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "lkM_lk-assoc"), { firmId: "firmA", matterId: "lkM", userId: "lk-assoc" })
+      await setDoc(doc(db, "drafts", "lkLocked"), { firmId: "firmA", matterId: "lkM", classification: "internal", body: "clean", locked: true })
+      await setDoc(doc(db, "drafts", "lkOpen"), { firmId: "firmA", matterId: "lkM", classification: "internal", body: "clean", locked: false })
+      await setDoc(doc(db, "drafts", "lkLegacy"), { firmId: "firmA", matterId: "lkM", classification: "internal", body: "clean" })
+    })
+  })
+
+  it("member author cannot edit the body of a locked draft", async () => {
+    await assertFails(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkLocked"), { body: "Relying on 2019 SCMR 1234" }))
+  })
+  it("nobody can set or clear the lock from the client SDK", async () => {
+    await assertFails(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkLocked"), { locked: false }))
+    await assertFails(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkOpen"), { locked: true }))
+  })
+  it("unlocked (or legacy, unflagged) drafts stay editable by a member author", async () => {
+    await assertSucceeds(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkOpen"), { body: "revised" }))
+    await assertSucceeds(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkLegacy"), { body: "revised" }))
+  })
+})
+
+describe("Review R1 #6 — every matter-bound collection requires membership (R-2, no role exempt)", () => {
+  const PARTNER_OUT = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC_OUT = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  const CLERK_IN = { firmId: "firmA", role: "clerk", clearanceLevel: "privileged-restricted" }
+  const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted" }
+  const LONG = (s: string) => s
+  // A sample across the families: filing chain, workflow-ops lattice (incl. a LEGACY_GOVERNANCE
+  // chain collection and a writer-less dedicated view), analytics, committee outputs.
+  const SAMPLE = [
+    "filing_packet_artifacts",
+    "filing_annexures",
+    "filing_submission_dispatch_queue",
+    "filing_submission_receipts",
+    "filing_escalation_rollover_reaffirmation_sla",
+    "committee_outputs",
+    "matter_report_export_analytics",
+    "workflow_ops_activity",
+    "workflow_ops_alert_waiver_expiry_dispute_adjudications",
+    LONG(
+      "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_tb_ack_recon_pd_freeze_seal_view513"
+    ),
+  ]
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "sgM"), { firmId: "firmA", title: "S", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "sgM_sg-clerk"), { firmId: "firmA", matterId: "sgM", userId: "sg-clerk" })
+      await setDoc(doc(db, "matter_members", "sgM_sg-partner-in"), { firmId: "firmA", matterId: "sgM", userId: "sg-partner-in" })
+      for (const coll of SAMPLE) {
+        await setDoc(doc(db, coll, "row"), { id: "row", firmId: "firmA", matterId: "sgM", classification: "internal" })
+        await setDoc(doc(db, coll, "rowNoMatter"), { id: "rowNoMatter", firmId: "firmA", classification: "internal" })
+      }
+      await setDoc(doc(db, "intimation_register", "sgIr"), { firmId: "firmA", matterId: "sgM", status: "asked" })
+      await setDoc(doc(db, "matter_client_search_index", "sgIdxM"), { firmId: "firmA", rowType: "matter", referenceId: "sgM", linkedMatterId: null, classification: "internal", label: "Secret v Co" })
+      await setDoc(doc(db, "matter_client_search_index", "sgIdxC"), { firmId: "firmA", rowType: "client", referenceId: "c1", linkedMatterId: "sgM", classification: "internal", label: "Client" })
+      await setDoc(doc(db, "matter_client_search_index", "sgIdxFree"), { firmId: "firmA", rowType: "client", referenceId: "c2", linkedMatterId: null, classification: "internal", label: "Prospect" })
+    })
+  })
+
+  it.each(SAMPLE)("%s: non-member partner and associate denied; member clerk allowed; row without matterId denied", async (coll) => {
+    await assertFails(getDoc(doc(await authed("sg-partner-out", PARTNER_OUT), coll, "row")))
+    await assertFails(getDoc(doc(await authed("sg-assoc-out", ASSOC_OUT), coll, "row")))
+    await assertSucceeds(getDoc(doc(await authed("sg-clerk", CLERK_IN), coll, "row")))
+    await assertFails(getDoc(doc(await authed("sg-clerk", CLERK_IN), coll, "rowNoMatter")))
+  })
+
+  it("intimation_register: accounts reads firm-wide; partners/associates only as members", async () => {
+    await assertSucceeds(getDoc(doc(await authed("sg-acc", ACCOUNTS), "intimation_register", "sgIr")))
+    await assertFails(getDoc(doc(await authed("sg-partner-out", PARTNER_OUT), "intimation_register", "sgIr")))
+    await assertSucceeds(getDoc(doc(await authed("sg-partner-in", PARTNER_OUT), "intimation_register", "sgIr")))
+  })
+
+  it("matter_client_search_index: matter rows and matter-linked client rows need membership", async () => {
+    await assertFails(getDoc(doc(await authed("sg-partner-out", PARTNER_OUT), "matter_client_search_index", "sgIdxM")))
+    await assertFails(getDoc(doc(await authed("sg-partner-out", PARTNER_OUT), "matter_client_search_index", "sgIdxC")))
+    await assertSucceeds(getDoc(doc(await authed("sg-clerk", CLERK_IN), "matter_client_search_index", "sgIdxM")))
+    await assertSucceeds(getDoc(doc(await authed("sg-partner-out", PARTNER_OUT), "matter_client_search_index", "sgIdxFree")))
+  })
+
+  describe("matter_members: no self-assignment; the adder must already be a member", () => {
+    it("a non-member partner cannot add themselves, then read the matter", async () => {
+      const db = await authed("p9", PARTNER_OUT)
+      await assertFails(setDoc(doc(db, "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9" }))
+      await assertFails(getDoc(doc(db, "matters", "sgM")))
+    })
+    it("a non-member partner cannot add someone else either", async () => {
+      await assertFails(setDoc(doc(await authed("p9", PARTNER_OUT), "matter_members", "sgM_p10"), { firmId: "firmA", matterId: "sgM", userId: "p10" }))
+    })
+    it("a member partner can add another partner", async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "users", "p9"), { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted", active: true })
+      })
+      await assertSucceeds(setDoc(doc(await authed("sg-partner-in", PARTNER_OUT), "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9" }))
+    })
+  })
+})
+
+describe("Review R1 #9 — documents create: matter floor and client-sourced floor in the rules", () => {
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "flPriv"), { firmId: "firmA", title: "P", classification: "privileged" })
+      await setDoc(doc(db, "matters", "flInt"), { firmId: "firmA", title: "I", classification: "internal" })
+      for (const m of ["flPriv", "flInt"]) {
+        await setDoc(doc(db, "matter_members", `${m}_fl-assoc`), { firmId: "firmA", matterId: m, userId: "fl-assoc" })
+      }
+    })
+  })
+
+  it("a member cannot create a document below the matter's classification", async () => {
+    await assertFails(setDoc(doc(await authed("fl-assoc", ASSOC), "documents", "flLow"), { firmId: "firmA", matterId: "flPriv", classification: "public" }))
+    await assertSucceeds(setDoc(doc(await authed("fl-assoc", ASSOC), "documents", "flAt"), { firmId: "firmA", matterId: "flPriv", classification: "privileged" }))
+  })
+
+  it("a whatsapp (client-sourced) document below privileged is refused", async () => {
+    await assertFails(setDoc(doc(await authed("fl-assoc", ASSOC), "documents", "flWa"), { firmId: "firmA", matterId: "flInt", classification: "internal", sourceChannel: "whatsapp" }))
+    await assertSucceeds(setDoc(doc(await authed("fl-assoc", ASSOC), "documents", "flWa2"), { firmId: "firmA", matterId: "flInt", classification: "privileged", sourceChannel: "whatsapp" }))
+    // R2 N7: a client-SDK create cannot prove its channel, so "web" is floored too.
+    await assertFails(setDoc(doc(await authed("fl-assoc", ASSOC), "documents", "flWeb"), { firmId: "firmA", matterId: "flInt", classification: "internal", sourceChannel: "web" }))
+  })
+})
+
+describe("Review R1 #10 — accounts cannot read feature flags or firm overrides (L17.6 #41)", () => {
+  const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "internal" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "internal" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "feature_flags", "ffL17"), { name: "L17_6", enabled: true })
+      await setDoc(doc(ctx.firestore(), "firm_feature_overrides", "ffoA"), { firmId: "firmA", flag: "L17_6", enabled: true })
+    })
+  })
+  it("accounts denied; staff still read", async () => {
+    await assertFails(getDoc(doc(await authed("ff-acc", ACCOUNTS), "feature_flags", "ffL17")))
+    await assertFails(getDoc(doc(await authed("ff-acc", ACCOUNTS), "firm_feature_overrides", "ffoA")))
+    await assertSucceeds(getDoc(doc(await authed("ff-assoc", ASSOC), "feature_flags", "ffL17")))
+    await assertSucceeds(getDoc(doc(await authed("ff-assoc", ASSOC), "firm_feature_overrides", "ffoA")))
+  })
+})
+
+describe("Review R2 N5 — client-role users read only their own matters, never staff collections", () => {
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "n5M"), { firmId: "firmA", title: "Other client's matter", classification: "internal", clientId: "someone" })
+      await setDoc(doc(db, "matters", "n5Own"), { firmId: "firmA", title: "Own matter", classification: "internal", clientId: "n5-cli" })
+      await setDoc(doc(db, "matter_members", "n5M_n5-cli"), { firmId: "firmA", matterId: "n5M", userId: "n5-cli" })
+      await setDoc(doc(db, "matter_members", "n5M_n5-pm"), { firmId: "firmA", matterId: "n5M", userId: "n5-pm" })
+      await setDoc(doc(db, "drafts", "n5D"), { firmId: "firmA", matterId: "n5M", classification: "internal", body: "b" })
+      await setDoc(doc(db, "documents", "n5Doc"), { firmId: "firmA", matterId: "n5M", classification: "internal" })
+      await setDoc(doc(db, "users", "n5-cli2"), { firmId: "firmA", role: "client", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "users", "n5-acc"), { firmId: "firmA", role: "accounts", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "users", "n5-assoc"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
+    })
+  })
+  it("a client-role member cannot read the matter, its drafts or its documents", async () => {
+    const db = await authed("n5-cli", CLIENT)
+    await assertFails(getDoc(doc(db, "matters", "n5M")))
+    await assertFails(getDoc(doc(db, "drafts", "n5D")))
+    await assertFails(getDoc(doc(db, "documents", "n5Doc")))
+    await assertFails(getDoc(doc(db, "matter_members", "n5M_n5-pm")))
+  })
+  it("a client reads their own matter (clientId), as the API allows", async () => {
+    await assertSucceeds(getDoc(doc(await authed("n5-cli", CLIENT), "matters", "n5Own")))
+  })
+  it("a member partner cannot assign a client or accounts user; a staff assignee is fine", async () => {
+    const db = await authed("n5-pm", PARTNER)
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-cli2"), { firmId: "firmA", matterId: "n5M", userId: "n5-cli2" }))
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-acc"), { firmId: "firmA", matterId: "n5M", userId: "n5-acc" }))
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-ghost"), { firmId: "firmA", matterId: "n5M", userId: "n5-ghost" }))
+    await assertSucceeds(setDoc(doc(db, "matter_members", "n5M_n5-assoc"), { firmId: "firmA", matterId: "n5M", userId: "n5-assoc" }))
+  })
+})
+
+describe("Review R2 N6 — escalation-closure digests are server-only; case number fields are API-only", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "filing_escalation_closure_followup_queue", "n6q"), { id: "n6q", firmId: "firmA", ownerId: "n6-pm", classification: "internal", packageIds: ["p1", "p2"], notes: ["re: memo"] })
+      await setDoc(doc(db, "filing_escalation_closure_compliance_digests", "n6c"), { id: "n6c", firmId: "firmA", ownerId: "n6-pm", classification: "internal", packageIds: ["p1"] })
+      await setDoc(doc(db, "matters", "n6M"), { firmId: "firmA", title: "N6", classification: "internal", caseNumber: null, caseNumberStatus: "pending", courtId: "SHC" })
+      await setDoc(doc(db, "matter_members", "n6M_n6-pm"), { firmId: "firmA", matterId: "n6M", userId: "n6-pm" })
+      await setDoc(doc(db, "matter_members", "n6M_n6-assoc"), { firmId: "firmA", matterId: "n6M", userId: "n6-assoc" })
+    })
+  })
+  it("no client-SDK read of filing_escalation_closure_* (rows span several matters), owner partner included", async () => {
+    await assertFails(getDoc(doc(await authed("n6-assoc", ASSOC), "filing_escalation_closure_followup_queue", "n6q")))
+    await assertFails(getDoc(doc(await authed("n6-pm", PARTNER), "filing_escalation_closure_followup_queue", "n6q")))
+    await assertFails(getDoc(doc(await authed("n6-pm", PARTNER), "filing_escalation_closure_compliance_digests", "n6c")))
+  })
+  it("members cannot rewrite caseNumber, caseNumberStatus or courtId from the client SDK", async () => {
+    for (const db of [await authed("n6-assoc", ASSOC), await authed("n6-pm", PARTNER)]) {
+      await assertFails(updateDoc(doc(db, "matters", "n6M"), { caseNumber: "C.P. No. 12 of 2019" }))
+      await assertFails(updateDoc(doc(db, "matters", "n6M"), { caseNumberStatus: "recorded" }))
+      await assertFails(updateDoc(doc(db, "matters", "n6M"), { courtId: "SC" }))
+    }
+    await assertSucceeds(updateDoc(doc(await authed("n6-assoc", ASSOC), "matters", "n6M"), { title: "renamed" }))
+  })
+})
+
+describe("Review R2 N7 — client-SDK document creates are treated as client-sourced (privileged floor)", () => {
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "n7M"), { firmId: "firmA", title: "N7", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "n7M_n7-assoc"), { firmId: "firmA", matterId: "n7M", userId: "n7-assoc" })
+    })
+  })
+  it.each([
+    ["WhatsApp", "internal"],
+    ["web", "internal"],
+    ["team_portal", "confidential"],
+    ["bulk", "internal"],
+    [undefined, "internal"],
+  ])("sourceChannel %s labelled %s is refused", async (channel, classification) => {
+    const row: Record<string, unknown> = { firmId: "firmA", matterId: "n7M", classification }
+    if (channel) row.sourceChannel = channel
+    await assertFails(setDoc(doc(await authed("n7-assoc", ASSOC), "documents", `n7-${channel}-${classification}`), row))
+  })
+  it("privileged is accepted; an unknown channel string is refused even when privileged", async () => {
+    await assertSucceeds(setDoc(doc(await authed("n7-assoc", ASSOC), "documents", "n7-ok"), { firmId: "firmA", matterId: "n7M", classification: "privileged", sourceChannel: "web" }))
+    await assertFails(setDoc(doc(await authed("n7-assoc", ASSOC), "documents", "n7-odd"), { firmId: "firmA", matterId: "n7M", classification: "privileged", sourceChannel: "WhatsApp" }))
+  })
+})
+
+describe("Review R2 probes (secrev2/rules2.probe.test.ts) pinned as regressions", () => {
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "p2m1"), { firmId: "firmA", title: "t", classification: "privileged" })
+      await setDoc(doc(db, "matters", "p2m2"), { firmId: "firmA", title: "t2", classification: "internal" })
+      for (const [m, u] of [["p2m1", "p2-member"], ["p2m2", "p2-member"], ["p2m1", "p2-pm"], ["p2m2", "p2-outsider"]]) {
+        await setDoc(doc(db, "matter_members", `${m}_${u}`), { firmId: "firmA", matterId: m, userId: u })
+      }
+      await setDoc(doc(db, "users", "p2-x1"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
+      await setDoc(doc(db, "drafts", "p2d1"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "clean" })
+      await setDoc(doc(db, "drafts", "p2dl"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "clean", locked: true, title: "x" })
+      await setDoc(doc(db, "documents", "p2doc1"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", contentHash: "h", storagePath: "s" })
+    })
+  })
+
+  it("locked draft: every write path to the body or the lock is denied; title stays editable", async () => {
+    const db = await authed("p2-member", ASSOC)
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { body: "evil" }))
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { locked: false }))
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { locked: deleteField() }))
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { body: "evil", locked: false }))
+    await assertFails(setDoc(doc(db, "drafts", "p2dl"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "evil", title: "x" }))
+    await assertFails((async () => {
+      const b = writeBatch(db)
+      b.update(doc(db, "drafts", "p2dl"), { locked: false })
+      b.update(doc(db, "drafts", "p2dl"), { body: "evil" })
+      await b.commit()
+    })())
+    await assertFails(runTransaction(db, async (tx) => {
+      await tx.get(doc(db, "drafts", "p2dl"))
+      tx.update(doc(db, "drafts", "p2dl"), { body: "evil" })
+    }))
+    await assertFails(setDoc(doc(db, "drafts", "p2copy1"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "evil", locked: false }))
+    await assertSucceeds(updateDoc(doc(db, "drafts", "p2dl"), { title: "y" }))
+  })
+
+  it("documents and drafts cannot be moved between matters", async () => {
+    await assertFails(updateDoc(doc(await authed("p2-outsider", ASSOC), "documents", "p2doc1"), { matterId: "p2m2" }))
+    await assertFails(updateDoc(doc(await authed("p2-member", ASSOC), "documents", "p2doc1"), { matterId: "p2m2" }))
+    await assertFails(updateDoc(doc(await authed("p2-member", ASSOC), "drafts", "p2d1"), { matterId: "p2m2" }))
+  })
+
+  it("self-assignment inside a batch and id/userId mismatches are denied", async () => {
+    const db = await authed("p2-p9", PARTNER)
+    await assertFails((async () => {
+      const b = writeBatch(db)
+      b.set(doc(db, "matter_members", "p2m1_p2-x1"), { firmId: "firmA", matterId: "p2m1", userId: "p2-x1" })
+      b.set(doc(db, "matter_members", "p2m1_p2-p9"), { firmId: "firmA", matterId: "p2m1", userId: "p2-p9" })
+      await b.commit()
+    })())
+    await assertFails(setDoc(doc(await authed("p2-pm", PARTNER), "matter_members", "p2m1_victim"), { firmId: "firmA", matterId: "p2m1", userId: "p2-x1" }))
+  })
+})
+
+describe("review round 3 N13 — audit_dead_letter is server-only", () => {
+  const P = { firmId: "firmA", role: "partner", clearanceLevel: "privileged" }
+  it("no client can read or write a dead-lettered audit row, not even a same-firm partner", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "audit_dead_letter", "dl1"), {
+        row: { firmId: "firmA", action: "x", reason: "full reason" }, reason: "failed 5 persist attempts", deadLetteredAt: 1,
+      })
+    })
+    const db = await authed("r3-partner", P)
+    await assertFails(getDoc(doc(db, "audit_dead_letter", "dl1")))
+    await assertFails(setDoc(doc(db, "audit_dead_letter", "dl2"), { row: { firmId: "firmA" }, reason: "r", deadLetteredAt: 2 }))
+    await assertFails(updateDoc(doc(db, "audit_dead_letter", "dl1"), { reason: "erased" }))
+    await assertFails(deleteDoc(doc(db, "audit_dead_letter", "dl1")))
+  })
+})
+
+describe("review round 3 N14 and rules3 probes", () => {
+  const PARTNER = { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged-restricted" }
+  const CLIENT = { firmId: "firmA", role: "client", clearanceLevel: "privileged" }
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "r3m1"), { firmId: "firmA", title: "t", classification: "privileged" })
+      await setDoc(doc(db, "matter_members", "r3m1_r3-member"), { firmId: "firmA", matterId: "r3m1", userId: "r3-member" })
+      await setDoc(doc(db, "matter_members", "r3m1_r3-pm"), { firmId: "firmA", matterId: "r3m1", userId: "r3-pm" })
+      await setDoc(doc(db, "users", "r3-foreign"), { firmId: "firmB", role: "associate", clearanceLevel: "privileged", active: true })
+      await setDoc(doc(db, "users", "r3-acc1"), { firmId: "firmA", role: "associate", clearanceLevel: "privileged", active: true })
+    })
+  })
+
+  it("no role can create a matters doc through the client SDK; an orphan never reaches the client it names", async () => {
+    const orphan = { firmId: "firmA", title: "Your case update - pay here", classification: "internal", clientId: "r3-cli", caseNumber: "C.P. No. 12 of 2019", courtId: "SC" }
+    await assertFails(setDoc(doc(await authed("r3-member", ASSOC), "matters", "r3orph1"), orphan))
+    await assertFails(setDoc(doc(await authed("r3-pm", PARTNER), "matters", "r3orph2"), orphan))
+    await assertFails(setDoc(doc(await authed("r3-member", ASSOC), "matters", "r3orph3"), { firmId: "firmA", title: "t", classification: "internal" }))
+    await assertFails(getDoc(doc(await authed("r3-cli", CLIENT), "matters", "r3orph1")))
+  })
+
+  it("a member partner cannot assign a foreign-firm user; a same-firm associate is fine", async () => {
+    const db = await authed("r3-pm", PARTNER)
+    await assertFails(setDoc(doc(db, "matter_members", "r3m1_r3-foreign"), { firmId: "firmA", matterId: "r3m1", userId: "r3-foreign" }))
+    await assertSucceeds(setDoc(doc(db, "matter_members", "r3m1_r3-acc1"), { firmId: "firmA", matterId: "r3m1", userId: "r3-acc1" }))
+  })
+
+  it("a member cannot rewrite the matter case number", async () => {
+    await assertFails(updateDoc(doc(await authed("r3-member", ASSOC), "matters", "r3m1"), { caseNumber: "X" }))
+  })
+
+  it("client-SDK document create: privileged web allowed in a privileged matter, unknown channel refused", async () => {
+    const db = await authed("r3-member", ASSOC)
+    await assertSucceeds(setDoc(doc(db, "documents", "r3csdk1"), { firmId: "firmA", matterId: "r3m1", classification: "privileged", sourceChannel: "web" }))
+    await assertFails(setDoc(doc(db, "documents", "r3csdk3"), { firmId: "firmA", matterId: "r3m1", classification: "privileged", sourceChannel: "email" }))
+  })
+})
+
+// SEC-3 (final security audit): every grant keyed on the ID token's claims alone, so a
+// deactivated or demoted user's still-valid token (up to 1 h) and a first-factor session in a
+// firm that enforces MFA kept direct client-SDK access. The identity helpers now read
+// users/{uid} (active, firmId, role and clearanceLevel equal to the token's) and
+// firms/{firmId}.mfaEnforcedRoles on every request.
+describe("SEC-3: rules read the authoritative users record and the firm's MFA policy", () => {
+  const FIRM = "firmSec3"
+  const MFA_FIRM = "firmSec3Mfa"
+  const claims = (firmId: string, role: string, clearanceLevel: string) => ({ firmId, role, clearanceLevel })
+  const PARTNER = claims(FIRM, "partner", "privileged-restricted")
+  const MFA_PARTNER = claims(MFA_FIRM, "partner", "privileged-restricted")
+  const MFA_ASSOCIATE = claims(MFA_FIRM, "associate", "privileged-restricted")
+  const FIRST_FACTOR = { firebase: { sign_in_provider: "password" } }
+  const SECOND_FACTOR = { firebase: { sign_in_provider: "password", sign_in_second_factor: "phone" } }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "firms", MFA_FIRM), { name: "MFA firm", mfaEnforcedRoles: ["partner"] })
+      for (const [matterId, firmId] of [["sec3-m", FIRM], ["sec3-mfa-m", MFA_FIRM]] as const) {
+        await setDoc(doc(db, "matters", matterId), { firmId, classification: "privileged-restricted", clientId: "c", title: "t" })
+      }
+      const users: Array<[string, string, Record<string, unknown>]> = [
+        ["sec3-live", "sec3-m", { ...PARTNER, active: true }],
+        ["sec3-ex", "sec3-m", { ...PARTNER, active: false }],
+        ["sec3-demoted", "sec3-m", { firmId: FIRM, role: "intern", clearanceLevel: "internal", active: true }],
+        ["sec3-lowered", "sec3-m", { firmId: FIRM, role: "partner", clearanceLevel: "confidential", active: true }],
+        ["sec3-moved", "sec3-m", { firmId: "firmElsewhere", role: "partner", clearanceLevel: "privileged-restricted", active: true }],
+        ["sec3-mfa-partner", "sec3-mfa-m", { ...MFA_PARTNER, active: true }],
+        ["sec3-mfa-assoc", "sec3-mfa-m", { ...MFA_ASSOCIATE, active: true }],
+      ]
+      for (const [uid, matterId, record] of users) {
+        await setDoc(doc(db, "users", uid), record)
+        await setDoc(doc(db, "matter_members", `${matterId}_${uid}`), { firmId: record.firmId, matterId, userId: uid })
+      }
+      await setDoc(doc(db, "matter_members", "sec3-m_sec3-norecord"), { firmId: FIRM, matterId: "sec3-m", userId: "sec3-norecord" })
+    })
+  })
+
+  const readMatter = (uid: string, token: Record<string, unknown>, matterId = "sec3-m") => getDoc(doc(rawAuthed(uid, token), "matters", matterId))
+
+  it("control: an active member whose record matches the token reads the matter (no firm doc: no MFA policy)", async () => {
+    await assertSucceeds(readMatter("sec3-live", PARTNER))
+  })
+
+  it("a deactivated user's still-live token is denied (users.active == false)", async () => {
+    await assertFails(readMatter("sec3-ex", PARTNER))
+  })
+
+  it("a demoted user's pre-demotion token is denied (record role differs)", async () => {
+    await assertFails(readMatter("sec3-demoted", PARTNER))
+  })
+
+  it("a token claiming a clearance the record no longer has is denied", async () => {
+    await assertFails(readMatter("sec3-lowered", PARTNER))
+  })
+
+  it("a token without a users record is denied", async () => {
+    await assertFails(readMatter("sec3-norecord", PARTNER))
+  })
+
+  it("a record in another firm denies the token's firm", async () => {
+    await assertFails(readMatter("sec3-moved", PARTNER))
+  })
+
+  it("MFA enforced for partners: a first-factor session is denied, a second-factor session is allowed", async () => {
+    await assertFails(readMatter("sec3-mfa-partner", { ...MFA_PARTNER, ...FIRST_FACTOR }, "sec3-mfa-m"))
+    await assertFails(readMatter("sec3-mfa-partner", MFA_PARTNER, "sec3-mfa-m"))
+    await assertSucceeds(readMatter("sec3-mfa-partner", { ...MFA_PARTNER, ...SECOND_FACTOR }, "sec3-mfa-m"))
+  })
+
+  it("MFA enforced for partners only: an associate's first-factor session is allowed", async () => {
+    await assertSucceeds(readMatter("sec3-mfa-assoc", { ...MFA_ASSOCIATE, ...FIRST_FACTOR }, "sec3-mfa-m"))
+  })
+
+  it("a deactivated user cannot read their own users record either", async () => {
+    await assertSucceeds(getDoc(doc(rawAuthed("sec3-live", PARTNER), "users", "sec3-live")))
+    await assertFails(getDoc(doc(rawAuthed("sec3-ex", PARTNER), "users", "sec3-ex")))
   })
 })

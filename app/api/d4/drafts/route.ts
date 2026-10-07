@@ -1,16 +1,24 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession, type HandlerSession } from "@/platform/http/withSession"
+import { errorResponse } from "@/platform/http/errors"
+import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
+import { DraftCharsetError } from "@/services/d4-2/draftCharset"
+import type { SpineStore } from "@/platform/spine/store"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification, type Classification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import {
   buildDraftTemplateAnalyticsRow,
   draftTemplateAnalyticsId,
@@ -27,7 +35,6 @@ import {
   type TemporalCitationInput,
 } from "@/services/d4-1/drafts"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 type PreflightBody = {
   action: "preflight"
@@ -37,6 +44,8 @@ type PreflightBody = {
   citedJudgmentIds?: string[]
   temporalCitations?: TemporalCitationInput[]
   partnerOverride?: { partnerId?: string; reason?: string }
+  /** Optional draft text to extract citations from. */
+  body?: string
 }
 
 type ComposeBody = {
@@ -54,18 +63,6 @@ type ComposeBody = {
 
 type Body = PreflightBody | ComposeBody
 
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
-
 function normalizeTerms(value: string | null): string[] {
   if (!value) return []
   return value
@@ -76,27 +73,34 @@ function normalizeTerms(value: string | null): string[] {
     .filter((term) => term.length > 0)
 }
 
-function buildPreflightInput(parsed: {
-  actorId?: string
-  matterId?: string
-  classification?: string
-  citedJudgmentIds?: string[]
-  temporalCitations?: TemporalCitationInput[]
-  partnerOverride?: { partnerId?: string; reason?: string }
-}): DraftPreflightInput {
+function buildPreflightInput(
+  store: SpineStore,
+  session: HandlerSession | null,
+  parsed: {
+    actorId?: string
+    matterId?: string
+    classification?: string
+    citedJudgmentIds?: string[]
+    temporalCitations?: TemporalCitationInput[]
+    partnerOverride?: { partnerId?: string; reason?: string }
+    body?: string
+    title?: string
+  }
+): DraftPreflightInput | Response {
   if (!parsed.actorId || !parsed.matterId) {
-    throw new Error("actorId and matterId are required")
+    throw new PublicError("actorId and matterId are required")
   }
   if (!isClassification(parsed.classification)) {
-    throw new Error("classification must be a rank-0–4 label")
+    throw new PublicError("classification must be a rank-0–4 label")
   }
-  const partnerOverride =
-    parsed.partnerOverride?.partnerId || parsed.partnerOverride?.reason
-      ? {
-          partnerId: parsed.partnerOverride?.partnerId ?? "",
-          reason: parsed.partnerOverride?.reason ?? "",
-        }
-      : undefined
+  // The override partner is the authenticated caller (L17.1 human control), never a body field.
+  const resolved = resolvePartnerOverride(
+    store,
+    parsed.partnerOverride,
+    session?.userId ?? undefined
+  )
+  if (!resolved.ok) return errorResponse(resolved.status, resolved.code, resolved.error)
+  const partnerOverride = resolved.override
   return {
     actorId: parsed.actorId,
     matterId: parsed.matterId,
@@ -104,10 +108,17 @@ function buildPreflightInput(parsed: {
     citedJudgmentIds: parsed.citedJudgmentIds ?? [],
     temporalCitations: parsed.temporalCitations ?? [],
     partnerOverride,
+    ...(typeof parsed.body === "string" ? { draftBody: parsed.body } : {}),
+    // R4-2: the title is gated with the body
+    ...(typeof parsed.title === "string" ? { draftTitle: parsed.title } : {}),
   }
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -133,7 +144,7 @@ export async function GET(request: Request) {
     if (!actor) {
       return NextResponse.json({ error: "unknown actor" }, { status: 404 })
     }
-    if (actor.role === "client" || actor.role === "intern") {
+    if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
       return NextResponse.json(
         { error: "actor role not allowed for template analytics search" },
         { status: 403 }
@@ -226,7 +237,7 @@ export async function GET(request: Request) {
     .filter((draft) => {
       const permission = checkPermission(store, userId, "draft", draft.matterId)
       if (!permission.allow) return false
-      return rankOf(user.clearanceLevel) >= rankOf(draft.classification)
+      return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(draft.classification)
     })
     .sort((a, b) => {
       const scoreA = templateUsage.get(a.templateId) ?? 0
@@ -248,7 +259,18 @@ export async function GET(request: Request) {
   })
 }
 
+/**
+ * SEC-1: drafts carry the draft body (up to 500,000 characters, enforced by the drafts
+ * service; multi-byte Urdu is 2-3 bytes per character in UTF-8), so this route allows 2 MB
+ * instead of the 1 MB default.
+ */
+const DRAFTS_MAX_BODY_BYTES = 2 * 1024 * 1024
+
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { maxBodyBytes: DRAFTS_MAX_BODY_BYTES })
+}
+
+async function handlePost(request: Request, session: HandlerSession | null) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -270,34 +292,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d4/drafts",
     action: parsed.action,
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (parsed.action === "preflight") {
-      const input = buildPreflightInput(parsed)
+      const input = buildPreflightInput(store, session, parsed)
+      if (input instanceof Response) return input
       const actor = store.users.get(input.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
       const result = runDraftPreflight(store, input)
       const payload = {
         action: "preflight",
         result,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -308,12 +325,13 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
-      const preflightInput = buildPreflightInput(parsed)
+      const preflightInput = buildPreflightInput(store, session, parsed)
+      if (preflightInput instanceof Response) return preflightInput
       const actor = store.users.get(preflightInput.actorId)
-      if (!actor) throw new Error("unknown actor")
+      if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
-      const gate = runDraftPreflight(store, preflightInput)
+      // Pre-check only for the 422 body; composeDraft re-runs the gate and records any override.
+      const gate = runDraftPreflight(store, preflightInput, { recordOverride: false })
       if (!gate.ok) {
         return NextResponse.json(
           { error: "preflight blocked drafting", preflight: gate },
@@ -335,7 +353,6 @@ export async function POST(request: Request) {
         target: draft.id,
         classification: draft.classification,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       await repos.drafts.create(draft)
       const template = listTemplateCatalog("").find((item) => item.id === draft.templateId)
       const analyticsId = draftTemplateAnalyticsId(draft.templateId)
@@ -356,13 +373,19 @@ export async function POST(request: Request) {
         preflight: gate,
         draft: (await repos.drafts.get(draft.id)) ?? draft,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "draft operation failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    if (err instanceof DraftCharsetError) {
+      return NextResponse.json(
+        { error: err.message, code: err.code, violations: err.violations },
+        { status: 422 }
+      )
+    }
+    const message = publicErrorMessage(err, "draft operation failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }

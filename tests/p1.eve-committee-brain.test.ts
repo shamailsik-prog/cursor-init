@@ -82,7 +82,7 @@ describe("eve Committee Brain — P1 is the only outbound path", () => {
     expect(result.finishReason.unified).toBe("error")
   })
 
-  it("blocks internal via the LanguageModel — DPA table is empty", async () => {
+  it("L18 §4.6: blocks confidential via the LanguageModel — DPA table is empty", async () => {
     let sent = false
     setTransportForTests({
       async send() {
@@ -92,16 +92,16 @@ describe("eve Committee Brain — P1 is the only outbound path", () => {
     })
     const result = await committeeBrainLanguageModel.doGenerate({
       prompt: [
-        { role: "user", content: [{ type: "text", text: "internal opinion" }] },
+        { role: "user", content: [{ type: "text", text: "confidential opinion" }] },
       ],
-      providerOptions: { sikander: { classification: "internal" } },
+      providerOptions: { sikander: { classification: "confidential" } },
     })
     expect(sent).toBe(false)
     const text = result.content
       .filter((p) => p.type === "text")
       .map((p) => ("text" in p ? p.text : ""))
       .join("")
-    expect(text).toMatch(/DPA|internal\+/)
+    expect(text).toMatch(/DPA/)
   })
 
   it("callCommitteeBrain with ai-gateway still masks and blocks without credentials", async () => {
@@ -127,9 +127,14 @@ describe("eve Committee Brain local tools", () => {
     expect(preview.redactionCounts.cnic).toBeGreaterThan(0)
   })
 
-  it("classification_policy blocks internal without DPA", () => {
-    const policy = classificationPolicy({ classification: "internal" })
+  it("L18 §4.6: classification_policy blocks confidential without DPA", () => {
+    const policy = classificationPolicy({ classification: "confidential" })
     expect(policy.allowed).toBe(false)
+  })
+
+  it("L18 §4.6: classification_policy allows internal to any configured provider", () => {
+    const policy = classificationPolicy({ classification: "internal" })
+    expect(policy.allowed).toBe(true)
   })
 
   it("classification_policy allows public", () => {

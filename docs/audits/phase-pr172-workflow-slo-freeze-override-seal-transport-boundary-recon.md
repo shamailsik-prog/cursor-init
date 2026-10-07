@@ -44,6 +44,7 @@ Evidence (present):
 3. Firestore client write deny rules (`firestore.rules` L191–192) for both new collections.
 4. Governance helper `platform/persistence/workflowOpsAlertPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationGovernance.ts` (deterministic IDs, status builders, backlog counters).
 5. `/api/d2/ops-reporting`: two paginated GET views + **six** new partner POST actions with shared idempotency cache + `persistAuditEntriesSince` audit write-through (verified in route diff `632d8f8..8fec696`).
+   - *Update (7 Oct 2026, final audit F8):* `persistAuditEntriesSince` has been removed. The action now only appends its rows to `store.audit`; withSession persists the request's own rows once, by object, in the end-of-request audit flush (`platform/persistence/requestAuditFlush.ts`) and answers 503 `AUDIT_UNAVAILABLE` if that flush fails. The text above records the code as audited at the time.
 
 Evidence (blocking):
 

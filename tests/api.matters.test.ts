@@ -73,7 +73,7 @@ describe("POST/GET /api/d1/matters", () => {
       key
     )
     expect(first.status).toBe(200)
-    expect(second.status).toBe(409)
+    expect(second.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
   })
 
   it("lists matters with limit/cursor pagination and tenant membership scoping", async () => {
@@ -138,6 +138,13 @@ describe("POST/GET /api/d1/matters", () => {
     const createdAJson = (await createdA.json()) as { result: { matter: { id: string } } }
     const matterAId = createdAJson.result.matter.id
 
+    // Matter creation requires a known client identity in the firm; seed firm B's client.
+    getRuntimeStore().users.set("client_b", {
+      id: "client_b",
+      firmId: "firmB",
+      role: "client",
+      clearanceLevel: "internal",
+    })
     const createdB = await post(
       {
         action: "create",

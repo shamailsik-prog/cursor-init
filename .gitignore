@@ -63,3 +63,13 @@ firestore-debug.log
 ui-debug.log
 .emulator/
 
+
+# cloud functions workspace
+/functions/lib/
+/functions/node_modules/
+
+# mutation testing (StrykerJS)
+.stryker-tmp/
+reports/
+functions/.stryker-tmp/
+functions/reports/

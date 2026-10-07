@@ -1,11 +1,21 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
+import { PublicError } from "@/platform/http/publicError"
+import { withSession, type HandlerSession } from "@/platform/http/withSession"
+import { gateByFlag, isFilingsCoreRequest } from "@/platform/flags/routeGate"
+import { isFeatureEnabled } from "@/platform/flags/featureFlags"
+import { REQUEST_FAILED_CODE, errorResponse, publicErrorMessage } from "@/platform/http/errors"
+import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
+import { closureRowVisible } from "@/services/d4-3/closureVisibility"
+import { DraftCharsetError } from "@/services/d4-2/draftCharset"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { isClassification } from "@/platform/p1/types"
-import { rankOf } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import type {
   Classification,
   FilingEscalationClosureComplianceDigestRow,
@@ -14,7 +24,6 @@ import type {
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildFilingPacketArtifactRow } from "@/platform/persistence/filingPacketArtifacts"
 import {
   buildFilingDispatchQueueRow,
@@ -220,11 +229,15 @@ import {
 } from "@/platform/persistence/filingEscalationExpiryAndWatchDigests"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
+  applyFilingPackageDecision,
   createFilingPackage,
-  decideFilingPackage,
+  DraftChangedError,
+  draftShouldBeLocked,
+  filingPackageDecisionPatch,
+  PackageAlreadyDecidedError,
+  planFilingPackageDecision,
 } from "@/services/d4-3/filingPackage"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 const HOUR_MS = 60 * 60 * 1000
 
 type CreateBody = {
@@ -251,6 +264,10 @@ type DecideBody = {
   packageId?: string
   decision?: "approve" | "reject"
   reason?: string
+  partnerOverride?: {
+    partnerId?: string
+    reason?: string
+  }
 }
 
 type DispatchUpdateBody = {
@@ -1512,18 +1529,6 @@ type Body =
   | OpenClosureQueueReentryDebtRetirementDisputeBody
   | ResolveClosureQueueReentryDebtRetirementDisputeBody
   | ControlClosureQueueReentryDebtRetirementRollbackBody
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function parseReadiness(value: string | null): "ready" | "blocked" | undefined {
   if (value === "ready" || value === "blocked") return value
@@ -3697,7 +3702,15 @@ async function recomputeClosureComplianceState(
   }
 }
 
+// Erratum E-24 (L18 §9.1 rule 4): only the core package path (isFilingsCoreRequest) stays live
+// while LEGACY_GOVERNANCE_CHAINS is off. The gate runs inside withSession, so auth applies first.
+const handleGetGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handleGet, isFilingsCoreRequest)
+
 export async function GET(request: Request) {
+  return withSession(request, handleGetGated)
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
@@ -3721,23 +3734,27 @@ export async function GET(request: Request) {
     const firmPackages = await repos.filings.listByFirm(user.firmId)
     const artifactRows = await repos.filingPacketArtifacts.listByFirm(user.firmId)
     const artifactByPackage = new Map(artifactRows.map((row) => [row.packageId, row]))
+    // GET is side-effect free: rows missing for legacy packages are derived for this response
+    // only. create_package / decide_package (POST) persist them.
     for (const filingPackage of firmPackages) {
       if (artifactByPackage.has(filingPackage.id)) continue
       const draft =
         store.drafts.get(filingPackage.draftId) ?? (await repos.drafts.get(filingPackage.draftId))
-      const artifact = buildFilingPacketArtifactRow(filingPackage, draft)
-      await repos.filingPacketArtifacts.upsert(artifact)
-      store.filingPacketArtifacts.set(artifact.id, artifact)
-      artifactByPackage.set(filingPackage.id, artifact)
+      // Anchor derived timestamps to the package (FilingPackage has no updatedAt) so repeated
+      // GETs return identical rows.
+      artifactByPackage.set(
+        filingPackage.id,
+        buildFilingPacketArtifactRow(filingPackage, draft, { now: filingPackage.createdAt })
+      )
     }
     const queueRows = await repos.filingDispatchQueue.listByFirm(user.firmId)
     const queueByPackage = new Map(queueRows.map((row) => [row.packageId, row]))
     for (const filingPackage of firmPackages) {
       if (filingPackage.status !== "approved" || queueByPackage.has(filingPackage.id)) continue
-      const queueRow = buildFilingDispatchQueueRow(filingPackage)
-      await repos.filingDispatchQueue.upsert(queueRow)
-      store.filingDispatchQueue.set(queueRow.id, queueRow)
-      queueByPackage.set(filingPackage.id, queueRow)
+      queueByPackage.set(
+        filingPackage.id,
+        buildFilingDispatchQueueRow(filingPackage, { now: filingPackage.createdAt })
+      )
     }
     if (view === "dispatch") {
       const visible = [...queueByPackage.values()]
@@ -3745,7 +3762,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .filter((row) => {
           if (!dispatchStatus || !isFilingDispatchQueueStatus(dispatchStatus)) return true
@@ -3785,7 +3802,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .filter((row) => {
           if (!annexureStatus || !isFilingAnnexureGenerationStatus(annexureStatus)) return true
@@ -3818,7 +3835,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.recordedAt - a.recordedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -3900,7 +3917,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4022,7 +4039,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => a.slaTargetAt - b.slaTargetAt || b.updatedAt - a.updatedAt)
       const items = visible.slice(cursor, cursor + limit)
@@ -4056,7 +4073,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4140,7 +4157,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => a.status.localeCompare(b.status) || a.breachWindowStartedAt - b.breachWindowStartedAt)
       const items = visible.slice(cursor, cursor + limit)
@@ -4222,7 +4239,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -4287,7 +4304,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .map((row) => {
@@ -4468,16 +4485,9 @@ export async function GET(request: Request) {
           if (!isFilingEscalationClosureFollowupQueueStatus(queueStatus)) return true
           return row.status === queueStatus
         })
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .map((row) => {
           const window = slaWindowByOwner.get(row.ownerId)
           const exceptionDigest = exceptionDigestByOwner.get(row.ownerId)
@@ -4615,7 +4625,7 @@ export async function GET(request: Request) {
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (isFilingEscalationClosureSlaWindowScope(scope) ? row.scope === scope : true))
-        .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+        .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4635,7 +4645,7 @@ export async function GET(request: Request) {
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (isFilingEscalationClosureAutoAssignmentMode(mode) ? row.mode === mode : true))
-        .filter((row) => rankOf(user.clearanceLevel) >= rankOf(row.classification))
+        .filter((row) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification))
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4714,7 +4724,7 @@ export async function GET(request: Request) {
             if (!filingPackage) return false
             const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
             if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
+            return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(filingPackage.classification)
           })
         })
         .map((row) => {
@@ -4865,16 +4875,9 @@ export async function GET(request: Request) {
             : true
         )
         .filter((row) => (packageId ? row.packageIds.includes(packageId) : true))
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = firmPackages.find((item) => item.id === pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => firmPackages.find((item) => item.id === pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4923,16 +4926,9 @@ export async function GET(request: Request) {
         .filter((row): row is NonNullable<typeof row> => row !== null)
         .filter((row) => (queueId ? row.queueId === queueId : true))
         .filter((row) => (packageId ? row.packageIds.includes(packageId) : true))
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4961,16 +4957,9 @@ export async function GET(request: Request) {
             ? row.status === disputeStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -4997,16 +4986,9 @@ export async function GET(request: Request) {
             ? row.status === enforcementStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => {
           const aDue = a.waiverExpiresAt ?? Number.MAX_SAFE_INTEGER
           const bDue = b.waiverExpiresAt ?? Number.MAX_SAFE_INTEGER
@@ -5039,16 +5021,9 @@ export async function GET(request: Request) {
             ? row.status === adjudicationStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5075,16 +5050,9 @@ export async function GET(request: Request) {
             ? row.status === rebalanceStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5113,16 +5081,9 @@ export async function GET(request: Request) {
             ? row.status === quorumStatus
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5155,16 +5116,9 @@ export async function GET(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureRebalanceExecutionMode(mode) ? row.mode === mode : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5197,16 +5151,9 @@ export async function GET(request: Request) {
             ? row.escalationTier === escalationTier
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5241,16 +5188,9 @@ export async function GET(request: Request) {
             ? row.suppressionReasons.includes(suppressionReason)
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5281,16 +5221,9 @@ export async function GET(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5319,16 +5252,9 @@ export async function GET(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5357,16 +5283,9 @@ export async function GET(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5395,16 +5314,9 @@ export async function GET(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5431,16 +5343,9 @@ export async function GET(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureBurndownRecalibrationStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5467,16 +5372,9 @@ export async function GET(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureExpiryAttestationQueueStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5503,16 +5401,9 @@ export async function GET(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureBurndownSettlementStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5541,16 +5432,9 @@ export async function GET(request: Request) {
             ? row.status === status
             : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5577,16 +5461,9 @@ export async function GET(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureSettlementAttestationStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5613,16 +5490,9 @@ export async function GET(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureQueueDrainReconciliationStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5649,16 +5519,9 @@ export async function GET(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureSettlementArbitrationStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -5685,16 +5548,9 @@ export async function GET(request: Request) {
         .filter((row) =>
           isFilingEscalationClosureQueueReentryComplianceStatus(status) ? row.status === status : true
         )
-        .filter((row) => {
-          if (row.packageIds.length === 0) return user.role === "partner"
-          return row.packageIds.some((pkgId) => {
-            const filingPackage = packageById.get(pkgId)
-            if (!filingPackage) return false
-            const permission = checkPermission(store, user.id, "draft", filingPackage.matterId)
-            if (!permission.allow) return false
-            return rankOf(user.clearanceLevel) >= rankOf(filingPackage.classification)
-          })
-        })
+        .filter((row) =>
+          closureRowVisible(store, user, row.packageIds, (pkgId) => packageById.get(pkgId))
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
       const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
@@ -6474,7 +6330,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .map((row) => {
           const quorum = row.ownerId ? adjudicationQuorumByOwner.get(row.ownerId) ?? null : null
@@ -6622,7 +6478,7 @@ export async function GET(request: Request) {
             const permission = checkPermission(store, user.id, "draft", row.matterId)
             if (!permission.allow) return false
           }
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6663,7 +6519,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.grantedAt - a.grantedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6743,7 +6599,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6826,7 +6682,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6872,7 +6728,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6903,7 +6759,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -6990,7 +6846,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7024,7 +6880,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7124,7 +6980,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7218,7 +7074,7 @@ export async function GET(request: Request) {
         .filter((row) => {
           const permission = checkPermission(store, user.id, "draft", row.matterId)
           if (!permission.allow) return false
-          return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+          return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
         })
         .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
       const items = visible.slice(cursor, cursor + limit)
@@ -7239,7 +7095,7 @@ export async function GET(request: Request) {
       .filter((row) => {
         const permission = checkPermission(store, user.id, "draft", row.matterId)
         if (!permission.allow) return false
-        return rankOf(user.clearanceLevel) >= rankOf(row.classification)
+        return rankOf(user.clearanceLevel) >= rankOfStoredOrMax(row.classification)
       })
       .filter((row) => {
         if (!readiness) return true
@@ -7264,12 +7120,20 @@ export async function GET(request: Request) {
       nextCursor,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "filings read failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "filings read failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
 
+// Erratum E-24 (L18 §9.1 rule 4): only the core package path (isFilingsCoreRequest) stays live
+// while LEGACY_GOVERNANCE_CHAINS is off. The gate runs inside withSession, so auth applies first.
+const handlePostGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handlePost, isFilingsCoreRequest)
+
 export async function POST(request: Request) {
+  return withSession(request, handlePostGated)
+}
+
+async function handlePost(request: Request, session: HandlerSession | null) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -7291,21 +7155,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d4/filings",
     action: parsed.action,
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (parsed.action === "create_package") {
@@ -7320,19 +7178,21 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
-      const partnerOverride =
-        parsed.partnerOverride?.partnerId || parsed.partnerOverride?.reason
-          ? {
-              partnerId: parsed.partnerOverride?.partnerId ?? "",
-              reason: parsed.partnerOverride?.reason ?? "",
-            }
-          : undefined
+      // The override partner is the authenticated caller (L17.1 human control), never a body field.
+      const resolvedOverride = resolvePartnerOverride(
+        store,
+        parsed.partnerOverride,
+        session?.userId ?? undefined
+      )
+      if (!resolvedOverride.ok) {
+        return errorResponse(resolvedOverride.status, resolvedOverride.code, resolvedOverride.error)
+      }
+      const partnerOverride = resolvedOverride.override
       const actor = store.users.get(parsed.actorId)
       if (!actor) {
         return NextResponse.json({ error: "unknown actor" }, { status: 404 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
       const created = createFilingPackage(store, {
         actorId: parsed.actorId,
         matterId: parsed.matterId,
@@ -7347,13 +7207,14 @@ export async function POST(request: Request) {
         },
       })
       await repos.filings.create(created.filingPackage)
+      // Review R1 #5: the draft is locked against body edits while the package is live.
+      await repos.drafts.setLocked(created.filingPackage.draftId, true)
       const draft =
         store.drafts.get(created.filingPackage.draftId) ??
         (await repos.drafts.get(created.filingPackage.draftId))
       const packetArtifact = buildFilingPacketArtifactRow(created.filingPackage, draft)
       await repos.filingPacketArtifacts.upsert(packetArtifact)
       store.filingPacketArtifacts.set(packetArtifact.id, packetArtifact)
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "create_package",
         filingPackage:
@@ -7361,7 +7222,7 @@ export async function POST(request: Request) {
         packetArtifact: (await repos.filingPacketArtifacts.get(packetArtifact.id)) ?? packetArtifact,
         preflight: created.preflight,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7372,35 +7233,66 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
-      const filingPackage = decideFilingPackage(store, {
-        actorId: parsed.actorId,
-        packageId: parsed.packageId,
-        decision: parsed.decision,
-        reason: parsed.reason,
-      })
+      const resolvedOverride = resolvePartnerOverride(
+        store,
+        parsed.partnerOverride,
+        session?.userId ?? undefined
+      )
+      if (!resolvedOverride.ok) {
+        return errorResponse(resolvedOverride.status, resolvedOverride.code, resolvedOverride.error)
+      }
       const actor = store.users.get(parsed.actorId)
       if (!actor) {
         return NextResponse.json({ error: "unknown actor" }, { status: 404 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
-      const persisted = await repos.filings.get(filingPackage.id)
-      if (persisted) {
-        await repos.filings.update(filingPackage.id, {
-          status: filingPackage.status,
-          approvedBy: filingPackage.approvedBy,
-          approvalReason: filingPackage.approvalReason,
-        })
-      } else {
-        await repos.filings.create(filingPackage)
-      }
+      // Final audit F2: decide against the durable package status, never a stale spine copy.
+      const durablePackage = await repos.filings.get(parsed.packageId)
+      if (durablePackage) store.filingPackages.set(durablePackage.id, durablePackage)
+      const pendingPackage = store.filingPackages.get(parsed.packageId)
+      // Review R1 #5: approve against the durable copy of the draft, never a stale in-memory one.
+      const pendingDraft = pendingPackage
+        ? ((await repos.drafts.get(pendingPackage.draftId)) ??
+          store.drafts.get(pendingPackage.draftId))
+        : undefined
+      const decision = planFilingPackageDecision(store, {
+        actorId: parsed.actorId,
+        packageId: parsed.packageId,
+        decision: parsed.decision,
+        reason: parsed.reason,
+        ...(pendingDraft ? { draftBody: pendingDraft.body, draftTitle: pendingDraft.title } : {}),
+        ...(resolvedOverride.override ? { partnerOverride: resolvedOverride.override } : {}),
+      })
+      // One-shot: the decision applies only if the durable package is still pending (a
+      // conditional update; a transaction in Firestore mode). A concurrent decision that lost
+      // the race is refused and changes nothing (no lock change, no decision audit row).
+      const won = await repos.filings.decideIfPending(
+        decision.decided.id,
+        filingPackageDecisionPatch(decision.decided)
+      )
+      if (won.kind === "already_decided") throw new PackageAlreadyDecidedError()
+      if (won.kind === "missing") await repos.filings.create(decision.decided)
+      const filingPackage = applyFilingPackageDecision(store, {
+        ...decision,
+        decided: won.kind === "decided" ? won.row : decision.decided,
+      })
+      await repos.drafts.setLocked(
+        filingPackage.draftId,
+        draftShouldBeLocked(store, filingPackage.draftId)
+      )
       const draft =
         store.drafts.get(filingPackage.draftId) ?? (await repos.drafts.get(filingPackage.draftId))
       const packetArtifact = buildFilingPacketArtifactRow(filingPackage, draft)
       await repos.filingPacketArtifacts.upsert(packetArtifact)
       store.filingPacketArtifacts.set(packetArtifact.id, packetArtifact)
+      // Erratum E-24: the filing-transport pipeline (dispatch queue, annexures) is frozen behind
+      // LEGACY_GOVERNANCE_CHAINS. With the flag off an approval stops at filing readiness: no
+      // dispatch-queue or annexure row is written and neither field is returned.
+      const transportLive = isFeatureEnabled("LEGACY_GOVERNANCE_CHAINS", actor.firmId)
       const dispatchQueueRow =
-        filingPackage.status === "approved" ? buildFilingDispatchQueueRow(filingPackage) : null
+        transportLive && filingPackage.status === "approved"
+          ? buildFilingDispatchQueueRow(filingPackage)
+          : null
       const annexureRow =
         dispatchQueueRow && dispatchQueueRow.status !== "blocked"
           ? buildFilingAnnexureRow(filingPackage, dispatchQueueRow)
@@ -7413,17 +7305,21 @@ export async function POST(request: Request) {
         await repos.filingAnnexures.upsert(annexureRow)
         store.filingAnnexures.set(annexureRow.id, annexureRow)
       }
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "decide_package",
         filingPackage: (await repos.filings.get(filingPackage.id)) ?? filingPackage,
         packetArtifact: (await repos.filingPacketArtifacts.get(packetArtifact.id)) ?? packetArtifact,
-        dispatchQueue:
-          dispatchQueueRow &&
-          ((await repos.filingDispatchQueue.get(dispatchQueueRow.id)) ?? dispatchQueueRow),
-        annexure: annexureRow && ((await repos.filingAnnexures.get(annexureRow.id)) ?? annexureRow),
+        ...(transportLive
+          ? {
+              dispatchQueue:
+                dispatchQueueRow &&
+                ((await repos.filingDispatchQueue.get(dispatchQueueRow.id)) ?? dispatchQueueRow),
+              annexure:
+                annexureRow && ((await repos.filingAnnexures.get(annexureRow.id)) ?? annexureRow),
+            }
+          : {}),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7466,7 +7362,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const existing =
         (await repos.filingDispatchQueue.get(filingDispatchQueueId(filingPackage.id))) ??
         buildFilingDispatchQueueRow(filingPackage)
@@ -7523,13 +7418,12 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: parsed.note?.trim() || parsed.nextStatus || "dispatch queue update",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "dispatch_update",
         dispatchQueue: (await repos.filingDispatchQueue.get(updated.id)) ?? updated,
         annexure: (await repos.filingAnnexures.get(annexure.id)) ?? annexure,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7587,7 +7481,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const existing =
         (await repos.filingAnnexures.get(filingAnnexureId(filingPackage.id))) ??
         buildFilingAnnexureRow(filingPackage, queueRow)
@@ -7649,12 +7542,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: parsed.checkpoint,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "annexure_checkpoint",
         annexure: (await repos.filingAnnexures.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7730,7 +7622,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const existingReceipts = await repos.filingSubmissionReceipts.listByPackageId(filingPackage.id)
       const highestAttempt = existingReceipts.reduce(
         (max, row) => (row.attemptNo > max ? row.attemptNo : max),
@@ -7836,7 +7727,6 @@ export async function POST(request: Request) {
           reason: `${submissionException.source}:${submissionException.severity}`,
         })
       }
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "record_submission_receipt",
         receipt: (await repos.filingSubmissionReceipts.get(receipt.id)) ?? receipt,
@@ -7849,7 +7739,7 @@ export async function POST(request: Request) {
           ? (await repos.filingDispatchQueue.get(updatedDispatchQueue.id)) ?? updatedDispatchQueue
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -7886,7 +7776,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const receipts = await repos.filingSubmissionReceipts.listByPackageId(filingPackage.id)
       const current =
         (await repos.filingSubmissionReconciliation.get(
@@ -7968,7 +7857,6 @@ export async function POST(request: Request) {
           reason: "auto_reconciled",
         })
       }
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "reconcile_submission",
         reconciliation: (await repos.filingSubmissionReconciliation.get(updated.id)) ?? updated,
@@ -7976,7 +7864,7 @@ export async function POST(request: Request) {
           submissionException &&
           ((await repos.filingSubmissionExceptions.get(submissionException.id)) ?? submissionException),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8010,7 +7898,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const existing = await repos.filingSubmissionExceptions.get(
         filingSubmissionExceptionId(filingPackage.id)
       )
@@ -8041,12 +7928,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "claim_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8100,7 +7986,6 @@ export async function POST(request: Request) {
           )
         }
       }
-      const priorAuditCount = store.audit.length
       const existing = await repos.filingSubmissionExceptions.get(
         filingSubmissionExceptionId(filingPackage.id)
       )
@@ -8133,12 +8018,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: `${updated.severity}:${updated.escalationOwnerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "escalate_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8172,7 +8056,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const existing = await repos.filingSubmissionExceptions.get(
         filingSubmissionExceptionId(filingPackage.id)
       )
@@ -8198,12 +8081,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "resolve_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8240,7 +8122,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const existing = await repos.filingSubmissionExceptions.get(
         filingSubmissionExceptionId(filingPackage.id)
       )
@@ -8270,12 +8151,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.severity,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "reopen_submission_exception",
         submissionException: (await repos.filingSubmissionExceptions.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8315,7 +8195,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const evidenceRows = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
       const nextSequenceNo = evidenceRows.reduce((max, row) => Math.max(max, row.sequenceNo), 0) + 1
@@ -8397,7 +8276,6 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: `${normalizedException.source}:${normalizedException.severity}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "mark_transport_blocked",
         evidence: (await repos.filingTransportExecutionEvidence.get(evidence.id)) ?? evidence,
@@ -8405,7 +8283,7 @@ export async function POST(request: Request) {
         submissionException:
           (await repos.filingSubmissionExceptions.get(normalizedException.id)) ?? normalizedException,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8445,7 +8323,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const evidenceRows = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
       const nextSequenceNo = evidenceRows.reduce((max, row) => Math.max(max, row.sequenceNo), 0) + 1
@@ -8530,7 +8407,6 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: normalizedException.severity,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attach_retry_plan",
         evidence: (await repos.filingTransportExecutionEvidence.get(evidence.id)) ?? evidence,
@@ -8538,7 +8414,7 @@ export async function POST(request: Request) {
         submissionException:
           (await repos.filingSubmissionExceptions.get(normalizedException.id)) ?? normalizedException,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8575,7 +8451,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const evidenceRows = await repos.filingTransportExecutionEvidence.listByPackageId(filingPackage.id)
       const nextSequenceNo = evidenceRows.reduce((max, row) => Math.max(max, row.sequenceNo), 0) + 1
@@ -8671,7 +8546,6 @@ export async function POST(request: Request) {
           reason: "confirm_delivered",
         })
       }
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "confirm_delivered",
         evidence: (await repos.filingTransportExecutionEvidence.get(evidence.id)) ?? evidence,
@@ -8680,7 +8554,7 @@ export async function POST(request: Request) {
           resolvedException &&
           ((await repos.filingSubmissionExceptions.get(resolvedException.id)) ?? resolvedException),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8708,7 +8582,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existingDigest =
         (await repos.filingSubmissionSlaDigests.get(filingSubmissionSlaDigestId(filingPackage.id))) ??
@@ -8752,12 +8625,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.breachReasons.join(",") || "none",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_breach",
         digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8792,7 +8664,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const persistedDigest = await repos.filingSubmissionSlaDigests.get(
         filingSubmissionSlaDigestId(filingPackage.id)
@@ -8838,12 +8709,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: String(deferHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "defer_window",
         digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8871,7 +8741,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const persistedDigest = await repos.filingSubmissionSlaDigests.get(
         filingSubmissionSlaDigestId(filingPackage.id)
@@ -8916,12 +8785,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: "cleared",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "clear_digest",
         digest: (await repos.filingSubmissionSlaDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -8973,7 +8841,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existing =
         (await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))) ??
@@ -9022,12 +8889,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: primaryOwner.id,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "assign_primary_owner",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9068,7 +8934,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existing =
         (await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))) ??
@@ -9114,12 +8979,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: backupOwner.id,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "set_backup_owner",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9162,7 +9026,6 @@ export async function POST(request: Request) {
       if (existing.primaryOwnerId !== actor.id && existing.backupOwnerId !== actor.id) {
         return NextResponse.json({ error: "actor must be assigned in rota to acknowledge handoff" }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const note = parsed.note?.trim() || "handoff acknowledged"
       const updated = {
@@ -9183,12 +9046,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: "handoff_acknowledged",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_handoff",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9222,7 +9084,6 @@ export async function POST(request: Request) {
       if (!existing) {
         return NextResponse.json({ error: "escalation rota not found for package" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const note = parsed.note?.trim() || "assignment revoked"
       const updated = {
@@ -9248,12 +9109,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: "revoked",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "revoke_assignment",
         rota: (await repos.filingEscalationOwnerRota.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9287,7 +9147,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const rota = await repos.filingEscalationOwnerRota.get(
         filingEscalationOwnerRotaId(filingPackage.id)
@@ -9332,12 +9191,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.alertReasons.join(",") || "none",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_owner_drift",
         workloadDigest: (await repos.filingEscalationWorkloadDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9378,7 +9236,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existingRota =
         (await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))) ??
@@ -9450,14 +9307,13 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: newPrimary.id,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "rebalance_assignment",
         rota: (await repos.filingEscalationOwnerRota.get(updatedRota.id)) ?? updatedRota,
         workloadDigest:
           (await repos.filingEscalationWorkloadDigests.get(updatedDigest.id)) ?? updatedDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9492,7 +9348,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const rota = await repos.filingEscalationOwnerRota.get(
         filingEscalationOwnerRotaId(filingPackage.id)
@@ -9536,12 +9391,11 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: String(snoozeHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "snooze_workload_alert",
         workloadDigest: (await repos.filingEscalationWorkloadDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9595,7 +9449,6 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
         }
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const id = filingEscalationPolicyBaselineId({ firmId: actor.firmId, packageId: parsed.packageId ?? null })
       const existing = await repos.filingEscalationPolicyBaselines.get(id)
@@ -9621,12 +9474,11 @@ export async function POST(request: Request) {
         classification: policy.classification,
         reason: policy.scope,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "set_policy_baseline",
         policy: (await repos.filingEscalationPolicyBaselines.get(policy.id)) ?? policy,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9656,7 +9508,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
@@ -9751,7 +9602,6 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: waiver.reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "grant_breach_waiver",
         waiver: (await repos.filingEscalationBreachWaivers.get(waiver.id)) ?? waiver,
@@ -9761,7 +9611,7 @@ export async function POST(request: Request) {
         workloadDigest:
           (await repos.filingEscalationWorkloadDigests.get(workloadDigest.id)) ?? workloadDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9789,7 +9639,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const waivers = await repos.filingEscalationBreachWaivers.listByPackageId(filingPackage.id)
       const target =
         (parsed.waiverId
@@ -9880,7 +9729,6 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: revoked.id,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "revoke_breach_waiver",
         waiver: (await repos.filingEscalationBreachWaivers.get(revoked.id)) ?? revoked,
@@ -9890,7 +9738,7 @@ export async function POST(request: Request) {
         workloadDigest:
           (await repos.filingEscalationWorkloadDigests.get(workloadDigest.id)) ?? workloadDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -9923,6 +9771,16 @@ export async function POST(request: Request) {
           { status: 403 }
         )
       }
+      // Four-eyes: the second approver may not be the actor. TODO(E-24 chain
+      // freeze): the second approval is still asserted by id in this request
+      // rather than confirmed by the approver's own authenticated session; that
+      // flow is out of scope while this chain is slated for freeze.
+      if (parsed.secondApproverId && parsed.secondApproverId === actor.id) {
+        return NextResponse.json(
+          { error: "second approver must be a different partner", code: "self_approval_forbidden" },
+          { status: 403 }
+        )
+      }
       await syncFirmMembers(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -9952,7 +9810,6 @@ export async function POST(request: Request) {
         }
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
@@ -10046,7 +9903,6 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: remediation.decision,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "record_variance_remediation",
         remediation:
@@ -10057,7 +9913,7 @@ export async function POST(request: Request) {
           (await repos.filingEscalationPolicyVarianceDigests.get(varianceDigest.id)) ??
           varianceDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10094,7 +9950,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const lifecycles = await repos.filingEscalationRemediationLifecycles.listByPackageId(filingPackage.id)
       const targetLifecycle =
@@ -10164,7 +10019,6 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: parsed.closureOutcome,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_remediation_closure",
         remediationLifecycle:
@@ -10173,7 +10027,7 @@ export async function POST(request: Request) {
         remediationExpiryDigest:
           (await repos.filingEscalationRemediationExpiryDigests.get(digest.id)) ?? digest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10201,7 +10055,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const remediations = await repos.filingEscalationVarianceRemediations.listByPackageId(filingPackage.id)
       for (const row of remediations) {
@@ -10256,13 +10109,12 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.reasons.join(",") || "none",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_remediation_expiry",
         remediationExpiryDigest:
           (await repos.filingEscalationRemediationExpiryDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10294,7 +10146,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const remediations = await repos.filingEscalationVarianceRemediations.listByPackageId(filingPackage.id)
       for (const row of remediations) {
@@ -10349,13 +10200,12 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: String(snoozeHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "snooze_remediation_expiry",
         remediationExpiryDigest:
           (await repos.filingEscalationRemediationExpiryDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10380,7 +10230,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
@@ -10437,13 +10286,12 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.reasons.join(",") || "none",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_rollover_breach",
         rolloverBreachWatch:
           (await repos.filingEscalationRolloverBreachWatches.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10472,7 +10320,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const waivers = await repos.filingEscalationBreachWaivers.listByPackageId(filingPackage.id)
       const activeWaiver =
         (parsed.waiverId
@@ -10544,7 +10391,6 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: activeWaiver.id,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "reaffirm_rollover_attestation",
         rolloverAttestation:
@@ -10556,7 +10402,7 @@ export async function POST(request: Request) {
           (await repos.filingEscalationRolloverReaffirmationSlas.get(reaffirmationSla.id)) ??
           reaffirmationSla,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10584,7 +10430,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
@@ -10638,13 +10483,12 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.reasons.join(",") || "none",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_rollover_reaffirmation_sla",
         rolloverReaffirmationSla:
           (await repos.filingEscalationRolloverReaffirmationSlas.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10674,7 +10518,7 @@ export async function POST(request: Request) {
         if (value === undefined) return undefined
         const numeric = Number(value)
         if (!Number.isFinite(numeric) || numeric < 0.5 || numeric > 168) {
-          throw new Error("hours must be between 0.5 and 168")
+          throw new PublicError("hours must be between 0.5 and 168")
         }
         return Math.round(numeric * HOUR_MS)
       }
@@ -10688,7 +10532,6 @@ export async function POST(request: Request) {
       } catch (error) {
         return NextResponse.json({ error: String((error as Error).message) }, { status: 400 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existing = await repos.filingEscalationClosureSlaWindowConfigs.get(
         filingEscalationClosureSlaWindowConfigId(actor.firmId, owner?.id ?? null)
@@ -10714,13 +10557,12 @@ export async function POST(request: Request) {
         classification: updated.classification,
         reason: updated.ownerId ?? "firm_default",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "set_closure_sla_window_config",
         closureSlaWindowConfig:
           (await repos.filingEscalationClosureSlaWindowConfigs.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10765,7 +10607,6 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existing = await repos.filingEscalationClosureAutoAssignmentRules.get(
         filingEscalationClosureAutoAssignmentRuleId(actor.firmId, owner?.id ?? null)
@@ -10791,13 +10632,12 @@ export async function POST(request: Request) {
         classification: updated.classification,
         reason: `${updated.mode}:${updated.enabled ? "enabled" : "disabled"}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "set_closure_auto_assignment_rule",
         closureAutoAssignmentRule:
           (await repos.filingEscalationClosureAutoAssignmentRules.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10813,7 +10653,6 @@ export async function POST(request: Request) {
       if (actor.role !== "partner") {
         return NextResponse.json({ error: "auto_assign_closure_followup requires partner role" }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
@@ -10849,7 +10688,6 @@ export async function POST(request: Request) {
           classification: queue.classification,
           reason: queue.assignedPartnerId,
         })
-        await persistAuditEntriesSince(store, repos, priorAuditCount)
       }
       const payload = {
         action: "auto_assign_closure_followup",
@@ -10857,7 +10695,7 @@ export async function POST(request: Request) {
         closureFollowupQueue: (await repos.filingEscalationClosureFollowupQueues.get(queue.id)) ?? queue,
         closureSlaWindow: slaWindowByOwner.get(ownerId) ?? null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10877,7 +10715,6 @@ export async function POST(request: Request) {
       if (!assignee || assignee.firmId !== actor.firmId || assignee.role !== "partner") {
         return NextResponse.json({ error: "assignee must be a partner in the same firm" }, { status: 422 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
@@ -10911,13 +10748,12 @@ export async function POST(request: Request) {
         classification: updated.classification,
         reason: assignee.id,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "assign_closure_followup",
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10933,7 +10769,6 @@ export async function POST(request: Request) {
       if (actor.role !== "partner") {
         return NextResponse.json({ error: "claim_closure_followup requires partner role" }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
@@ -10975,13 +10810,12 @@ export async function POST(request: Request) {
         classification: updated.classification,
         reason: updated.ownerId,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "claim_closure_followup",
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -10997,7 +10831,6 @@ export async function POST(request: Request) {
       if (actor.role !== "partner") {
         return NextResponse.json({ error: "resolve_closure_followup requires partner role" }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
@@ -11037,13 +10870,12 @@ export async function POST(request: Request) {
         classification: updated.classification,
         reason: updated.ownerId,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "resolve_closure_followup",
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11077,7 +10909,6 @@ export async function POST(request: Request) {
           )
         }
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
@@ -11133,7 +10964,6 @@ export async function POST(request: Request) {
         classification: row.classification,
         reason: row.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const refreshedState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
         packageById,
@@ -11149,7 +10979,7 @@ export async function POST(request: Request) {
             null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11187,7 +11017,6 @@ export async function POST(request: Request) {
           { status: 403 }
         )
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const note =
         parsed.note?.trim() ||
@@ -11211,7 +11040,6 @@ export async function POST(request: Request) {
         classification: updated.classification,
         reason: updated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const refreshedState = await recomputeClosureComplianceState(store, repos, {
@@ -11230,7 +11058,7 @@ export async function POST(request: Request) {
             null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11255,7 +11083,6 @@ export async function POST(request: Request) {
       if (actor.role !== "partner") {
         return NextResponse.json({ error: "waive_closure_sla_exception requires partner role" }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
@@ -11309,7 +11136,6 @@ export async function POST(request: Request) {
         classification: updated.classification,
         reason: parsed.waiverReason.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const refreshedState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
         packageById,
@@ -11324,7 +11150,7 @@ export async function POST(request: Request) {
             null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11354,7 +11180,6 @@ export async function POST(request: Request) {
       if (!queue) {
         return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existingDisputes = await repos.filingEscalationClosureAttestationDisputes.listByAttestationId(
         attestation.id
@@ -11407,7 +11232,6 @@ export async function POST(request: Request) {
         classification: dispute.classification,
         reason: dispute.conflictReason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
@@ -11433,7 +11257,7 @@ export async function POST(request: Request) {
           ? (await repos.filingEscalationClosureSlaExceptionEnforcement.get(enforcementRef.id)) ?? null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11473,7 +11297,6 @@ export async function POST(request: Request) {
       if (!queue) {
         return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const note =
         parsed.note?.trim() ||
@@ -11535,7 +11358,6 @@ export async function POST(request: Request) {
         classification: disputeUpdated.classification,
         reason: disputeUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
@@ -11562,7 +11384,7 @@ export async function POST(request: Request) {
           ? (await repos.filingEscalationClosureSlaExceptionEnforcement.get(enforcementRef.id)) ?? null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11605,7 +11427,6 @@ export async function POST(request: Request) {
       if (!queue) {
         return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existingAdjudication = await repos.filingEscalationClosureAdjudicationQueue.get(
         filingEscalationClosureAdjudicationQueueId(dispute.id)
@@ -11643,7 +11464,6 @@ export async function POST(request: Request) {
         classification: adjudicationUpdated.classification,
         reason: panelMemberIds.join(","),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const refreshed = await recomputeClosureComplianceState(store, repos, {
@@ -11664,7 +11484,7 @@ export async function POST(request: Request) {
           ? (await repos.filingEscalationClosureEnforcementRebalance.get(rebalanceRef.id)) ?? null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11711,7 +11531,6 @@ export async function POST(request: Request) {
       if (!queue) {
         return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const enforcement = await repos.filingEscalationClosureSlaExceptionEnforcement.get(
         filingEscalationClosureSlaExceptionEnforcementId(queue.id)
@@ -11786,7 +11605,6 @@ export async function POST(request: Request) {
         classification: adjudicationUpdated.classification,
         reason: parsed.verdict,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const refreshed = await recomputeClosureComplianceState(store, repos, {
@@ -11812,7 +11630,7 @@ export async function POST(request: Request) {
           ? (await repos.filingEscalationClosureEnforcementRebalance.get(rebalanceRef.id)) ?? null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11881,7 +11699,6 @@ export async function POST(request: Request) {
       if (parsed.status !== "owner_reassignment_recommended") {
         recommendedOwnerId = null
       }
-      const priorAuditCount = store.audit.length
       const existingRebalance =
         selectedRebalance ??
         (await repos.filingEscalationClosureEnforcementRebalance.get(
@@ -11917,7 +11734,6 @@ export async function POST(request: Request) {
         classification: rebalanceUpdated.classification,
         reason: rebalanceUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const refreshed = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
         packageById,
@@ -11933,7 +11749,7 @@ export async function POST(request: Request) {
         closureFollowupQueue:
           (await repos.filingEscalationClosureFollowupQueues.get(queue.id)) ?? queue,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -11996,7 +11812,6 @@ export async function POST(request: Request) {
       if (!queue) {
         return NextResponse.json({ error: "linked closure follow-up queue not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const existingQuorum = await repos.filingEscalationClosureAdjudicationQuorum.get(
         filingEscalationClosureAdjudicationQuorumId(adjudication.id)
@@ -12021,14 +11836,13 @@ export async function POST(request: Request) {
         classification: quorumUpdated.classification,
         reason: quorumUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "govern_closure_adjudication_quorum",
         closureAdjudicationQuorum:
           (await repos.filingEscalationClosureAdjudicationQuorum.get(quorumUpdated.id)) ??
           quorumUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12116,7 +11930,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const queueUpdated = {
         ...queue,
         assignedPartnerId: recommendedOwner.id,
@@ -12169,7 +11982,6 @@ export async function POST(request: Request) {
         classification: executionUpdated.classification,
         reason: recommendedOwner.id,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "execute_closure_rebalance_owner_transfer",
         closureFollowupQueue:
@@ -12184,7 +11996,7 @@ export async function POST(request: Request) {
           (await repos.filingEscalationClosureRebalanceSafeguards.get(safeguardUpdated.id)) ??
           safeguardUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12258,7 +12070,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const reopenQueue = parsed.reopenQueue ?? true
       const queueUpdated =
         reopenQueue && queue.status === "resolved"
@@ -12319,7 +12130,6 @@ export async function POST(request: Request) {
         classification: executionUpdated.classification,
         reason: String(reopenQueue),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "execute_closure_rebalance_throttle_release",
         closureFollowupQueue:
@@ -12334,7 +12144,7 @@ export async function POST(request: Request) {
           (await repos.filingEscalationClosureRebalanceSafeguards.get(safeguardUpdated.id)) ??
           safeguardUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12378,7 +12188,6 @@ export async function POST(request: Request) {
       const quorum = await repos.filingEscalationClosureAdjudicationQuorum.get(
         filingEscalationClosureAdjudicationQuorumId(adjudication.id)
       )
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const sloUpdated = buildFilingEscalationClosureAdjudicationSloRow({
         adjudication,
@@ -12399,13 +12208,12 @@ export async function POST(request: Request) {
         classification: sloUpdated.classification,
         reason: String(extensionHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "extend_closure_adjudication_slo_deadline",
         closureAdjudicationSlo:
           (await repos.filingEscalationClosureAdjudicationSlo.get(sloUpdated.id)) ?? sloUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12451,7 +12259,6 @@ export async function POST(request: Request) {
       const quorum = await repos.filingEscalationClosureAdjudicationQuorum.get(
         filingEscalationClosureAdjudicationQuorumId(adjudication.id)
       )
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const sloUpdated = buildFilingEscalationClosureAdjudicationSloRow({
         adjudication,
@@ -12471,13 +12278,12 @@ export async function POST(request: Request) {
         classification: sloUpdated.classification,
         reason: parsed.escalationTier,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "escalate_closure_adjudication_slo_tier",
         closureAdjudicationSlo:
           (await repos.filingEscalationClosureAdjudicationSlo.get(sloUpdated.id)) ?? sloUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12528,7 +12334,6 @@ export async function POST(request: Request) {
       if (candidate.breachDebtHours <= 0 && candidate.status !== "breach_open") {
         return NextResponse.json({ error: "no active adjudication SLO breach to acknowledge" }, { status: 422 })
       }
-      const priorAuditCount = store.audit.length
       const sloUpdated = buildFilingEscalationClosureAdjudicationSloRow({
         adjudication,
         queue,
@@ -12547,13 +12352,12 @@ export async function POST(request: Request) {
         classification: sloUpdated.classification,
         reason: sloUpdated.escalationTier,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_closure_adjudication_slo_breach",
         closureAdjudicationSlo:
           (await repos.filingEscalationClosureAdjudicationSlo.get(sloUpdated.id)) ?? sloUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12636,7 +12440,6 @@ export async function POST(request: Request) {
       const existingSafeguard = await repos.filingEscalationClosureRebalanceSafeguards.get(
         filingEscalationClosureRebalanceSafeguardId(rebalance.id)
       )
-      const priorAuditCount = store.audit.length
       const safeguardUpdated = buildFilingEscalationClosureRebalanceSafeguardRow({
         rebalance,
         queue,
@@ -12656,14 +12459,13 @@ export async function POST(request: Request) {
         classification: safeguardUpdated.classification,
         reason: safeguardUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "configure_closure_rebalance_auto_execution_safeguard",
         closureRebalanceSafeguard:
           (await repos.filingEscalationClosureRebalanceSafeguards.get(safeguardUpdated.id)) ??
           safeguardUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12726,7 +12528,6 @@ export async function POST(request: Request) {
       const existingSafeguard = await repos.filingEscalationClosureRebalanceSafeguards.get(
         filingEscalationClosureRebalanceSafeguardId(rebalance.id)
       )
-      const priorAuditCount = store.audit.length
       const safeguardUpdated = buildFilingEscalationClosureRebalanceSafeguardRow({
         rebalance,
         queue,
@@ -12746,14 +12547,13 @@ export async function POST(request: Request) {
         classification: safeguardUpdated.classification,
         reason: parsed.reason.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_rebalance_auto_execution_override",
         closureRebalanceSafeguard:
           (await repos.filingEscalationClosureRebalanceSafeguards.get(safeguardUpdated.id)) ??
           safeguardUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12804,7 +12604,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const remediationUpdated = buildFilingEscalationClosureAdjudicationSloDebtRemediationRow({
         slo,
@@ -12825,14 +12624,13 @@ export async function POST(request: Request) {
         classification: remediationUpdated.classification,
         reason: remediationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "record_closure_adjudication_slo_debt_remediation",
         closureAdjudicationSloDebtRemediation:
           (await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get(remediationUpdated.id)) ??
           remediationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12905,7 +12703,6 @@ export async function POST(request: Request) {
       const quorum = await repos.filingEscalationClosureAdjudicationQuorum.get(
         filingEscalationClosureAdjudicationQuorumId(adjudicationRow.id)
       )
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const sloUpdated = buildFilingEscalationClosureAdjudicationSloRow({
         adjudication: adjudicationRow,
@@ -12938,7 +12735,6 @@ export async function POST(request: Request) {
         classification: remediationUpdated.classification,
         reason: parsed.escalationTier,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "downshift_closure_adjudication_slo_tier",
         closureAdjudicationSlo:
@@ -12947,7 +12743,7 @@ export async function POST(request: Request) {
           (await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get(remediationUpdated.id)) ??
           remediationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -12992,7 +12788,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const remediationUpdated = buildFilingEscalationClosureAdjudicationSloDebtRemediationRow({
         slo,
@@ -13013,14 +12808,13 @@ export async function POST(request: Request) {
         classification: remediationUpdated.classification,
         reason: remediationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_adjudication_slo_breach_closure",
         closureAdjudicationSloDebtRemediation:
           (await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get(remediationUpdated.id)) ??
           remediationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13095,7 +12889,6 @@ export async function POST(request: Request) {
       if (!safeguard) {
         return NextResponse.json({ error: "closure rebalance safeguard row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const expiryUpdated = buildFilingEscalationClosureRebalanceSafeguardExpiryRow({
         safeguard,
         existing: existingExpiry,
@@ -13112,14 +12905,13 @@ export async function POST(request: Request) {
         classification: expiryUpdated.classification,
         reason: String(overrideExpiryHours ?? 0),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "set_closure_rebalance_safeguard_override_expiry",
         closureRebalanceSafeguardExpiry:
           (await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(expiryUpdated.id)) ??
           expiryUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13199,7 +12991,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const safeguardUpdated = buildFilingEscalationClosureRebalanceSafeguardRow({
         rebalance,
         queue,
@@ -13228,7 +13019,6 @@ export async function POST(request: Request) {
         classification: expiryUpdated.classification,
         reason: expiryUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "auto_clear_closure_rebalance_safeguard_suppression",
         closureRebalanceSafeguard:
@@ -13238,7 +13028,7 @@ export async function POST(request: Request) {
           (await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(expiryUpdated.id)) ??
           expiryUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13309,7 +13099,6 @@ export async function POST(request: Request) {
       if (!existingSafeguard) {
         return NextResponse.json({ error: "closure rebalance safeguard row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const safeguardUpdated = buildFilingEscalationClosureRebalanceSafeguardRow({
         rebalance,
         queue,
@@ -13339,7 +13128,6 @@ export async function POST(request: Request) {
         classification: expiryUpdated.classification,
         reason: expiryUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "cleanup_stale_closure_rebalance_safeguard_lock",
         closureRebalanceSafeguard:
@@ -13349,7 +13137,7 @@ export async function POST(request: Request) {
           (await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(expiryUpdated.id)) ??
           expiryUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13395,7 +13183,6 @@ export async function POST(request: Request) {
       if (!remediation || remediation.firmId !== actor.firmId) {
         return NextResponse.json({ error: "closure adjudication debt remediation row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const burndownUpdated = buildFilingEscalationClosureAdjudicationDebtBurndownRow({
         remediation,
@@ -13413,14 +13200,13 @@ export async function POST(request: Request) {
         classification: burndownUpdated.classification,
         reason: String(targetHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "set_closure_adjudication_debt_burndown_target",
         closureAdjudicationDebtBurndown:
           (await repos.filingEscalationClosureAdjudicationDebtBurndown.get(burndownUpdated.id)) ??
           burndownUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13461,7 +13247,6 @@ export async function POST(request: Request) {
       if (remediation.debtAgeHours <= 0) {
         return NextResponse.json({ error: "no debt backlog available for attestation" }, { status: 422 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const burndownUpdated = buildFilingEscalationClosureAdjudicationDebtBurndownRow({
         remediation,
@@ -13479,14 +13264,13 @@ export async function POST(request: Request) {
         classification: burndownUpdated.classification,
         reason: burndownUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_adjudication_debt_backlog",
         closureAdjudicationDebtBurndown:
           (await repos.filingEscalationClosureAdjudicationDebtBurndown.get(burndownUpdated.id)) ??
           burndownUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13534,7 +13318,6 @@ export async function POST(request: Request) {
       if (!remediation || remediation.firmId !== actor.firmId) {
         return NextResponse.json({ error: "closure adjudication debt remediation row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const burndownUpdated = buildFilingEscalationClosureAdjudicationDebtBurndownRow({
         remediation,
@@ -13553,14 +13336,13 @@ export async function POST(request: Request) {
         classification: burndownUpdated.classification,
         reason: parsed.escalationTier,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_adjudication_tier_normalization",
         closureAdjudicationDebtBurndown:
           (await repos.filingEscalationClosureAdjudicationDebtBurndown.get(burndownUpdated.id)) ??
           burndownUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13624,7 +13406,6 @@ export async function POST(request: Request) {
       if (!resolvedExpiry || resolvedExpiry.firmId !== actor.firmId) {
         return NextResponse.json({ error: "closure safeguard expiry row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const attestationUpdated = buildFilingEscalationClosureSafeguardExpiryAttestationRow({
         expiry: resolvedExpiry,
         existing: existingAttestation,
@@ -13644,14 +13425,13 @@ export async function POST(request: Request) {
         classification: attestationUpdated.classification,
         reason: attestationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_closure_safeguard_expiry_attestation",
         closureSafeguardExpiryAttestation:
           (await repos.filingEscalationClosureSafeguardExpiryAttestations.get(attestationUpdated.id)) ??
           attestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13721,7 +13501,6 @@ export async function POST(request: Request) {
           { status: 422 }
         )
       }
-      const priorAuditCount = store.audit.length
       const attestationUpdated = buildFilingEscalationClosureSafeguardExpiryAttestationRow({
         expiry: resolvedExpiry,
         existing: existingAttestation,
@@ -13741,14 +13520,13 @@ export async function POST(request: Request) {
         classification: attestationUpdated.classification,
         reason: attestationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "queue_closure_safeguard_overdue_expiry_exception",
         closureSafeguardExpiryAttestation:
           (await repos.filingEscalationClosureSafeguardExpiryAttestations.get(attestationUpdated.id)) ??
           attestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13812,7 +13590,6 @@ export async function POST(request: Request) {
       if (!resolvedExpiry || resolvedExpiry.firmId !== actor.firmId) {
         return NextResponse.json({ error: "closure safeguard expiry row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const attestationUpdated = buildFilingEscalationClosureSafeguardExpiryAttestationRow({
         expiry: resolvedExpiry,
         existing: existingAttestation,
@@ -13833,14 +13610,13 @@ export async function POST(request: Request) {
         classification: attestationUpdated.classification,
         reason: attestationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "reconcile_closure_safeguard_expiry_override",
         closureSafeguardExpiryAttestation:
           (await repos.filingEscalationClosureSafeguardExpiryAttestations.get(attestationUpdated.id)) ??
           attestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13891,7 +13667,6 @@ export async function POST(request: Request) {
       if (!burndown || burndown.firmId !== actor.firmId) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const recalibrationExistingByBurndown =
         await repos.filingEscalationClosureBurndownRecalibration.get(
@@ -13913,14 +13688,13 @@ export async function POST(request: Request) {
         classification: recalibrationUpdated.classification,
         reason: String(targetHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "rebaseline_closure_adjudication_burndown_forecast",
         closureBurndownRecalibration:
           (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
           recalibrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -13982,7 +13756,6 @@ export async function POST(request: Request) {
       if (!burndown || burndown.firmId !== actor.firmId) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const recalibrationExistingByBurndown =
         await repos.filingEscalationClosureBurndownRecalibration.get(
@@ -14006,14 +13779,13 @@ export async function POST(request: Request) {
         classification: recalibrationUpdated.classification,
         reason: `${lowerHours}-${upperHours}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "override_closure_adjudication_burndown_confidence_band",
         closureBurndownRecalibration:
           (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
           recalibrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14060,7 +13832,6 @@ export async function POST(request: Request) {
       if (!burndown || burndown.firmId !== actor.firmId) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const recalibrationExistingByBurndown =
         await repos.filingEscalationClosureBurndownRecalibration.get(
@@ -14083,14 +13854,13 @@ export async function POST(request: Request) {
         classification: recalibrationUpdated.classification,
         reason: parsed.rollbackReason.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "annotate_closure_adjudication_burndown_checkpoint_rollback",
         closureBurndownRecalibration:
           (await repos.filingEscalationClosureBurndownRecalibration.get(recalibrationUpdated.id)) ??
           recalibrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14179,7 +13949,6 @@ export async function POST(request: Request) {
         await repos.filingEscalationClosureExpiryAttestationQueue.get(
           filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
         )
-      const priorAuditCount = store.audit.length
       const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
         attestation: resolvedAttestation,
         existing: existingQueueItem ?? existingQueueByAttestation,
@@ -14196,14 +13965,13 @@ export async function POST(request: Request) {
         classification: queueUpdated.classification,
         reason: queueUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "triage_closure_safeguard_expiry_attestation_queue",
         closureExpiryAttestationQueue:
           (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
           queueUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14293,7 +14061,6 @@ export async function POST(request: Request) {
         await repos.filingEscalationClosureExpiryAttestationQueue.get(
           filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
         )
-      const priorAuditCount = store.audit.length
       const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
         attestation: resolvedAttestation,
         existing: existingQueueItem ?? existingQueueByAttestation,
@@ -14312,14 +14079,13 @@ export async function POST(request: Request) {
         classification: queueUpdated.classification,
         reason: parsed.handoffToOwnerId.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_safeguard_expiry_queue_handoff",
         closureExpiryAttestationQueue:
           (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
           queueUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14414,7 +14180,6 @@ export async function POST(request: Request) {
         await repos.filingEscalationClosureExpiryAttestationQueue.get(
           filingEscalationClosureExpiryAttestationQueueId(resolvedAttestation.id)
         )
-      const priorAuditCount = store.audit.length
       const queueUpdated = buildFilingEscalationClosureExpiryAttestationQueueRow({
         attestation: resolvedAttestation,
         existing: existingQueueItem ?? existingQueueByAttestation,
@@ -14431,14 +14196,13 @@ export async function POST(request: Request) {
         classification: queueUpdated.classification,
         reason: queueUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_safeguard_expiry_queue_auto_drain",
         closureExpiryAttestationQueue:
           (await repos.filingEscalationClosureExpiryAttestationQueue.get(queueUpdated.id)) ??
           queueUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14494,7 +14258,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -14526,14 +14289,13 @@ export async function POST(request: Request) {
         classification: settlementUpdated.classification,
         reason: settlementUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_closure_burndown_settlement_drift",
         closureBurndownSettlement:
           (await repos.filingEscalationClosureBurndownSettlement.get(settlementUpdated.id)) ??
           settlementUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14589,7 +14351,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -14621,14 +14382,13 @@ export async function POST(request: Request) {
         classification: settlementUpdated.classification,
         reason: settlementUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_burndown_settlement_target_lock",
         closureBurndownSettlement:
           (await repos.filingEscalationClosureBurndownSettlement.get(settlementUpdated.id)) ??
           settlementUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14685,7 +14445,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -14719,14 +14478,13 @@ export async function POST(request: Request) {
         classification: settlementUpdated.classification,
         reason: parsed.resolutionNote.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "close_closure_burndown_rollback_resolution",
         closureBurndownSettlement:
           (await repos.filingEscalationClosureBurndownSettlement.get(settlementUpdated.id)) ??
           settlementUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14828,7 +14586,6 @@ export async function POST(request: Request) {
       })
       await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
       store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
-      const priorAuditCount = store.audit.length
       const drainUpdated = buildFilingEscalationClosureExpiryAttestationQueueDrainRow({
         queueItem: queueUpdated,
         existing:
@@ -14849,14 +14606,13 @@ export async function POST(request: Request) {
         classification: drainUpdated.classification,
         reason: drainUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "escalate_closure_expiry_attestation_queue_handoff_timeout",
         closureExpiryAttestationQueueDrain:
           (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(drainUpdated.id)) ??
           drainUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -14961,7 +14717,6 @@ export async function POST(request: Request) {
       })
       await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
       store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
-      const priorAuditCount = store.audit.length
       const drainUpdated = buildFilingEscalationClosureExpiryAttestationQueueDrainRow({
         queueItem: queueUpdated,
         existing:
@@ -14983,14 +14738,13 @@ export async function POST(request: Request) {
         classification: drainUpdated.classification,
         reason: parsed.reassignedOwnerId.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_expiry_attestation_queue_stale_reassignment",
         closureExpiryAttestationQueueDrain:
           (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(drainUpdated.id)) ??
           drainUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15093,7 +14847,6 @@ export async function POST(request: Request) {
       })
       await repos.filingEscalationClosureExpiryAttestationQueue.upsert(queueUpdated)
       store.filingEscalationClosureExpiryAttestationQueue.set(queueUpdated.id, queueUpdated)
-      const priorAuditCount = store.audit.length
       const drainUpdated = buildFilingEscalationClosureExpiryAttestationQueueDrainRow({
         queueItem: queueUpdated,
         existing:
@@ -15115,14 +14868,13 @@ export async function POST(request: Request) {
         classification: drainUpdated.classification,
         reason: drainUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_expiry_attestation_queue_forced_drain_override",
         closureExpiryAttestationQueueDrain:
           (await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(drainUpdated.id)) ??
           drainUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15186,7 +14938,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -15232,7 +14983,6 @@ export async function POST(request: Request) {
         classification: settlementAttestationUpdated.classification,
         reason: settlementAttestationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_settlement_post_resolution_verification",
         closureSettlementAttestation:
@@ -15240,7 +14990,7 @@ export async function POST(request: Request) {
             settlementAttestationUpdated.id
           )) ?? settlementAttestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15304,7 +15054,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -15350,7 +15099,6 @@ export async function POST(request: Request) {
         classification: settlementAttestationUpdated.classification,
         reason: settlementAttestationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_settlement_lock_release",
         closureSettlementAttestation:
@@ -15358,7 +15106,7 @@ export async function POST(request: Request) {
             settlementAttestationUpdated.id
           )) ?? settlementAttestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15423,7 +15171,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -15470,7 +15217,6 @@ export async function POST(request: Request) {
         classification: settlementAttestationUpdated.classification,
         reason: parsed.guardNote.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "safeguard_closure_settlement_dispute_reopen",
         closureSettlementAttestation:
@@ -15478,7 +15224,7 @@ export async function POST(request: Request) {
             settlementAttestationUpdated.id
           )) ?? settlementAttestationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15599,7 +15345,6 @@ export async function POST(request: Request) {
       })
       await repos.filingEscalationClosureExpiryAttestationQueueDrain.upsert(queueDrainUpdated)
       store.filingEscalationClosureExpiryAttestationQueueDrain.set(queueDrainUpdated.id, queueDrainUpdated)
-      const priorAuditCount = store.audit.length
       const reconciliationUpdated = buildFilingEscalationClosureQueueDrainReconciliationRow({
         queueDrain: queueDrainUpdated,
         existing:
@@ -15623,14 +15368,13 @@ export async function POST(request: Request) {
         classification: reconciliationUpdated.classification,
         reason: reconciliationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_queue_drain_forced_reconciliation",
         closureQueueDrainReconciliation:
           (await repos.filingEscalationClosureQueueDrainReconciliation.get(reconciliationUpdated.id)) ??
           reconciliationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15752,7 +15496,6 @@ export async function POST(request: Request) {
       })
       await repos.filingEscalationClosureExpiryAttestationQueueDrain.upsert(queueDrainUpdated)
       store.filingEscalationClosureExpiryAttestationQueueDrain.set(queueDrainUpdated.id, queueDrainUpdated)
-      const priorAuditCount = store.audit.length
       const reconciliationUpdated = buildFilingEscalationClosureQueueDrainReconciliationRow({
         queueDrain: queueDrainUpdated,
         existing:
@@ -15777,14 +15520,13 @@ export async function POST(request: Request) {
         classification: reconciliationUpdated.classification,
         reason: parsed.rollbackToOwnerId.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_queue_drain_reassignment_rollback",
         closureQueueDrainReconciliation:
           (await repos.filingEscalationClosureQueueDrainReconciliation.get(reconciliationUpdated.id)) ??
           reconciliationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -15910,7 +15652,6 @@ export async function POST(request: Request) {
       })
       await repos.filingEscalationClosureExpiryAttestationQueueDrain.upsert(queueDrainUpdated)
       store.filingEscalationClosureExpiryAttestationQueueDrain.set(queueDrainUpdated.id, queueDrainUpdated)
-      const priorAuditCount = store.audit.length
       const reconciliationUpdated = buildFilingEscalationClosureQueueDrainReconciliationRow({
         queueDrain: queueDrainUpdated,
         existing:
@@ -15935,14 +15676,13 @@ export async function POST(request: Request) {
         classification: reconciliationUpdated.classification,
         reason: String(timeoutWindowHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "control_closure_queue_drain_timeout_reentry",
         closureQueueDrainReconciliation:
           (await repos.filingEscalationClosureQueueDrainReconciliation.get(reconciliationUpdated.id)) ??
           reconciliationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16015,7 +15755,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -16072,14 +15811,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: parsed.overrideReason.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "petition_closure_settlement_verification_override",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16151,7 +15889,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -16208,14 +15945,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: arbitrationUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_settlement_arbitration_panel_confirmation",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16288,7 +16024,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -16346,14 +16081,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: parsed.vetoNote.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_settlement_reopen_veto",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16426,7 +16160,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -16484,14 +16217,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: parsed.rulingSummary.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "issue_closure_settlement_arbitration_final_ruling",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16564,7 +16296,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -16622,14 +16353,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: parsed.dissentNote.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "memorialize_closure_settlement_arbitration_dissent",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16702,7 +16432,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -16760,14 +16489,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: parsed.publicationChannel.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_settlement_arbitration_ruling_publication",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16840,7 +16568,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -16898,14 +16625,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: parsed.correctionNote.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "log_closure_settlement_arbitration_publication_correction",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -16978,7 +16704,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -17036,14 +16761,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: parsed.rollbackReason.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_settlement_arbitration_publication_rollback",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17122,7 +16846,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "closure adjudication debt burndown row not found" }, { status: 404 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const recalibrationUpdated = buildFilingEscalationClosureBurndownRecalibrationRow({
         burndown,
         existing:
@@ -17180,14 +16903,13 @@ export async function POST(request: Request) {
         classification: arbitrationUpdated.classification,
         reason: parsed.decision,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "review_closure_settlement_arbitration_distribution_attestation",
         closureSettlementArbitration:
           (await repos.filingEscalationClosureSettlementArbitration.get(arbitrationUpdated.id)) ??
           arbitrationUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17330,7 +17052,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
         existing:
@@ -17351,14 +17072,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: complianceUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_queue_reentry_exception",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17506,7 +17226,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
         existing:
@@ -17528,14 +17247,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: String(waiverHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "checkpoint_closure_queue_reentry_timeout_waiver",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17678,7 +17396,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
         existing:
@@ -17699,14 +17416,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: complianceUpdated.status,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "control_closure_queue_reentry_reconciliation_resume",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -17849,7 +17565,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
         existing:
@@ -17871,14 +17586,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: parsed.assigneeId?.trim() || actor.id,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "assign_closure_queue_reentry_exception_debt",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18026,7 +17740,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const cumulativeRetiredCount = (existingCompliance?.debtRetiredCount ?? 0) + retiredCount
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
@@ -18049,14 +17762,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: String(retiredCount),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "attest_closure_queue_reentry_debt_retirement",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18204,7 +17916,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
         existing:
@@ -18226,14 +17937,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: String(agingHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "control_closure_queue_reentry_debt_aging_auto_escalation",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18377,7 +18087,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
         existing:
@@ -18399,14 +18108,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: parsed.disputeReason.trim(),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "open_closure_queue_reentry_debt_retirement_dispute",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18553,7 +18261,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
         existing:
@@ -18575,14 +18282,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: parsed.resolution,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "resolve_closure_queue_reentry_debt_retirement_dispute",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18730,7 +18436,6 @@ export async function POST(request: Request) {
         queueDrainReconciliationUpdated.id,
         queueDrainReconciliationUpdated
       )
-      const priorAuditCount = store.audit.length
       const cumulativeRollbackCount = (existingCompliance?.retirementRollbackCount ?? 0) + rollbackCount
       const complianceUpdated = buildFilingEscalationClosureQueueReentryComplianceRow({
         queueReconciliation: queueDrainReconciliationUpdated,
@@ -18753,14 +18458,13 @@ export async function POST(request: Request) {
         classification: complianceUpdated.classification,
         reason: String(rollbackCount),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "control_closure_queue_reentry_debt_retirement_rollback",
         closureQueueReentryCompliance:
           (await repos.filingEscalationClosureQueueReentryCompliance.get(complianceUpdated.id)) ??
           complianceUpdated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18779,7 +18483,6 @@ export async function POST(request: Request) {
           { status: 403 }
         )
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const packageRows = await repos.filings.listByFirm(actor.firmId)
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
@@ -18831,7 +18534,6 @@ export async function POST(request: Request) {
         classification: queue.classification,
         reason: parsed.note?.trim() || "enforcement tick",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const refreshed = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
         packageById,
@@ -18850,7 +18552,7 @@ export async function POST(request: Request) {
             null
           : null,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18878,7 +18580,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
       const { defaultPolicy } = buildEscalationPolicyMaps(policyRows)
@@ -18922,13 +18623,12 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.varianceReasons.join(",") || "none",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_policy_variance",
         policyVarianceDigest:
           (await repos.filingEscalationPolicyVarianceDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -18960,7 +18660,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
       const { defaultPolicy } = buildEscalationPolicyMaps(policyRows)
@@ -19002,13 +18701,12 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: String(snoozeHours),
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "snooze_policy_variance",
         policyVarianceDigest:
           (await repos.filingEscalationPolicyVarianceDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -19036,7 +18734,6 @@ export async function POST(request: Request) {
       if (!permission.allow) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
-      const priorAuditCount = store.audit.length
       const now = Date.now()
       const waivers = await repos.filingEscalationBreachWaivers.listByPackageId(filingPackage.id)
       const activeWaiver =
@@ -19077,13 +18774,12 @@ export async function POST(request: Request) {
         classification: filingPackage.classification,
         reason: updated.reasons.join(",") || "none",
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_waiver_expiry",
         waiverExpiryDigest:
           (await repos.filingEscalationWaiverExpiryDigests.get(updated.id)) ?? updated,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -19103,6 +18799,16 @@ export async function POST(request: Request) {
       if (actor.role !== "partner") {
         return NextResponse.json({ error: "extend_breach_waiver requires partner role" }, { status: 403 })
       }
+      // Four-eyes: the second approver may not be the actor. TODO(E-24 chain
+      // freeze): the second approval is still asserted by id in this request
+      // rather than confirmed by the approver's own authenticated session; that
+      // flow is out of scope while this chain is slated for freeze.
+      if (parsed.secondApproverId && parsed.secondApproverId === actor.id) {
+        return NextResponse.json(
+          { error: "second approver must be a different partner", code: "self_approval_forbidden" },
+          { status: 403 }
+        )
+      }
       await syncFirmMembers(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -19116,7 +18822,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
       const now = Date.now()
-      const priorAuditCount = store.audit.length
       const waivers = await repos.filingEscalationBreachWaivers.listByPackageId(filingPackage.id)
       const target =
         (parsed.waiverId
@@ -19304,7 +19009,6 @@ export async function POST(request: Request) {
           reason: rolloverAttestation.secondApproverId,
         })
       }
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "extend_breach_waiver",
         waiver: (await repos.filingEscalationBreachWaivers.get(extendedWaiver.id)) ?? extendedWaiver,
@@ -19324,14 +19028,23 @@ export async function POST(request: Request) {
           (await repos.filingEscalationWorkloadDigests.get(normalizedWorkloadDigest.id)) ??
           normalizedWorkloadDigest,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "filing package write failed"
+    if (err instanceof DraftCharsetError) {
+      return NextResponse.json(
+        { error: err.message, code: err.code, violations: err.violations },
+        { status: 422 }
+      )
+    }
+    if (err instanceof DraftChangedError || err instanceof PackageAlreadyDecidedError) {
+      return NextResponse.json({ error: err.message, code: err.code }, { status: 409 })
+    }
+    const message = publicErrorMessage(err, "filing package write failed")
     const status = /preflight blocked/.test(message) ? 422 : 400
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status })
   }
 }

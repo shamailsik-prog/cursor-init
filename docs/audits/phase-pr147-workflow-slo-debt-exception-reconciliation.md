@@ -78,6 +78,7 @@ Evidence verified in merge diff `abb135a..4f0a44d`:
      - `assign_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_owner`
      - `reconcile_workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception`
 6. **Idempotency + audit write-through:** shared POST handler requires `Idempotency-Key`, replays via idempotency cache, and calls `persistAuditEntriesSince(...)` after audit append (e.g. debt remediation record ~6302–6349, exception reconcile ~6827–6872 in `app/api/d2/ops-reporting/route.ts`). Partner role enforced at POST gate (`actor.role !== "partner"`).
+   - *Update (7 Oct 2026, final audit F8):* `persistAuditEntriesSince` has been removed. The action now only appends its rows to `store.audit`; withSession persists the request's own rows once, by object, in the end-of-request audit flush (`platform/persistence/requestAuditFlush.ts`) and answers 503 `AUDIT_UNAVAILABLE` if that flush fails. The text above records the code as audited at the time.
 
 ### B) FE honesty (`frontend_real=false`)
 

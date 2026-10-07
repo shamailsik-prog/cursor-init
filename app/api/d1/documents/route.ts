@@ -1,63 +1,66 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { BodySchema, DOCUMENTS_SURFACE } from "./surface"
+import { z } from "zod"
+import { PublicError } from "@/platform/http/publicError"
+import { actionOf, getQuery, refuseUndeclaredBody } from "@/platform/http/surface"
+import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
+import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
-import { isClassification } from "@/platform/p1/types"
-import { rankOf, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import {
+  base64DecodedLength,
+  maxUploadBytes,
+  maxUploadRequestBytes,
+  fingerprintOf,
+  parseBody,
+  payloadTooLarge,
+  readJsonLimited,
+} from "@/platform/http/validation"
+import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
+import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
-type SourceChannel = "web" | "team_portal" | "whatsapp" | "bulk"
 
-type IngestBody = {
-  action: "ingest"
-  actorId?: string
-  firmId?: string
-  matterId?: string | null
-  contentBase64?: string
-  sourceChannel?: SourceChannel
-  classification?: string
-}
-
-type Body = IngestBody
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
-
-function isSourceChannel(value: unknown): value is SourceChannel {
-  return (
-    value === "web" ||
-    value === "team_portal" ||
-    value === "whatsapp" ||
-    value === "bulk"
-  )
-}
+type Body = z.infer<typeof BodySchema>
 
 function requireActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
   const actor = store.users.get(actorId)
-  if (!actor) throw new Error("unknown actor")
-  if (firmId && actor.firmId !== firmId) throw new Error("cross-firm actor denied")
-  if (actor.role === "client" || actor.role === "intern") {
-    throw new Error("actor role not allowed for document ingest")
+  if (!actor) throw new PublicError("unknown actor")
+  if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
+    throw new PublicError("actor role not allowed for document ingest")
   }
   return actor
+}
+
+const DEFAULT_INGEST_CLASSIFICATION: Classification = "privileged"
+
+/**
+ * Client-sourced ingest channels (L17.3 "default privileged for client-sourced material").
+ * Review R1 #9: these are floored at privileged even when the uploader labels them lower.
+ * The spec's client portal was dropped in favour of L8.1 WhatsApp self-service and §4 lists no
+ * email intake channel, so WhatsApp is the only one today; team_portal is the staff upload
+ * portal (L18 §10.1 "Team Upload Portal"). Add any new client-facing channel here.
+ */
+const CLIENT_SOURCED_CHANNELS: ReadonlySet<string> = new Set(["whatsapp"])
+
+/** max(privileged, matter classification); an unreadable matter label floors at the most restrictive. */
+function defaultIngestClassification(matterClassification: unknown): Classification {
+  if (matterClassification === undefined) return DEFAULT_INGEST_CLASSIFICATION
+  if (!isClassification(matterClassification)) return "privileged-restricted"
+  return rankOf(matterClassification) > rankOf(DEFAULT_INGEST_CLASSIFICATION)
+    ? matterClassification
+    : DEFAULT_INGEST_CLASSIFICATION
 }
 
 function canViewDocument(
@@ -67,22 +70,21 @@ function canViewDocument(
 ): boolean {
   const user = store.users.get(userId)
   if (!user) return false
-  if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOf(doc.classification)) return false
-  if (doc.matterId) {
-    return store.members.has(store.memberKey(doc.matterId, userId))
-  }
-  return user.role !== "client" && user.role !== "intern"
+  return canReadDocument(store, user, doc)
 }
 
 export async function GET(request: Request) {
+  return withSession(request, handleGet, { surface: DOCUMENTS_SURFACE })
+}
+
+async function handleGet(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
-  const userId = url.searchParams.get("userId")
-  const matterId = url.searchParams.get("matterId")
-  const limit = parseLimit(url.searchParams.get("limit"))
-  const cursor = parseCursor(url.searchParams.get("cursor"))
+  const userId = getQuery(DOCUMENTS_SURFACE, url, "userId")
+  const matterId = getQuery(DOCUMENTS_SURFACE, url, "matterId")
+  const limit = parseLimit(getQuery(DOCUMENTS_SURFACE, url, "limit"))
+  const cursor = parseCursor(getQuery(DOCUMENTS_SURFACE, url, "cursor"))
 
   if (!userId) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 })
@@ -119,7 +121,22 @@ export async function GET(request: Request) {
   })
 }
 
+// The boundary reads the (large) upload body once, under the same wire cap as the
+// handler. Getters so SIKANDER_MAX_UPLOAD_BYTES is read per request, as the handler does.
+const uploadBodyLimits: SessionRouteOptions = {
+  get maxBodyBytes() {
+    return maxUploadRequestBytes()
+  },
+  get reportedBodyLimit() {
+    return maxUploadBytes()
+  },
+}
+
 export async function POST(request: Request) {
+  return withSession(request, handlePost, { ...uploadBodyLimits, surface: DOCUMENTS_SURFACE })
+}
+
+async function handlePost(request: Request) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -131,59 +148,57 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
-  let parsed: Body
-  try {
-    parsed = (await request.json()) as Body
-  } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 })
+  const uploadLimit = maxUploadBytes()
+  const raw = await readJsonLimited(request, maxUploadRequestBytes(), uploadLimit)
+  if (!raw.ok) return raw.response
+  const undeclared = refuseUndeclaredBody(DOCUMENTS_SURFACE, raw.data)
+  if (undeclared) return undeclared
+  const body = parseBody(BodySchema, raw.data)
+  if (!body.ok) return body.response
+  const parsed: Body = body.data
+  if (base64DecodedLength(parsed.contentBase64) > uploadLimit) {
+    return payloadTooLarge(uploadLimit)
   }
 
-  if (parsed.action !== "ingest") {
-    return NextResponse.json({ error: "unknown action" }, { status: 400 })
-  }
-  if (!parsed.actorId || !parsed.firmId || !parsed.contentBase64) {
-    return NextResponse.json(
-      { error: "actorId, firmId, and contentBase64 are required" },
-      { status: 400 }
-    )
-  }
-  if (!isClassification(parsed.classification)) {
-    return NextResponse.json(
-      { error: "classification must be a rank-0–4 label" },
-      { status: 400 }
-    )
-  }
-  if (!isSourceChannel(parsed.sourceChannel)) {
-    return NextResponse.json({ error: "sourceChannel is invalid" }, { status: 400 })
-  }
-
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/documents",
-    action: parsed.action,
+    action: actionOf(DOCUMENTS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
-    const priorAuditCount = store.audit.length
     const actor = requireActor(parsed.actorId, parsed.firmId)
     await syncFirmMembers(store, repos, actor.firmId)
-    if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification)) {
+    const matterId = parsed.matterId ?? null
+    const matterForDefault = matterId ? store.matters.get(matterId) : undefined
+    // L17.3 Human control: "Initial classification set at ingest (default privileged for
+    // client-sourced material)". Material arriving without a label is treated as
+    // client-sourced; the default is floored at the matter's classification.
+    let classification: Classification =
+      parsed.classification ?? defaultIngestClassification(matterForDefault?.classification)
+    if (
+      CLIENT_SOURCED_CHANNELS.has(parsed.sourceChannel) &&
+      rankOf(classification) < rankOf(DEFAULT_INGEST_CLASSIFICATION)
+    ) {
+      classification = DEFAULT_INGEST_CLASSIFICATION
+    }
+    if (rankOf(actor.clearanceLevel) < rankOf(classification)) {
       return NextResponse.json(
         { error: "actor clearance is below requested document classification" },
         { status: 403 }
       )
     }
-    const matterId = parsed.matterId ?? null
+    if (!matterId && !canUseLooseVault(actor)) {
+      // E-18: loose vault is clerk/partner with clearance >= confidential (as the rules' authorNew()).
+      return NextResponse.json(
+        { error: "loose vault is limited to clerk and partner roles with confidential clearance" },
+        { status: 403 }
+      )
+    }
     if (matterId) {
       const matter = store.matters.get(matterId)
       if (!matter) return NextResponse.json({ error: "unknown matter" }, { status: 404 })
@@ -196,7 +211,7 @@ export async function POST(request: Request) {
           { status: 403 }
         )
       }
-      if (rankOf(parsed.classification) < rankOf(matter.classification)) {
+      if (rankOf(classification) < rankOfStoredOrMax(matter.classification)) {
         return NextResponse.json(
           { error: "document classification cannot be lower than matter classification" },
           { status: 400 }
@@ -213,8 +228,9 @@ export async function POST(request: Request) {
       matterId,
       bytes,
       sourceChannel: parsed.sourceChannel,
-      classification: parsed.classification,
+      classification,
       idempotencyKey: key,
+      callerClearance: actor.clearanceLevel,
     })
 
     const inMemoryDoc = store.documents.get(write.docId)
@@ -247,7 +263,6 @@ export async function POST(request: Request) {
       classification: doc.classification,
       reason: write.reused ? "reused" : "created",
     })
-    await persistAuditEntriesSince(store, repos, priorAuditCount)
 
     const payload = {
       action: "ingest",
@@ -256,10 +271,10 @@ export async function POST(request: Request) {
       ocrJobs: (await repos.jobs.listByDocument(doc.id)).filter((job) => job.jobType === "ocr")
         .length,
     }
-    idempotency.set(key, payload, fingerprint)
+    claim.complete(payload)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "document ingest failed"
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = publicErrorMessage(err, "document ingest failed")
+    return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }
 }
