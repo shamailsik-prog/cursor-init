@@ -41,7 +41,7 @@ describe("deploy config: proxy hops and ingress", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/TRUSTED_PROXY_HOPS/))
   })
 
-  it("api and every callable carry the configured ingress (default ALLOW_ALL)", async () => {
+  it("api carries the configured ingress (default ALLOW_ALL)", async () => {
     const index = (await import("../src/index")) as Record<string, { __endpoint?: { ingressSettings?: string } }>
     for (const name of Object.keys(index).filter((n) => n !== "health")) {
       expect([name, index[name].__endpoint?.ingressSettings]).toEqual([name, "ALLOW_ALL"])

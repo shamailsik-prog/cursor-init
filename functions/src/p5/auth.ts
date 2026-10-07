@@ -1,4 +1,3 @@
-import type { CallableRequest } from "firebase-functions/v2/https"
 import type { DecodedIdToken } from "firebase-admin/auth"
 import type { Classification } from "@/platform/p1/types"
 import {
@@ -164,72 +163,5 @@ async function bindToUserDoc(
   return { caller: { ...caller, role: decision.role, clearanceLevel: decision.clearanceLevel }, firm }
 }
 
-/**
- * Re-checks a callable session against the user record. The callable runtime
- * verifies the token but does not check revocation, so: no auth → 401
- * missing_token, disabled user → 401 user_disabled, session older than
- * tokensValidAfterTime → 401 token_revoked, unreadable user → 401 invalid_token.
- */
-async function verifyCallableSession(
-  auth: CallableRequest["auth"]
-): Promise<{ claims: Record<string, unknown>; customClaims: Record<string, unknown> }> {
-  if (!auth) throw new HttpError(401, "missing_token")
-  const claims = auth.token as unknown as Record<string, unknown>
-  const authTime = claims.auth_time
-  if (typeof authTime !== "number") throw new HttpError(401, "invalid_token")
-
-  let user: Awaited<ReturnType<ReturnType<typeof adminAuth>["getUser"]>>
-  try {
-    user = await adminAuth().getUser(auth.uid)
-  } catch {
-    throw new HttpError(401, "invalid_token")
-  }
-  if (user.disabled) throw new HttpError(401, "user_disabled")
-  const validAfter = user.tokensValidAfterTime ? Date.parse(user.tokensValidAfterTime) : NaN
-  if (!Number.isNaN(validAfter) && authTime * 1000 < validAfter) throw new HttpError(401, "token_revoked")
-  return { claims, customClaims: { ...(user.customClaims ?? {}) } }
-}
-
-/**
- * Callable (onCall) identity: a revocation/disabled-checked session bound to
- * an explicit firm (`request.data.firmId`): missing → 400 firm_required,
- * ≠ claims.firmId → 403 firm_mismatch. The firm's MFA policy applies
- * (403 mfa_required); `mfaExempt` is only for disableMfa called by the
- * subject (a user who lost their device) and syncMfaStatus, which must be
- * reachable with the first factor alone.
- */
-export async function callerFromCallable(
-  auth: CallableRequest["auth"],
-  firmIdHeader: string,
-  opts: { mfaExempt?: boolean } = {}
-): Promise<Caller> {
-  return (await callableSession(auth, firmIdHeader, opts)).caller
-}
-
-/** callerFromCallable, also returning the firm doc read for the binding (per-firm settings such as rate limits). */
-export async function callableSession(
-  auth: CallableRequest["auth"],
-  firmIdHeader: string,
-  opts: { mfaExempt?: boolean } = {}
-): Promise<{ caller: Caller; firm: Record<string, unknown> | undefined }> {
-  if (!auth) throw new HttpError(401, "missing_token")
-  if (typeof firmIdHeader !== "string" || firmIdHeader === "") throw new HttpError(400, "firm_required")
-  const { claims } = await verifyCallableSession(auth)
-  const caller = callerFromClaims(auth.uid, claims, firmIdHeader)
-  return bindToUserDoc(caller, { secondFactor: hasSecondFactor(claims), mfaExempt: opts.mfaExempt === true })
-}
-
 /** A caller without a firm yet (onboarding): uid, current custom claims, verified email if any. */
 export type FirmlessIdentity = { uid: string; claims: Record<string, unknown>; verifiedEmail?: string }
-
-/**
- * Callable identity for callers that have no firm yet (firm onboarding):
- * the same revocation/disabled checks, returning the uid, the user's
- * *current* custom claims from the user record (not the possibly stale token)
- * and the token's email when it is verified.
- */
-export async function callerWithoutFirm(auth: CallableRequest["auth"]): Promise<FirmlessIdentity> {
-  const { claims, customClaims } = await verifyCallableSession(auth)
-  const verifiedEmail = claims.email_verified === true && typeof claims.email === "string" ? claims.email : undefined
-  return { uid: auth!.uid, claims: customClaims, verifiedEmail }
-}

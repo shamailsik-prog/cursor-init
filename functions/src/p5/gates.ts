@@ -1,9 +1,7 @@
-import { onCall } from "firebase-functions/v2/https"
 import { FieldValue, Timestamp, type Transaction } from "firebase-admin/firestore"
 import { adminDb } from "../admin"
-import { CALLABLE_OPTIONS } from "../health"
 import { HttpError } from "../http/errors"
-import { callableHandler, type Data, type FirmlessOperation } from "./common"
+import { type Data, type FirmlessOperation } from "./common"
 
 /**
  * Platform gates (L18 §10, R-5). `platform/gates` records which gates have
@@ -115,6 +113,3 @@ export const recordGatePassOp: FirmlessOperation<{ gate: Gate; passId: string }>
     return { gate, passId: passRef.id }
   },
 }
-export const recordGatePassHandler = callableHandler(recordGatePassOp)
-
-export const recordGatePass = onCall(CALLABLE_OPTIONS, recordGatePassHandler)

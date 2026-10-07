@@ -1,31 +1,26 @@
 import { createHmac } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 import { DocumentReference, Timestamp } from "firebase-admin/firestore"
-import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
 import { HttpError } from "../src/http/errors"
-import { callerFromCallable, requireAuth } from "../src/p5/auth"
-import {
-  approveMfaDisableHandler,
-  disableMfaHandler,
-  enforceMfaForRoleHandler,
-  generateRecoveryCodesHandler,
-  normaliseRecoveryCode,
-  syncMfaStatusHandler,
-} from "../src/p5/mfa"
-import { EMULATORS, callableAuth, mintIdToken, mintMfaIdToken, uniq } from "./emu"
+import { bindHttpSession, requireAuth, verifyBearer } from "../src/p5/auth"
+import { normaliseRecoveryCode } from "../src/p5/mfa"
+import { EMULATORS, mintIdToken, mintMfaIdToken, uniq } from "./emu"
+import { ApiError, apiCall, apiErrorOf, expectKind, viaApi } from "./api"
+
+// U-1: the operations are driven through the HTTP api, their only entry point.
+const approveMfaDisableHandler = viaApi("approveMfaDisable")
+const disableMfaHandler = viaApi("disableMfa")
+const enforceMfaForRoleHandler = viaApi("enforceMfaForRole")
+const generateRecoveryCodesHandler = viaApi("generateRecoveryCodes")
+const syncMfaStatusHandler = viaApi("syncMfaStatus")
+
+/** Authorization + X-Firm-Id headers for a direct requireAuth / bindHttpSession call. */
+const headersFor = (token: string, firmId: string) => ({ authorization: `Bearer ${token}`, "x-firm-id": firmId })
 
 const CODE_RE = /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}$/
 
-async function httpsErrorOf(p: Promise<unknown>): Promise<HttpsError> {
-  try {
-    await p
-  } catch (e) {
-    expect(e).toBeInstanceOf(HttpsError)
-    return e as HttpsError
-  }
-  throw new Error("expected HttpsError, promise resolved")
-}
+const httpsErrorOf = apiErrorOf
 
 async function httpErrorOf(p: Promise<unknown>): Promise<HttpError> {
   try {
@@ -37,9 +32,7 @@ async function httpErrorOf(p: Promise<unknown>): Promise<HttpError> {
   throw new Error("expected HttpError, promise resolved")
 }
 
-function expectHttps(err: HttpsError, code: string, detail: string) {
-  expect({ code: err.code, details: err.details }).toEqual({ code, details: { code: detail } })
-}
+const expectHttps = expectKind
 
 async function auditRows(actorId: string, action: string) {
   const snap = await adminDb().collection("audit_log").where("actorId", "==", actorId).where("action", "==", action).get()
@@ -49,7 +42,7 @@ async function auditRows(actorId: string, action: string) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function req(token: string | null, data: Record<string, unknown>) {
-  return { auth: token ? await callableAuth(token) : undefined, data } as never
+  return apiCall(token, data)
 }
 
 const claims = (firmId: string, role: string, clearanceLevel = "privileged-restricted") => ({
@@ -78,42 +71,40 @@ describe("normaliseRecoveryCode (no emulator needed)", () => {
   })
 })
 
-describe.skipIf(!EMULATORS)("MFA enforcement in requireAuth / callerFromCallable", () => {
-  it("enforced role without a second factor → 403 mfa_required (HTTP and callable)", async () => {
+describe.skipIf(!EMULATORS)("MFA enforcement in requireAuth / bindHttpSession", () => {
+  it("enforced role without a second factor → 403 mfa_required", async () => {
     const firmId = await newFirm(["associate"])
     const { token } = await mintIdToken(claims(firmId, "associate", "confidential"))
     const http = await httpErrorOf(requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } }))
     expect({ status: http.status, code: http.code }).toEqual({ status: 403, code: "mfa_required" })
-    const call = await httpErrorOf(callerFromCallable(await callableAuth(token), firmId))
-    expect({ status: call.status, code: call.code }).toEqual({ status: 403, code: "mfa_required" })
   })
 
-  it("enforced role with a second factor → allowed (HTTP and callable)", async () => {
+  it("enforced role with a second factor → allowed", async () => {
     const firmId = await newFirm(["associate"])
     const { uid, token } = await mintMfaIdToken(claims(firmId, "associate", "confidential"))
     const decoded = await adminAuth().verifyIdToken(token)
     expect(decoded.firebase.sign_in_second_factor).toBe("phone")
     const expected = { uid, firmId, role: "associate", clearanceLevel: "confidential" }
     expect(await requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } })).toEqual(expected)
-    expect(await callerFromCallable(await callableAuth(token), firmId)).toEqual(expected)
   })
 
   it("role not enforced (or no firm doc) → first factor is enough", async () => {
     const firmId = await newFirm(["partner"])
     const { token } = await mintIdToken(claims(firmId, "associate", "confidential"))
-    await expect(callerFromCallable(await callableAuth(token), firmId)).resolves.toMatchObject({ role: "associate" })
+    await expect(requireAuth({ headers: headersFor(token, firmId) })).resolves.toMatchObject({ role: "associate" })
 
     const noDocFirm = uniq("firm")
     const b = await mintIdToken(claims(noDocFirm, "associate", "confidential"))
-    await expect(callerFromCallable(await callableAuth(b.token), noDocFirm)).resolves.toMatchObject({ role: "associate" })
+    await expect(requireAuth({ headers: headersFor(b.token, noDocFirm) })).resolves.toMatchObject({ role: "associate" })
   })
 
   it("mfaExempt callers skip only the second-factor rule, not identity checks", async () => {
     const firmId = await newFirm(["associate"])
     const { uid, token } = await mintIdToken(claims(firmId, "associate", "confidential"))
-    await expect(callerFromCallable(await callableAuth(token), firmId, { mfaExempt: true })).resolves.toMatchObject({ uid })
+    const exempt = async () => (await bindHttpSession(await verifyBearer(headersFor(token, firmId)), headersFor(token, firmId), { mfaExempt: true })).caller
+    await expect(exempt()).resolves.toMatchObject({ uid })
     await adminDb().collection("users").doc(uid).update({ active: false })
-    const err = await httpErrorOf(callerFromCallable(await callableAuth(token), firmId, { mfaExempt: true }))
+    const err = await httpErrorOf(exempt())
     expect(err.code).toBe("inactive_user")
   })
 })
@@ -259,7 +250,7 @@ describe.skipIf(!EMULATORS)("generateRecoveryCodes", () => {
     const firmId = await newFirm(["associate"])
     const victim = await mintIdToken(claims(firmId, "associate", "confidential"), { emailVerified: true })
     // Attacker with the password only, before the victim enrols.
-    await expect(generateRecoveryCodesHandler(await req(victim.token, { firmId }))).rejects.toBeInstanceOf(HttpsError)
+    await expect(generateRecoveryCodesHandler(await req(victim.token, { firmId }))).rejects.toBeInstanceOf(ApiError)
     expect(await recoveryDoc(victim.uid)).toBeUndefined()
   })
 
@@ -357,7 +348,6 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
   it("subject who lost the device (first factor only) + code + another partner's approval → MFA removed", async () => {
     const { firmId, subject, codes, approve } = await setup()
     const approvalId = await approve()
-    const mfaSession = await callableAuth(subject.token) // decoded now: the emulator refuses revoked tokens
     await sleep(1100) // revocation granularity is one second
 
     const res = await disableMfaHandler(
@@ -375,7 +365,7 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
     expect((await adminDb().collection("mfa_disable_approvals").doc(approvalId).get()).data()?.used).toBe(true)
 
     // Sessions are revoked.
-    const err = await httpErrorOf(callerFromCallable(mfaSession, firmId))
+    const err = await httpErrorOf(requireAuth({ headers: headersFor(subject.token, firmId) }))
     expect(err.code).toBe("token_revoked")
 
     const rows = await auditRows(subject.uid, ACTION)
@@ -482,16 +472,16 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
     await sleep(1100) // the old sessions were revoked; a new sign-in must post-date that
     const again = await callableAuthFor(subject.email)
     const wrong = await httpsErrorOf(
-      disableMfaHandler({ auth: again, data: { firmId, uid: subject.uid, recoveryCode: "0000-0000-0000-0000", approvalId } } as never)
+      disableMfaHandler(apiCall(again, { firmId, uid: subject.uid, recoveryCode: "0000-0000-0000-0000", approvalId }))
     )
     expectHttps(wrong, "permission-denied", "invalid_code")
     const reused = await httpsErrorOf(
-      disableMfaHandler({ auth: again, data: { firmId, uid: subject.uid, recoveryCode: codes[1], approvalId } } as never)
+      disableMfaHandler(apiCall(again, { firmId, uid: subject.uid, recoveryCode: codes[1], approvalId }))
     )
     expectHttps(reused, "failed-precondition", "code_used")
     // disableMfa invalidated the remaining codes: an unused one from the old set no longer works.
     const stale = await httpsErrorOf(
-      disableMfaHandler({ auth: again, data: { firmId, uid: subject.uid, recoveryCode: codes[2], approvalId } } as never)
+      disableMfaHandler(apiCall(again, { firmId, uid: subject.uid, recoveryCode: codes[2], approvalId }))
     )
     expectHttps(stale, "permission-denied", "invalid_code")
     expect((await adminDb().collection("mfa_disable_approvals").doc(approvalId).get()).data()?.used).toBe(false)
@@ -538,7 +528,7 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
     await sleep(1100)
     const again = await callableAuthFor(subject.email)
     const retry = async () =>
-      httpsErrorOf(disableMfaHandler({ auth: again, data: { firmId, uid: subject.uid, approvalId } } as never))
+      httpsErrorOf(disableMfaHandler(apiCall(again, { firmId, uid: subject.uid, approvalId })))
     expectHttps(await retry(), "permission-denied", "second_partner_required") // completed, factors gone
 
     await adminAuth().updateUser(subject.uid, {
@@ -655,18 +645,15 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
   it("the attempt cap holds under concurrency: 30 parallel wrong codes → at most 5 invalid_code, the rest approval_voided", async () => {
     const { firmId, subject, approve } = await setup()
     const approvalId = await approve()
-    const auth = await callableAuth(subject.firstFactorToken)
+    const auth = subject.firstFactorToken
     const results = await Promise.allSettled(
       Array.from({ length: 30 }, () =>
-        disableMfaHandler({
-          auth,
-          data: { firmId, uid: subject.uid, recoveryCode: "0000-0000-0000-0000", approvalId },
-        } as never)
+        disableMfaHandler(apiCall(auth, { firmId, uid: subject.uid, recoveryCode: "0000-0000-0000-0000", approvalId }))
       )
     )
     const codes = results.map((r) => {
       expect(r.status).toBe("rejected")
-      return ((r as PromiseRejectedResult).reason as HttpsError).details as { code: string }
+      return { code: ((r as PromiseRejectedResult).reason as ApiError).code }
     })
     const invalid = codes.filter((c) => c.code === "invalid_code").length
     const voided = codes.filter((c) => c.code === "approval_voided").length
@@ -695,8 +682,8 @@ describe.skipIf(!EMULATORS)("disableMfa", () => {
   })
 })
 
-/** Signs the (MFA-less, after disableMfa) user in again with the shared emulator password. */
-async function callableAuthFor(email: string) {
+/** Signs the (MFA-less, after disableMfa) user in again with the shared emulator password; returns the ID token. */
+async function callableAuthFor(email: string): Promise<string> {
   const res = await fetch(
     `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
     {
@@ -706,7 +693,7 @@ async function callableAuthFor(email: string) {
     }
   )
   const body = (await res.json()) as { idToken: string }
-  return callableAuth(body.idToken)
+  return body.idToken
 }
 
 describe.skipIf(!EMULATORS)("syncMfaStatus", () => {

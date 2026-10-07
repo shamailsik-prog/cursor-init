@@ -2,15 +2,14 @@ import { randomUUID } from "node:crypto"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { Firestore } from "firebase-admin/firestore"
 import { Timestamp } from "firebase-admin/firestore"
-import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
 import { HttpError } from "../src/http/errors"
 import { IDEMPOTENCY_LEASE_MS, canonicalJson, isStorableResult, isUuidV4, requestHash } from "../src/http/idempotency"
 import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { clientIp, retryAfterSeconds, windowId } from "../src/http/rateLimit"
 import { ROUTES, api, buildRouteTable, createRouter, type Route } from "../src/http/router"
-import { callableHandler, type FirmOperation, type Operation } from "../src/p5/common"
-import { EMULATORS, callableAuth, mintIdToken, mintMfaIdToken, mockRes, uniq } from "./emu"
+import { type FirmOperation, type Operation } from "../src/p5/common"
+import { EMULATORS, mintIdToken, mintMfaIdToken, mockRes, uniq } from "./emu"
 
 type ReqInit = {
   method?: string
@@ -82,7 +81,7 @@ describe("route table", () => {
     expect(() => buildRouteTable([route("/api/x/y/z", op), route("/api/x/y/z", op, "general", "PUT")])).not.toThrow()
   })
 
-  it("exposes the nine identity functions as POST /api/platform/identity/{fn}, kind general", () => {
+  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, kind general", () => {
     const fns = [
       "onboardFirm",
       "createFirmUser",
@@ -95,12 +94,12 @@ describe("route table", () => {
       "syncMfaStatus",
     ]
     expect(ROUTES.map((r) => `${r.method} ${r.path} ${r.kind}`).sort()).toEqual(
-      fns.map((f) => `POST /api/platform/identity/${f} general`).sort()
+      [...fns.map((f) => `POST /api/platform/identity/${f} general`), "POST /api/platform/gates/recordGatePass general"].sort()
     )
     expect(() => buildRouteTable(ROUTES)).not.toThrow()
   })
 
-  it("each route's rate-limit kind is its operation's kind (the callable uses the same)", () => {
+  it("each route's rate-limit kind is its operation's kind", () => {
     for (const r of ROUTES) expect(r.kind).toBe(r.handler.kind)
   })
 })
@@ -165,13 +164,13 @@ describe("idempotency helpers", () => {
     expect(isStorableResult(r(status, code))).toBe(stored)
   })
 
-  it("the idempotency lease outlives the pinned function timeout; api and every callable pin it", async () => {
+  it("the idempotency lease outlives the pinned function timeout; api pins it", async () => {
     expect(FUNCTION_TIMEOUT_SECONDS).toBe(120)
     expect(IDEMPOTENCY_LEASE_MS).toBeGreaterThan(FUNCTION_TIMEOUT_SECONDS * 1000)
     const index = (await import("../src/index")) as Record<string, { __endpoint?: { timeoutSeconds?: number } }>
     const names = Object.keys(index).filter((n) => n !== "health")
-    expect(names).toContain("api")
-    expect(names).toContain("disableMfa")
+    // U-1: the HTTP api is the only entry point (no onCall callables are deployed)
+    expect(names).toEqual(["api"])
     for (const name of names) expect([name, index[name].__endpoint?.timeoutSeconds]).toEqual([name, FUNCTION_TIMEOUT_SECONDS])
     expect((api as unknown as { __endpoint: { timeoutSeconds?: number } }).__endpoint.timeoutSeconds).toBe(FUNCTION_TIMEOUT_SECONDS)
   })
@@ -682,7 +681,9 @@ describe.skipIf(!EMULATORS)("router over the emulators", () => {
   })
 })
 
-describe.skipIf(!EMULATORS)("callables share the rate limits", () => {
+// U-1: these were the callable rate-limit checks; the HTTP api is now the only entry point, so
+// the same limits are checked through the router.
+describe.skipIf(!EMULATORS)("rate limits on the api (per user, per firm override, per IP before auth)", () => {
   let minute = Date.UTC(2032, 0, 1, 0, 0, 0)
   const freshClock = () => {
     minute += 60_000
@@ -696,19 +697,7 @@ describe.skipIf(!EMULATORS)("callables share the rate limits", () => {
     return { firmId, ...(await mintIdToken(partnerClaims(firmId))) }
   }
 
-  const rawRequest = (ip: string, spoof = "10.9.9.9") => ({ headers: { "x-forwarded-for": `${spoof}, ${ip}` }, ip: "127.0.0.1" })
-
-  async function callableError(p: Promise<unknown>): Promise<HttpsError> {
-    try {
-      await p
-    } catch (e) {
-      expect(e).toBeInstanceOf(HttpsError)
-      return e as HttpsError
-    }
-    throw new Error("expected HttpsError, promise resolved")
-  }
-
-  function testOp(kind: "general" | "p1", action = uniq("test.callable")) {
+  function testOp(kind: "general" | "p1", action = uniq("test.api")) {
     const calls = { n: 0 }
     const op: Operation = {
       auth: "firm",
@@ -723,61 +712,57 @@ describe.skipIf(!EMULATORS)("callables share the rate limits", () => {
     return { op, calls }
   }
 
-  it("p1 operation: the 11th call in a minute → resource-exhausted with a retryAfter detail", async () => {
+  it("p1 operation: the 11th call in a minute → 429 rate_limited with Retry-After", async () => {
     const { op, calls } = testOp("p1")
-    const handler = callableHandler(op, { now: freshClock() })
+    const router = createRouter([route("/api/t/u/p1", op, "p1")], { now: freshClock() })
     const { firmId, token } = await firmPartner()
-    const auth = await callableAuth(token)
-    const call = () => handler({ auth, data: { firmId }, rawRequest: rawRequest("192.0.2.10") } as never)
-    for (let i = 0; i < 10; i++) await expect(call()).resolves.toEqual({ ok: true })
-    const err = await callableError(call())
-    expect({ code: err.code, details: err.details }).toEqual({
-      code: "resource-exhausted",
-      details: { code: "rate_limited", retryAfter: 40 },
+    const call = () => send(router, { path: "/api/t/u/p1", token, firmId, ip: "192.0.2.10" })
+    for (let i = 0; i < 10; i++) expect((await call()).status).toBe(200)
+    const out = await call()
+    expect({ status: out.status, code: errorOf(out), retryAfter: out.headers["retry-after"] }).toEqual({
+      status: 429,
+      code: "rate_limited",
+      retryAfter: "40",
     })
     expect(calls.n).toBe(10)
   }, 30_000)
 
-  it("the general bucket is shared with HTTP and honours the firm override", async () => {
-    const { op } = testOp("general")
+  it("the general bucket is per user across routes and honours the firm override", async () => {
     const now = freshClock()
-    const handler = callableHandler(op, { now })
-    const router = createRouter([route("/api/t/u/shared", countingOp().op)], { now })
+    const router = createRouter([route("/api/t/u/one", testOp("general").op), route("/api/t/u/shared", countingOp().op)], { now })
     const { firmId, token } = await firmPartner()
     await adminDb().collection("firms").doc(firmId).set({ rateLimits: { general: 2 } }, { merge: true })
-    const auth = await callableAuth(token)
-    const call = () => handler({ auth, data: { firmId }, rawRequest: rawRequest("192.0.2.11") } as never)
-    await expect(call()).resolves.toEqual({ ok: true })
+    expect((await send(router, { path: "/api/t/u/one", token, firmId })).status).toBe(200)
     expect((await send(router, { path: "/api/t/u/shared", token, firmId })).status).toBe(200)
-    expect((await callableError(call())).code).toBe("resource-exhausted")
+    expect(errorOf(await send(router, { path: "/api/t/u/one", token, firmId }))).toBe("rate_limited")
   })
 
-  it("real identity callable: syncMfaStatus is rate limited under the general kind", async () => {
-    const { syncMfaStatusOp } = await import("../src/p5/mfa")
-    const handler = callableHandler(syncMfaStatusOp, { now: freshClock() })
+  it("real identity route: syncMfaStatus is rate limited under the general kind", async () => {
+    const router = createRouter(ROUTES, { now: freshClock() })
     const { firmId, token } = await firmPartner()
     await adminDb().collection("firms").doc(firmId).set({ rateLimits: { general: 1 } }, { merge: true })
-    const auth = await callableAuth(token)
-    const call = () => handler({ auth, data: { firmId }, rawRequest: rawRequest("192.0.2.12") } as never)
-    await expect(call()).resolves.toMatchObject({ mfaEnabled: false })
-    expect((await callableError(call())).code).toBe("resource-exhausted")
+    const path = "/api/platform/identity/syncMfaStatus"
+    const first = await send(router, { path, token, firmId })
+    expect(first.status).toBe(200)
+    expect(first.body).toMatchObject({ mfaEnabled: false })
+    expect(errorOf(await send(router, { path, token, firmId }))).toBe("rate_limited")
   })
 
-  it("pre-auth per-IP limit from rawRequest: the 61st failing call → resource-exhausted, no audit row; a spoofed first hop does not help", async () => {
+  it("pre-auth per-IP limit: the 61st failing call → 429, no audit row; a spoofed first hop does not help", async () => {
     const action = uniq("test.anon")
     const { op, calls } = testOp("general", action)
-    const handler = callableHandler(op, { now: freshClock() })
+    const router = createRouter([route("/api/t/u/anon", op)], { now: freshClock() })
     const ip = `198.19.0.${Math.floor(Math.random() * 250)}`
     for (let i = 0; i < 60; i++) {
-      const err = await callableError(handler({ auth: undefined, data: {}, rawRequest: rawRequest(ip, `100.64.${i}.1`) } as never))
-      expect(err.code).toBe("unauthenticated")
+      const out = await send(router, { path: "/api/t/u/anon", ip, spoof: `100.64.${i}.1` })
+      expect({ status: out.status, code: errorOf(out) }).toEqual({ status: 401, code: "missing_token" })
     }
     const rows = async () =>
       (await adminDb().collection("audit_log").where("action", "==", action).where("actorId", "==", "anonymous").get()).size
     expect(await rows()).toBe(60)
-    const err = await callableError(handler({ auth: undefined, data: {}, rawRequest: rawRequest(ip, "100.64.250.1") } as never))
-    expect(err.code).toBe("resource-exhausted")
-    expect((err.details as { retryAfter?: number }).retryAfter).toBeGreaterThanOrEqual(1)
+    const out = await send(router, { path: "/api/t/u/anon", ip, spoof: "100.64.250.1" })
+    expect(out.status).toBe(429)
+    expect(Number(out.headers["retry-after"])).toBeGreaterThanOrEqual(1)
     expect(await rows()).toBe(60)
     expect(calls.n).toBe(0)
   }, 60_000)

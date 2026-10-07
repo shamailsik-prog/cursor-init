@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
-import { HttpsError } from "firebase-functions/v2/https"
 import {
   assertFails,
   assertSucceeds,
@@ -18,18 +17,19 @@ import * as mfa from "../src/p5/mfa"
 import * as gates from "../src/p5/gates"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
-import { EMULATORS, callableAuth, mintIdToken, mockRes, uniq } from "./emu"
+import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
 
 /**
- * Gate G-2 (L18 §10, functions side): two firms are seeded; every P5 identity
- * callable and every HTTP `api` route is attempted by each firm-B role against
- * firm A (the firm taken from firm A, or a firm-A user as the target), and
- * every tenant collection in firestore.rules is read cross-firm. All must deny,
- * leak no firm-A data, and leave firm A unchanged.
+ * Gate G-2 (L18 §10, functions side): two firms are seeded; every HTTP `api`
+ * route (the only entry point to the P5 operations — U-1, no callables are
+ * deployed) is attempted by each firm-B role against firm A (X-Firm-Id of
+ * firm A, or a firm-A user as the target), and every tenant collection in
+ * firestore.rules is read cross-firm. All must deny, leak no firm-A data, and
+ * leave firm A unchanged.
  *
- * The lists are derived, not hand-copied: the callables are src/index.ts's
- * exports, the routes are ROUTES, the collections are the `match` blocks of
- * firestore.rules. A new callable, route or collection without a probe fails
+ * The lists are derived, not hand-copied: the routes are ROUTES, the deployed
+ * entries are src/index.ts's exports, the collections are the `match` blocks
+ * of firestore.rules. A new route, export or collection without a probe fails
  * this suite. `G2_COVERAGE_OUT` (set by ci_gates/gate_g2.sh) receives the
  * coverage rows as JSON.
  */
@@ -50,7 +50,7 @@ afterAll(() => {
 const NOT_TENANT_ENDPOINTS: Record<string, string> = { health: "health probe, no tenant data", api: "HTTP router, probed route by route" }
 
 /**
- * Every callable, how to aim it at firm A. `target`: the op names a user (the
+ * Every operation (HTTP route), how to aim it at firm A. `target`: the op names a user (the
  * firm-A victim is put in the payload); otherwise only the firm binding can be
  * aimed at firm A. `firmless`: the op takes no firm (onboarding, platform).
  */
@@ -68,15 +68,7 @@ const PROBES: Record<string, Probe> = {
   syncMfaStatus: { data: () => ({}), target: false },
 }
 
-type Handler = (request: never) => Promise<unknown>
 const HANDLER_MODULES = [identity, mfa, gates] as unknown as Record<string, unknown>[]
-function handlerFor(name: string): Handler | undefined {
-  for (const mod of HANDLER_MODULES) {
-    const h = mod[`${name}Handler`]
-    if (typeof h === "function") return h as Handler
-  }
-  return undefined
-}
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
@@ -85,7 +77,8 @@ function opFor(name: string): Operation | undefined {
   return undefined
 }
 
-const CALLABLES = Object.keys(index)
+/** Deployed exports other than the HTTP router and the health probe (must be none: U-1). */
+const OTHER_EXPORTS = Object.keys(index)
   .filter((n) => !(n in NOT_TENANT_ENDPOINTS))
   .sort()
 
@@ -134,7 +127,7 @@ function leaked(body: unknown, tokens: string[]): string[] {
   return tokens.filter((t) => text.includes(t))
 }
 
-describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: P5 callables and the HTTP api", () => {
+describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
   let A: FirmA
   let B: FirmB
   let before: unknown
@@ -166,49 +159,13 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: P5 callables and the HTTP
     before = await snapshotFirmA(A)
   })
 
-  it("every deployed callable has a cross-firm probe, and every HTTP route runs one of them", () => {
-    expect(CALLABLES).toEqual(Object.keys(PROBES).sort())
-    for (const name of CALLABLES) {
-      expect([name, typeof handlerFor(name)]).toEqual([name, "function"])
-      expect([name, opFor(name) !== undefined]).toEqual([name, true])
-    }
+  it("only the HTTP api and the health probe are deployed; every route has a cross-firm probe and runs its operation", () => {
+    expect(OTHER_EXPORTS).toEqual([])
+    expect(ROUTES.map((route) => route.path.split("/").pop()!).sort()).toEqual(Object.keys(PROBES).sort())
     for (const route of ROUTES) {
       const name = route.path.split("/").pop()!
       expect([route.path, opFor(name) === route.handler]).toEqual([route.path, true])
     }
-  })
-
-  it("callables: each firm-B role aiming each callable at firm A is denied, leaks nothing", async () => {
-    const tokens = firmATokens(A)
-    const failures: string[] = []
-    for (const name of CALLABLES) {
-      const probe = PROBES[name]
-      const handler = handlerFor(name)!
-      let attempts = 0
-      let allowed = 0
-      for (const role of ROLES) {
-        const caller = B.members[role]
-        const variants: Array<[string, Record<string, unknown>]> = [["firmId=A", { ...probe.data(A), firmId: A.firmId }]]
-        if (probe.target) variants.push(["own firm, firm-A target", { ...probe.data(A), firmId: B.firmId }])
-        for (const [label, data] of variants) {
-          attempts++
-          try {
-            const result = await handler({ auth: await callableAuth(caller.token), data } as never)
-            allowed++
-            failures.push(`${name} ${role} ${label}: ALLOWED ${JSON.stringify(result)}`)
-          } catch (err) {
-            if (!(err instanceof HttpsError) || err.code === "internal") {
-              failures.push(`${name} ${role} ${label}: not a deny (${String(err)})`)
-              continue
-            }
-            const leak = leaked({ message: err.message, details: err.details }, tokens)
-            if (leak.length) failures.push(`${name} ${role} ${label}: leaked ${leak.join(",")}`)
-          }
-        }
-      }
-      rows.push({ suite: "functions", service: "P5", channel: "callable", path: name, status: "tested", attempts, allowed })
-    }
-    expect(failures).toEqual([])
   })
 
   it("HTTP api: each firm-B role on each route with X-Firm-Id=A, or with a firm-A target, is denied, leaks nothing", async () => {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { adminAuth, adminDb } from "../src/admin"
 import { HttpError } from "../src/http/errors"
-import { callerFromCallable, requireAuth } from "../src/p5/auth"
-import { EMULATORS, callableAuth, mintIdToken, uniq } from "./emu"
+import { requireAuth } from "../src/p5/auth"
+import { EMULATORS, mintIdToken, uniq } from "./emu"
 
 async function httpErrorOf(p: Promise<unknown>): Promise<HttpError> {
   try {
@@ -140,73 +140,6 @@ describe.skipIf(!EMULATORS)("requireAuth header handling (Auth emulator)", () =>
   )
 })
 
-describe("callerFromCallable (no emulator needed)", () => {
-  it("missing auth → 401 missing_token", async () => {
-    const err = await httpErrorOf(callerFromCallable(undefined, "f1"))
-    expect(err.status).toBe(401)
-    expect(err.code).toBe("missing_token")
-  })
-})
-
-describe.skipIf(!EMULATORS)("callerFromCallable (Auth emulator)", () => {
-  it("valid claims + matching firmId → Caller", async () => {
-    const firmId = uniq("firm")
-    const { uid, token } = await mintIdToken(goodClaims(firmId))
-    await expect(callerFromCallable(await callableAuth(token), firmId)).resolves.toEqual({
-      uid,
-      firmId,
-      role: "associate",
-      clearanceLevel: "confidential",
-    })
-  })
-
-  it("missing or empty firmId → 400 firm_required", async () => {
-    const { token } = await mintIdToken(goodClaims(uniq("firm")))
-    const auth = await callableAuth(token)
-    for (const firm of [undefined, ""]) {
-      const err = await httpErrorOf(callerFromCallable(auth, firm as never))
-      expect(err.status).toBe(400)
-      expect(err.code).toBe("firm_required")
-    }
-  })
-
-  it("mismatching firmId → 403 firm_mismatch", async () => {
-    const { token } = await mintIdToken(goodClaims(uniq("firm")))
-    const err = await httpErrorOf(callerFromCallable(await callableAuth(token), uniq("other")))
-    expect(err.status).toBe(403)
-    expect(err.code).toBe("firm_mismatch")
-  })
-
-  it("malformed claims → 403 no_claims", async () => {
-    const firmId = uniq("firm")
-    const { token } = await mintIdToken({ firmId, role: "root", clearanceLevel: "internal" })
-    const err = await httpErrorOf(callerFromCallable(await callableAuth(token), firmId))
-    expect(err.status).toBe(403)
-    expect(err.code).toBe("no_claims")
-  })
-
-  it("revoked session → 401 token_revoked", async () => {
-    const firmId = uniq("firm")
-    const { uid, token } = await mintIdToken(goodClaims(firmId))
-    const auth = await callableAuth(token)
-    await new Promise((r) => setTimeout(r, 1100))
-    await adminAuth().revokeRefreshTokens(uid)
-    const err = await httpErrorOf(callerFromCallable(auth, firmId))
-    expect(err.status).toBe(401)
-    expect(err.code).toBe("token_revoked")
-  })
-
-  it("disabled user → 401 user_disabled", async () => {
-    const firmId = uniq("firm")
-    const { uid, token } = await mintIdToken(goodClaims(firmId))
-    const auth = await callableAuth(token)
-    await adminAuth().updateUser(uid, { disabled: true })
-    const err = await httpErrorOf(callerFromCallable(auth, firmId))
-    expect(err.status).toBe(401)
-    expect(err.code).toBe("user_disabled")
-  })
-})
-
 describe.skipIf(!EMULATORS)("requireAuth disabled user (Auth emulator)", () => {
   it("disabled user → 401 user_disabled", async () => {
     const firmId = uniq("firm")
@@ -218,18 +151,14 @@ describe.skipIf(!EMULATORS)("requireAuth disabled user (Auth emulator)", () => {
   })
 })
 
-describe.skipIf(!EMULATORS)("users/{uid} is authoritative (requireAuth + callerFromCallable)", () => {
+// U-1: the HTTP api (requireAuth / bindHttpSession) is the only entry point; the callable
+// identity path (callerFromCallable, firm from data.firmId) no longer exists.
+describe.skipIf(!EMULATORS)("users/{uid} is authoritative (requireAuth)", () => {
   const partner = (firmId: string) => ({ firmId, role: "partner", clearanceLevel: "privileged" })
   const users = () => adminDb().collection("users")
 
   async function both(token: string, firmId: string) {
-    // Resolve the callable auth first: both calls then start together under one allSettled,
-    // so neither rejection is ever unhandled while the other is being set up.
-    const auth = await callableAuth(token)
-    return Promise.allSettled([
-      requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } }),
-      callerFromCallable(auth, firmId),
-    ])
+    return Promise.allSettled([requireAuth({ headers: { authorization: `Bearer ${token}`, "x-firm-id": firmId } })])
   }
 
   function rejectedWith(results: PromiseSettledResult<unknown>[], status: number, code: string) {
