@@ -8,7 +8,7 @@
  * evidence validation.
  */
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
 import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
@@ -168,6 +168,25 @@ describe.skipIf(!EMULATORS)("Bearer tokens and token subjects", () => {
     await expect(verifyBearer({ authorization: `Bearer ${u.token}` })).rejects.toMatchObject({ code: "token_revoked", uid: u.uid })
   })
 
+  it("verifies Bearer tokens with revocation checking on (the emulator checks either way, so assert the call)", async () => {
+    const u = await mintIdToken(null)
+    const spy = vi.spyOn(adminAuth(), "verifyIdToken")
+    try {
+      await verifyBearer({ authorization: `Bearer ${u.token}` })
+      expect(spy).toHaveBeenCalledWith(u.token, true)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("an empty firmId claim is no_claims, even with an empty X-Firm-Id", async () => {
+    const u = await mintIdToken({ firmId: "", role: "partner", clearanceLevel: "internal" }, { userDoc: false })
+    await expect(requireAuth({ headers: { authorization: `Bearer ${u.token}`, "x-firm-id": "" } })).rejects.toMatchObject({
+      status: 403,
+      code: "no_claims",
+    })
+  })
+
   it("requireAuth binds with the firm's MFA policy applied (not exempt)", async () => {
     const firmId = uniq("firm")
     const u = await mintIdToken({ firmId, role: "partner", clearanceLevel: "privileged" })
@@ -204,6 +223,9 @@ describe.skipIf(!EMULATORS)("verified email for firmless callers", () => {
       status: 401,
       code: "invalid_token",
     })
+    await expect(
+      callerWithoutFirm({ ...auth, token: { ...auth.token, email: 5, email_verified: true } } as never)
+    ).resolves.toMatchObject({ verifiedEmail: undefined })
     await expect(callerWithoutFirm({ ...auth, uid: uniq("ghost") } as never)).rejects.toMatchObject({ status: 401, code: "invalid_token" })
   })
 })
@@ -311,6 +333,17 @@ describe.skipIf(!EMULATORS)("gate evidence validation", () => {
     return recordGatePassHandler(await req(admin.token, { gate: "G-2", evidence }))
   }
 
+  it("keeps other fields of platform/gates (merge) and audits an early refusal against platform/gates", async () => {
+    await adminDb().collection("platform").doc("gates").set({ unrelated: "kept" }, { merge: true })
+    await record(EVIDENCE)
+    expect((await adminDb().collection("platform").doc("gates").get()).data()?.unrelated).toBe("kept")
+    const admin = await mintIdToken({ platformAdmin: true })
+    await httpsErrorOf(recordGatePassHandler(await req(admin.token, { gate: "G-9", evidence: EVIDENCE })))
+    const rows = await auditRows(admin.uid)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ target: "platform/gates", decision: "deny", reason: "invalid_gate" })
+  })
+
   it("accepts the boundaries: 2000-char summary (trimmed), 500-char https URL, 40-char sha", async () => {
     await expect(record({ ...EVIDENCE, summary: ` ${"s".repeat(2000)} ` })).resolves.toMatchObject({ gate: "G-2" })
     const url = `https://example.test/${"u".repeat(500 - "https://example.test/".length)}`
@@ -390,6 +423,34 @@ describe.skipIf(!EMULATORS)("idempotency claims at their boundaries", () => {
     const s = scope()
     await seed(s, { status: "done", response, claimedAt: Timestamp.fromMillis(NOW), expiresAt: Timestamp.fromMillis(NOW + IDEMPOTENCY_TTL_MS) })
     await expect(withIdempotency(s, ok)).rejects.toMatchObject({ status: 409, code: "idempotency_in_progress" })
+  })
+
+  it("an in_progress claim is never replayed, even if it carries a response; a done claim is never taken over", async () => {
+    const s1 = scope()
+    await seed(s1, {
+      status: "in_progress",
+      response: { status: 200, body: { stale: true } },
+      claimedAt: Timestamp.fromMillis(NOW),
+      expiresAt: Timestamp.fromMillis(NOW + IDEMPOTENCY_TTL_MS),
+    })
+    await expect(withIdempotency(s1, ok)).rejects.toMatchObject({ code: "idempotency_in_progress" })
+    const s2 = scope()
+    await seed(s2, {
+      status: "done",
+      response: { status: "bad" },
+      claimedAt: Timestamp.fromMillis(NOW - IDEMPOTENCY_LEASE_MS - 1),
+      expiresAt: Timestamp.fromMillis(NOW + IDEMPOTENCY_TTL_MS),
+    })
+    await expect(withIdempotency(s2, ok)).rejects.toMatchObject({ code: "idempotency_in_progress" })
+  })
+
+  it("holds the key as in_progress while the handler runs", async () => {
+    const s = scope()
+    const ref = adminDb().collection("idempotency_keys").doc(`${s.firmId}_${(s.key as string).toLowerCase()}`)
+    await withIdempotency(s, async () => {
+      expect((await ref.get()).data()).toMatchObject({ status: "in_progress", uid: s.uid, route: ROUTE })
+      return { status: 200, body: {} }
+    })
   })
 
   it("redacts only a stored 2xx body", async () => {

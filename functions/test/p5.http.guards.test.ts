@@ -283,6 +283,8 @@ describe("router request shape (before auth)", () => {
   const routes: Route[] = [
     { method: "POST", path: "/api/t/u/echo", handler: op, kind: "general" },
     { method: "GET", path: "/api/t/u/read", handler: op, kind: "general" },
+    { method: "GET", path: "/api/t/u/both", handler: op, kind: "general" },
+    { method: "POST", path: "/api/t/u/both", handler: op, kind: "general" },
   ]
   const router = createRouter(routes)
 
@@ -312,6 +314,7 @@ describe("router request shape (before auth)", () => {
   it("lists the allowed methods on 405", async () => {
     const out = await call({ method: "PUT", path: "/api/t/u/read" })
     expect({ status: out.status, code: out.code, allow: out.headers.allow }).toEqual({ status: 405, code: "method_not_allowed", allow: "GET" })
+    expect((await call({ method: "PUT", path: "/api/t/u/both" })).headers.allow).toBe("GET, POST")
   })
 
   it("accepts application/json with parameters only, case-insensitively", async () => {
@@ -331,6 +334,7 @@ describe("router request shape (before auth)", () => {
   it("413 on a declared Content-Length over 1 MB, and accepts exactly 1 MB", async () => {
     expect(await call({ length: String(1024 * 1024 + 1) })).toMatchObject({ status: 413, code: "payload_too_large" })
     expect(pastShape(await call({ raw: Buffer.alloc(1024 * 1024, 32) }))).toBe(true)
+    expect(pastShape(await call({ length: String(1024 * 1024) }))).toBe(true)
   })
 
   it("does not apply body checks to GET", async () => {
