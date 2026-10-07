@@ -425,7 +425,7 @@ describe("POST/GET /api/d4/drafts", () => {
     expect(a.result.draft.id).toBe(b.result.draft.id)
 
     const conflict = await post({ ...payload, title: "Different body" }, key)
-    expect(conflict.status).toBe(409)
+    expect(conflict.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
   })
 
   it("lists composed drafts with pagination and matter scoping", async () => {

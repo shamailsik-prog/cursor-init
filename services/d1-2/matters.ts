@@ -69,7 +69,9 @@ export class MembershipAssignmentError extends PublicError {
  * R-2 "no matter access without membership, and no role is exempt": only a partner who is
  * already a member of the matter assigns another user, and nobody assigns themselves (a
  * non-member partner cannot self-assign into a matter). Initial membership of a new matter is
- * set by the matters API at creation. Mirrored by firestore.rules matter_members create.
+ * set by the matters API at creation, through the same `validateMatterAssignee` rule (the
+ * creator seats themselves; the partner rule governs later assignment only). Mirrored by
+ * firestore.rules matter_members create.
  */
 export function assignMatterMember(
   store: SpineStore,
@@ -91,25 +93,43 @@ export function assignMatterMember(
   if (!store.members.has(store.memberKey(input.matterId, actor.id))) {
     throw new MembershipAssignmentError("not_member", "only a member of the matter assigns its members")
   }
-  // R2 N5: only same-firm matter staff are assigned. Clients reach their own matters through
-  // matters.clientId (L8.1), and accounts is register-only (L17.6 #41).
-  const assignee = store.users.get(input.userId)
-  if (!assignee || assignee.firmId !== matter.firmId) throw new PublicError("unknown member user")
+  validateMatterAssignee(store, matter.firmId, input.userId)
+  addMember(store, input.matterId, input.userId, matter.firmId)
+  recordMatterMemberAdd(store, actor.id, matter, input.userId)
+  return { matterId: input.matterId, userId: input.userId, firmId: matter.firmId }
+}
+
+/**
+ * The assignee rule shared by matter create (`memberUserIds`) and `assignMatterMember`
+ * (final audit F1). R2 N5: only same-firm matter staff are assigned. Clients reach their own
+ * matters through matters.clientId (L8.1), and accounts is register-only (L17.6 #41). A
+ * cross-firm user is reported exactly like a nonexistent one (no existence oracle).
+ */
+export function validateMatterAssignee(store: SpineStore, firmId: string, userId: string): void {
+  const assignee = store.users.get(userId)
+  if (!assignee || assignee.firmId !== firmId) throw new PublicError("unknown member user")
   if (assignee.role === "client" || assignee.role === "accounts") {
     throw new MembershipAssignmentError(
       "assignee_role_forbidden",
       "client and accounts users are not assigned to matters"
     )
   }
-  addMember(store, input.matterId, input.userId, matter.firmId)
+}
+
+/** One `matter_member_add` audit row per seat granted (assignment and matter create alike). */
+export function recordMatterMemberAdd(
+  store: SpineStore,
+  actorId: string,
+  matter: { id: string; classification: Classification },
+  userId: string
+): void {
   store.audit.push({
     action: "matter_member_add",
-    actorId: actor.id,
-    target: input.matterId,
+    actorId,
+    target: matter.id,
     classification: matter.classification,
-    reason: `added ${input.userId}`,
+    reason: `added ${userId}`,
   })
-  return { matterId: input.matterId, userId: input.userId, firmId: matter.firmId }
 }
 
 export function confirmEngagement(store: SpineStore, matterId: string, now = Date.now()) {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { newStore } from "@/platform/spine/store"
 import { seedUser, checkPermission } from "@/platform/p5/checkPermission"
 import { handleWhatsApp } from "@/services/d2-1/whatsapp"
-import { IdempotencyError, IdempotencyCache, requireIdempotencyKey } from "@/platform/http/idempotency"
+import { IdempotencyError, IdempotencyStore, requireIdempotencyKey } from "@/platform/http/idempotency"
 import { uploadDocument, ocrJobsFor } from "@/services/d1-6/uploadDocument"
 import {
   addMember,
@@ -178,13 +178,15 @@ describe("G-1 spine hardening", () => {
         new Request("http://local", { headers: { "Idempotency-Key": key } })
       )
     ).toBe(key)
-    const cache = new IdempotencyCache<string>(50, 2)
-    cache.set("a", "one")
-    cache.set("b", "two")
-    cache.set("c", "three")
+    const cache = new IdempotencyStore({ ttlMs: 50_000, maxEntries: 2, maxBytes: 1 << 20, maxEntryBytes: 1 << 20, leaseMs: 1_000 })
+    for (const [k, body] of [["a", "one"], ["b", "two"], ["c", "three"]] as const) {
+      const begun = cache.begin(k, "fp")
+      if (begun.kind !== "claimed") throw new Error("expected a claim")
+      cache.complete(k, begun.claimId, body)
+    }
     expect(cache.size).toBe(2)
-    expect(cache.get("a")).toBeUndefined()
-    expect(cache.get("c")).toBe("three")
+    expect(cache.begin("a", "fp").kind).toBe("claimed") // evicted: runs again
+    expect(cache.begin("c", "fp")).toEqual({ kind: "replay", body: "three" })
   })
 
   it("refuses cross-firm matter membership and does not list the other firm's matter", () => {
@@ -369,6 +371,8 @@ describe("G-1 spine hardening", () => {
         partyNames: [party],
       })
       expect(result.blocked).toBe(false)
+      // L18 §4.7 event catalogue: ai.call.requested/completed/failed/blocked (spec audit U-15)
+      expect(result.event).toBe("ai.call.completed")
       expect(result.text).not.toContain(party)
       expect(result.text).toContain("[PARTY]")
     } finally {

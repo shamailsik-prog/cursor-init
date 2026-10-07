@@ -170,7 +170,7 @@ describe("POST/GET /api/d1/documents", () => {
       key
     )
     expect(a.status).toBe(200)
-    expect(b.status).toBe(409)
+    expect(b.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
   })
 
   it("defaults an unlabelled upload to privileged, floored at the matter's classification (L17.3)", async () => {

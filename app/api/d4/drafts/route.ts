@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession, type HandlerSession } from "@/platform/http/withSession"
 import { errorResponse } from "@/platform/http/errors"
@@ -7,7 +9,7 @@ import { DraftCharsetError } from "@/services/d4-2/draftCharset"
 import type { SpineStore } from "@/platform/spine/store"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -17,7 +19,6 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import {
   buildDraftTemplateAnalyticsRow,
   draftTemplateAnalyticsId,
@@ -34,7 +35,6 @@ import {
   type TemporalCitationInput,
 } from "@/services/d4-1/drafts"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 type PreflightBody = {
   action: "preflight"
@@ -62,18 +62,6 @@ type ComposeBody = {
 }
 
 type Body = PreflightBody | ComposeBody
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function normalizeTerms(value: string | null): string[] {
   if (!value) return []
@@ -271,8 +259,15 @@ async function handleGet(request: Request) {
   })
 }
 
+/**
+ * SEC-1: drafts carry the draft body (up to 500,000 characters, enforced by the drafts
+ * service; multi-byte Urdu is 2-3 bytes per character in UTF-8), so this route allows 2 MB
+ * instead of the 1 MB default.
+ */
+const DRAFTS_MAX_BODY_BYTES = 2 * 1024 * 1024
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost)
+  return withSession(request, handlePost, { maxBodyBytes: DRAFTS_MAX_BODY_BYTES })
 }
 
 async function handlePost(request: Request, session: HandlerSession | null) {
@@ -297,21 +292,15 @@ async function handlePost(request: Request, session: HandlerSession | null) {
     return NextResponse.json({ error: "action is required" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d4/drafts",
     action: parsed.action,
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (parsed.action === "preflight") {
@@ -320,14 +309,12 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       const actor = store.users.get(input.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
       const result = runDraftPreflight(store, input)
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "preflight",
         result,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -343,7 +330,6 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       const actor = store.users.get(preflightInput.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
       // Pre-check only for the 422 body; composeDraft re-runs the gate and records any override.
       const gate = runDraftPreflight(store, preflightInput, { recordOverride: false })
       if (!gate.ok) {
@@ -367,7 +353,6 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         target: draft.id,
         classification: draft.classification,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       await repos.drafts.create(draft)
       const template = listTemplateCatalog("").find((item) => item.id === draft.templateId)
       const analyticsId = draftTemplateAnalyticsId(draft.templateId)
@@ -388,7 +373,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         preflight: gate,
         draft: (await repos.drafts.get(draft.id)) ?? draft,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

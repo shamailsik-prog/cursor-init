@@ -15,7 +15,7 @@ import {
   OPS_POST_ACTIONS,
   opsReportingDiagnostics,
 } from "@/app/api/d2/ops-reporting/dispatch"
-import { IdempotencyCache } from "@/platform/http/idempotency"
+import { IdempotencyClaim } from "@/platform/http/idempotency"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { POST as workflowPost } from "@/app/api/d1/document-workflow/route"
 import { addMember, createMatter } from "@/services/d1-2/matters"
@@ -147,7 +147,7 @@ describe("POST /api/d2/ops-reporting: handler crashes reach the onError hook", (
 
   it("reports a TypeError thrown inside a handler to opsReportingDiagnostics.onError", async () => {
     const canary = new TypeError("dispatch-coverage canary")
-    const injected = vi.spyOn(IdempotencyCache.prototype, "set").mockImplementationOnce(() => {
+    const injected = vi.spyOn(IdempotencyClaim.prototype, "complete").mockImplementationOnce(() => {
       throw canary
     })
     let injectedCalls = 0

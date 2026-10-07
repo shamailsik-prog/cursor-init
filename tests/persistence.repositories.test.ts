@@ -6,8 +6,20 @@ import {
 } from "@firebase/rules-unit-testing"
 import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
 import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
-import { newStore } from "@/platform/spine/store"
+import { normalizeAuditEntryInPlace } from "@/platform/persistence/auditWriteThrough"
+import { isAuditRowPersisted, markAuditRowPersisted } from "@/platform/audit/requestAudit"
+import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
+import { newStore, type AuditEntry, type SpineStore } from "@/platform/spine/store"
+
+/** Persists rows as the request flush does: normalise in place, append, mark persisted. */
+async function persistRows(store: SpineStore, repos: SpineRepositories, rows: readonly AuditEntry[]) {
+  for (const row of rows) {
+    if (isAuditRowPersisted(row)) continue
+    normalizeAuditEntryInPlace(store, row)
+    await repos.audit.append(row)
+    markAuditRowPersisted(row)
+  }
+}
 
 const RULES = readFileSync("firestore.rules", "utf8")
 
@@ -5072,8 +5084,8 @@ describe("Firestore repository adapters", () => {
       runtime.audit.push(entry("mat_overlap_a"))
       const priorB = runtime.audit.length
       runtime.audit.push(entry("mat_overlap_b"))
-      await persistAuditEntriesSince(runtime, repos, 0)
-      await expect(persistAuditEntriesSince(runtime, repos, priorB)).resolves.toBeUndefined()
+      await persistRows(runtime, repos, runtime.audit.slice(0))
+      await expect(persistRows(runtime, repos, runtime.audit.slice(priorB))).resolves.toBeUndefined()
       const overlapRows = (await repos.audit.listByFirm("firmA")).filter((row) =>
         row.target.startsWith("mat_overlap_")
       )
@@ -5081,6 +5093,41 @@ describe("Firestore repository adapters", () => {
         "mat_overlap_a",
         "mat_overlap_b",
       ])
+    })
+  })
+})
+
+describe("Firestore filings.decideIfPending (final audit F2)", () => {
+  it("of two concurrent decisions exactly one applies; a decided package is left unchanged", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      const repos = createFirestoreRepositories(
+        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
+      )
+      await repos.filings.create({
+        id: "pkg_one_shot",
+        firmId: "firmA",
+        matterId: "mat_1",
+        draftId: "drf_1",
+        classification: "internal",
+        citationStatus: "OK",
+        temporalAllOk: true,
+        status: "pending_partner_approval",
+        createdBy: "associate_a",
+        createdAt: 3,
+        approvedBy: null,
+        approvalReason: null,
+      })
+      const outcomes = await Promise.all([
+        repos.filings.decideIfPending("pkg_one_shot", { status: "approved", approvedBy: "partner_a", approvalReason: "ok" }),
+        repos.filings.decideIfPending("pkg_one_shot", { status: "rejected", approvedBy: "partner_c", approvalReason: "no" }),
+      ])
+      expect(outcomes.map((o) => o.kind).sort()).toEqual(["already_decided", "decided"])
+      const winner = outcomes.find((o) => o.kind === "decided") as { row: { status: string; approvedBy: string } }
+      const stored = await repos.filings.get("pkg_one_shot")
+      expect(stored?.status).toBe(winner.row.status)
+      expect(stored?.approvedBy).toBe(winner.row.approvedBy)
+      expect(await repos.filings.decideIfPending("pkg_missing", { status: "approved", approvedBy: "partner_a", approvalReason: "ok" })).toEqual({ kind: "missing" })
     })
   })
 })

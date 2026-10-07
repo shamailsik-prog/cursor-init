@@ -229,10 +229,25 @@ export type WorkflowRepository = {
   listByFirm(firmId: string): Promise<DocumentWorkflow[]>
 }
 
+/** Outcome of a one-shot filing package decision (final audit F2). */
+export type FilingDecisionOutcome =
+  | { kind: "decided"; row: FilingPackage }
+  | { kind: "already_decided" }
+  | { kind: "missing" }
+
 export type FilingRepository = {
   create(row: FilingPackage): Promise<void>
   get(id: string): Promise<FilingPackage | null>
   update(id: string, patch: Partial<FilingPackage>): Promise<FilingPackage | null>
+  /**
+   * Applies `patch` only while the stored package is still pending_partner_approval (a
+   * conditional update; Firestore runs it in a transaction). A package already approved or
+   * rejected is left unchanged.
+   */
+  decideIfPending(
+    id: string,
+    patch: Pick<FilingPackage, "status" | "approvedBy" | "approvalReason">
+  ): Promise<FilingDecisionOutcome>
   listByFirm(firmId: string): Promise<FilingPackage[]>
 }
 
@@ -2187,6 +2202,15 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         const next = { ...current, ...patch }
         store.filingPackages.set(id, next)
         return next
+      },
+      async decideIfPending(id, patch) {
+        // Check and write with no await between them: atomic in this process.
+        const current = store.filingPackages.get(id)
+        if (!current) return { kind: "missing" }
+        if (current.status !== "pending_partner_approval") return { kind: "already_decided" }
+        const next = { ...current, ...patch }
+        store.filingPackages.set(id, next)
+        return { kind: "decided", row: next }
       },
       async listByFirm(firmId) {
         return [...store.filingPackages.values()].filter((row) => row.firmId === firmId)

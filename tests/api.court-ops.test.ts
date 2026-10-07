@@ -184,6 +184,6 @@ describe("GET/POST /api/d2/court-ops", () => {
     expect(b.reused).toBe(true)
 
     const conflict = await post({ ...payload, id: `${followUpId}-other` }, key)
-    expect(conflict.status).toBe(409)
+    expect(conflict.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
   })
 })

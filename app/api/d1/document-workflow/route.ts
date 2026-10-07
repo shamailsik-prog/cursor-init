@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
 import { BodySchema, DOCUMENT_WORKFLOW_SURFACE } from "./surface"
 import { canReadDocument } from "@/platform/p5/documentAccess"
 import { z } from "zod"
@@ -8,7 +10,7 @@ import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -18,7 +20,6 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import {
   applyReviewDecision,
@@ -26,22 +27,9 @@ import {
   transitionWorkflowStatus,
 } from "@/services/d1-7/documentWorkflow"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 
 type Body = z.infer<typeof BodySchema>
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function isWorkflowStatus(value: unknown): value is WorkflowStatus {
   return (
@@ -207,21 +195,15 @@ async function handlePost(request: Request) {
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/document-workflow",
     action: actionOf(DOCUMENT_WORKFLOW_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (isAction(DOCUMENT_WORKFLOW_SURFACE, parsed, "transition")) {
@@ -234,7 +216,6 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = transitionWorkflowStatus(store, {
         actorId: parsed.actorId,
@@ -244,9 +225,8 @@ async function handlePost(request: Request) {
       })
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_transition")
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "transition", row }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -260,7 +240,6 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = assignReviewer(store, {
         actorId: parsed.actorId,
@@ -269,9 +248,8 @@ async function handlePost(request: Request) {
       })
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_assign_reviewer")
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "assign_reviewer", row }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -285,7 +263,6 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = applyReviewDecision(store, {
         actorId: parsed.actorId,
@@ -296,7 +273,6 @@ async function handlePost(request: Request) {
       })
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_review_decision")
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const updatedDoc = store.documents.get(parsed.documentId)
       if (updatedDoc) {
         const persistedDoc = await repos.documents.get(updatedDoc.id)
@@ -312,7 +288,7 @@ async function handlePost(request: Request) {
         }
       }
       const payload = { action: "review_decision", row }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

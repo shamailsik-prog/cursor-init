@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { BodySchema, DOCUMENTS_SURFACE } from "./surface"
 import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
@@ -6,7 +7,7 @@ import { actionOf, getQuery, refuseUndeclaredBody } from "@/platform/http/surfac
 import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -24,26 +25,12 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 
 type Body = z.infer<typeof BodySchema>
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function requireActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
@@ -178,19 +165,12 @@ async function handlePost(request: Request) {
     action: actionOf(DOCUMENTS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
-    const priorAuditCount = store.audit.length
     const actor = requireActor(parsed.actorId, parsed.firmId)
     await syncFirmMembers(store, repos, actor.firmId)
     const matterId = parsed.matterId ?? null
@@ -283,7 +263,6 @@ async function handlePost(request: Request) {
       classification: doc.classification,
       reason: write.reused ? "reused" : "created",
     })
-    await persistAuditEntriesSince(store, repos, priorAuditCount)
 
     const payload = {
       action: "ingest",
@@ -292,7 +271,7 @@ async function handlePost(request: Request) {
       ocrJobs: (await repos.jobs.listByDocument(doc.id)).filter((job) => job.jobType === "ocr")
         .length,
     }
-    idempotency.set(key, payload, fingerprint)
+    claim.complete(payload)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
     const message = publicErrorMessage(err, "document ingest failed")

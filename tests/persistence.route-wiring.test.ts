@@ -230,6 +230,7 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       create: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
       update: vi.fn().mockResolvedValue(null),
+      decideIfPending: vi.fn().mockResolvedValue({ kind: "missing" }),
     },
     filingPacketArtifacts: {
       upsert: vi.fn(),

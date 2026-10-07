@@ -159,7 +159,7 @@ describe("POST/GET /api/d1/document-workflow", () => {
     expect(b.reused).toBe(true)
 
     const conflict = await post({ ...payload, nextStatus: "review_required" }, key)
-    expect(conflict.status).toBe(409)
+    expect(conflict.status).toBe(422) // idempotency_key_reused (final audit F4: functions semantics)
   })
 
   it("lists queue and timeline with pagination and matter scoping", async () => {

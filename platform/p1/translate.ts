@@ -21,5 +21,6 @@ export async function requestTranslation(input: {
       classification: input.classification,
     }
   }
-  return { event: "ai.call.accepted" as const, blocked: false as const, text: result.text }
+  // L18 §4.7 event catalogue: ai.call.requested/completed/failed/blocked (spec audit U-15).
+  return { event: "ai.call.completed" as const, blocked: false as const, text: result.text }
 }

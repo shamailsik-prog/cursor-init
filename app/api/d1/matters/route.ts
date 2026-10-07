@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
 import { BodySchema, MATTERS_SURFACE } from "./surface"
 import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
@@ -7,7 +9,7 @@ import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -18,35 +20,23 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import {
   addMember,
   assignMatterMember,
   confirmEngagement,
   MembershipAssignmentError,
+  recordMatterMemberAdd,
+  validateMatterAssignee,
 } from "@/services/d1-2/matters"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 
 type Body = z.infer<typeof BodySchema>
 
 function deny(message: string, status = 403) {
   return NextResponse.json({ error: message }, { status })
-}
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
 }
 
 function ensureActor(actorId: string, firmId?: string) {
@@ -58,16 +48,6 @@ function ensureActor(actorId: string, firmId?: string) {
     throw new PublicError("actor role not allowed for matter operations")
   }
   return actor
-}
-
-function ensureMemberUsersInFirm(userIds: Iterable<string>, firmId: string) {
-  const store = getRuntimeStore()
-  for (const userId of userIds) {
-    const user = store.users.get(userId)
-    // A cross-firm user is reported exactly like a nonexistent one (no id echoed), so
-    // the response is not an oracle for which ids exist in other firms.
-    if (!user || user.firmId !== firmId) throw new PublicError("unknown member user")
-  }
 }
 
 function ensureClientIdentityInFirm(clientId: string, firmId: string) {
@@ -167,21 +147,15 @@ async function handlePost(request: Request) {
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/matters",
     action: actionOf(MATTERS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (isAction(MATTERS_SURFACE, parsed, "create")) {
@@ -203,10 +177,18 @@ async function handlePost(request: Request) {
       }
       ensureClientIdentityInFirm(parsed.clientId, parsed.firmId)
       // Validate every member before anything is persisted, so a bad member id cannot
-      // leave an orphaned matter behind.
+      // leave an orphaned matter behind. Final audit F1: the same assignee rule as
+      // add_member (same-firm staff only; client/accounts -> 403 assignee_role_forbidden).
+      // The creator seats themselves (ensureActor already refused client/intern/accounts).
       const memberIds = new Set<string>([parsed.actorId, ...(parsed.memberUserIds ?? [])])
-      ensureMemberUsersInFirm(memberIds, parsed.firmId)
-      const priorAuditCount = store.audit.length
+      try {
+        for (const userId of memberIds) validateMatterAssignee(store, parsed.firmId, userId)
+      } catch (err) {
+        if (err instanceof MembershipAssignmentError) {
+          return NextResponse.json({ error: err.message, code: err.code }, { status: 403 })
+        }
+        throw err
+      }
       const matter = {
         id: store.id("mat"),
         firmId: parsed.firmId,
@@ -225,6 +207,7 @@ async function handlePost(request: Request) {
       for (const userId of memberIds) {
         addMember(store, matter.id, userId, parsed.firmId)
         await repo.members.upsert({ matterId: matter.id, userId, firmId: parsed.firmId })
+        recordMatterMemberAdd(store, parsed.actorId, matter, userId)
       }
       store.audit.push({
         action: "matter_create",
@@ -232,12 +215,11 @@ async function handlePost(request: Request) {
         target: matter.id,
         classification: matter.classification,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "create",
         matter,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -246,7 +228,6 @@ async function handlePost(request: Request) {
       await syncFirmMembers(store, repo, actor.firmId)
       const matter = store.matters.get(parsed.matterId) ?? (await repo.matters.get(parsed.matterId))
       if (matter) store.matters.set(matter.id, matter)
-      const priorAuditCount = store.audit.length
       let member: { matterId: string; userId: string; firmId: string }
       try {
         member = assignMatterMember(store, {
@@ -261,9 +242,8 @@ async function handlePost(request: Request) {
         throw err
       }
       await repo.members.upsert(member)
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = { action: "add_member", member }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -274,7 +254,6 @@ async function handlePost(request: Request) {
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
-      const priorAuditCount = store.audit.length
       const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
       const updatedMatter = store.matters.get(parsed.matterId)
@@ -296,12 +275,11 @@ async function handlePost(request: Request) {
         target: parsed.matterId,
         classification: matter.classification,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "confirm_engagement",
         matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -323,7 +301,6 @@ async function handlePost(request: Request) {
           { status: 403 }
         )
       }
-      const priorAuditCount = store.audit.length
       const priorFollowUpIds = new Set(store.followUps.map((row) => row.id))
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)
       const updatedMatter = store.matters.get(parsed.matterId)
@@ -345,13 +322,12 @@ async function handlePost(request: Request) {
         classification: matter.classification,
         reason: result.status,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "record_case_number",
         result,
         matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
 import { REPORTING_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -24,23 +26,9 @@ import {
   buildClientSearchIndexRow,
   buildMatterSearchIndexRow,
 } from "@/platform/persistence/matterClientSearchIndex"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 const RELEVANCE_FRESH_WINDOW_MS = 24 * 60 * 60 * 1000
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function normalizeTerms(value: string | null): string[] {
   if (!value) return []
@@ -424,21 +412,15 @@ async function handlePost(request: Request) {
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/reporting",
     action: actionOf(REPORTING_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   const actorId = parsed.actorId
   const matterId = parsed.matterId
@@ -488,7 +470,6 @@ async function handlePost(request: Request) {
       }
       await repos.matterReportExportAnalytics.upsert(nextRow)
       store.matterReportExportAnalytics.set(nextRow.id, nextRow)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "reporting_matter_export_recorded",
         actorId: actor.id,
@@ -496,13 +477,12 @@ async function handlePost(request: Request) {
         classification: matter.classification,
         reason: `${nextRow.lastExportScope}:${nextRow.lastExportFormat}:${nextRow.lastExportReason}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: actionOf(REPORTING_SURFACE, parsed),
         exportAnalytics: nextRow,
         relevanceSnapshot: baseline.relevanceSnapshot,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -518,7 +498,6 @@ async function handlePost(request: Request) {
     )
     await repos.matterReportRelevanceSnapshots.upsert(nextSnapshot)
     store.matterReportRelevanceSnapshots.set(nextSnapshot.id, nextSnapshot)
-    const priorAuditCount = store.audit.length
     store.audit.push({
       action: "reporting_matter_relevance_recomputed",
       actorId: actor.id,
@@ -526,13 +505,12 @@ async function handlePost(request: Request) {
       classification: matter.classification,
       reason: recomputeReason,
     })
-    await persistAuditEntriesSince(store, repos, priorAuditCount)
     const payload = {
       action: actionOf(REPORTING_SURFACE, parsed),
       relevanceSnapshot: nextSnapshot,
       exportAnalytics: baseline.exportAnalytics,
     }
-    idempotency.set(key, payload, fingerprint)
+    claim.complete(payload)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
     const message = publicErrorMessage(err, "reporting operation failed")

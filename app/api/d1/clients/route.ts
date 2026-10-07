@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
 import { BodySchema, CLIENTS_SURFACE } from "./surface"
 import { z } from "zod"
 import { DEFAULT_JSON_BODY_BYTES, parseBody, readJsonLimited } from "@/platform/http/validation"
@@ -7,7 +9,7 @@ import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/h
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -16,26 +18,12 @@ import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmEntities } from "@/platform/persistence/entitySync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildClientSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import { conflictCheck, createClient } from "@/services/d1-1/clients"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 
 type Body = z.infer<typeof BodySchema>
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function requireActor(actorId: string, firmId?: string) {
   const store = getRuntimeStore()
@@ -112,21 +100,15 @@ async function handlePost(request: Request) {
   if (!body.ok) return body.response
   const parsed: Body = body.data
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/d1/clients",
     action: actionOf(CLIENTS_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (isAction(CLIENTS_SURFACE, parsed, "create")) {
@@ -151,7 +133,6 @@ async function handlePost(request: Request) {
       }
 
       await syncFirmEntities(store, repos, parsed.firmId)
-      const priorAuditCount = store.audit.length
       const existingLinkKeys = new Set(
         store.links
           .filter((row) => row.firmId === parsed.firmId)
@@ -179,12 +160,11 @@ async function handlePost(request: Request) {
         classification: entity.classification,
         firmId: entity.firmId,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "create",
         entity,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -200,7 +180,7 @@ async function handlePost(request: Request) {
         entityId: parsed.entityId,
         result,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 

@@ -254,3 +254,53 @@ describe("insecure-dev also reads the body once under the cap", () => {
     expect(pulled()).toBeLessThan(2 * DEFAULT_JSON_BODY_BYTES)
   })
 })
+
+// SEC-1 (body caps): withSession's default cap is 1 MB; only document upload opts into the
+// upload ceiling, and drafts allow 2 MB (draft bodies up to 500k chars of multi-byte Urdu).
+describe("default 1 MB body cap on every JSON POST route (SEC-1)", () => {
+  const routes: Array<[string, () => Promise<{ POST: (r: Request) => Promise<Response> }>]> = [
+    ["/api/d4/filings", () => import("@/app/api/d4/filings/route")],
+    ["/api/g0/normalise", () => import("@/app/api/g0/normalise/route")],
+    ["/api/p1/committee-brain", () => import("@/app/api/p1/committee-brain/route")],
+    ["/api/p5/tenancy", () => import("@/app/api/p5/tenancy/route")],
+    ["/api/d2/court-ops", () => import("@/app/api/d2/court-ops/route")],
+    ["/api/d1/reporting", () => import("@/app/api/d1/reporting/route")],
+  ]
+
+  it.each(routes)("%s answers 413 above 1 MB (declared and chunked)", async (path, load) => {
+    const { POST } = await load()
+    const oversize = JSON.stringify({ action: "x", note: "x".repeat(DEFAULT_JSON_BODY_BYTES) })
+    const declared = await POST(
+      authedPost(`http://127.0.0.1${path}`, oversize, { "Content-Length": String(Buffer.byteLength(oversize)) })
+    )
+    expect(declared.status).toBe(413)
+    expect(((await declared.json()) as { code: string }).code).toBe("payload_too_large")
+    const { stream, pulled } = countingStream(8 * DEFAULT_JSON_BODY_BYTES)
+    const chunked = await POST(authedPost(`http://127.0.0.1${path}`, stream))
+    expect(chunked.status).toBe(413)
+    expect(pulled()).toBeLessThan(2 * DEFAULT_JSON_BODY_BYTES)
+  })
+
+  it("withSession defaults to 1 MB when a route names no cap", async () => {
+    const handler = vi.fn(async () => new Response("ran"))
+    const { stream } = countingStream(DEFAULT_JSON_BODY_BYTES + 1024)
+    const res = await withSession(authedPost("http://127.0.0.1/api/test", stream), handler)
+    expect(res.status).toBe(413)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it("drafts allow up to 2 MB (a 500k-char Urdu draft fits) and answer 413 above it", async () => {
+    const { POST } = await import("@/app/api/d4/drafts/route")
+    // 500,000 Urdu characters (2-3 UTF-8 bytes each: Arabic block plus presentation forms)
+    // is well over 1 MB.
+    const urdu = "\u0627\ufb8e".repeat(250_000)
+    const big = JSON.stringify({ action: "x", body: urdu })
+    expect(Buffer.byteLength(big)).toBeGreaterThan(DEFAULT_JSON_BODY_BYTES)
+    const ok = await POST(authedPost("http://127.0.0.1/api/d4/drafts", big))
+    expect(ok.status).not.toBe(413)
+    const { stream, pulled } = countingStream(8 * DEFAULT_JSON_BODY_BYTES)
+    const res = await POST(authedPost("http://127.0.0.1/api/d4/drafts", stream))
+    expect(res.status).toBe(413)
+    expect(pulled()).toBeLessThan(3 * DEFAULT_JSON_BODY_BYTES)
+  })
+})

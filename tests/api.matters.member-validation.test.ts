@@ -123,3 +123,51 @@ describe("addMember service", () => {
     expect(store.members.size).toBe(0)
   })
 })
+
+// Final audit F1: matter create's memberUserIds runs the same assignee validation as
+// assignMatterMember (R1 #6 / R2 N5) and writes one matter_member_add row per member.
+describe("POST /api/d1/matters create seats members through the assignee rules", () => {
+  function clerk() {
+    const store = getRuntimeStore()
+    return [...store.users.values()].find((u) => u.firmId === "firmA" && u.role === "clerk")!
+  }
+
+  it("refuses a client member with 403 assignee_role_forbidden and persists nothing", async () => {
+    const actor = clerk()
+    const before = snapshot()
+    const res = await post(
+      createBody({ actorId: actor.id, memberUserIds: ["client_a"] }),
+      "6d4f1f0e-4b1c-4f59-9d2c-2f5b0d1f7b01"
+    )
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { code: string }).code).toBe("assignee_role_forbidden")
+    expect(snapshot()).toEqual(before)
+  })
+
+  it("refuses an accounts member with 403 assignee_role_forbidden and persists nothing", async () => {
+    const store = getRuntimeStore()
+    store.users.set("accounts_x", { id: "accounts_x", firmId: "firmA", role: "accounts", clearanceLevel: "internal" })
+    const before = snapshot()
+    const res = await post(
+      createBody({ memberUserIds: ["associate_a", "accounts_x"] }),
+      "6d4f1f0e-4b1c-4f59-9d2c-2f5b0d1f7b02"
+    )
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { code: string }).code).toBe("assignee_role_forbidden")
+    expect(snapshot()).toEqual(before)
+  })
+
+  it("lets a non-partner creator seat same-firm staff, and writes one matter_member_add row per member", async () => {
+    const actor = clerk()
+    const res = await post(
+      createBody({ actorId: actor.id, memberUserIds: ["associate_a"] }),
+      "6d4f1f0e-4b1c-4f59-9d2c-2f5b0d1f7b03"
+    )
+    expect(res.status).toBe(200)
+    const matterId = ((await res.json()) as { result: { matter: { id: string } } }).result.matter.id
+    const store = getRuntimeStore()
+    const rows = store.audit.filter((r) => r.action === "matter_member_add" && r.target === matterId)
+    expect(rows.map((r) => r.reason).sort()).toEqual([`added ${actor.id}`, "added associate_a"].sort())
+    expect(rows.every((r) => r.actorId === actor.id)).toBe(true)
+  })
+})

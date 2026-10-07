@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
+import { fingerprintOf } from "@/platform/http/validation"
 import { TENANCY_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
-  IdempotencyCache,
+  beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
@@ -81,7 +83,6 @@ import {
   updateUserRole,
 } from "@/platform/p5/tenancyAdmin"
 
-const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
 /** On `view=session_refs`, `userId` filters the listing; the caller is `actorId`. */
 const TENANCY_GET_SESSION_OPTIONS = {
@@ -330,18 +331,6 @@ type Body =
   | AttestExternalSessionIdentityBridgeBody
   | QuarantineExternalSessionIdentityBridgeBody
   | ClearExternalSessionIdentityBridgeBody
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function parseBoolean(value: string | null): boolean {
   return value === "1" || value === "true" || value === "yes"
@@ -1614,21 +1603,15 @@ async function handlePost(request: Request) {
     )
   }
 
-  const fingerprint = JSON.stringify({
+  const fingerprint = fingerprintOf({
     route: "/api/p5/tenancy",
     action: actionOf(TENANCY_SURFACE, parsed),
     body: parsed,
   })
-  const replay = idempotency.getReplay(key, fingerprint)
-  if (replay.conflict) {
-    return NextResponse.json(
-      { error: "Idempotency-Key reused with a different request payload" },
-      { status: 409 }
-    )
-  }
-  if (replay.body !== undefined) {
-    return NextResponse.json({ result: replay.body, idempotencyKey: key, reused: true })
-  }
+  // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
+  const idem = beginIdempotentRequest(request, key, fingerprint)
+  if (idem.response) return idem.response
+  const claim = idem.claim
 
   try {
     if (isAction(TENANCY_SURFACE, parsed, "revoke_session_reference")) {
@@ -1692,7 +1675,7 @@ async function handlePost(request: Request) {
           reopenTrigger: monitoring.closureCheckpoint.reopenTrigger,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -1767,7 +1750,7 @@ async function handlePost(request: Request) {
           reopenTrigger: monitoring.closureCheckpoint.reopenTrigger,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -1827,7 +1810,7 @@ async function handlePost(request: Request) {
           reopenTrigger: monitoring.closureCheckpoint.reopenTrigger,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -1899,7 +1882,7 @@ async function handlePost(request: Request) {
           reopenTrigger: monitoring.closureCheckpoint.reopenTrigger,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -1950,7 +1933,7 @@ async function handlePost(request: Request) {
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2000,7 +1983,7 @@ async function handlePost(request: Request) {
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2050,7 +2033,7 @@ async function handlePost(request: Request) {
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2100,7 +2083,7 @@ async function handlePost(request: Request) {
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2161,7 +2144,7 @@ async function handlePost(request: Request) {
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2221,7 +2204,7 @@ async function handlePost(request: Request) {
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2278,7 +2261,7 @@ async function handlePost(request: Request) {
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2335,7 +2318,7 @@ async function handlePost(request: Request) {
           unresolvedRevocationCount: digest.unresolvedRevocationCount,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2386,7 +2369,7 @@ async function handlePost(request: Request) {
           reasons: digest.reasons,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2437,7 +2420,7 @@ async function handlePost(request: Request) {
           reasons: digest.reasons,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2484,7 +2467,7 @@ async function handlePost(request: Request) {
           reasons: digest.reasons,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2535,7 +2518,7 @@ async function handlePost(request: Request) {
           reasons: digest.reasons,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2588,7 +2571,7 @@ async function handlePost(request: Request) {
           reasons: digest.reasons,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2642,7 +2625,7 @@ async function handlePost(request: Request) {
           reasons: digest.reasons,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2695,7 +2678,7 @@ async function handlePost(request: Request) {
           reasons: digest.reasons,
         },
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2728,7 +2711,7 @@ async function handlePost(request: Request) {
         action: "attest_external_session_identity_bridge",
         bridge: attested.bridge,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2756,7 +2739,7 @@ async function handlePost(request: Request) {
         action: "quarantine_external_session_identity_bridge",
         bridge: quarantined.bridge,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2784,7 +2767,7 @@ async function handlePost(request: Request) {
         action: "clear_external_session_identity_bridge",
         bridge: cleared.bridge,
       }
-      idempotency.set(key, payload, fingerprint)
+      claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
@@ -2946,7 +2929,7 @@ async function handlePost(request: Request) {
         enrichedAuditEntry.delegatedBoundaryDivergenceReasons ?? [],
       digests: digestSummaries,
     }
-    idempotency.set(key, payload, fingerprint)
+    claim.complete(payload)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
   } catch (err) {
     const message = publicErrorMessage(err, "tenancy write failed")
