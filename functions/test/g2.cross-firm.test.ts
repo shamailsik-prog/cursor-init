@@ -287,9 +287,20 @@ function ruleCollections(rules: string): Array<{ name: string; block: string }> 
   }))
 }
 
-/** A collection whose read rule never consults the caller's firm is platform-global (not tenant data). */
+/**
+ * A server-only collection: every `allow` in its block is `if false` (fix/sec-gaps: the
+ * escalation-closure collections and audit_dead_letter). No client of any firm reads or writes
+ * it; it holds tenant rows, so it is swept like every tenant collection (firm-B denial) and its
+ * control asserts that even firm A's own partner is denied.
+ */
+function isServerOnly(block: string): boolean {
+  const conditions = [...block.matchAll(/allow [a-z, ]+:\s*if ([^;]+);/g)].map((m) => m[1].trim())
+  return conditions.length > 0 && conditions.every((c) => c === "false")
+}
+
+/** A collection whose read rule never consults the caller's firm (and is not server-only) is platform-global (not tenant data). */
 function isGlobal(block: string): boolean {
-  return !/sameFirm\(\)|tok\(\)\.firmId/.test(block)
+  return !isServerOnly(block) && !/sameFirm\(\)|tok\(\)\.firmId/.test(block)
 }
 
 const COLLECTIONS = ruleCollections(RULES)
@@ -310,12 +321,15 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
   let env: RulesTestEnvironment
 
   const docIdFor = (name: string) => (name === "firms" ? FIRM_A : name === "matters" ? MATTER_A : "g2-a-doc")
-  const seedFor = () => ({
+  const seedFor = (name: string) => ({
     firmId: FIRM_A,
     classification: "public",
     matterId: MATTER_A,
     userId: A_PARTNER,
     name: "G2-ALPHA-SECRET",
+    // matter_client_search_index reads membership of the row's matter (fix/sec-gaps R1 #6):
+    // a matter row names it in referenceId.
+    ...(name === "matter_client_search_index" ? { rowType: "matter", referenceId: MATTER_A } : {}),
   })
 
   beforeAll(async () => {
@@ -325,7 +339,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
     await env.clearFirestore()
     await env.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore()
-      for (const { name } of COLLECTIONS) await setDoc(doc(db, name, docIdFor(name)), seedFor())
+      for (const { name } of COLLECTIONS) await setDoc(doc(db, name, docIdFor(name)), seedFor(name))
       // Firm A's partner is a member of the matter (positive control). Every firm-B user also
       // holds a forged membership doc on the firm-A matter: the firm check alone must refuse.
       await setDoc(doc(db, "matter_members", `${MATTER_A}_${A_PARTNER}`), { firmId: FIRM_A, matterId: MATTER_A, userId: A_PARTNER })
@@ -349,13 +363,18 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
     }
   })
 
-  it("control: firm A's partner (a matter member) can read the seeded doc in every tenant collection", async () => {
+  it("control: firm A's partner (a matter member) can read the seeded doc in every tenant collection, and is denied every server-only one", async () => {
     const db = env.authenticatedContext(A_PARTNER, { firmId: FIRM_A, role: "partner", clearanceLevel: MAX_CLEARANCE }).firestore()
     const failures: string[] = []
     for (const { name, block } of COLLECTIONS) {
       if (isGlobal(block)) continue
+      if (isServerOnly(block)) {
+        await assertFails(getDoc(doc(db, name, docIdFor(name)))).catch(() => failures.push(`${name}: server-only collection readable by firm A's partner`))
+        continue
+      }
       await assertSucceeds(getDoc(doc(db, name, docIdFor(name)))).catch((err: unknown) => failures.push(`${name}: ${String(err)}`))
     }
+    expect(COLLECTIONS.filter((c) => isServerOnly(c.block)).length).toBeGreaterThan(0)
     expect(failures).toEqual([])
   })
 

@@ -208,21 +208,26 @@ describe("Job E — Firestore rules", () => {
 ] as const
 
   it.each(TB_ACK_RECON_PD_FREEZE_SEAL_DEDICATED_VIEW_COLLECTIONS)(
-    "tb ack-recon pd freeze seal dedicated view collection %s: same-firm cleared partner reads, another firm's partner is denied",
+    "tb ack-recon pd freeze seal dedicated view collection %s: a same-firm cleared partner member reads; a non-member partner and another firm's partner are denied",
     async (collectionPath) => {
+      // The rows are matter-bound: fix/sec-gaps (R1 #6) adds membership (memberReader) to the
+      // read rule, so the reader is a member of m1 (matter_members m1_member1).
       await testEnv.withSecurityRulesDisabled(async (ctx) => {
         await setDoc(doc(ctx.firestore(), collectionPath, "row-read"), {
           firmId: "firmA",
+          matterId: "m1",
           classification: "internal",
         })
       })
-      const sameFirm = authed("partner1", { firmId: "firmA", role: "partner", clearanceLevel: "privileged" })
+      const sameFirm = authed("member1", { firmId: "firmA", role: "partner", clearanceLevel: "privileged" })
+      const nonMember = authed("partner1", { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" })
       const otherFirm = authed("partnerB", {
         firmId: "firmB",
         role: "partner",
         clearanceLevel: "privileged-restricted",
       })
       await assertSucceeds(getDoc(doc(sameFirm, collectionPath, "row-read")))
+      await assertFails(getDoc(doc(nonMember, collectionPath, "row-read")))
       await assertFails(getDoc(doc(otherFirm, collectionPath, "row-read")))
     }
   )
