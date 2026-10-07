@@ -23,31 +23,21 @@
  *   - client research                            -> deny client-research-denied
  *   - otherwise                                  -> allow ok
  */
-import { CLASSIFICATION_RANKS, type Classification } from "@/platform/p1/types";
+import { CLASSIFICATION_RANKS, type Classification } from "@/platform/p1/types"
 
-export type PermissionDecision = { allow: boolean; reason: string };
+export type PermissionDecision = { allow: boolean; reason: string }
 
 /** The caller as the table needs it (role and clearance already resolved by the identity policy). */
-export type DecisionCaller = {
-  role: string;
-  firmId: string;
-  clearanceLevel: Classification;
-};
+export type DecisionCaller = { role: string; firmId: string; clearanceLevel: Classification }
 
 /**
  * The named matter: `undefined` when the action names no matter, `null` when it names one that
  * does not exist (treated as cross-firm, so existence never leaks).
  */
-export type DecisionMatter =
-  | { firmId: string; classification: unknown }
-  | null
-  | undefined;
+export type DecisionMatter = { firmId: string; classification: unknown } | null | undefined
 
 /** The only actions the accounts role may take (L17.6: getIntimationRegister, recordAccountsEntry). */
-export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set([
-  "intimation_register",
-  "record_accounts_entry",
-]);
+export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set(["intimation_register", "record_accounts_entry"])
 
 /**
  * Firm administration (P5 identity and E-19 MFA operations, Cloud Functions): partner only.
@@ -60,21 +50,19 @@ export const FIRM_ADMIN_ACTIONS = [
   "identity.deactivate",
   "mfa.enforce",
   "mfa.approve_disable",
-] as const;
-export type FirmAdminAction = (typeof FIRM_ADMIN_ACTIONS)[number];
-const FIRM_ADMIN_ACTION_SET: ReadonlySet<string> = new Set(FIRM_ADMIN_ACTIONS);
+] as const
+export type FirmAdminAction = (typeof FIRM_ADMIN_ACTIONS)[number]
+const FIRM_ADMIN_ACTION_SET: ReadonlySet<string> = new Set(FIRM_ADMIN_ACTIONS)
 
 export function isFirmAdminAction(action: string): action is FirmAdminAction {
-  return FIRM_ADMIN_ACTION_SET.has(action);
+  return FIRM_ADMIN_ACTION_SET.has(action)
 }
 
 /**
  * Firm tools for staff (partner, associate, clerk, intern), never for a client (re-audit N-2):
  * `normalise_case_number` is POST /api/g0/normalise. Accounts keep their register-only rule.
  */
-export const STAFF_ONLY_ACTIONS: ReadonlySet<string> = new Set([
-  "normalise_case_number",
-]);
+export const STAFF_ONLY_ACTIONS: ReadonlySet<string> = new Set(["normalise_case_number"])
 
 /**
  * D1 (Phase 2a: clients, matters, conflict checks). Staff only; a client or an own_matters scope
@@ -93,16 +81,16 @@ export const D1_ACTIONS = [
   "conflict.read_trail",
   "firm.set_numbering",
   "matter.read",
-] as const;
-export type D1Action = (typeof D1_ACTIONS)[number];
-const D1_ACTION_SET: ReadonlySet<string> = new Set(D1_ACTIONS);
+] as const
+export type D1Action = (typeof D1_ACTIONS)[number]
+const D1_ACTION_SET: ReadonlySet<string> = new Set(D1_ACTIONS)
 
 export function isD1Action(action: string): action is D1Action {
-  return D1_ACTION_SET.has(action);
+  return D1_ACTION_SET.has(action)
 }
 
-const D1_STAFF = ["partner", "associate", "clerk", "intern"];
-const D1_PARTNER_ASSOCIATE = ["partner", "associate"];
+const D1_STAFF = ["partner", "associate", "clerk", "intern"]
+const D1_PARTNER_ASSOCIATE = ["partner", "associate"]
 const D1_ROLES: Record<D1Action, readonly string[]> = {
   "client.register": ["partner", "associate", "clerk"],
   "client.read": D1_STAFF,
@@ -115,20 +103,26 @@ const D1_ROLES: Record<D1Action, readonly string[]> = {
   "conflict.read_trail": D1_PARTNER_ASSOCIATE,
   "firm.set_numbering": ["partner"],
   "matter.read": D1_STAFF,
-};
-const D1_MATTER_LEVEL: ReadonlySet<string> = new Set([
-  "matter.read",
-  "matter.advance_stage",
-  "matter.close",
-]);
+}
+const D1_MATTER_LEVEL: ReadonlySet<string> = new Set(["matter.read", "matter.advance_stage", "matter.close"])
 
-const deny = (reason: string): PermissionDecision => ({ allow: false, reason });
-const allow = (reason: string): PermissionDecision => ({ allow: true, reason });
+const deny = (reason: string): PermissionDecision => ({ allow: false, reason })
+const allow = (reason: string): PermissionDecision => ({ allow: true, reason })
 
 function knownRank(value: unknown): number | null {
   return typeof value === "string" && Object.hasOwn(CLASSIFICATION_RANKS, value)
     ? CLASSIFICATION_RANKS[value as Classification]
-    : null;
+    : null
+}
+
+/** A named matter: same firm, a member, cleared for its classification (unreadable: fail closed). */
+function matterGate(caller: DecisionCaller, matter: DecisionMatter, isMember: boolean): PermissionDecision | null {
+  if (!matter || matter.firmId !== caller.firmId) return deny("cross-firm")
+  if (!isMember) return deny("not-member")
+  const required = knownRank(matter.classification)
+  const held = knownRank(caller.clearanceLevel)
+  if (required === null || held === null || held < required) return deny("clearance")
+  return null
 }
 
 export function decide(
@@ -136,68 +130,50 @@ export function decide(
   action: string,
   matter: DecisionMatter,
   isMember: boolean,
-  extra?: { scope?: "own_matters" },
+  extra?: { scope?: "own_matters" }
 ): PermissionDecision {
-  if (!caller) return deny("no-user");
+  if (!caller) return deny("no-user")
 
   if (isFirmAdminAction(action)) {
-    return caller.role === "partner" ? allow("ok") : deny("partner-only");
+    return caller.role === "partner" ? allow("ok") : deny("partner-only")
   }
 
   // L17.6 #41: "The accounts role is defined in L4.7 with read access to the intimation
   // register only — no matter documents." Membership does not widen it.
   if (caller.role === "accounts") {
-    if (!ACCOUNTS_REGISTER_ACTIONS.has(action))
-      return deny("accounts-register-only");
-    if (matter !== undefined && (!matter || matter.firmId !== caller.firmId))
-      return deny("cross-firm");
-    return allow("accounts-register");
+    if (!ACCOUNTS_REGISTER_ACTIONS.has(action)) return deny("accounts-register-only")
+    if (matter !== undefined && (!matter || matter.firmId !== caller.firmId)) return deny("cross-firm")
+    return allow("accounts-register")
   }
 
   if (isD1Action(action)) {
-    if (caller.role === "client" || extra?.scope === "own_matters")
-      return deny("client-denied");
+    if (caller.role === "client" || extra?.scope === "own_matters") return deny("client-denied")
+    // A matter-level action must name a matter; none given fails closed.
     if (D1_MATTER_LEVEL.has(action)) {
-      // A matter-level action must name a matter; none given fails closed.
-      if (!matter || matter.firmId !== caller.firmId) return deny("cross-firm");
-      if (!isMember) return deny("not-member");
-      const required = knownRank(matter.classification);
-      const held = knownRank(caller.clearanceLevel);
-      if (required === null || held === null || held < required)
-        return deny("clearance");
+      const refused = matterGate(caller, matter, isMember)
+      if (refused) return refused
     }
-    return D1_ROLES[action].includes(caller.role)
-      ? allow("ok")
-      : deny("role-not-permitted");
+    return D1_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
   }
 
-  if (
-    caller.role === "intern" &&
-    (action === "research" || action === "draft")
-  ) {
-    return deny("intern-channel-denied");
+  if (caller.role === "intern" && (action === "research" || action === "draft")) {
+    return deny("intern-channel-denied")
   }
 
   if (extra?.scope === "own_matters" || caller.role === "client") {
-    if (STAFF_ONLY_ACTIONS.has(action)) return deny("staff-only");
-    if (action === "research" || action === "draft")
-      return deny("client-channel-denied");
-    if (action === "list_matters") return allow("client-own-matters");
+    if (STAFF_ONLY_ACTIONS.has(action)) return deny("staff-only")
+    if (action === "research" || action === "draft") return deny("client-channel-denied")
+    if (action === "list_matters") return allow("client-own-matters")
   }
 
-  if (action === "list_matters") return allow("ok");
+  if (action === "list_matters") return allow("ok")
 
   if (matter !== undefined) {
-    if (!matter || matter.firmId !== caller.firmId) return deny("cross-firm");
-    if (!isMember) return deny("not-member");
-    const required = knownRank(matter.classification);
-    const held = knownRank(caller.clearanceLevel);
-    if (required === null || held === null || held < required)
-      return deny("clearance");
+    const refused = matterGate(caller, matter, isMember)
+    if (refused) return refused
   }
 
-  if (action === "research" && caller.role === "client")
-    return deny("client-research-denied");
+  if (action === "research" && caller.role === "client") return deny("client-research-denied")
 
-  return allow("ok");
+  return allow("ok")
 }
