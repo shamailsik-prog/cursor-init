@@ -516,6 +516,9 @@ const URDU_NON_AUTHORITY = ["ایف آئی آر", "چالان", "انتقال", 
 const URDU_CASE_WORD = foldDraftText("مقدمہ").text
 const URDU_FIR_CONTEXT = ["ایف آئی آر", "تھانہ"].map((w) => foldDraftText(w).text)
 const URDU_UNDER_SECTION = foldDraftText("زیر دفعہ").text
+// F-1: court names (Urdu and English) that make a مقدمہ a court case.
+const URDU_COURT_NAMES = ["سپریم کورٹ", "ہائی کورٹ", "عدالت عظمیٰ", "عدالت عالیہ", "شرعی عدالت"].map((w) => foldDraftText(w).text)
+const RE_ENGLISH_COURT_NAME = /\b(?:supreme|high|shariat|apex)\s+court\b/iu
 // "<type words> نمبر n (بابت|آف|سال|سن|/|-) yyyy" — Urdu case references.
 const URDU_CASE_REFERENCE = new RegExp(
   `(?:[\\p{Script=Arabic}.]+\\s+){0,4}${foldDraftText("نمبر").text}\\s*\\d+(?:\\s*-\\s*\\p{L})?\\s*(?:${["بابت", "آف", "سال", "سن"]
@@ -545,7 +548,9 @@ function urduSuspects(folded: FoldedText): Array<Span & { raw: string }> {
       const clauseEndAt = text.slice(start).search(/[\u06d4.\n]/u)
       const clause = text.slice(clauseStart, clauseEndAt < 0 ? text.length : start + clauseEndAt)
       const after = text.slice(start + m[0].length, start + m[0].length + 20).trimStart()
-      if (after.startsWith(URDU_UNDER_SECTION) || URDU_FIR_CONTEXT.some((w) => clause.includes(w))) continue
+      // F-1: a court named in the clause means a court case, whatever FIR words surround it
+      const courtNamed = URDU_COURT_NAMES.some((w) => clause.includes(w)) || RE_ENGLISH_COURT_NAME.test(clause)
+      if (!courtNamed && (after.startsWith(URDU_UNDER_SECTION) || URDU_FIR_CONTEXT.some((w) => clause.includes(w)))) continue
     }
     out.push({ start, end: start + m[0].length, raw: m[0] })
   }
