@@ -54,6 +54,23 @@ describe.skipIf(!EMULATORS)("allocateNumber", () => {
     expect(await alloc("client", "2026-06-01T10:00:00Z")).toBe(2)
     expect(await alloc("client", "2026-12-31T19:30:00Z")).toBe(1)
   })
+
+  it("an existing counter with a malformed next → 500 counter_corrupt, never a reset to 1 (final review M4)", async () => {
+    const now = new Date("2026-06-01T10:00:00Z")
+    for (const next of ["7", 0, -1, 2.5, null]) {
+      const firmId = uniq("firm")
+      const ref = adminDb().collection("counters").doc(`${firmId}_matter_2026`)
+      await ref.set({ firmId, kind: "matter", year: 2026, next })
+      await expect(adminDb().runTransaction((tx) => allocateNumber(tx, firmId, "matter", now))).rejects.toMatchObject({
+        status: 500,
+        code: "counter_corrupt",
+      })
+      expect((await ref.get()).data()?.next).toEqual(next)
+    }
+    const missing = uniq("firm")
+    await adminDb().collection("counters").doc(`${missing}_matter_2026`).set({ firmId: missing, kind: "matter", year: 2026 })
+    await expect(adminDb().runTransaction((tx) => allocateNumber(tx, missing, "matter", now))).rejects.toMatchObject({ code: "counter_corrupt" })
+  })
 })
 
 describe.skipIf(!EMULATORS)("setFirmNumbering and readPrefixes", () => {

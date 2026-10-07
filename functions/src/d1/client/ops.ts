@@ -226,7 +226,9 @@ export const listClientsOp: FirmOperation<Page<Record<string, unknown>>> = {
     if (cursor !== null) {
       const { sortKey, id } = decodeCursor(cursor)
       const [seconds, nanos] = sortKey.split(".").map(Number)
-      if (!Number.isInteger(seconds) || !Number.isInteger(nanos)) throw new HttpError(400, "invalid_cursor")
+      if (!Number.isInteger(seconds) || !Number.isInteger(nanos) || nanos < 0 || nanos >= 1e9 || !isSafeDocId(id)) {
+        throw new HttpError(400, "invalid_cursor")
+      }
       after = { createdAt: new Timestamp(seconds, nanos), id }
     }
 

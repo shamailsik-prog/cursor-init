@@ -249,4 +249,15 @@ describe.skipIf(!EMULATORS)("listClients", () => {
     const lim = await apiErrorOf(listClients({ token: intern.token, data: { firmId, limit: "0" } } as never))
     expectKind(lim, "invalid-argument", "invalid_limit")
   })
+
+  it("a crafted cursor (nanos out of 0..999999999, negative nanos, unsafe id) → 400 invalid_cursor, as listMatters (final review M5)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const crafted = (sortKey: string, id: string) => Buffer.from(JSON.stringify({ sortKey, id }), "utf8").toString("base64url")
+    for (const cursor of [crafted("1700000000.1000000000", "abc"), crafted("1700000000.-1", "abc"), crafted("1700000000.5", "a/b"), crafted("1700000000.5", "")]) {
+      expectKind(await apiErrorOf(listClients({ token: partner.token, data: { firmId, cursor } } as never)), "invalid-argument", "invalid_cursor")
+    }
+    const ok = await listClients({ token: partner.token, data: { firmId, cursor: crafted("1700000000.999999999", "abc") } } as never)
+    expect(ok.items).toEqual([])
+  })
 })

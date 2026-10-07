@@ -48,13 +48,17 @@ export function formatMatterNo(prefix: string, year: number, n: number): string 
 /**
  * Allocates the next number (from 1) of `kind` for the firm in the current Karachi year.
  * Reads then writes the counter in `tx`, so concurrent allocations serialise; call it
- * after the transaction's other reads (Firestore requires reads before writes).
+ * after the transaction's other reads (Firestore requires reads before writes). An existing
+ * counter whose `next` is not an integer ≥ 1 → HttpError(500, "counter_corrupt").
  */
 export async function allocateNumber(tx: Transaction, firmId: string, kind: NumberKind, now: Date): Promise<number> {
   const year = karachiYear(now)
   const ref = adminDb().collection("counters").doc(`${firmId}_${kind}_${year}`)
   const data = (await tx.get(ref)).data()
-  const n = typeof data?.next === "number" && Number.isInteger(data.next) && data.next >= 1 ? data.next : 1
+  const valid = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1
+  // A counter that exists but cannot be read fails closed: resetting it would reissue numbers.
+  if (data !== undefined && !valid(data.next)) throw new HttpError(500, "counter_corrupt")
+  const n = data === undefined ? 1 : (data.next as number)
   if (data) tx.update(ref, { next: n + 1 })
   else {
     tx.create(ref, {
