@@ -380,8 +380,11 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
 
     const userRef = usersRef().doc(uid)
     const change = await adminDb().runTransaction(async (tx) => {
-      const current = await readTargetDoc(tx, caller, uid)
+      // Read in the order a commit takes its write locks (by path: claims_sync before users), so
+      // a concurrent setUserClaims commit can never hold one of our reads while waiting on the
+      // other (a lock-order deadlock the emulator ends as a non-retryable INVALID_ARGUMENT).
       const syncDoc = (await tx.get(claimsSyncRef(uid))).data()
+      const current = await readTargetDoc(tx, caller, uid)
       const nextRole: unknown = role ?? current.role
       const nextClearance: unknown = clearanceLevel ?? current.clearanceLevel
       if (!isRole(nextRole) || !isKnownClassification(nextClearance)) throw new HttpError(409, "target_state_invalid")
@@ -474,8 +477,9 @@ async function revertIfStillOurs(
   before: { role: unknown; clearanceLevel: unknown }
 ): Promise<{ result: ClaimsResult; blocked: boolean } | undefined> {
   return adminDb().runTransaction(async (tx) => {
-    const doc = (await tx.get(usersRef().doc(uid))).data()
+    // Same read order as setUserClaims (claims_sync before users): see the note there.
     const syncDoc = (await tx.get(claimsSyncRef(uid))).data()
+    const doc = (await tx.get(usersRef().doc(uid))).data()
     if (!doc || committedVersion(syncDoc, doc) !== ours.version) return undefined
     let role: unknown = before.role
     let blocked = false

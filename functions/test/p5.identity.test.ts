@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { Firestore, Timestamp } from "firebase-admin/firestore"
+import { Firestore, Timestamp, Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { adminAuth, adminDb } from "../src/admin"
 import { firmlessFromToken, requireAuth, verifyBearer } from "../src/p5/auth"
@@ -601,6 +601,38 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
     })
     expect(await auditCount(p1.uid, ACTION)).toBe(1)
     expect(await auditCount(p2.uid, ACTION)).toBe(1)
+  })
+
+  it("each claims transaction reads claims_sync/{uid} before users/{uid} (commit lock order), on the change and on the revert", async () => {
+    // Regression for a flake of the concurrent test above. The transactions read users/{uid}
+    // and then claims_sync/{uid}. A concurrent commit takes its write locks in path order
+    // (claims_sync before users), so it could hold claims_sync while waiting on users: the
+    // second read deadlocked, and the emulator ended the reader with INVALID_ARGUMENT
+    // "Transaction is invalid or closed", which the SDK does not retry (a 500 internal). Reading
+    // in the same order the commit locks removes the cycle. Measured with 4 pairs in parallel:
+    // 2 to 5 lost calls in 60 pairs before, 0 in 120 pairs after.
+    const firmId = uniq("firm")
+    const partner = await mintIdToken(partnerClaims(firmId))
+    const target = await member(firmId)
+    const reads = new Map<Transaction, string[]>()
+    const realGet = Transaction.prototype.get
+    const recordingGet = function (this: Transaction, ref: unknown) {
+      const path = (ref as { path?: unknown }).path
+      if (typeof path === "string" && path.endsWith(`/${target.uid}`)) reads.set(this, [...(reads.get(this) ?? []), path.split("/")[0]!])
+      return (realGet as (r: unknown) => unknown).call(this, ref)
+    }
+    vi.spyOn(Transaction.prototype, "get").mockImplementation(recordingGet as never)
+    await setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
+    vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("injected"))
+    await expect(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, clearanceLevel: "internal" }))).rejects.toBeDefined()
+    const orders = [...reads.values()].map((r) => r.filter((c) => c === "users" || c === "claims_sync"))
+    // change, change, revert: three transactions read both documents
+    expect(orders.filter((o) => o.includes("users") && o.includes("claims_sync"))).toEqual([
+      ["claims_sync", "users"],
+      ["claims_sync", "users"],
+      ["claims_sync", "users"],
+    ])
   })
 
   it("the target-clearance check uses the users doc, not stale Auth claims", async () => {
