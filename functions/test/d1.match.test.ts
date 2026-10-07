@@ -218,7 +218,7 @@ describe("screen: identity basis and outcome (P2-3, P2-5)", () => {
       reliedOnLinkIds: []
     })
   })
-  it("different non-empty CNICs on both sides + identical names -> no hit", () => {
+  it("different non-empty CNICs on both sides + identical names -> a name-basis review item, never FLAG (final review I4)", () => {
     const r = run(
       [{ role: "opposing", name: "Muhammad Ali", keys: { cnic: CNIC_X, phone: "+923001234567" } }],
       [
@@ -226,12 +226,71 @@ describe("screen: identity basis and outcome (P2-3, P2-5)", () => {
           role: "client",
           name: "Muhammad Ali",
           keys: { cnic: CNIC_Y, phone: "+923001234567" },
-          linkState: "confirmed"
+          linkState: "confirmed",
+          linkIds: ["l1"]
         })
       ]
     )
+    expect(r.hits).toHaveLength(1)
+    expect(r.hits[0]).toMatchObject({
+      basis: "name",
+      outcome: "POSSIBLE_CANDIDATE_REVIEW",
+      identityBasis: "candidate_only",
+      reliedOnLinkIds: []
+    })
+    expect(r.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+  })
+  it("a one-digit-different CNIC + identical name, opposing vs live client -> POSSIBLE_CANDIDATE_REVIEW (was CLEAR)", () => {
+    const r = run(
+      [{ role: "opposing", name: "Muhammad Ali", keys: { cnic: "4210112345671" } }],
+      [cand({ role: "client", name: "Muhammad Ali", keys: { cnic: "4210112345672" }, clientHasLiveMatter: true })]
+    )
+    expect(r.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+    expect(r.hits[0]).toMatchObject({ type: "direct_adverse", basis: "name", outcome: "POSSIBLE_CANDIDATE_REVIEW" })
+  })
+  it("different CNICs with an equal phone but unrelated names -> a name-basis review item on role-crossing", () => {
+    const r = run(
+      [{ role: "opposing", name: "Zzz Qqq", keys: { cnic: CNIC_X, phone: "+923001234567" } }],
+      [
+        cand({
+          role: "client",
+          name: "Muhammad Ali",
+          keys: { cnic: CNIC_Y, phone: "+923001234567" },
+          linkState: "confirmed",
+          linkIds: ["l1"],
+          clientHasLiveMatter: true
+        })
+      ]
+    )
+    expect(r.hits).toHaveLength(1)
+    expect(r.hits[0]).toMatchObject({ basis: "name", outcome: "POSSIBLE_CANDIDATE_REVIEW", identityBasis: "candidate_only" })
+    expect(r.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+  })
+  it("different CNICs with neither a name hit nor another equal key -> no hit", () => {
+    const r = run(
+      [{ role: "opposing", name: "Zzz Qqq", keys: { cnic: CNIC_X } }],
+      [cand({ role: "client", name: "Muhammad Ali", keys: { cnic: CNIC_Y }, clientHasLiveMatter: true })]
+    )
     expect(r.hits).toEqual([])
     expect(r.result).toBe("CLEAR")
+  })
+  it("a same-role pair with differing CNICs stays NONE, even with an unresolved link", () => {
+    const r = run(
+      [{ role: "client", name: "Muhammad Ali", keys: { cnic: CNIC_X } }],
+      [cand({ role: "client", name: "Muhammad Ali", keys: { cnic: CNIC_Y }, unresolvedLinkIds: ["l7"] })]
+    )
+    expect(r.hits.map((h) => h.outcome)).toEqual(["NONE"])
+    expect(r.result).toBe("CLEAR")
+  })
+  it("a fallback skeleton hit with differing CNICs is a review item on role-crossing", () => {
+    const r = screen(
+      [{ role: "opposing", name: "بابر", keys: { cnic: CNIC_X } }],
+      [nameForms("بابر")],
+      [cand({ role: "client", name: "Babar Khan", keys: { cnic: CNIC_Y }, clientHasLiveMatter: true })],
+      { subjectFallback: [true] }
+    )
+    expect(r.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+    expect(r.hits[0]).toMatchObject({ basis: "name" })
   })
   it("a CNIC on one side only does not veto a name hit", () => {
     const r = run(
@@ -439,5 +498,22 @@ describe("screen: fallback skeleton comparison (controller ruling)", () => {
       { subjectFallback: [true] }
     )
     expect(r.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+  })
+})
+
+describe("screen: argument lengths fail closed (final review M1)", () => {
+  const subjects: Subject[] = [
+    { role: "client", name: "Ayesha Siddiqa", keys: {} },
+    { role: "opposing", name: "Muhammad Ali", keys: {} }
+  ]
+  const c = [cand({ role: "client", name: "Muhammad Ali" })]
+  it("throws when subjectForms does not match subjects", () => {
+    expect(() => screen(subjects, [nameForms("Ayesha Siddiqa")], c)).toThrow()
+  })
+  it("throws when subjectFallback or subjectEntityIds is given with another length", () => {
+    const forms = subjects.map((s) => nameForms(s.name))
+    expect(() => screen(subjects, forms, c, { subjectFallback: [false] })).toThrow()
+    expect(() => screen(subjects, forms, c, { subjectEntityIds: [undefined] })).toThrow()
+    expect(() => screen(subjects, forms, c, { subjectFallback: [false, false], subjectEntityIds: [undefined, undefined] })).not.toThrow()
   })
 })

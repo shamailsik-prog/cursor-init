@@ -129,9 +129,12 @@ const RANK: Record<Hit["outcome"], number> = { NONE: 0, POSSIBLE_CANDIDATE_REVIE
 /**
  * Screens every subject against every candidate. One hit at most per (subject, candidate):
  * basis `key` (score 1) on an equal normalised key or the subject client's own entity, else
- * basis `name` when the best token-set ratio over form pairs is ≥ 0.80. Different CNICs on
- * both sides are distinct persons and never hit. Role-crossing hits FLAG only on a confirmed
+ * basis `name` when the best token-set ratio over form pairs is ≥ 0.80. Different non-empty
+ * CNICs on both sides (and no shared entity) never confirm an identity, but neither do they
+ * clear it (P2-3, P2-16): a name hit or another equal key is then a basis `name` hit, a review
+ * item when it crosses sides and NONE when it does not. Role-crossing hits FLAG only on a confirmed
  * identity; otherwise they, and any hit on a candidate with an unresolved link, are review items.
+ * Per-subject arrays must match `subjects` in length (a mismatch throws: never a silent no-match).
  */
 export function screen(
   subjects: Subject[],
@@ -139,9 +142,16 @@ export function screen(
   candidates: Candidate[],
   opts?: ScreenOptions
 ): ScreenResult {
+  if (subjectForms.length !== subjects.length) throw new Error("screen: subjectForms length differs from subjects")
+  if (opts?.subjectFallback !== undefined && opts.subjectFallback.length !== subjects.length) {
+    throw new Error("screen: subjectFallback length differs from subjects")
+  }
+  if (opts?.subjectEntityIds !== undefined && opts.subjectEntityIds.length !== subjects.length) {
+    throw new Error("screen: subjectEntityIds length differs from subjects")
+  }
   const hits: Hit[] = []
   subjects.forEach((subject, subjectIndex) => {
-    const forms = subjectForms[subjectIndex] ?? []
+    const forms = subjectForms[subjectIndex]
     const fallback = opts?.subjectFallback?.[subjectIndex] === true
     const subjectEntity = subject.clientId ? opts?.subjectEntityIds?.[subjectIndex] : undefined
 
@@ -149,23 +159,26 @@ export function screen(
       const sameEntity = subjectEntity !== undefined && subjectEntity !== "" && subjectEntity === c.entityId
       const sc = subject.keys.cnic
       const cc = c.keys.cnic
-      if (!sameEntity && sc && cc && sc !== cc) continue
+      // Two different CNICs: no key can confirm this pair, so any match is name-basis only.
+      const cnicsDiffer = !sameEntity && !!sc && !!cc && sc !== cc
 
       const keyEqual = KEY_FIELDS.some((k) => !!subject.keys[k] && subject.keys[k] === c.keys[k])
-      const keyHit = sameEntity || keyEqual
+      const keyHit = sameEntity || (keyEqual && !cnicsDiffer)
       let score = 1
       if (!keyHit) {
         score = bestRatio(forms, c.forms)
         if (fallback && score < NAME_THRESHOLD) score = Math.max(score, bestRatio(forms, c.forms, skeleton))
+        // An equal phone/NTN/SECP beside differing CNICs still asks for review (score 1: the key matched).
+        if (keyEqual) score = 1
         if (score < NAME_THRESHOLD) continue
       }
 
-      const confirmed = sameEntity || (keyEqual && c.linkState === "confirmed")
+      const confirmed = keyHit && (sameEntity || c.linkState === "confirmed")
       const unresolved = c.unresolvedLinkIds.length > 0
       const type = conflictType(subject.role, c)
       const outcome: Hit["outcome"] =
         type === "informational"
-          ? unresolved
+          ? unresolved && !cnicsDiffer
             ? "POSSIBLE_CANDIDATE_REVIEW"
             : "NONE"
           : confirmed
@@ -185,7 +198,7 @@ export function screen(
         matterId: c.matterId,
         matterNo: c.matterNo,
         matterClassification: c.matterClassification,
-        reliedOnLinkIds: keyEqual ? [...c.linkIds] : [],
+        reliedOnLinkIds: keyHit && keyEqual ? [...c.linkIds] : [],
         ...(unresolved ? { unresolvedLinkIds: [...c.unresolvedLinkIds] } : {})
       })
     }
