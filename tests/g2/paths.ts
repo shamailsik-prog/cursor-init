@@ -375,15 +375,6 @@ const TENANCY_PATHS: ReadPath[] = [
   },
   ...LINEAGE_VIEWS.map(([view, extra]) => tenancyView(view, extra)),
   {
-    service: "P5", channel: "web", route: TENANCY, method: "POST", selector: "action=update_role", kind: "write",
-    base: () => post(TENANCY, { action: "update_role", firmId: FIRM_B, targetUserId: "accounts_b", nextRole: "accounts", nextClearance: "privileged-restricted", reason: "g2 base" }),
-    aimed: (a) => [
-      deny("firm-A session reference", post(TENANCY, { action: "update_role", firmId: FIRM_B, targetUserId: "accounts_b", nextRole: "accounts", nextClearance: "privileged-restricted", reason: "g2 aimed", sessionReferenceId: a.tenancy.child }), /"unknown session reference"/),
-      deny("firm-A target user", post(TENANCY, { action: "update_role", firmId: FIRM_B, targetUserId: "clerk_a", nextRole: "clerk", nextClearance: "confidential", reason: "g2 aimed" }), /"unknown target user"/),
-    ],
-    control: { as: "partner_a", call: () => post(TENANCY, { action: "update_role", firmId: FIRM_A, targetUserId: "accounts_a", nextRole: "accounts", nextClearance: "internal", reason: "g2 control" }) },
-  },
-  {
     service: "P5", channel: "web", route: TENANCY, method: "POST", selector: "action=revoke_session_reference", kind: "write",
     base: async ({ fresh }) => {
       const c = await fresh("chain", () => chainAt(FIRM_B))
@@ -412,6 +403,9 @@ export const selectorKey = (p: { method: string; route: string; selector: string
 
 /** Selectors of G-2 service modules that are writes with no firm-A read surface, reviewed and outside the read set. */
 export const OUT_OF_SCOPE_SELECTORS: Record<string, string> = {
+  // Re-audit N-3: refused 409 use_identity_api for every caller and firm (no effect, no read), so
+  // it has no cross-firm surface; tests/api.tenancy.test.ts pins the refusal.
+  "POST /api/p5/tenancy action=update_role": "retired: identity changes go through POST /api/platform/identity/setUserClaims",
   "POST /api/d2/court-ops action=acknowledge_item": "D6-1 court-ops write",
   "POST /api/d2/court-ops action=resolve_follow_up": "D6-1 court-ops write",
   "POST /api/d2/court-ops action=resolve_workflow": "D6-1 court-ops write",

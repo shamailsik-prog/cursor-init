@@ -139,7 +139,8 @@ function problemsOf(route: string, surface: RouteSurface = SURFACES[route], meth
 const MUTATIONS: Array<[string, string, (s: RouteSurface) => RouteSurface, string[]?]> = [
   ["J a new body field on an existing action", "/api/d1/clients", (s) => ({ ...s, bodyFields: { ...s.bodyFields, conflict_check: [...s.bodyFields.conflict_check, "entityIds"] } })],
   ["a new non-id-named body field (caseRef)", "/api/d1/clients", (s) => ({ ...s, bodyFields: { ...s.bodyFields, conflict_check: [...s.bodyFields.conflict_check, "caseRef"] } })],
-  ["a new body field on a tenancy action (scope)", "/api/p5/tenancy", (s) => ({ ...s, bodyFields: { ...s.bodyFields, update_role: [...s.bodyFields.update_role, "scope"] } })],
+  // On revoke_session_reference: update_role is retired and out of the read set (re-audit N-3).
+  ["a new body field on a tenancy action (scope)", "/api/p5/tenancy", (s) => ({ ...s, bodyFields: { ...s.bodyFields, revoke_session_reference: [...s.bodyFields.revoke_session_reference, "scope"] } })],
   ["a new by-id query param", "/api/d1/clients", (s) => ({ ...s, queryParams: [...s.queryParams, "id"] })],
   ["a new view", "/api/d1/document-workflow", (s) => ({ ...s, views: [...s.views, "export_all"] })],
   ["a new action", "/api/p5/tenancy", (s) => ({ ...s, actions: [...s.actions, "dump_firm"], bodyFields: { ...s.bodyFields, dump_firm: ["action", "actorId", "firmId"] } })],

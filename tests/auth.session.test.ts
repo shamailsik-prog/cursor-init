@@ -258,9 +258,10 @@ describe("identity binding", () => {
       )
     // Claiming to be the partner is rejected outright…
     expect((await attempt("partner_a")).status).toBe(403)
-    // …and acting as itself, the clerk fails the partner-only check.
+    // …and acting as itself, the clerk is refused too: update_role is retired for every caller
+    // (re-audit N-3: 409 use_identity_api; role changes go through the identity API).
     const own = await attempt()
-    expect(own.status).toBeGreaterThanOrEqual(400)
+    expect(own.status).toBe(409)
     expect(getRuntimeStore().users.get("clerk_a")?.role).toBe("clerk")
     expect(getRuntimeStore().users.get("clerk_a")?.clearanceLevel).toBe("confidential")
   })

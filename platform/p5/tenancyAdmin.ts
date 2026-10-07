@@ -1,4 +1,4 @@
-import { isClassification, type Classification } from "@/platform/p1/types"
+import type { Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
 import {
   rankOf, rankOfStoredOrMax,
@@ -209,72 +209,6 @@ export function listFirmAudit(
     total: rows.length,
     nextCursor,
   }
-}
-
-export function updateUserRole(
-  store: SpineStore,
-  input: {
-    actorId: string
-    firmId: string
-    targetUserId: string
-    nextRole: Role
-    nextClearance: Classification
-    reason?: string
-    authBoundary?: TenancyAuthBoundary
-    sessionReferenceId?: string | null
-    externalSessionId?: string | null
-    privilegedBoundaryDriftCount?: number
-    privilegedBoundaryDriftSessionReferenceIds?: string[]
-    delegatedBoundaryLineageRootSessionReferenceId?: string | null
-    delegatedBoundaryComparedSessionReferenceId?: string | null
-    delegatedBoundaryReconciliationStatus?: TenancyDelegatedBoundaryReconciliationStatus
-    delegatedBoundaryDivergenceReasons?: string[]
-  }
-): { user: User; auditEntry: NonNullable<SpineStore["audit"][number]> } {
-  const actor = requirePartnerInFirm(store, input.actorId, input.firmId)
-  const target = store.users.get(input.targetUserId)
-  // One answer for not-found and other-firm (no cross-firm existence oracle).
-  if (!target || target.firmId !== input.firmId) throw new PublicError("unknown target user")
-  if (!isClassification(input.nextClearance)) {
-    throw new PublicError("nextClearance must be a rank-0–4 label")
-  }
-  if (input.nextRole === "partner" && target.role !== "partner") {
-    throw new PublicError("partner promotion is blocked in this surface")
-  }
-  if (rankOf(input.nextClearance) > rankOf(actor.clearanceLevel)) {
-    throw new PublicError("cannot assign clearance above actor level")
-  }
-  if (input.nextRole === "client" && rankOf(input.nextClearance) > rankOf("internal")) {
-    throw new PublicError("client clearance may not exceed internal")
-  }
-  target.role = input.nextRole
-  target.clearanceLevel = input.nextClearance
-  // `store.users.get` may return a request-scoped copy of the caller's record
-  // (clearance ceiling); write the update back explicitly.
-  store.users.set(target.id, target)
-  const auditEntry = {
-    id: store.id("aud"),
-    firmId: input.firmId,
-    action: "tenant_update_role",
-    actorId: actor.id,
-    target: target.id,
-    classification: target.clearanceLevel,
-    reason: input.reason,
-    authBoundary: input.authBoundary,
-    sessionReferenceId: input.sessionReferenceId ?? null,
-    externalSessionId: input.externalSessionId ?? null,
-    privilegedBoundaryDriftCount: input.privilegedBoundaryDriftCount ?? 0,
-    privilegedBoundaryDriftSessionReferenceIds: input.privilegedBoundaryDriftSessionReferenceIds ?? [],
-    delegatedBoundaryLineageRootSessionReferenceId:
-      input.delegatedBoundaryLineageRootSessionReferenceId ?? null,
-    delegatedBoundaryComparedSessionReferenceId:
-      input.delegatedBoundaryComparedSessionReferenceId ?? null,
-    delegatedBoundaryReconciliationStatus: input.delegatedBoundaryReconciliationStatus ?? "aligned",
-    delegatedBoundaryDivergenceReasons: input.delegatedBoundaryDivergenceReasons ?? [],
-    at: Date.now(),
-  } as const
-  store.audit.push(auditEntry)
-  return { user: target, auditEntry }
 }
 
 export function getTenancySessionReferenceState(
@@ -528,43 +462,6 @@ export function revokeTenancySessionReference(
   } as const
   store.audit.push(auditEntry)
   return { reference: revoked, auditEntry }
-}
-
-export function invalidateSessionReferencesForPrivilegeDrift(
-  store: SpineStore,
-  input: {
-    actorId: string
-    firmId: string
-    targetUserId: string
-    targetRole: Role
-    targetClearance: Classification
-    now?: number
-  }
-): TenancySessionReferenceRow[] {
-  requirePartnerInFirm(store, input.actorId, input.firmId)
-  const now = input.now ?? Date.now()
-  const updatedRows: TenancySessionReferenceRow[] = []
-  for (const row of store.tenancySessionReferences.values()) {
-    if (row.firmId !== input.firmId || row.userId !== input.targetUserId) continue
-    if (row.revokedAt !== null) continue
-    const state = getTenancySessionReferenceState(row, now)
-    if (state === "expired") continue
-    if (row.roleSnapshot === input.targetRole && row.clearanceSnapshot === input.targetClearance) {
-      continue
-    }
-    const invalidated = {
-      ...row,
-      revokedAt: now,
-      revokedBy: input.actorId,
-      revokedReason: "privileged_boundary_drift",
-      privilegedBoundaryDriftedAt: now,
-      privilegedBoundaryDriftedBy: input.actorId,
-      privilegedBoundaryDriftReason: "role_or_clearance_changed",
-    }
-    store.tenancySessionReferences.set(invalidated.id, invalidated)
-    updatedRows.push(invalidated)
-  }
-  return updatedRows
 }
 
 export function listFirmSessionReferences(

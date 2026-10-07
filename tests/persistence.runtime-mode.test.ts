@@ -10822,17 +10822,18 @@ describe("Runtime persistence mode", () => {
           }),
         })
       )
-      expect(roleUpdate.status).toBe(200)
-      const roleUpdateJson = (await roleUpdate.json()) as {
-        result: {
-          privilegedBoundaryDriftCount: number
-          privilegedBoundaryDriftSessionReferenceIds: string[]
-        }
-      }
-      expect(roleUpdateJson.result.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
-      expect(roleUpdateJson.result.privilegedBoundaryDriftSessionReferenceIds).toContain(
-        clerkSessionJson.sessionReference.id
-      )
+      // Re-audit N-3: the Next tenancy route no longer writes identity fields (E-27).
+      expect(roleUpdate.status).toBe(409)
+      expect(((await roleUpdate.json()) as { code: string }).code).toBe("use_identity_api")
+      // The change arrives the way it does in production: Cloud Functions setUserClaims writes
+      // users/{uid} (simulated here with the Admin-equivalent context).
+      await setDoc(doc(ctx.firestore(), "users", "clerk_a"), {
+        id: "clerk_a",
+        firmId: "firmA",
+        role: "clerk",
+        clearanceLevel: "internal",
+        active: true,
+      })
 
       const associateSession = await tenancyGet(
         new Request("http://127.0.0.1/api/p5/tenancy?view=session&userId=associate_a&firmId=firmA")
@@ -11670,17 +11671,8 @@ describe("Runtime persistence mode", () => {
           delegatedBoundaryDivergenceReasons?: string[]
         }>
       }
-      const roleAudit = auditJson.items.find(
-        (row) => row.action === "tenant_update_role" && row.target === "clerk_a"
-      )
-      expect(roleAudit).toBeDefined()
-      expect(roleAudit?.authBoundary).toBe("external_session_hint")
-      expect(roleAudit?.sessionReferenceId).toBe(actorSessionJson.sessionReference.id)
-      expect(roleAudit?.externalSessionId).toBe("ext-runtime-actor")
-      expect(roleAudit?.privilegedBoundaryDriftCount).toBeGreaterThanOrEqual(1)
-      expect(roleAudit?.privilegedBoundaryDriftSessionReferenceIds).toContain(
-        clerkSessionJson.sessionReference.id
-      )
+      // The refused update_role wrote no tenant row.
+      expect(auditJson.items.some((row) => row.action === "tenant_update_role")).toBe(false)
       expect(
         auditJson.items.some((row) => row.action === "tenant_revoke_session_reference")
       ).toBe(true)
@@ -11847,17 +11839,7 @@ describe("Runtime persistence mode", () => {
       expect(persistedClerk.data()?.clearanceLevel).toBe("internal")
 
       const persistedAudit = await getDocs(collection(ctx.firestore(), "audit_log"))
-      expect(
-        persistedAudit.docs.some(
-          (entry) =>
-            entry.data()?.action === "tenant_update_role" &&
-            entry.data()?.target === "clerk_a" &&
-            entry.data()?.firmId === "firmA" &&
-            entry.data()?.authBoundary === "external_session_hint" &&
-            entry.data()?.sessionReferenceId === actorSessionJson.sessionReference.id &&
-            entry.data()?.externalSessionId === "ext-runtime-actor"
-        )
-      ).toBe(true)
+      expect(persistedAudit.docs.some((entry) => entry.data()?.action === "tenant_update_role")).toBe(false)
 
       const persistedSessionRef = await getDoc(
         doc(ctx.firestore(), "tenancy_session_references", actorSessionJson.sessionReference.id)

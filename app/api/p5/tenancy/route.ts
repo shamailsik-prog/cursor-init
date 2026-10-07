@@ -5,13 +5,12 @@ import { TENANCY_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
-import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
+import { REQUEST_FAILED_CODE, errorResponse, publicErrorMessage } from "@/platform/http/errors"
 import {
   beginIdempotentRequest,
   IdempotencyError,
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
-import { isClassification } from "@/platform/p1/types"
 import type {
   Role,
   TenancyAuthBoundary,
@@ -56,7 +55,6 @@ import {
   listLineageClosureAdjudications,
   listLineageClosureAdjudicationSettlements,
   listExternalSessionIdentityBridges,
-  invalidateSessionReferencesForPrivilegeDrift,
   logLineageClosureAdjudicationSettlementCorrection,
   openLineageArbitrationDebtRetirementDispute,
   quarantineExternalSessionIdentityBridge,
@@ -80,7 +78,6 @@ import {
   resolveSessionLineageDispute,
   revokeTenancySessionReference,
   upsertTenancySessionReference,
-  updateUserRole,
 } from "@/platform/p5/tenancyAdmin"
 
 
@@ -496,16 +493,6 @@ function parseExternalSessionIdentityBridgeMismatchStatus(
   throw new PublicError("mismatchStatus must be aligned, mismatch_detected, or assertion_missing")
 }
 
-function isRole(value: unknown): value is Role {
-  return (
-    value === "partner" ||
-    value === "associate" ||
-    value === "clerk" ||
-    value === "intern" ||
-    value === "accounts" ||
-    value === "client"
-  )
-}
 
 function normalizeOptionalString(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim()
@@ -521,12 +508,15 @@ function parseAuthBoundary(value: unknown): TenancyAuthBoundary | undefined {
 async function loadUser(
   store: ReturnType<typeof getRuntimeStore>,
   repos: Awaited<ReturnType<typeof getRuntimeRepositories>>,
-  userId: string
+  userId: string,
+  options: { preferRepository?: boolean } = {}
 ): Promise<User | null> {
   const cached = store.users.get(userId)
-  if (cached) return cached
+  if (cached && !options.preferRepository) return cached
   const row = await repos.users.get(userId)
-  if (!row) return null
+  // preferRepository: a persisted record wins over this instance's copy; a user that exists only
+  // in this instance's store (the in-memory seed) is still found.
+  if (!row) return cached ?? null
   store.users.set(row.id, row)
   return row
 }
@@ -620,7 +610,10 @@ async function handleGet(request: Request) {
         return NextResponse.json({ error: "userId is required" }, { status: 400 })
       }
 
-      const user = await loadUser(store, repos, resolvedUserId)
+      // The repository is authoritative here: role and clearance change only through the
+      // identity API (Cloud Functions, E-27 / re-audit N-3), so a cached copy on this instance
+      // may be stale, and the drift check below must see the change.
+      const user = await loadUser(store, repos, resolvedUserId, { preferRepository: true })
       // One answer for unknown and other-firm users (no existence oracle).
       if (!user || (resolvedFirmId && resolvedFirmId !== user.firmId)) {
         return NextResponse.json({ error: "unknown user" }, { status: 400 })
@@ -1324,18 +1317,15 @@ async function handlePost(request: Request) {
   }
 
   if (isAction(TENANCY_SURFACE, parsed, "update_role")) {
-    if (!parsed.actorId || !parsed.firmId || !parsed.targetUserId || !isRole(parsed.nextRole)) {
-      return NextResponse.json(
-        { error: "actorId, firmId, targetUserId, and nextRole are required" },
-        { status: 400 }
-      )
-    }
-    if (!isClassification(parsed.nextClearance)) {
-      return NextResponse.json(
-        { error: "nextClearance must be a rank-0–4 label" },
-        { status: 400 }
-      )
-    }
+    // Re-audit N-3 / Erratum E-27: identity fields on users/{uid} are written only by Cloud
+    // Functions, which also re-issue the token claims. This legacy action wrote the role and
+    // clearance from the Next server without doing so, so it is retired for every caller and
+    // firm (one answer: no existence oracle, no effect, no stored replay).
+    return errorResponse(
+      409,
+      "use_identity_api",
+      "update_role is retired: identity fields are written only by Cloud Functions (E-27); use POST /api/platform/identity/setUserClaims"
+    )
   } else if (isAction(TENANCY_SURFACE, parsed, "resolve_session_lineage_dispute")) {
     if (!parsed.actorId || !parsed.firmId || !parsed.disputeId) {
       return NextResponse.json(
@@ -2771,166 +2761,8 @@ async function handlePost(request: Request) {
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
     }
 
-    const actorId = parsed.actorId
-    const firmId = parsed.firmId
-    const targetUserId = parsed.targetUserId
-    const nextRole = parsed.nextRole
-    const nextClearance = parsed.nextClearance
-    if (
-      !actorId ||
-      !firmId ||
-      !targetUserId ||
-      !nextRole ||
-      !isRole(nextRole) ||
-      !nextClearance ||
-      !isClassification(nextClearance)
-    ) {
-      throw new PublicError("actorId, firmId, targetUserId, nextRole, and nextClearance are required")
-    }
-
-    const sessionReferenceId = normalizeOptionalString(parsed.sessionReferenceId)
-    const authBoundary = parseAuthBoundary(parsed.authBoundary)
-    const externalSessionId = normalizeOptionalString(parsed.externalSessionId)
-    await syncFirmUsers(store, repos, firmId)
-    await syncFirmMembers(store, repos, firmId)
-    await syncFirmTenancySessionReferences(store, repos, firmId)
-    await syncFirmTenancyLineageDisputeAttestations(store, repos, firmId)
-    await syncFirmTenancyLineageReconciliationDigests(store, repos, firmId)
-    await syncFirmTenancyLineageReconciliationQueueArbitrations(store, repos, firmId)
-    await syncFirmTenancyLineageDigestClosureCheckpoints(store, repos, firmId)
-    await syncFirmTenancyLineageClosureAdjudications(store, repos, firmId)
-    await syncFirmTenancyLineageArbitrationDebtRetirementLedgers(store, repos, firmId)
-    await syncFirmTenancyLineageClosureAdjudicationSettlements(store, repos, firmId)
-    await syncFirmTenancyLineageArbitrationDebtRetirementDisputeLedgers(store, repos, firmId)
-    let existingReference = null
-    if (sessionReferenceId) {
-      existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
-      if (!existingReference) throw new PublicError("unknown session reference")
-      store.tenancySessionReferences.set(existingReference.id, existingReference)
-      // Same answer for unknown, other-firm and other-user references.
-      if (existingReference.firmId !== firmId || existingReference.userId !== actorId) {
-        throw new PublicError("unknown session reference")
-      }
-      const state = getTenancySessionReferenceState(existingReference)
-      if (state === "revoked") throw new PublicError("session reference revoked")
-      if (state === "expired") throw new PublicError("session reference expired")
-    }
-    const actor = await loadUser(store, repos, actorId)
-    if (!actor) throw new PublicError("unknown actor")
-    const sessionReference = upsertTenancySessionReference(store, {
-      user: actor,
-      existing: existingReference,
-      sessionReferenceId,
-      authBoundary,
-      externalSessionId,
-    })
-    await repos.tenancySessionReferences.upsert(sessionReference)
-    const updated = updateUserRole(store, {
-      actorId,
-      firmId,
-      targetUserId,
-      nextRole,
-      nextClearance,
-      reason: parsed.reason,
-      authBoundary: sessionReference.authBoundary,
-      sessionReferenceId: sessionReference.id,
-      externalSessionId: sessionReference.externalSessionId,
-    })
-    const driftedReferences = invalidateSessionReferencesForPrivilegeDrift(store, {
-      actorId,
-      firmId,
-      targetUserId,
-      targetRole: nextRole,
-      targetClearance: nextClearance,
-    })
-    for (const drifted of driftedReferences) {
-      await repos.tenancySessionReferences.upsert(drifted)
-    }
-    const digestRootIds = new Set<string>([
-      sessionReference.lineageRootSessionReferenceId,
-      ...driftedReferences.map((row) => row.lineageRootSessionReferenceId),
-    ])
-    const enrichedAuditEntry = {
-      ...updated.auditEntry,
-      privilegedBoundaryDriftCount: driftedReferences.length,
-      privilegedBoundaryDriftSessionReferenceIds: driftedReferences.map((row) => row.id),
-      delegatedBoundaryLineageRootSessionReferenceId:
-        sessionReference.lineageRootSessionReferenceId,
-      delegatedBoundaryComparedSessionReferenceId:
-        sessionReference.delegatedBoundaryComparedSessionReferenceId,
-      delegatedBoundaryReconciliationStatus:
-        sessionReference.delegatedBoundaryReconciliationStatus,
-      delegatedBoundaryDivergenceReasons: sessionReference.delegatedBoundaryDivergenceReasons,
-    }
-    const auditIdx = store.audit.findIndex((row) => row.id === updated.auditEntry.id)
-    if (auditIdx >= 0) {
-      store.audit[auditIdx] = enrichedAuditEntry
-    }
-    const refreshedActor = await loadUser(store, repos, actorId)
-    if (refreshedActor) {
-      const refreshedReference = upsertTenancySessionReference(store, {
-        user: refreshedActor,
-        existing: sessionReference,
-        sessionReferenceId: sessionReference.id,
-        authBoundary: sessionReference.authBoundary,
-        externalSessionId: sessionReference.externalSessionId ?? undefined,
-      })
-      await repos.tenancySessionReferences.upsert(refreshedReference)
-    }
-    await repos.users.upsert(updated.user)
-    await repos.audit.append(enrichedAuditEntry)
-    const digestSummaries: Array<{
-      id: string
-      lineageRootSessionReferenceId: string
-      lineageNodeCount: number
-      divergedHopCount: number
-      openDisputeCount: number
-      unresolvedRevocationCount: number
-      status: "aligned" | "needs_review"
-      reasons: string[]
-    }> = []
-    for (const rootId of digestRootIds) {
-      const { digest } = await recomputeAndPersistLineageDigestState(store, repos, {
-        firmId,
-        lineageRootSessionReferenceId: rootId,
-      })
-      digestSummaries.push({
-        id: digest.id,
-        lineageRootSessionReferenceId: digest.lineageRootSessionReferenceId,
-        lineageNodeCount: digest.lineageNodeCount,
-        divergedHopCount: digest.divergedHopCount,
-        openDisputeCount: digest.openDisputeCount,
-        unresolvedRevocationCount: digest.unresolvedRevocationCount,
-        status: digest.status,
-        reasons: digest.reasons,
-      })
-    }
-    const payload = {
-      action: "update_role",
-      user: {
-        id: updated.user.id,
-        firmId: updated.user.firmId,
-        role: updated.user.role,
-        clearanceLevel: updated.user.clearanceLevel,
-      },
-      authBoundary: enrichedAuditEntry.authBoundary ?? "runtime_local",
-      sessionReferenceId: enrichedAuditEntry.sessionReferenceId ?? null,
-      externalSessionId: enrichedAuditEntry.externalSessionId ?? null,
-      privilegedBoundaryDriftCount: enrichedAuditEntry.privilegedBoundaryDriftCount ?? 0,
-      privilegedBoundaryDriftSessionReferenceIds:
-        enrichedAuditEntry.privilegedBoundaryDriftSessionReferenceIds ?? [],
-      delegatedBoundaryLineageRootSessionReferenceId:
-        enrichedAuditEntry.delegatedBoundaryLineageRootSessionReferenceId ?? null,
-      delegatedBoundaryComparedSessionReferenceId:
-        enrichedAuditEntry.delegatedBoundaryComparedSessionReferenceId ?? null,
-      delegatedBoundaryReconciliationStatus:
-        enrichedAuditEntry.delegatedBoundaryReconciliationStatus ?? "aligned",
-      delegatedBoundaryDivergenceReasons:
-        enrichedAuditEntry.delegatedBoundaryDivergenceReasons ?? [],
-      digests: digestSummaries,
-    }
-    claim.complete(payload)
-    return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    // Every declared write action returned above; update_role was refused before any effect.
+    throw new PublicError("unknown action")
   } catch (err) {
     const message = publicErrorMessage(err, "tenancy write failed")
     return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })

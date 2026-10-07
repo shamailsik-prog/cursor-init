@@ -318,7 +318,8 @@ const CORE_CALLS: CoreCall[] = [
         reason: "boot test role confirmation",
       },
     }),
-    expect: 200,
+    // Re-audit N-3: retired (identity is written only by Cloud Functions); the route still boots.
+    expect: 409,
   },
   { route: "d4/filings", method: "GET", init: () => ({ query: { ...page } }), expect: 200 },
   { route: "d4/filings", method: "GET", init: () => ({ query: { view: "packages", ...page } }), expect: 200 },

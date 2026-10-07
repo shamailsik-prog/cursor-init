@@ -3237,7 +3237,9 @@ export function OperatorAuditConsole() {
 
     await runApiCallAllowingStatuses(
       {
-        step: "Batch D: tenancy role update for audit trail",
+        // Re-audit N-3: retired (409 use_identity_api); role changes go through
+        // POST /api/platform/identity/setUserClaims. Kept as a probe of the refusal.
+        step: "Batch D: tenancy role update is refused (use the identity API)",
         method: "POST",
         path: "/api/p5/tenancy",
         body: {
@@ -3250,7 +3252,7 @@ export function OperatorAuditConsole() {
           reason: "Batch D /ops frontend wiring audit trail",
         },
       },
-      [200, 400, 403, 404, 409, 422]
+      [403, 409]
     )
 
     await runApiCallAllowingStatuses(
