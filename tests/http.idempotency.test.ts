@@ -202,3 +202,32 @@ describe("IdempotencyStore bounds", () => {
     expect(s.begin("a", "fp", 5)).toEqual({ kind: "replay", body: "fresh" })
   })
 })
+
+// Final audit F6: the effect committed but the end-of-request audit flush failed (503). The
+// success response is still stored for the key, so a same-key retry replays it instead of
+// committing the effect a second time.
+describe("Next idempotency: committed effect + failed audit flush (F6)", () => {
+  it("answers 503 AUDIT_UNAVAILABLE, and a same-key retry replays the success instead of re-running", async () => {
+    const { setRequestAuditSinkForTests } = await import("@/platform/persistence/requestAuditFlush")
+    const store = getRuntimeStore()
+    const before = store.matters.size
+    const key = "c3c3c3c3-0000-4000-8000-000000000001"
+    setRequestAuditSinkForTests(async () => {
+      throw new Error("audit store down")
+    })
+    try {
+      const first = await MATTERS(req("http://127.0.0.1/api/d1/matters", matterBody, key))
+      expect(first.status).toBe(503)
+      expect(((await first.json()) as { code: string }).code).toBe("AUDIT_UNAVAILABLE")
+      expect(store.matters.size - before).toBe(1)
+      const retry = await MATTERS(req("http://127.0.0.1/api/d1/matters", matterBody, key))
+      expect(retry.status).toBe(200)
+      const json = (await retry.json()) as { reused: boolean; result: { matter: { id: string } } }
+      expect(json.reused).toBe(true)
+      expect(store.matters.has(json.result.matter.id)).toBe(true)
+      expect(store.matters.size - before).toBe(1)
+    } finally {
+      setRequestAuditSinkForTests(null)
+    }
+  })
+})

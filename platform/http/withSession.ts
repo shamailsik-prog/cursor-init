@@ -233,8 +233,18 @@ function claimedIdentity(url: URL, parsed: unknown): string | null {
  * alike (review round 1, finding 4). If persisting fails the caller gets 503
  * AUDIT_UNAVAILABLE instead of the response: a read never returns data whose access was not
  * durably audited. For a POST whose effect has already been committed the 503 is still
- * returned and the failure is logged; the true fix is an async P5 that awaits the durable
- * append before allowing (tracked as a follow-up).
+ * returned and the failure is logged.
+ *
+ * Final audit F6: the 503 is replay-safe. The route stored its success payload on its
+ * idempotency claim before returning, and claims are settled after this flush whatever its
+ * outcome (runAudited below), so a same-key retry replays the committed result instead of
+ * running the effect again. The failed rows stay on the audit log's retry queue.
+ *
+ * FOLLOW-UP (outbox): the effect and its audit rows are still not atomic. The durable fix is to
+ * stage each effect's audit rows in the same Firestore batch/transaction as the effect (an
+ * audit outbox drained to audit_log), as the Cloud Functions identity/MFA paths already do, so
+ * a committed effect can never lack its audit row (and a crash between effect and flush cannot
+ * lose it). Until then the retry queue + dead-letter path is the safety net.
  */
 async function runAudited(
   request: Request,
