@@ -303,6 +303,12 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
       for (const role of ROLES) {
         await setDoc(doc(db, "matter_members", `${MATTER_A}_${bUid(role)}`), { firmId: FIRM_A, matterId: MATTER_A, userId: bUid(role) })
       }
+      // SEC-3: every caller is a live identity (active users record matching its token), so only
+      // the firm boundary can refuse firm B and the control succeeds on its own merits.
+      await setDoc(doc(db, "users", A_PARTNER), { firmId: FIRM_A, role: "partner", clearanceLevel: MAX_CLEARANCE, active: true })
+      for (const role of ROLES) {
+        await setDoc(doc(db, "users", bUid(role)), { firmId: FIRM_B, role, clearanceLevel: MAX_CLEARANCE, active: true })
+      }
     })
   })
 

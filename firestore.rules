@@ -4,8 +4,31 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function signedIn() { return request.auth != null; }
+    // SEC-3 / E-27: a signed-in caller is a live identity, not just a valid token. users/{uid} is
+    // authoritative (written only by Cloud Functions): it must exist with active == true and the
+    // same firmId, role and clearanceLevel as the token's claims, so a deactivated or demoted
+    // user's still-valid ID token (up to 1 h) is refused; and the firm's E-19 MFA policy applies:
+    // when firms/{firmId}.mfaEnforcedRoles lists the role, the token must record a second factor.
+    // Read cost: every evaluated request (a get, a write, or a whole list query) reads users/{uid}
+    // and firms/{firmId} once each — 2 billed document reads and 2 of the 10 access calls a request
+    // may make (calls to the same document are cached). The heaviest rule, matter_members create,
+    // now touches 4 distinct documents (users/{caller}, firms/{firmId}, the membership doc and
+    // users/{assignee}).
+    function signedIn() { return request.auth != null && liveUser() && mfaSatisfied(); }
     function tok() { return request.auth.token; }
+    function liveUser() {
+      let u = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return u.get('active', false) == true
+        && u.get('firmId', '') == tok().get('firmId', null)
+        && u.get('role', '') == tok().get('role', null)
+        && u.get('clearanceLevel', '') == tok().get('clearanceLevel', null);
+    }
+    function mfaSatisfied() {
+      let firmPath = /databases/$(database)/documents/firms/$(tok().get('firmId', '_none'));
+      let enforced = exists(firmPath) ? get(firmPath).data.get('mfaEnforcedRoles', []) : [];
+      let secondFactor = tok().get('firebase', {}).get('sign_in_second_factor', null);
+      return !(enforced is list) || !(tok().get('role', '') in enforced) || (secondFactor is string && secondFactor != '');
+    }
     function sameFirm() { return signedIn() && tok().firmId == resource.data.firmId; }
     function sameFirmNew() { return signedIn() && tok().firmId == request.resource.data.firmId; }
     function role() { return tok().role; }
