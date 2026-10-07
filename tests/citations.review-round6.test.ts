@@ -1,10 +1,9 @@
 // Review round 6 follow-ups (review-secgaps-r6.md): F-1..F-5 and the fn7 probe.
 import { describe, expect, it } from "vitest"
-import { extractCitations } from "@/services/d4-2/citations"
+import { extractCitations, isUnrecognisedRef as isSuspect } from "@/services/d4-2/citations"
 import { ownCaseReferenceMatcher } from "@/services/d4-1/drafts"
 import { checkDraftCharset } from "@/services/d4-2/draftCharset"
 
-const isSuspect = (ref: string) => ref.startsWith("UNRECOGNISED: ")
 const blocked = (refs: string[]) => refs.length > 0 && refs.every(isSuspect)
 
 describe("F-1: a court name in the clause defeats the FIR-sense مقدمہ exclusion", () => {
