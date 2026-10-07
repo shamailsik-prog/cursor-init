@@ -4,15 +4,19 @@
 //
 // Scope (docs/audits/README.md "Mutation testing"):
 //   - P5 identity: session resolution, request-scoped identity, checkPermission,
-//     Committee Brain scope. tenancyAdmin.ts (2.7k lines of admin orchestration)
-//     is out of this run: its authorisation decisions call checkPermission and
-//     the functions-side P5 callables, which are mutated here and in
-//     functions/stryker.config.mjs.
+//     Committee Brain scope, and the two modules shared with Cloud Functions
+//     (bundled there through the "@/" alias, so they can only be mutated here):
+//     identityPolicy.ts (SEC-2, E-27) and permissionDecision.ts (I-3 / U-2).
+//     tenancyAdmin.ts (2.7k lines of admin orchestration) is out of this run: its
+//     authorisation decisions call checkPermission, which is mutated here, and the
+//     functions-side P5 operations (HTTP api) are mutated in functions/stryker.config.mjs.
 //   - P1 provider policy and the classification helpers in p1/types.ts.
 //   - HTTP surface: validation, withSession, errors, idempotency, surface.
 //   - Feature flags and route gates.
-//   - Audit writes: there is no platform/audit/ directory; the audit write path
-//     lives in platform/persistence/audit*.ts and is mutated here.
+//   - Audit writes (final audit F8): rows are collected per request in
+//     platform/audit/requestAudit.ts (AuditLog, retry queue, dead-letters) and
+//     persisted by the end-of-request flush, platform/persistence/requestAuditFlush.ts;
+//     the row helpers stay in platform/persistence/audit*.ts. All are mutated here.
 //   - persistence/runtimeRepositories.ts (memory vs Firestore fail-closed choice).
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 const config = {
@@ -30,10 +34,14 @@ const config = {
     "platform/p5/requestSession.ts",
     "platform/p5/checkPermission.ts",
     "platform/p5/committeeScope.ts",
+    "platform/p5/identityPolicy.ts",
+    "platform/p5/permissionDecision.ts",
     "platform/p1/providerPolicy.ts",
     "platform/p1/types.ts",
     "platform/http/**/*.ts",
     "platform/flags/**/*.ts",
+    "platform/audit/requestAudit.ts",
+    "platform/persistence/requestAuditFlush.ts",
     "platform/persistence/auditWriteThrough.ts",
     "platform/persistence/auditSync.ts",
     "platform/persistence/auditAppendConflictError.ts",

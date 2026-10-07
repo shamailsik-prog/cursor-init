@@ -13,6 +13,24 @@ the tooling commit (no new tests); "After" is a full, non-incremental
 (`--force`) run after the test commits. Raw HTML/JSON reports are not
 committed (`reports/`, gitignored); CI uploads them as artifacts.
 
+> **Scores below are for the code at 4dd5f6e.** On 7 Oct 2026 this branch was
+> merged after the final-audit fixes:
+> - The per-route idempotency caches became one `IdempotencyStore` (F4).
+> - `persistAuditEntriesSince` was removed in favour of the end-of-request flush (F8).
+> - The functions callables were removed (U-1).
+> - The Next session and functions auth share `platform/p5/identityPolicy.ts`
+>   and `platform/p5/permissionDecision.ts` (SEC-2, I-3).
+>
+> The tests were adapted to keep targeting the same mutant classes; the
+> adaptations and deletions are listed in the commits after the merge. The
+> configurations now also mutate:
+> - `identityPolicy.ts` and `permissionDecision.ts`;
+> - `platform/audit/requestAudit.ts` and `platform/persistence/requestAuditFlush.ts`.
+>
+> Scope after the merge: Next 23 files / 1972 mutants, functions 13 files /
+> 1943 mutants. Both dry runs (`--dryRunOnly`) pass. The tables need a fresh
+> full run, which is not yet done (over 2 hours).
+
 ## Next app (`npm run mutation`)
 
 | Module | Mutants | Before | After | Killed by new tests | Remaining (survived + no coverage) |

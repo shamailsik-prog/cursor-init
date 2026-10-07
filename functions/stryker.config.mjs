@@ -1,5 +1,8 @@
 // StrykerJS mutation testing for the Cloud Functions P5 identity layer and the
-// HTTP api. `npm run mutation` (from functions/) or `npm run mutation:functions`
+// HTTP api (U-1: the only entry point; there are no onCall callables). The shared
+// identity policy and permission table (platform/p5/identityPolicy.ts,
+// permissionDecision.ts) live outside functions/ and are mutated by the root
+// stryker.config.mjs. `npm run mutation` (from functions/) or `npm run mutation:functions`
 // (from the repo root); summary in docs/audits/mutation-report.md.
 //
 // Most of these suites need the Auth and Firestore emulators. scripts/mutation.sh
