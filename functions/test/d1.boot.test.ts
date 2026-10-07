@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ROUTES, createRouter } from "../src/http/router"
 
-// L18 §9.1 rule 4: the core boots with every layer disabled. Flags resolve from
-// SIKANDER_FLAG_<NAME> (platform/flags/featureFlags.ts); L17_2_ENABLED is read by the conflict engine.
+// L18 §9.1 rule 4: the core boots with every layer disabled. The flags that exist are the registry
+// in platform/flags/featureFlags.ts (CORE_ENABLED, LEGACY_GOVERNANCE_CHAINS; env SIKANDER_FLAG_<NAME>)
+// and L17_2_ENABLED, which the conflict engine reads from the same env prefix at run time. Router
+// construction reads none of them today, so this proves the entry point loads and registers every
+// D1 route with all of them off, and will catch a flag read added to module load or route building.
 const LAYER_FLAGS = ["CORE_ENABLED", "LEGACY_GOVERNANCE_CHAINS", "L17_2_ENABLED"]
 const D1_PATHS = [
   "/api/d1/client/setFirmNumbering",
@@ -34,6 +37,13 @@ describe("boot with every layer flag off (G-4)", () => {
       if (saved[f] === undefined) delete process.env[`SIKANDER_FLAG_${f}`]
       else process.env[`SIKANDER_FLAG_${f}`] = saved[f]
     }
+  })
+
+  it("loads the real entry point (src/index) with every flag off: api is exported", async () => {
+    vi.resetModules()
+    const index = await import("../src/index")
+    expect(typeof index.api).toBe("function")
+    expect(typeof index.health).toBe("function")
   })
 
   it("builds the router and registers every D1 route", () => {

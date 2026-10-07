@@ -3,8 +3,10 @@
 
 Usage: check_route_coverage.py <router.ts> <tests-dir>
 
-A route is covered when a test file under <tests-dir> calls viaApi("<name>") (the generic
-helper may carry a type argument) or contains the literal path /api/d1/<service>/<name>.
+A route is covered only when a test file under <tests-dir> calls viaApi("<name>") (the generic
+helper may carry a type argument). A bare path literal does not count: lists of paths (boot
+checks, probe tables) would satisfy it without exercising the route. The number of routes found
+is cross-checked against the number of get/post/put entries of the router that name a d1 path.
 Routes are read from the router: `${D1_X}/<name>` template paths (D1_X = "/api/d1/<service>")
 and full "/api/d1/<service>/<name>" literals.
 """
@@ -24,6 +26,11 @@ def routes(router_text):
     return sorted(found)
 
 
+def route_entries(router_text):
+    """Independent count: route-table entries (get/post/put calls) whose path is a d1 path."""
+    return len(re.findall(r'^\s*(?:get|post|put)\(\s*[`"\']\$?\{?D1_\w+\}?[^,]*,|^\s*(?:get|post|put)\(\s*[`"\']/api/d1/', router_text, re.M))
+
+
 def main(argv):
     if len(argv) != 3:
         print(__doc__)
@@ -33,14 +40,18 @@ def main(argv):
     if not rs:
         print(f"FAIL: no /api/d1 routes found in {router}")
         return 1
+    entries = route_entries(router.read_text(encoding="utf-8"))
+    print(f"d1 routes found: {len(rs)}; d1 entries in the route table: {entries}")
+    if entries != len(rs):
+        print("FAIL: the route extraction and the route-table count disagree")
+        return 1
     corpus = "\n".join(
         p.read_text(encoding="utf-8", errors="ignore") for p in sorted(tests.rglob("*.ts")) if p.is_file()
     )
     missing = []
     for base, name in rs:
         via = re.search(r'viaApi\s*(?:<[^()]*>)?\s*\(\s*["\']' + re.escape(name) + r'["\']', corpus)
-        path = f"{base}/{name}" in corpus
-        if not (via or path):
+        if not via:
             missing.append(f"{base}/{name}")
     if missing:
         print("FAIL: MISSING test coverage for d1 routes:")

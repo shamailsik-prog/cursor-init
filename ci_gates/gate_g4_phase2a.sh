@@ -16,8 +16,16 @@ cd "$ROOT"
 
 if [ "${1:-}" = "--inner" ]; then
   cd "$ROOT/functions"
-  npx vitest run test/d1.conflict.emu.test.ts -t "forensic test 3"
-  exit 0
+  # vitest exits 0 when -t matches nothing (renamed test) or the emulator suite is skipped, so the
+  # JSON result must show exactly one passed test and none failed. G4_FORENSIC_FILTER exists only
+  # to prove this check can fail.
+  json="$2/forensic.json"
+  npx vitest run test/d1.conflict.emu.test.ts -t "${G4_FORENSIC_FILTER:-forensic test 3}" --reporter=json --outputFile="$json" || true
+  node -e '
+    const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
+    console.log(`forensic test 3: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)
+    process.exit(r.numPassedTests === 1 && r.numFailedTests === 0 ? 0 : 1)' "$json"
+  exit $?
 fi
 
 echo "=== Gate G-4 (Phase 2a): matter spine and conflict engine ==="
@@ -60,7 +68,7 @@ fi
 
 echo "--- [3] forensic test 3 (emulators)"
 npx firebase emulators:exec --config "$config" --only auth,firestore --project "$project" \
-  "bash \"$ROOT/ci_gates/gate_g4_phase2a.sh\" --inner"
+  "bash \"$ROOT/ci_gates/gate_g4_phase2a.sh\" --inner \"$out\""
 
 echo "--- [4] Gate G-2 over all routes"
 bash "$ROOT/ci_gates/gate_g2.sh"

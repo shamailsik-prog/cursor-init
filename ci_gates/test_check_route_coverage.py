@@ -33,13 +33,26 @@ def test_untested_route_fails_and_is_named(tmp_path):
     assert "getClient" not in res.stdout.split("MISSING")[-1]
 
 
-def test_all_covered_via_viaApi_and_path_literal_passes(tmp_path):
+def test_path_literal_alone_does_not_cover(tmp_path):
+    res = run(tmp_path, ROUTER, {"a.test.ts": 'viaApi("registerClient"); viaApi("getClient"); const p = ["/api/d1/matter/listMatters"]'})
+    assert res.returncode == 1
+    assert "listMatters" in res.stdout
+
+
+def test_extraction_and_table_count_must_agree(tmp_path):
+    router = ROUTER + '\n  get(`${D1_UNKNOWN}/ghost`, ghostOp),\n'
+    res = run(tmp_path, router, {"a.test.ts": 'viaApi("registerClient"); viaApi("getClient"); viaApi("listMatters")'})
+    assert res.returncode == 1
+    assert "disagree" in res.stdout
+
+
+def test_all_covered_via_viaApi_passes(tmp_path):
     res = run(
         tmp_path,
         ROUTER,
         {
             "a.test.ts": 'viaApi("registerClient"); viaApi<Foo>("getClient")',
-            "b.test.ts": 'call("/api/d1/matter/listMatters")',
+            "b.test.ts": 'viaApi<Foo>(  "listMatters" )',
         },
     )
     assert res.returncode == 0, res.stdout
