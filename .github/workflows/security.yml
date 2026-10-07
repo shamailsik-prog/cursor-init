@@ -21,7 +21,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      security-events: write
+      security-events: read
     strategy:
       fail-fast: false
       matrix:
@@ -37,9 +37,23 @@ jobs:
           # The default suite always runs; this adds the security-extended queries.
           queries: security-extended
           config-file: ./.github/codeql/codeql-config.yml
+      # Code scanning (SARIF upload) needs GitHub Code Security on this private
+      # repository and is not enabled; analyse without uploading and gate on the
+      # SARIF here instead (ci_gates/check_codeql_sarif.py, severity >= 7.0 high).
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: /language:${{ matrix.language }}
+          upload: never
+          output: sarif-results
+      - name: Gate on high-severity CodeQL results
+        run: python3 ci_gates/check_codeql_sarif.py sarif-results 7.0
+      - name: Keep the SARIF as a run artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-${{ matrix.language }}-sarif
+          path: sarif-results
+          if-no-files-found: ignore
 
   secrets:
     name: Secret scan (gitleaks)

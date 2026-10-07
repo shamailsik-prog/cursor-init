@@ -8,3 +8,7 @@ paths-ignore:
   - reports
   - .stryker-tmp
   - artifacts
+  # Frozen legacy governance chain (E-24, LEGACY_GOVERNANCE_CHAINS off): its
+  # 254-character file name plus CodeQL's ".trap.gz" suffix exceeds the 255-byte
+  # filename limit, which aborts JavaScript extraction for the whole repository.
+  - platform/persistence/workflowOpsAlertArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerGovernance.ts

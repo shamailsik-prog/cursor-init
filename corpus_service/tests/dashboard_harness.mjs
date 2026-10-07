@@ -2,7 +2,11 @@
 import vm from "node:vm"
 import fs from "node:fs"
 const html = fs.readFileSync(process.argv[2], "utf8")
-const script = html.match(/<script>([\s\S]*)<\/script>/)[1]
+// Our own dashboard template has exactly one inline script block; take the text between its tags.
+const scriptStart = html.indexOf("<script>") + "<script>".length
+const scriptEnd = html.lastIndexOf("</script>")
+if (scriptStart < "<script>".length || scriptEnd < scriptStart) throw new Error("dashboard script block not found")
+const script = html.slice(scriptStart, scriptEnd)
 const prompts = JSON.parse(process.argv[3]) // successive prompt() answers
 let unhandled = 0
 process.on("unhandledRejection", () => { unhandled++ })
