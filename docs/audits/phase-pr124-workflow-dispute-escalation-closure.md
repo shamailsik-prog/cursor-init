@@ -49,6 +49,7 @@ Evidence:
 7. Idempotency and audit-trail scaffolding are materially present in action path:
    - `Idempotency-Key` enforcement + replay/conflict handling in route-level fingerprint cache.
    - per-action `store.audit.push(...)` + `persistAuditEntriesSince(...)` write-through.
+     - *Update (7 Oct 2026, final audit F8):* `persistAuditEntriesSince` has been removed. The action now only appends its rows to `store.audit`; withSession persists the request's own rows once, by object, in the end-of-request audit flush (`platform/persistence/requestAuditFlush.ts`) and answers 503 `AUDIT_UNAVAILABLE` if that flush fails. The text above records the code as audited at the time.
 
 ### B) FE honesty (`frontend_real=false` + `/ops` not touched)
 

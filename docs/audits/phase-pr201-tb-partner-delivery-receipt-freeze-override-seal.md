@@ -61,6 +61,7 @@ Evidence:
 5. `/api/d2/ops-reporting`:
    - **Two** paginated GET `view=` surfaces (route-wiring L5700–5729): custody + closure TB outbound-registry seal-verification monitoring rows.
    - **Six** partner POST lifecycle actions for this slice (added in product diff): waiver checkpoint / attest verified / control finalization; variance checkpoint / attest verified / control finalization — handlers upsert into the two new deepest repositories (e.g. POST handlers ~L23448–L23862) with idempotency + `persistAuditEntriesSince` audit write-through.
+     - *Update (7 Oct 2026, final audit F8):* `persistAuditEntriesSince` has been removed. The action now only appends its rows to `store.audit`; withSession persists the request's own rows once, by object, in the end-of-request audit flush (`platform/persistence/requestAuditFlush.ts`) and answers 503 `AUDIT_UNAVAILABLE` if that flush fails. The text above records the code as audited at the time.
    - Digest-rebuild sync from PR #199 TB parents during mega refresh (route diff includes parent-key wiring for new store maps).
 
 **Firestore ID length (checklist emphasis):**

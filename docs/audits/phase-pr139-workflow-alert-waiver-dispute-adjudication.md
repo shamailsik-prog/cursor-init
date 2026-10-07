@@ -81,6 +81,7 @@ Evidence verified on independently tested tip `df7451d` (implementation in `01eb
 7. Route path keeps idempotency + audit write-through:
    - `requireIdempotencyKey(request)` plus replay/conflict handling
    - each new action `store.audit.push(...)` then `persistAuditEntriesSince(...)`
+     - *Update (7 Oct 2026, final audit F8):* `persistAuditEntriesSince` has been removed. The action now only appends its rows to `store.audit`; withSession persists the request's own rows once, by object, in the end-of-request audit flush (`platform/persistence/requestAuditFlush.ts`) and answers 503 `AUDIT_UNAVAILABLE` if that flush fails. The text above records the code as audited at the time.
    - `idempotency.set(key, payload, fingerprint)` on success
 8. Symbols were absent from pre-merge `main` and are now present on `origin/main` via merge `f541ae7`.
 

@@ -53,6 +53,7 @@ Evidence:
 7. Idempotency + audit behavior is present in route action handling:
    - `Idempotency-Key` required, conflict replay guarded.
    - per-action audit append + persistence via `persistAuditEntriesSince(...)`.
+     - *Update (7 Oct 2026, final audit F8):* `persistAuditEntriesSince` has been removed. The action now only appends its rows to `store.audit`; withSession persists the request's own rows once, by object, in the end-of-request audit flush (`platform/persistence/requestAuditFlush.ts`) and answers 503 `AUDIT_UNAVAILABLE` if that flush fails. The text above records the code as audited at the time.
 
 ### B) FE honesty (`frontend_real=false` + no `/ops` delivery claim)
 
