@@ -1,0 +1,277 @@
+import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import type { Classification } from "@/platform/p1/types"
+import { adminDb } from "../../admin"
+import { isKnownClassification, rankOf } from "../../p5/classification"
+import { logFailure } from "../../log"
+import { nameForms, usesFallback } from "./normalise"
+import { screen, summarise, type Candidate, type Hit, type IdentityBasis, type Keys, type Outcome, type Subject } from "./match"
+
+/**
+ * Firestore side of the Module 6 conflict engine (spec P2-3..P2-5, P2-13, P2-18; L18 §7).
+ * Loads the firm's registry (clients, opposing `matter_parties`, matters, `entity_links`,
+ * `transliteration_map`), tailors each candidate's link state to the subject being screened
+ * (only the link on the matched key counts), and runs the pure `screen`.
+ */
+
+/** Entity link auto-confirm window (P2-5, L18 §7.1). */
+export const LINK_AUTO_CONFIRM_MS = 30 * 24 * 60 * 60 * 1000
+
+const KEY_FIELDS = ["cnic", "ntn", "secp", "phone"] as const
+type KeyName = (typeof KEY_FIELDS)[number]
+
+/** One `entity_links` row (per key), with its state resolved at read time. */
+export type LinkRow = { id: string; leftId: string; rightId: string; key: KeyName; confirmed: boolean }
+
+/** A registry row before it is tailored to a subject (link state and relied-on links depend on the subject). */
+export type BaseCandidate = Omit<Candidate, "linkState" | "linkIds"> & { linkState: "none"; linkIds: [] }
+
+export type Registry = {
+  candidates: BaseCandidate[]
+  links: LinkRow[]
+  firmMap: Map<string, string[]>
+  l17_2Enabled: boolean
+}
+
+const PRIVILEGED_RESTRICTED: Classification = "privileged-restricted"
+
+/** An unreadable classification counts as the highest rank (monotonic, fail closed). */
+export const knownOrHighest = (raw: unknown): Classification => (isKnownClassification(raw) ? raw : PRIVILEGED_RESTRICTED)
+
+const millisOf = (value: unknown): number | null => (value instanceof Timestamp ? value.toMillis() : null)
+
+/**
+ * L18 §7.1: confirmed = human-confirmed, or a candidate auto-confirmed 30 days after creation
+ * without dispute. With L17_2_ENABLED off every key link counts as a candidate (P2-18).
+ */
+export function linkConfirmed(row: DocumentData, nowMs: number, l17_2Enabled: boolean): boolean {
+  if (!l17_2Enabled) return false
+  if (row.state === "confirmed") return true
+  if (row.state !== "candidate" || row.disputed !== false) return false
+  const created = millisOf(row.createdAt)
+  return created !== null && created <= nowMs - LINK_AUTO_CONFIRM_MS
+}
+
+/**
+ * Whether layer L17.2 (entity resolution) is on for the firm. Resolution order, as
+ * platform/flags/featureFlags.ts: env `SIKANDER_FLAG_L17_2_ENABLED` = "true" | "false", then the
+ * firm doc's `featureFlags.L17_2_ENABLED` boolean, then the registry default (on,
+ * lib/foundation-data.ts). A malformed value or an unreadable firm doc fails toward off, which
+ * only makes key matches candidates (more review items, never a CLEAR).
+ */
+export function l17_2Enabled(firm: DocumentData | undefined, readable = true): boolean {
+  const env = process.env.SIKANDER_FLAG_L17_2_ENABLED?.trim().toLowerCase()
+  if (env === "true") return true
+  if (env === "false") return false
+  if (!readable) return false
+  const flags: unknown = firm?.featureFlags
+  if (flags === undefined || flags === null) return true
+  if (typeof flags !== "object") return false
+  const value = (flags as Record<string, unknown>).L17_2_ENABLED
+  if (value === undefined) return true
+  return value === true
+}
+
+/** Keys of a client doc in the screening shape. */
+export function clientKeys(doc: DocumentData): Keys {
+  const keys: Keys = {}
+  if (typeof doc.cnic === "string") keys.cnic = doc.cnic
+  if (typeof doc.ntn === "string") keys.ntn = doc.ntn
+  if (typeof doc.secpNumber === "string") keys.secp = doc.secpNumber
+  if (typeof doc.primaryMobile === "string") keys.phone = doc.primaryMobile
+  return keys
+}
+
+function partyKeys(raw: unknown): Keys {
+  const keys: Keys = {}
+  if (raw === null || typeof raw !== "object") return keys
+  for (const k of KEY_FIELDS) {
+    const v = (raw as Record<string, unknown>)[k]
+    if (typeof v === "string" && v !== "") keys[k] = v
+  }
+  return keys
+}
+
+const isKeyName = (v: unknown): v is KeyName => typeof v === "string" && (KEY_FIELDS as readonly string[]).includes(v)
+
+/** The firm's registry for screening, read at `now`. */
+export async function loadRegistry(firmId: string, now: Date): Promise<Registry> {
+  const db = adminDb()
+  const byFirm = (name: string) => db.collection(name).where("firmId", "==", firmId).get()
+  const [firmSnap, clientSnap, matterSnap, partySnap, linkSnap, mapSnap] = await Promise.all([
+    db
+      .collection("firms")
+      .doc(firmId)
+      .get()
+      .then((s) => ({ ok: true as const, data: s.data() }))
+      .catch((err: unknown) => {
+        logFailure("conflict flag read failed", err)
+        return { ok: false as const, data: undefined }
+      }),
+    byFirm("clients"),
+    byFirm("matters"),
+    db.collection("matter_parties").where("firmId", "==", firmId).where("role", "==", "opposing").get(),
+    byFirm("entity_links"),
+    byFirm("transliteration_map"),
+  ])
+  const enabled = l17_2Enabled(firmSnap.data, firmSnap.ok)
+  const nowMs = now.getTime()
+
+  const firmMap = new Map<string, string[]>()
+  for (const d of mapSnap.docs) {
+    const { script, roman } = d.data()
+    if (typeof script !== "string" || script === "" || !Array.isArray(roman)) continue
+    const spellings = roman.filter((r): r is string => typeof r === "string" && r.trim() !== "")
+    if (spellings.length > 0) firmMap.set(script, [...(firmMap.get(script) ?? []), ...spellings])
+  }
+
+  const links: LinkRow[] = []
+  for (const d of linkSnap.docs) {
+    const row = d.data()
+    if (typeof row.leftId !== "string" || typeof row.rightId !== "string" || !isKeyName(row.key)) continue
+    links.push({ id: d.id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: linkConfirmed(row, nowMs, enabled) })
+  }
+  const unresolvedByEntity = new Map<string, string[]>()
+  for (const l of links) {
+    if (l.confirmed) continue
+    for (const e of [l.leftId, l.rightId]) unresolvedByEntity.set(e, [...(unresolvedByEntity.get(e) ?? []), l.id])
+  }
+  const unresolvedOf = (entityId: string | undefined) => (entityId ? [...new Set(unresolvedByEntity.get(entityId) ?? [])] : [])
+
+  type MatterInfo = { matterNo: string | null; classification: string; status: "live" | "closed"; clientId: unknown }
+  const matters = new Map<string, MatterInfo>()
+  for (const d of matterSnap.docs) {
+    const m = d.data()
+    matters.set(d.id, {
+      matterNo: typeof m.matterNo === "string" ? m.matterNo : null,
+      classification: knownOrHighest(m.classification),
+      // engagement_unconfirmed and live are both open matters; only "closed" is closed.
+      status: m.status === "closed" ? "closed" : "live",
+      clientId: m.clientId,
+    })
+  }
+
+  const candidates: BaseCandidate[] = []
+  for (const d of clientSnap.docs) {
+    const c = d.data()
+    if (typeof c.canonicalName !== "string") continue
+    const own = [...matters.entries()].filter(([, m]) => m.clientId === d.id)
+    const base = {
+      role: "client" as const,
+      name: c.canonicalName,
+      forms: nameForms(c.canonicalName, firmMap),
+      keys: clientKeys(c),
+      ...(typeof c.entityId === "string" && c.entityId !== "" ? { entityId: c.entityId } : {}),
+      clientHasLiveMatter: own.some(([, m]) => m.status !== "closed"),
+      linkState: "none" as const,
+      linkIds: [] as [],
+      unresolvedLinkIds: unresolvedOf(c.entityId),
+    }
+    if (own.length === 0) {
+      // A client with no matter yet: the hit names no matter; the client's own label stands in.
+      candidates.push({ ...base, matterId: null, matterNo: null, matterClassification: knownOrHighest(c.classification), matterStatus: null })
+      continue
+    }
+    // One candidate per matter, so every matter the hit touches is reported (and classifies the check).
+    for (const [matterId, m] of own) {
+      candidates.push({ ...base, matterId, matterNo: m.matterNo, matterClassification: m.classification, matterStatus: m.status })
+    }
+  }
+
+  for (const d of partySnap.docs) {
+    const p = d.data()
+    if (typeof p.name !== "string") continue
+    const matterId = typeof p.matterId === "string" && p.matterId !== "" ? p.matterId : null
+    const matter = matterId ? matters.get(matterId) : undefined
+    const entityId = typeof p.entityId === "string" && p.entityId !== "" ? p.entityId : undefined
+    candidates.push({
+      role: "opposing",
+      name: p.name,
+      forms: nameForms(p.name, firmMap),
+      keys: partyKeys(p.keys),
+      ...(entityId ? { entityId } : {}),
+      matterId,
+      matterNo: matter?.matterNo ?? null,
+      matterClassification: matter ? matter.classification : knownOrHighest(p.matterClassification ?? p.classification),
+      matterStatus: matter ? matter.status : p.matterStatus === "closed" ? "closed" : matterId ? "live" : null,
+      clientHasLiveMatter: false,
+      linkState: "none",
+      linkIds: [],
+      unresolvedLinkIds: unresolvedOf(entityId),
+    })
+  }
+
+  return { candidates, links, firmMap, l17_2Enabled: enabled }
+}
+
+/** All firm candidates (clients, opposing parties) with their unresolved links; link state is per subject (see `tailor`). */
+export async function loadCandidates(firmId: string, now: Date): Promise<Candidate[]> {
+  return (await loadRegistry(firmId, now)).candidates
+}
+
+/**
+ * The candidates as seen from one subject. For each candidate, the keys equal to the subject's
+ * decide which links count: a link on a matched key K between the candidate's entity and the
+ * subject's entity (a subject without an entity: any K-link touching the candidate's entity,
+ * i.e. an entity sharing that key value). linkState is "confirmed" iff one of those links is
+ * confirmed, else "candidate" (an equal key without any link row is still a candidate identity);
+ * "none" when no key is equal. Unresolved links of the subject's own entity whose other end is
+ * the candidate's entity are attached to that candidate (P2-5, forensic test 3).
+ */
+export function tailor(registry: Registry, subject: Subject, subjectEntityId: string | undefined): Candidate[] {
+  const subjectUnresolved = subjectEntityId
+    ? registry.links.filter((l) => !l.confirmed && (l.leftId === subjectEntityId || l.rightId === subjectEntityId))
+    : []
+  return registry.candidates.map((c): Candidate => {
+    const matched = KEY_FIELDS.filter((k) => !!subject.keys[k] && subject.keys[k] === c.keys[k])
+    const unresolved = new Set(c.unresolvedLinkIds)
+    if (c.entityId) {
+      for (const l of subjectUnresolved) if (l.leftId === c.entityId || l.rightId === c.entityId) unresolved.add(l.id)
+    }
+    if (matched.length === 0) return { ...c, linkState: "none", linkIds: [], unresolvedLinkIds: [...unresolved] }
+    const relied = c.entityId
+      ? registry.links.filter((l) => {
+          if (!matched.includes(l.key)) return false
+          if (l.leftId !== c.entityId && l.rightId !== c.entityId) return false
+          if (!subjectEntityId) return true
+          const other = l.leftId === c.entityId ? l.rightId : l.leftId
+          return other === subjectEntityId
+        })
+      : []
+    return {
+      ...c,
+      linkState: relied.some((l) => l.confirmed) ? "confirmed" : "candidate",
+      linkIds: relied.map((l) => l.id),
+      unresolvedLinkIds: [...unresolved],
+    }
+  })
+}
+
+export type EngineResult = { hits: Hit[]; result: Outcome; identityBasis: IdentityBasis; classification: Classification }
+
+/** Conflict checks are confidential unless a hit touches a higher-classified matter (P2-13, monotonic). */
+export function checkClassification(hits: readonly Hit[]): Classification {
+  let label: Classification = "confidential"
+  for (const h of hits) {
+    const c = knownOrHighest(h.matterClassification)
+    if (rankOf(c) > rankOf(label)) label = c
+  }
+  return label
+}
+
+/**
+ * Screens every subject against the registry. `subjectEntityIds[i]` is the entity of a
+ * `client: { clientId }` subject. Each subject is screened against its own tailored candidates;
+ * the hits are merged in subject order and summarised once.
+ */
+export function runEngine(registry: Registry, subjects: Subject[], subjectEntityIds: (string | undefined)[]): EngineResult {
+  const hits: Hit[] = []
+  subjects.forEach((subject, i) => {
+    const entityId = subjectEntityIds[i]
+    const r = screen([subject], [nameForms(subject.name, registry.firmMap)], tailor(registry, subject, entityId), {
+      subjectFallback: [usesFallback(subject.name, registry.firmMap)],
+      subjectEntityIds: [entityId],
+    })
+    for (const h of r.hits) hits.push({ ...h, subjectIndex: i })
+  })
+  return { hits, ...summarise(hits), classification: checkClassification(hits) }
+}

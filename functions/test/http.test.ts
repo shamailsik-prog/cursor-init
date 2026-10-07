@@ -82,7 +82,7 @@ describe("route table", () => {
     expect(() => buildRouteTable([route("/api/x/y/z", op), route("/api/x/y/z", op, "general", "PUT")])).not.toThrow()
   })
 
-  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, setFirmNumbering, registerClient (POST), getClient and listClients (GET) under /api/d1/client, kind general", () => {
+  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, setFirmNumbering, registerClient (POST), getClient and listClients (GET) under /api/d1/client, kind general; runConflictCheck (POST, kind p1) and getConflictResult (GET) under /api/d1/conflict", () => {
     const fns = [
       "onboardFirm",
       "createFirmUser",
@@ -102,6 +102,8 @@ describe("route table", () => {
         "POST /api/d1/client/registerClient general",
         "GET /api/d1/client/getClient general",
         "GET /api/d1/client/listClients general",
+        "POST /api/d1/conflict/runConflictCheck p1",
+        "GET /api/d1/conflict/getConflictResult general",
       ].sort()
     )
     expect(() => buildRouteTable(ROUTES)).not.toThrow()

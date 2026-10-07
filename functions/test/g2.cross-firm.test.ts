@@ -17,6 +17,7 @@ import * as mfa from "../src/p5/mfa"
 import * as gates from "../src/p5/gates"
 import * as numbering from "../src/d1/client/numberingOp"
 import * as clientOps from "../src/d1/client/ops"
+import * as conflictOps from "../src/d1/conflict/ops"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -72,9 +73,11 @@ const PROBES: Record<string, Probe> = {
   registerClient: { data: () => ({ name: "G2 Probe Client", type: "individual", primaryMobile: "03001234567", classification: "internal" }), target: false },
   getClient: { data: () => ({ clientId: "g2-probe-client" }), target: false },
   listClients: { data: () => ({}), target: false },
+  runConflictCheck: { data: () => ({ client: { name: "G2 Probe Client" }, opposingParties: [{ name: "G2 Probe Opponent" }] }), target: false },
+  getConflictResult: { data: () => ({ checkId: "g2-probe-check" }), target: false },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined

@@ -16,6 +16,7 @@ import { createFirmUserOp, deactivateUserOp, onboardFirmOp, setUserClaimsOp } fr
 import { recordGatePassOp } from "../p5/gates"
 import { setFirmNumberingOp } from "../d1/client/numberingOp"
 import { getClientOp, listClientsOp, registerClientOp } from "../d1/client/ops"
+import { getConflictResultOp, runConflictCheckOp } from "../d1/conflict/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -56,6 +57,7 @@ export const MAX_BODY_BYTES = 1024 * 1024
 const IDENTITY = "/api/platform/identity"
 const GATES = "/api/platform/gates"
 const D1_CLIENT = "/api/d1/client"
+const D1_CONFLICT = "/api/d1/conflict"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
@@ -85,6 +87,8 @@ export const ROUTES: readonly Route[] = [
   post(`${D1_CLIENT}/registerClient`, registerClientOp),
   get(`${D1_CLIENT}/getClient`, getClientOp),
   get(`${D1_CLIENT}/listClients`, listClientsOp),
+  post(`${D1_CONFLICT}/runConflictCheck`, runConflictCheckOp),
+  get(`${D1_CONFLICT}/getConflictResult`, getConflictResultOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
@@ -110,7 +114,7 @@ const errorBody = (code: string) => ({ error: { code } })
 
 function send(res: Response, result: HttpResult, headers: Record<string, string> = {}): void {
   res.status(result.status)
-  for (const [name, value] of Object.entries(headers)) res.set(name, value)
+  for (const [name, value] of Object.entries({ ...result.headers, ...headers })) res.set(name, value)
   res.json(result.body)
 }
 
@@ -198,17 +202,25 @@ async function auditRefusal(op: Operation, uid: string, firmId: string, err: unk
   throw err
 }
 
-/** Runs the operation with its one audit row; errors become their HTTP result. */
-async function execute(op: Operation, auth: Authenticated, body: Data): Promise<HttpResult> {
+/**
+ * Runs the operation with its one audit row; errors become their HTTP result. A firm operation
+ * gets the router's clock as `session.now`. An operation's RateLimitedError (e.g. 429
+ * daily_limit) keeps its Retry-After header; a 429 is never stored for idempotent replay
+ * (isStorableResult), so a same-key retry after the reset runs.
+ */
+async function execute(op: Operation, auth: Authenticated, body: Data, now: number): Promise<HttpResult> {
   const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
   const audit = new CallAudit(op.action, uid, op.target)
   try {
     const result = await runAudited(audit, () =>
-      op.auth === "firm" && auth.kind === "firm" ? op.run(auth.session, body, audit) : runFirmless(op, auth, body, audit)
+      op.auth === "firm" && auth.kind === "firm" ? op.run({ ...auth.session, now }, body, audit) : runFirmless(op, auth, body, audit)
     )
     return { status: 200, body: isObject(result) ? result : { result } }
   } catch (err) {
     // runAudited has already logged a non-HttpError.
+    if (err instanceof RateLimitedError) {
+      return { status: err.status, body: errorBody(err.code), headers: { "Retry-After": String(err.retryAfter) } }
+    }
     return err instanceof HttpError ? { status: err.status, body: errorBody(err.code) } : { status: 500, body: errorBody("internal") }
   }
 }
@@ -255,7 +267,7 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
       await rateLimit({ uid }, route.kind, { firm: auth.kind === "firm" ? auth.firm : undefined, now })
 
-      const run = () => execute(op, auth, body)
+      const run = () => execute(op, auth, body, now)
       const firmId = auth.kind === "firm" ? auth.session.caller.firmId : ""
       const result = hasBody
         ? await withIdempotency(

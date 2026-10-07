@@ -109,8 +109,11 @@ export async function runAudited<T>(audit: CallAudit, body: () => Promise<T>): P
   }
 }
 
-/** A firm-bound, authenticated session: the Caller and whether the token has a second factor. */
-export type Session = { caller: Caller; secondFactor: boolean }
+/**
+ * A firm-bound, authenticated session: the Caller, whether the token has a second factor, and
+ * the router's clock for this request (`now`, epoch ms; absent outside the router → Date.now()).
+ */
+export type Session = { caller: Caller; secondFactor: boolean; now?: number }
 
 export type { FirmlessIdentity }
 

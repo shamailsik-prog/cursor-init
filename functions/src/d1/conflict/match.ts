@@ -24,6 +24,8 @@ export type Hit = {
   matterNo: string | null
   matterClassification: string
   reliedOnLinkIds: string[]
+  /** The matched candidate's unresolved entity links (P2-5), so a reviewer can find the evidence. */
+  unresolvedLinkIds?: string[]
   review?: { resolution: "different_person" | "same_person"; by: string; note: string; at: string }
 }
 
@@ -183,15 +185,21 @@ export function screen(
         matterId: c.matterId,
         matterNo: c.matterNo,
         matterClassification: c.matterClassification,
-        reliedOnLinkIds: keyEqual ? [...c.linkIds] : []
+        reliedOnLinkIds: keyEqual ? [...c.linkIds] : [],
+        ...(unresolved ? { unresolvedLinkIds: [...c.unresolvedLinkIds] } : {})
       })
     }
   })
 
+  return { hits, ...summarise(hits) }
+}
+
+/** The overall result (precedence FLAG > POSSIBLE_CANDIDATE_REVIEW > CLEAR) and identity basis of `hits`. */
+export function summarise(hits: readonly Hit[]): { result: Outcome; identityBasis: IdentityBasis } {
   const top = hits.reduce((m, h) => Math.max(m, RANK[h.outcome]), 0)
   const result: Outcome = top === 2 ? "FLAG" : top === 1 ? "POSSIBLE_CANDIDATE_REVIEW" : "CLEAR"
   const identityBasis: IdentityBasis = hits.some((h) => h.outcome !== "NONE" && h.identityBasis === "candidate_only")
     ? "candidate_only"
     : "confirmed_identity"
-  return { hits, result, identityBasis }
+  return { result, identityBasis }
 }

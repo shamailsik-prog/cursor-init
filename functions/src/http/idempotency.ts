@@ -78,8 +78,11 @@ export function requestHash(body: unknown): string {
   return createHash("sha256").update(canonicalJson(body)).digest("hex")
 }
 
-/** An HTTP response as stored and replayed: status + JSON object body. */
-export type HttpResult = { status: number; body: Record<string, unknown> }
+/**
+ * An HTTP response as stored and replayed: status + JSON object body. `headers` (e.g. a 429's
+ * Retry-After) are sent but never stored: only storable results are kept, and those carry none.
+ */
+export type HttpResult = { status: number; body: Record<string, unknown>; headers?: Record<string, string> }
 
 export type IdempotencyScope = {
   /** The caller's firm; "" for firmless routes (stored under the `_nofirm` prefix). */
