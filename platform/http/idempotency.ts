@@ -23,6 +23,11 @@
  *   IDEMPOTENCY_MAX_ENTRY_BYTES is not kept; its key still refuses to run again (409
  *   idempotency_replay_unavailable) until it expires or is evicted.
  *
+ * - Per-firm quotas (re-audit N-1): each firm may hold at most IDEMPOTENCY_FIRM_MAX_ENTRIES keys and
+ *   IDEMPOTENCY_FIRM_MAX_BYTES of responses (a quarter of the global bounds). A firm over its quota
+ *   evicts its own least recently used entries first, so one firm flooding the store cannot push
+ *   another firm's entries out.
+ *
  * Still process-local: lost on restart and not shared between instances. A durable store (the
  * functions `idempotency_keys` collection) is the follow-up once the Next API serves Firestore.
  */
@@ -56,6 +61,9 @@ export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
 export const IDEMPOTENCY_MAX_ENTRIES = 10_000
 export const IDEMPOTENCY_MAX_BYTES = 64 * 1024 * 1024
 export const IDEMPOTENCY_MAX_ENTRY_BYTES = 4 * 1024 * 1024
+/** Re-audit N-1: one firm's share of the store, a quarter of each global bound. */
+export const IDEMPOTENCY_FIRM_MAX_ENTRIES = IDEMPOTENCY_MAX_ENTRIES / 4
+export const IDEMPOTENCY_FIRM_MAX_BYTES = IDEMPOTENCY_MAX_BYTES / 4
 /**
  * An in-progress claim outside a withSession request (nothing will settle it) may be taken over
  * after this long, like the functions lease. Inside a request the claim is settled at its end.
@@ -63,8 +71,8 @@ export const IDEMPOTENCY_MAX_ENTRY_BYTES = 4 * 1024 * 1024
 export const IDEMPOTENCY_LEASE_MS = 5 * 60 * 1000
 
 type Entry =
-  | { state: "in_progress"; fingerprint: string; at: number; claimId: number }
-  | { state: "done"; fingerprint: string; at: number; json: string | null; bytes: number }
+  | { state: "in_progress"; firm: string; fingerprint: string; at: number; claimId: number }
+  | { state: "done"; firm: string; fingerprint: string; at: number; json: string | null; bytes: number }
 
 export type IdempotencyLimits = {
   ttlMs: number
@@ -72,6 +80,9 @@ export type IdempotencyLimits = {
   maxBytes: number
   maxEntryBytes: number
   leaseMs: number
+  /** Per-firm bounds (re-audit N-1); omitted means no per-firm quota. */
+  firmMaxEntries?: number
+  firmMaxBytes?: number
 }
 
 type Begin =
@@ -85,6 +96,7 @@ type Begin =
 export class IdempotencyStore {
   private readonly entries = new Map<string, Entry>()
   private bytes = 0
+  private readonly firmUsage = new Map<string, { count: number; bytes: number }>()
   private nextClaimId = 1
 
   constructor(private readonly limits: IdempotencyLimits) {}
@@ -97,8 +109,8 @@ export class IdempotencyStore {
     return this.bytes
   }
 
-  /** Check-and-reserve in one synchronous step. */
-  begin(scopedKey: string, fingerprint: string, now: number = Date.now()): Begin {
+  /** Check-and-reserve in one synchronous step. `firm` names the quota the key counts against. */
+  begin(scopedKey: string, fingerprint: string, now: number = Date.now(), firm = ""): Begin {
     const hit = this.entries.get(scopedKey)
     if (hit && now - hit.at < this.limits.ttlMs) {
       if (hit.fingerprint !== fingerprint) return { kind: "reused" }
@@ -111,7 +123,8 @@ export class IdempotencyStore {
     }
     if (hit) this.remove(scopedKey, hit)
     const claimId = this.nextClaimId++
-    this.entries.set(scopedKey, { state: "in_progress", fingerprint, at: now, claimId })
+    this.add(scopedKey, { state: "in_progress", firm, fingerprint, at: now, claimId })
+    this.evictFirm(firm, now)
     this.evict(now)
     return { kind: "claimed", claimId }
   }
@@ -125,14 +138,15 @@ export class IdempotencyStore {
     const bytes = json.length * 2
     const kept = bytes <= this.limits.maxEntryBytes ? json : null
     this.remove(scopedKey, hit)
-    this.entries.set(scopedKey, {
+    this.add(scopedKey, {
       state: "done",
+      firm: hit.firm,
       fingerprint: hit.fingerprint,
       at: now,
       json: kept,
       bytes: kept === null ? 0 : bytes,
     })
-    this.bytes += kept === null ? 0 : bytes
+    this.evictFirm(hit.firm, now)
     this.evict(now)
   }
 
@@ -145,6 +159,7 @@ export class IdempotencyStore {
   clear(): void {
     this.entries.clear()
     this.bytes = 0
+    this.firmUsage.clear()
   }
 
   private touch(scopedKey: string, entry: Entry): void {
@@ -152,9 +167,47 @@ export class IdempotencyStore {
     this.entries.set(scopedKey, entry)
   }
 
+  private add(scopedKey: string, entry: Entry): void {
+    this.entries.set(scopedKey, entry)
+    const stored = entry.state === "done" ? entry.bytes : 0
+    this.bytes += stored
+    const usage = this.firmUsage.get(entry.firm) ?? { count: 0, bytes: 0 }
+    usage.count += 1
+    usage.bytes += stored
+    this.firmUsage.set(entry.firm, usage)
+  }
+
   private remove(scopedKey: string, entry: Entry): void {
     this.entries.delete(scopedKey)
-    if (entry.state === "done") this.bytes -= entry.bytes
+    const stored = entry.state === "done" ? entry.bytes : 0
+    this.bytes -= stored
+    const usage = this.firmUsage.get(entry.firm)
+    if (!usage) return
+    usage.count -= 1
+    usage.bytes -= stored
+    if (usage.count <= 0) this.firmUsage.delete(entry.firm)
+  }
+
+  /**
+   * Re-audit N-1: while `firm` is over its own quota, drop its least recently used entries
+   * (never a live in-progress claim), before the global bounds are applied to everyone.
+   */
+  private evictFirm(firm: string, now: number): void {
+    const maxEntries = this.limits.firmMaxEntries
+    const maxBytes = this.limits.firmMaxBytes
+    if (maxEntries === undefined && maxBytes === undefined) return
+    const over = () => {
+      const usage = this.firmUsage.get(firm)
+      if (!usage) return false
+      return (maxEntries !== undefined && usage.count > maxEntries) || (maxBytes !== undefined && usage.bytes > maxBytes)
+    }
+    if (!over()) return
+    for (const [key, entry] of this.entries) {
+      if (!over()) return
+      if (entry.firm !== firm) continue
+      if (entry.state === "in_progress" && now - entry.at <= this.limits.leaseMs) continue
+      this.remove(key, entry)
+    }
   }
 
   /**
@@ -182,6 +235,8 @@ const store = new IdempotencyStore({
   maxBytes: IDEMPOTENCY_MAX_BYTES,
   maxEntryBytes: IDEMPOTENCY_MAX_ENTRY_BYTES,
   leaseMs: IDEMPOTENCY_LEASE_MS,
+  firmMaxEntries: IDEMPOTENCY_FIRM_MAX_ENTRIES,
+  firmMaxBytes: IDEMPOTENCY_FIRM_MAX_BYTES,
 })
 
 /** Test hook: the shared store (size and byte accounting). */
@@ -260,7 +315,7 @@ export function beginIdempotentRequest(request: Request, key: string, fingerprin
   const ctx = requestClaims.getStore()
   const scope = ctx?.scope ?? { firmId: "_", userId: "_" }
   const scopedKey = [scope.firmId, scope.userId, routeOf(request), key.toLowerCase()].join("|")
-  const begun = store.begin(scopedKey, fingerprint)
+  const begun = store.begin(scopedKey, fingerprint, Date.now(), scope.firmId)
   switch (begun.kind) {
     case "claimed": {
       const claim = new IdempotencyClaim(scopedKey, begun.claimId)
