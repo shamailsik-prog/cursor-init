@@ -14,6 +14,7 @@ import {
 } from "../p5/mfa"
 import { createFirmUserOp, deactivateUserOp, onboardFirmOp, setUserClaimsOp } from "../p5/identity"
 import { recordGatePassOp } from "../p5/gates"
+import { setFirmNumberingOp } from "../d1/client/numberingOp"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -53,6 +54,7 @@ export const MAX_BODY_BYTES = 1024 * 1024
 
 const IDENTITY = "/api/platform/identity"
 const GATES = "/api/platform/gates"
+const D1_CLIENT = "/api/d1/client"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
@@ -75,6 +77,7 @@ export const ROUTES: readonly Route[] = [
   post(`${IDENTITY}/syncMfaStatus`, syncMfaStatusOp),
   // firmless (platformAdmin): R-5 gate passes; no X-Firm-Id, like onboardFirm (E-26 exception)
   post(`${GATES}/recordGatePass`, recordGatePassOp),
+  post(`${D1_CLIENT}/setFirmNumbering`, setFirmNumberingOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>

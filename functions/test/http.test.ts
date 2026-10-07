@@ -82,7 +82,7 @@ describe("route table", () => {
     expect(() => buildRouteTable([route("/api/x/y/z", op), route("/api/x/y/z", op, "general", "PUT")])).not.toThrow()
   })
 
-  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, kind general", () => {
+  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, and setFirmNumbering as POST /api/d1/client/setFirmNumbering, kind general", () => {
     const fns = [
       "onboardFirm",
       "createFirmUser",
@@ -95,7 +95,11 @@ describe("route table", () => {
       "syncMfaStatus",
     ]
     expect(ROUTES.map((r) => `${r.method} ${r.path} ${r.kind}`).sort()).toEqual(
-      [...fns.map((f) => `POST /api/platform/identity/${f} general`), "POST /api/platform/gates/recordGatePass general"].sort()
+      [
+        ...fns.map((f) => `POST /api/platform/identity/${f} general`),
+        "POST /api/platform/gates/recordGatePass general",
+        "POST /api/d1/client/setFirmNumbering general",
+      ].sort()
     )
     expect(() => buildRouteTable(ROUTES)).not.toThrow()
   })
