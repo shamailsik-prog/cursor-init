@@ -467,6 +467,17 @@ export function reissueTenancySessionReference(
   return { reference, auditEntry }
 }
 
+/**
+ * Marks a tenancy session reference revoked in the registry and audits it.
+ *
+ * SEC-6 (by design): a session reference is an administrative record, not a credential. No
+ * request presents one — resolveSession authenticates the Firebase ID token alone — so revoking
+ * a reference (here, or the automatic privileged_boundary_drift revocation) does not end any
+ * session or refuse any request. To cut a user's access use deactivateUser / setUserClaims
+ * (Cloud Functions): they flip users/{uid}.active or the role, which resolveSession, the
+ * functions API and the Firestore rules all read, and revoke the refresh tokens.
+ * Pinned by tests/p5.session-reference.no-access-effect.test.ts.
+ */
 export function revokeTenancySessionReference(
   store: SpineStore,
   input: {
