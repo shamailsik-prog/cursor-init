@@ -408,8 +408,11 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
     try {
       await syncClaims(uid, change.result)
     } catch (err) {
+      // FN-2: every claims-sync failure is an incident row (not only claims_sync_failed); the
+      // revert that follows is audited too (recoverFailedSync).
+      const syncFailed = err instanceof HttpError && err.code === "claims_sync_failed"
+      await audit.incident(syncFailed ? "claims_sync_failed" : "claims_sync_error")
       await recoverFailedSync(audit, uid, change.result, change.before)
-      if (err instanceof HttpError && err.code === "claims_sync_failed") await audit.incident("claims_sync_failed")
       throw err
     }
     await adminAuth().revokeRefreshTokens(uid)
@@ -433,7 +436,10 @@ function writeClaimsState(tx: Transaction, uid: string, r: ClaimsResult): void {
  * After a failed claims sync: revert the doc (if our version is still the
  * committed one) and re-sync the Auth claims from the reverted result, so doc
  * and claims agree again. Failures here are logged; the caller rethrows the
- * original error.
+ * original error. FN-2: the revert stages its own deny row in the revert
+ * transaction (`claims_change_reverted`, or `revert_blocked_last_partner`); a
+ * failed revert (`claims_revert_failed`) and one skipped because a newer change
+ * is committed (`claims_revert_superseded`) are recorded as incidents.
  */
 async function recoverFailedSync(
   audit: CallAudit,
@@ -443,13 +449,17 @@ async function recoverFailedSync(
 ): Promise<void> {
   let reverted: { result: ClaimsResult; blocked: boolean } | undefined
   try {
-    reverted = await revertIfStillOurs(uid, ours, before)
+    reverted = await revertIfStillOurs(audit, uid, ours, before)
   } catch (err) {
     logFailure("setUserClaims revert failed", err, uid)
+    await audit.incident("claims_revert_failed")
     return
   }
-  if (!reverted) return
-  if (reverted.blocked) await audit.incident("revert_blocked_last_partner")
+  if (!reverted) {
+    // A newer change is committed and stays authoritative: nothing was reverted.
+    await audit.incident("claims_revert_superseded")
+    return
+  }
   try {
     await syncClaims(uid, reverted.result)
   } catch (err) {
@@ -464,6 +474,7 @@ async function recoverFailedSync(
  * is kept and only the clearance is restored (`blocked: true`).
  */
 async function revertIfStillOurs(
+  audit: CallAudit,
   uid: string,
   ours: ClaimsResult,
   before: { role: unknown; clearanceLevel: unknown }
@@ -487,6 +498,8 @@ async function revertIfStillOurs(
       { firmId: ours.firmId, role, clearanceLevel: before.clearanceLevel, version: ours.version + 1 },
       ours.firmId
     )
+    // FN-2: the revert's audit row commits with the revert (no revert without its row).
+    await audit.stage(tx, "deny", blocked ? "revert_blocked_last_partner" : "claims_change_reverted")
     writeClaimsState(tx, uid, result)
     return { result, blocked }
   })

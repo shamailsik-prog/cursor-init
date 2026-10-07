@@ -750,7 +750,8 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
         clearanceLevel: "confidential",
         claimsVersion: 2,
       })
-      expect(await auditCount(partner.uid, ACTION)).toBe(1)
+      // FN-2: the allow row, the sync-failure incident and the revert's own row
+      expect(await auditCount(partner.uid, ACTION)).toBe(3)
     })
 
     it("Auth claims write fails but a newer change already committed → that newer doc state is kept", async () => {
@@ -846,7 +847,11 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
         claimsVersion: 2,
       })
       const rows = await auditRows(partner.uid, ACTION)
-      expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual(["allow:ok", "deny:claims_sync_failed"])
+      expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual([
+        "allow:ok",
+        "deny:claims_change_reverted",
+        "deny:claims_sync_failed",
+      ])
     })
 
     it("N3: a revert that would demote the last active partner keeps the role, reverts the rest, and is audited", async () => {
@@ -874,7 +879,11 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
         claimsVersion: 2,
       })
       const rows = await auditRows(partner.uid, ACTION)
-      expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual(["allow:ok", "deny:revert_blocked_last_partner"])
+      expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual([
+        "allow:ok",
+        "deny:claims_sync_error",
+        "deny:revert_blocked_last_partner",
+      ])
     })
   })
 

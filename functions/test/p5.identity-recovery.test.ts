@@ -58,3 +58,53 @@ describe.skipIf(!EMULATORS)("FN-1: platformAdmin onboardFirm is resumable", () =
     expect((await adminAuth().getUser(uid)).customClaims).toMatchObject({ firmId: res.firmId, platformAdmin: true })
   })
 })
+
+describe.skipIf(!EMULATORS)("FN-2: setUserClaims failures and reverts are audited", () => {
+  const ACTION = "identity.setUserClaims"
+
+  async function setup() {
+    const firmId = uniq("firm")
+    const partner = await mintIdToken({ firmId, role: "partner", clearanceLevel: "privileged-restricted" })
+    const target = await mintIdToken({ firmId, role: "associate", clearanceLevel: "internal" })
+    vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    return { firmId, partner, target }
+  }
+
+  it("an Auth outage (not claims_sync_failed) writes an incident row and a revert row", async () => {
+    const { firmId, partner, target } = await setup()
+    vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("auth down"))
+    await expect(
+      setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, clearanceLevel: "confidential" }))
+    ).rejects.toBeDefined()
+    const doc = (await adminDb().collection("users").doc(target.uid).get()).data()
+    expect(doc?.clearanceLevel).toBe("internal")
+    const rows = await auditRows(partner.uid, ACTION)
+    expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual([
+      "allow:ok",
+      "deny:claims_change_reverted",
+      "deny:claims_sync_error",
+    ])
+  })
+
+  it("a sync failure whose change was superseded by a newer one is audited as not reverted", async () => {
+    const { firmId, partner, target } = await setup()
+    const users = adminDb().collection("users")
+    vi.spyOn(adminAuth(), "setCustomUserClaims").mockImplementationOnce(async () => {
+      await users.doc(target.uid).update({ role: "intern", claimsVersion: 2 })
+      await adminDb()
+        .collection("claims_sync")
+        .doc(target.uid)
+        .set({ version: 2, firmId, role: "intern", clearanceLevel: "internal" })
+      throw new Error("injected claims failure")
+    })
+    await expect(
+      setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
+    ).rejects.toBeDefined()
+    const rows = await auditRows(partner.uid, ACTION)
+    expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual([
+      "allow:ok",
+      "deny:claims_revert_superseded",
+      "deny:claims_sync_error",
+    ])
+  })
+})
