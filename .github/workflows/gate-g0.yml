@@ -55,3 +55,21 @@ jobs:
         run: npm --prefix functions run test:emu
       - name: Gate G-2 cross-firm isolation (L18 §10)
         run: npm run gate:g2
+
+  corpus-service:
+    # corpus_service/ pytest, including the security-hardening regression tests. Runs until
+    # the service moves to its own repository (E-25); the pinned test set is requirements-test.txt.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: corpus_service/requirements-test.txt
+      # test_security_hardening runs tests/dashboard_harness.mjs under node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install -r corpus_service/requirements-test.txt
+      - run: python -m pytest corpus_service/tests -q
