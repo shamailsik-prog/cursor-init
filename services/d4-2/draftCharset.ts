@@ -79,6 +79,13 @@ const RE_ARABIC_LETTER = /^(?=\p{L})\p{Script=Arabic}$/u
 const RE_LATIN_LETTER = /^(?=\p{L})\p{Script=Latin}$/u
 const RE_LETTER = /^\p{L}$/u
 const RE_SYMBOL_OR_PUNCT = /^[\p{S}\p{P}]$/u
+// Symbols / punctuation whose UTS #39 prototype is a single ASCII letter.
+const SYMBOL_LETTER_LOOKALIKE = new Set(
+  Object.entries(CONFUSABLE)
+    .filter(([, prototype]) => /^[A-Za-z]$/.test(prototype))
+    .map(([hex]) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .filter((c) => /^[\p{S}\p{P}]$/u.test(c))
+)
 const RUN_SPLIT = /^[()[\]{}/\\"\u201c\u201d\u00ab\u00bb\u2018]$/u
 // Intra-word marks that are ordinary in Latin text: dashes (\p{Pd}) and the curly apostrophes.
 const INTRA_WORD_MARKS = new Set(["\u2018", "\u2019", "\u02bc"])
@@ -198,6 +205,27 @@ export function checkDraftCharset(rawBody: string): CharsetCheck {
     const problem = characterProblem(ch, cps[i - 1] ?? "", cps[i + 1] ?? "")
     if (problem) flag(i, problem)
   }
+
+  // Fuzz R5: a symbol or punctuation mark that UTS #39 maps onto a single ASCII letter
+  // (🝌 -> C, ⊤ -> T, ∪ -> U, × -> x, ∣ -> l) is refused when glued to a Latin letter, or when it
+  // stands as its own token next to an abbreviation-like token (2-6 capital letters, any
+  // punctuation inside): "2018 🝌 L〰C 789". "5 × 10", "Length × Width", "A ∪ B" stay allowed.
+  const tokens = [...body.matchAll(/\S+/gu)].map((m) => ({ text: m[0], at: [...body.slice(0, m.index ?? 0)].length }))
+  const abbreviationLike = (token: string | undefined) => {
+    const letters = [...(token ?? "")].filter((c) => RE_LETTER.test(c)).join("")
+    return letters.length >= 2 && letters.length <= 6 && /^[A-Z]+$/.test(letters)
+  }
+  tokens.forEach((token, t) => {
+    const chars = [...token.text]
+    chars.forEach((c, k) => {
+      if (!RE_SYMBOL_OR_PUNCT.test(c) || !SYMBOL_LETTER_LOOKALIKE.has(c)) return
+      const glued = isLatinLike(chars[k - 1] ?? "") || isLatinLike(chars[k + 1] ?? "")
+      const alone = chars.length === 1 && (abbreviationLike(tokens[t - 1]?.text) || abbreviationLike(tokens[t + 1]?.text))
+      if (glued || alone) {
+        violations.push({ codePoint: codePointLabel(c.codePointAt(0) ?? 0), position: token.at + k, category: category(c), reason: `symbol look-alike of the letter "${CONFUSABLE[(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")]}"` })
+      }
+    })
+  })
 
   // R5-5: a numeric HTML character reference (decimal or hex, ";" optional) that decodes to a
   // character refused above is refused too, so the stored text can never render, say, a bidi

@@ -198,7 +198,10 @@ function ambiguousTail(rest: string): boolean {
   // a period may not.
   // R4-3: any run of punctuation/symbols glued between the page and more digits ("12\u202634",
   // "12!!34", "12\u2a7434") is ambiguous.
-  return /^(?:[\p{P}\p{S}]+\d|[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
+  // Fuzz R5: on the same line, a period, blanks and digits that are not an enumeration ("5.",
+  // "5)") — "PCrLJ 4. 4 for …", "4.<FF>4" — are ambiguous, across one line break too; an ellipsis,
+  // a blank line or "5." stay prose.
+  return /^(?:[^\S\n]*\.(?:[^\S\n]+|[^\S\n]*\n[^\S\n]*)\d+(?![\d.)])|[\p{P}\p{S}]+\d|[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
 }
 
 function trailingParen(rest: string): { length: number; key: string } | null {

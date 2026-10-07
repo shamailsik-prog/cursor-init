@@ -242,3 +242,35 @@ describe("R5-5: a numeric HTML entity that decodes to a disallowed character is 
     expect(((await res.json()) as { code: string }).code).toBe("unsupported_characters")
   })
 })
+
+// Found by the round-5 30-seed sweep (4000-4029).
+describe("fuzz round 5: '4. 4' mid-line, and a stand-alone symbol look-alike beside an abbreviation", () => {
+  it.each(["Relying on 2019 PCrLJ\r\n4. 4 for the proposition.", "see 2019 SCMR 12. 34 for that", "see 2019 SCMR 12.  34", "Relying on 2019 PCrLJ 4.\f4 a < b for the proposition.", "see 2019 SCMR 12.\n34 for that"])("%j never resolves to the shorter page", (text) => {
+    const store = newStore()
+    seedJudgment(store, "d4", "Four", "full", "2019 PCrLJ 4")
+    seedJudgment(store, "d12", "Twelve", "full", "2019 SCMR 12")
+    const check = checkDraftCharset(text)
+    expect(check.ok).toBe(true)
+    const res = verifyCitations(store, extractCitations(check.ok ? check.normalised : text))
+    expect(res.status).not.toBe("OK")
+    expect(res.findings.some((f) => f.status === "VERIFIED")).toBe(false)
+  })
+  it("enumerations, blank lines, newlines and ellipses after a citation stay prose", () => {
+    for (const text of ["2019 SCMR 1234. 5. The next issue", "2019 SCMR 1234.\n\n5 cases", "2019 SCMR 1234.\n5) next", "2019 SCMR 1234... 5 cases", "2019 SCMR 1234. The 5 cases"]) {
+      expect(extractCitations(text), text).toEqual(["2019 SCMR 1234"])
+    }
+  })
+  it.each(["Relying on 2018 \u{1f74c}\nL〰C 78\u{1fbf9} for the proposition.", "2018 \u{1f74c} LC 789", "2019 SCM \u{1ccd7} 1234", "2019 ⊤CL 5", "2019 PLD∪ 5"])(
+    "%j is refused (symbol look-alike of a letter beside an abbreviation)",
+    (text) => {
+      const check = checkDraftCharset(text)
+      expect(check.ok).toBe(false)
+      if (!check.ok) expect(check.violations.some((v) => /look-alike/.test(v.reason))).toBe(true)
+    }
+  )
+  it("ordinary uses of those symbols stay accepted", () => {
+    for (const text of ["5 × 10 metres", "Length × Width", "A ∪ B of the sets", "Name │ Address"]) {
+      expect(checkDraftCharset(text).ok, text).toBe(true)
+    }
+  })
+})

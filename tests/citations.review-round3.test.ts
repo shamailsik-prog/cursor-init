@@ -546,7 +546,8 @@ describe("ellipsis after a citation stays ordinary prose", () => {
   it("'2019 SCMR 1234 ... 2019' and '2019 SCMR 1234... 5 cases' read page 1234", () => {
     expect(extractCitations("2019 SCMR 1234 ... 2019 was a year")).toEqual(["2019 SCMR 1234"])
     expect(extractCitations("2019 SCMR 1234... 5 cases")).toEqual(["2019 SCMR 1234"])
-    expect(extractCitations("2019 SCMR 1234.  5 cases")).toEqual(["2019 SCMR 1234"])
+    // R5 fuzz: a period, blanks and digits on the same line are ambiguous ("PCrLJ 4. 4 for …")
+    expect(extractCitations("2019 SCMR 1234.  5 cases").every((r) => r.startsWith("UNRECOGNISED: "))).toBe(true)
   })
 })
 
