@@ -1,14 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
-import { onCall } from "firebase-functions/v2/https"
 import type { UpdateMultiFactorInfoRequest } from "firebase-admin/auth"
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import { adminAuth, adminDb } from "../admin"
-import { CALLABLE_OPTIONS } from "../health"
 import { HttpError } from "../http/errors"
 import type { Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 import {
-  callableHandler,
   errorCode,
   isSafeDocId,
   parseRole,
@@ -108,7 +105,7 @@ export const enforceMfaForRoleOp: FirmOperation<{ firmId: string; role: Role; en
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
-    requirePartner(caller)
+    await requirePartner(caller, "mfa.enforce")
     const role = parseRole(data.role)
     if (typeof data.enforced !== "boolean") throw new HttpError(400, "invalid_enforced")
     const enforced = data.enforced
@@ -126,7 +123,6 @@ export const enforceMfaForRoleOp: FirmOperation<{ firmId: string; role: Role; en
     return { firmId: caller.firmId, role, enforced }
   },
 }
-export const enforceMfaForRoleHandler = callableHandler(enforceMfaForRoleOp)
 
 /**
  * generateRecoveryCodes({ firmId }) → { codes }: 10 new codes for the caller,
@@ -166,7 +162,6 @@ export const generateRecoveryCodesOp: FirmOperation<{ codes: string[] }> = {
     return { codes }
   },
 }
-export const generateRecoveryCodesHandler = callableHandler(generateRecoveryCodesOp)
 
 /**
  * approveMfaDisable({ firmId, uid }) → { approvalId, expiresAt }. A partner
@@ -181,7 +176,7 @@ export const approveMfaDisableOp: FirmOperation<{ approvalId: string; expiresAt:
   target: "users",
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
-    requirePartner(caller)
+    await requirePartner(caller, "mfa.approve_disable")
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
     if (uid === caller.uid) throw new HttpError(403, "second_partner_required")
@@ -204,7 +199,6 @@ export const approveMfaDisableOp: FirmOperation<{ approvalId: string; expiresAt:
     return { approvalId: ref.id, expiresAt: expiresAt.toDate().toISOString() }
   },
 }
-export const approveMfaDisableHandler = callableHandler(approveMfaDisableOp)
 
 /** The uids of the Auth user's enrolled second factors; an unknown user has none. */
 async function enrolledFactorUids(uid: string): Promise<string[]> {
@@ -383,7 +377,6 @@ export const disableMfaOp: FirmOperation<{ uid: string; mfaEnabled: boolean }> =
     return { uid, mfaEnabled }
   },
 }
-export const disableMfaHandler = callableHandler(disableMfaOp)
 
 /**
  * Reserves one code attempt on an unused approval for this firm and subject,
@@ -433,10 +426,3 @@ export const syncMfaStatusOp: FirmOperation<{ uid: string; mfaEnabled: boolean }
     return { uid: caller.uid, mfaEnabled }
   },
 }
-export const syncMfaStatusHandler = callableHandler(syncMfaStatusOp)
-
-export const enforceMfaForRole = onCall(CALLABLE_OPTIONS, enforceMfaForRoleHandler)
-export const generateRecoveryCodes = onCall(CALLABLE_OPTIONS, generateRecoveryCodesHandler)
-export const approveMfaDisable = onCall(CALLABLE_OPTIONS, approveMfaDisableHandler)
-export const disableMfa = onCall(CALLABLE_OPTIONS, disableMfaHandler)
-export const syncMfaStatus = onCall(CALLABLE_OPTIONS, syncMfaStatusHandler)

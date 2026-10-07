@@ -2,7 +2,7 @@ import { logger } from "firebase-functions"
 
 /**
  * Deploy-time settings read from the environment (functions/.env.<projectId>),
- * shared by `api` and the callables.
+ * used by `api`.
  *
  * - TRUSTED_PROXY_HOPS: proxies of ours in front of Google's front end that
  *   append to X-Forwarded-For (see clientIp in http/rateLimit.ts). Default 0.

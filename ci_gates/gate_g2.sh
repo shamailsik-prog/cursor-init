@@ -3,8 +3,9 @@
 #
 # Two firms are seeded and every read function of D1-1, D1-2, D3-1, D5-1 and
 # D2-1 is attempted cross-firm through web and WhatsApp (tests/g2.cross-firm.test.ts,
-# memory and Firestore persistence), plus every P5 callable, every HTTP `api`
-# route and every tenant collection in firestore.rules
+# memory and Firestore persistence), plus every HTTP `api` route (the only entry
+# point to the P5 operations: no callables are deployed) and every tenant
+# collection in firestore.rules
 # (functions/test/g2.cross-firm.test.ts). Both run under the Auth and
 # Firestore emulators. The gate prints the coverage table (tested / not built /
 # out of scope) and fails on any allowed cross-firm attempt, any read path the
@@ -32,7 +33,7 @@ if [ "${1:-}" = "--inner" ]; then
   cd "$ROOT" || exit 1
   echo "--- web + WhatsApp read paths (tests/g2.cross-firm.test.ts)"
   G2_COVERAGE_OUT="$out/next.json" npx vitest run tests/g2.cross-firm.test.ts || rc=1
-  echo "--- P5 callables, HTTP api, Firestore rules (functions/test/g2.cross-firm.test.ts)"
+  echo "--- P5 HTTP api, Firestore rules (functions/test/g2.cross-firm.test.ts)"
   (cd "$ROOT/functions" && G2_GATE=1 G2_COVERAGE_OUT="$out/functions.json" npx vitest run test/g2.cross-firm.test.ts) || rc=1
   exit $rc
 fi
@@ -110,7 +111,8 @@ for (const r of rows) {
   if (r.status === "tested" && r.attempts === 0) problems.push(`tested with no attempts: ${r.path}`)
 }
 if (!rows.some((r) => r.suite === "next" && r.status === "tested")) problems.push("no web/WhatsApp read path was tested")
-if (!rows.some((r) => r.channel === "callable")) problems.push("no P5 callable was tested")
+// U-1: the HTTP api is the only entry point to the P5 operations (no callables are deployed)
+if (!rows.some((r) => r.suite === "functions" && r.channel === "http" && r.status === "tested")) problems.push("no P5 HTTP api route was tested")
 if (!rows.some((r) => r.channel === "rules" && r.status === "tested")) problems.push("no Firestore rules collection was tested")
 // Every web/WhatsApp path must have run in both persistence modes.
 const nextTested = rows.filter((r) => r.suite === "next" && r.status === "tested")
@@ -132,7 +134,7 @@ rows
   .sort((a, b) => order[a.status] - order[b.status] || a.service.localeCompare(b.service) || a.path.localeCompare(b.path) || String(a.mode).localeCompare(String(b.mode)))
   .forEach(print)
 
-console.log("\n=== G-2 coverage: P5 identity (callables, HTTP api) ===")
+console.log("\n=== G-2 coverage: P5 identity (HTTP api) ===")
 console.log(line(["svc", "channel", "", "function / route", "status", "attempts", "allowed"]))
 rows.filter((r) => r.suite === "functions" && r.channel !== "rules").forEach(print)
 

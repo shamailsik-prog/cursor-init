@@ -71,6 +71,20 @@ export function loadCourts(data: {
   )
 }
 
+// The upper-cased synonym table of a court record, built once per record (SEC-1: the citation
+// gate calls normalise for every case reference in a draft).
+const upperSynonymCache = new WeakMap<CourtRecord, Record<string, string>>()
+function upperSynonyms(court: CourtRecord): Record<string, string> {
+  const cached = upperSynonymCache.get(court)
+  if (cached) return cached
+  const syn: Record<string, string> = {}
+  for (const [k, v] of Object.entries(court.synonyms ?? {})) {
+    syn[k.toUpperCase()] = v
+  }
+  upperSynonymCache.set(court, syn)
+  return syn
+}
+
 export function normalise(
   raw: string,
   courtId: string,
@@ -98,10 +112,7 @@ export function normalise(
   }
   const bench = bench1 || bench2 || null
   const head = s.slice(0, m.index).trim().replace(/[-\s]+$/, "")
-  const syn: Record<string, string> = {}
-  for (const [k, v] of Object.entries(court.synonyms ?? {})) {
-    syn[k.toUpperCase()] = v
-  }
+  const syn = upperSynonyms(court)
   let prefix: string | undefined
   const tokens = head.split(" ").filter(Boolean)
   for (let n = tokens.length; n > 0; n--) {

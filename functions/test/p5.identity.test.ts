@@ -1,18 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Firestore, Timestamp } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
-import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
-import { HttpError, toHttpsError } from "../src/http/errors"
-import { callerWithoutFirm, requireAuth } from "../src/p5/auth"
-import {
-  createFirmUserHandler,
-  deactivateUserHandler,
-  onboardFirmHandler,
-  setUserClaimsHandler,
-} from "../src/p5/identity"
+import { firmlessFromToken, requireAuth, verifyBearer } from "../src/p5/auth"
 import { appendAudit } from "../src/p5/audit"
-import { EMULATORS, callableAuth, mintIdToken, uniq } from "./emu"
+import { EMULATORS, mintIdToken, uniq } from "./emu"
+import { apiCall, apiErrorOf, expectKind, viaApi, viaCore, type ApiError } from "./api"
+
+// U-1: the operations are driven through the HTTP api, their only entry point.
+const onboardFirmHandler = viaApi("onboardFirm")
+const createFirmUserHandler = viaApi("createFirmUser")
+const setUserClaimsHandler = viaApi("setUserClaims")
+const deactivateUserHandler = viaApi("deactivateUser")
+// The operation core without the router's rate limit / idempotency transactions, for tests
+// that inject a runTransaction failure into the operation's own transaction.
+const setUserClaimsCore = viaCore("setUserClaims")
 
 vi.mock("../src/p5/audit", async (importOriginal) => {
   const real = await importOriginal<typeof import("../src/p5/audit")>()
@@ -24,19 +26,8 @@ function loggedText(spy: { mock: { calls: unknown[][] } }): string {
   return JSON.stringify(spy.mock.calls, (_k, v) => (v instanceof Error ? { name: v.name, message: v.message } : v))
 }
 
-async function httpsErrorOf(p: Promise<unknown>): Promise<HttpsError> {
-  try {
-    await p
-  } catch (e) {
-    expect(e).toBeInstanceOf(HttpsError)
-    return e as HttpsError
-  }
-  throw new Error("expected HttpsError, promise resolved")
-}
-
-function expectHttps(err: HttpsError, code: string, detail: string) {
-  expect({ code: err.code, details: err.details }).toEqual({ code, details: { code: detail } })
-}
+const httpsErrorOf = apiErrorOf
+const expectHttps = expectKind
 
 async function auditRows(actorId: string, action: string) {
   const snap = await adminDb().collection("audit_log").where("actorId", "==", actorId).where("action", "==", action).get()
@@ -49,9 +40,9 @@ async function auditCount(actorId: string, action: string): Promise<number> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** A request as the onCall runtime would hand it to the handler. */
+/** One api call: the caller's token (null = none) and the data, firmId sent as X-Firm-Id. */
 async function req(token: string | null, data: Record<string, unknown>) {
-  return { auth: token ? await callableAuth(token) : undefined, data } as never
+  return apiCall(token, data)
 }
 
 const partnerClaims = (firmId: string, clearanceLevel = "privileged-restricted") => ({
@@ -60,48 +51,27 @@ const partnerClaims = (firmId: string, clearanceLevel = "privileged-restricted")
   clearanceLevel,
 })
 
-describe("toHttpsError", () => {
-  it.each([
-    [400, "bad", "invalid-argument"],
-    [401, "token_revoked", "unauthenticated"],
-    [403, "partner_only", "permission-denied"],
-    [409, "already_exists", "already-exists"],
-    [409, "already_onboarded", "failed-precondition"],
-    [503, "audit_unavailable", "unavailable"],
-  ])("HttpError(%i, %s) → %s with the code in details", (status, code, expected) => {
-    const err = toHttpsError(new HttpError(status, code))
-    expect(err).toBeInstanceOf(HttpsError)
-    expectHttps(err, expected, code)
-  })
+describe.skipIf(!EMULATORS)("firmless HTTP identity: verifyBearer + firmlessFromToken (Auth emulator)", () => {
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` })
 
-  it("non-HttpError → internal (no detail leak)", () => {
-    const err = toHttpsError(new Error("secret stack detail"))
-    expectHttps(err, "internal", "internal")
-    expect(err.message).not.toContain("secret")
-  })
-})
-
-describe.skipIf(!EMULATORS)("callerWithoutFirm (Auth emulator)", () => {
   it("returns uid and claims for a user without firm claims", async () => {
     const { uid, token } = await mintIdToken({ platformAdmin: true })
-    const res = await callerWithoutFirm(await callableAuth(token))
+    const res = await firmlessFromToken(await verifyBearer(bearer(token)))
     expect(res.uid).toBe(uid)
     expect(res.claims.platformAdmin).toBe(true)
   })
 
   it("no auth → 401 missing_token; revoked → token_revoked; disabled → user_disabled", async () => {
-    await expect(callerWithoutFirm(undefined)).rejects.toMatchObject({ status: 401, code: "missing_token" })
+    await expect(verifyBearer({})).rejects.toMatchObject({ status: 401, code: "missing_token" })
 
     const a = await mintIdToken(null)
-    const authA = await callableAuth(a.token)
     await sleep(1100)
     await adminAuth().revokeRefreshTokens(a.uid)
-    await expect(callerWithoutFirm(authA)).rejects.toMatchObject({ status: 401, code: "token_revoked" })
+    await expect(verifyBearer(bearer(a.token))).rejects.toMatchObject({ status: 401, code: "token_revoked" })
 
     const b = await mintIdToken(null)
-    const authB = await callableAuth(b.token)
     await adminAuth().updateUser(b.uid, { disabled: true })
-    await expect(callerWithoutFirm(authB)).rejects.toMatchObject({ status: 401, code: "user_disabled" })
+    await expect(verifyBearer(bearer(b.token))).rejects.toMatchObject({ status: 401, code: "user_disabled" })
   })
 })
 
@@ -188,7 +158,7 @@ describe.skipIf(!EMULATORS)("onboardFirm", () => {
     const denied = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[]
     expect(ok).toHaveLength(1)
     expect(denied).toHaveLength(1)
-    expectHttps(denied[0].reason as HttpsError, "permission-denied", "bootstrap_closed")
+    expectHttps(denied[0].reason as ApiError, "permission-denied", "bootstrap_closed")
     expect(await auditCount(a.uid, ACTION)).toBe(1)
     expect(await auditCount(b.uid, ACTION)).toBe(1)
   })
@@ -556,7 +526,6 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
     const firmId = uniq("firm")
     const partner = await mintIdToken(partnerClaims(firmId))
     const target = await member(firmId, { locale: "ur-PK" })
-    const targetAuth = await callableAuth(target.token)
     await sleep(1100)
 
     const res = await setUserClaimsHandler(
@@ -574,8 +543,10 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
     expect(doc).toMatchObject({ firmId, role: "clerk", clearanceLevel: "privileged", active: true, claimsVersion: 1 })
 
     // The old session is revoked so the new claims take effect on the next sign-in.
-    const { callerFromCallable } = await import("../src/p5/auth")
-    await expect(callerFromCallable(targetAuth, firmId)).rejects.toMatchObject({ status: 401, code: "token_revoked" })
+    await expect(requireAuth({ headers: { authorization: `Bearer ${target.token}`, "x-firm-id": firmId } })).rejects.toMatchObject({
+      status: 401,
+      code: "token_revoked",
+    })
 
     const rows = await auditRows(partner.uid, ACTION)
     expect(rows).toHaveLength(1)
@@ -725,7 +696,7 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
       vi.spyOn(Firestore.prototype, "runTransaction").mockRejectedValueOnce(new Error("injected users-doc failure"))
 
       const err = await httpsErrorOf(
-        setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk", clearanceLevel: "internal" }))
+        setUserClaimsCore(await req(partner.token, { firmId, uid: target.uid, role: "clerk", clearanceLevel: "internal" }))
       )
       expectHttps(err, "internal", "internal")
       expect(setClaims).not.toHaveBeenCalled()
@@ -786,7 +757,7 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
         return out
       })
       await expect(
-        setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
+        setUserClaimsCore(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
       ).resolves.toEqual({ uid: target.uid, role: "clerk", clearanceLevel: "confidential" })
       expect((await adminAuth().getUser(target.uid)).customClaims).toEqual({
         firmId,
@@ -1102,11 +1073,13 @@ describe.skipIf(!EMULATORS)("deactivateUser", () => {
 })
 
 describe("index exports", () => {
-  it("exports the four identity callables in asia-south1", async () => {
-    const mod = (await import("../src/index")) as Record<string, { __endpoint?: { region?: string[]; callableTrigger?: unknown } }>
-    for (const name of ["onboardFirm", "createFirmUser", "setUserClaims", "deactivateUser"]) {
-      expect(mod[name]?.__endpoint?.callableTrigger, name).toBeDefined()
-      expect(mod[name]?.__endpoint?.region, name).toEqual(["asia-south1"])
+  it("U-1: deploys only the HTTP api (and the health probe) in asia-south1 — no onCall callables", async () => {
+    const mod = (await import("../src/index")) as Record<string, { __endpoint?: { region?: string[]; callableTrigger?: unknown; httpsTrigger?: unknown } }>
+    expect(Object.keys(mod).sort()).toEqual(["api", "health"])
+    for (const name of Object.keys(mod)) {
+      expect(mod[name]?.__endpoint?.callableTrigger, name).toBeUndefined()
+      expect(mod[name]?.__endpoint?.httpsTrigger, name).toBeDefined()
     }
+    expect(mod.api?.__endpoint?.region).toEqual(["asia-south1"])
   })
 })

@@ -1,14 +1,11 @@
-import { onCall } from "firebase-functions/v2/https"
 import { FieldValue, type DocumentData, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminAuth, adminDb } from "../admin"
-import { CALLABLE_OPTIONS } from "../health"
 import { HttpError } from "../http/errors"
 import { isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 import { g2Passed } from "./gates"
 import {
-  callableHandler,
   errorCode,
   isSafeDocId,
   logFailure,
@@ -24,10 +21,10 @@ import {
 } from "./common"
 
 /**
- * Module 40 identity lifecycle callables: firm onboarding, firm users, claims
+ * Module 40 identity lifecycle operations (HTTP api): firm onboarding, firm users, claims
  * and deactivation. Every call writes exactly one audit_log row (allow or
  * deny). Allowed mutations are audited *before* they run, so a failed audit
- * write stops the call (503 audit_unavailable → `unavailable`) with nothing changed.
+ * write stops the call (503 audit_unavailable) with nothing changed.
  */
 
 const MAX_FIRM_NAME = 200
@@ -298,7 +295,6 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
     return { firmId: outcome.firmId }
   },
 }
-export const onboardFirmHandler = callableHandler(onboardFirmOp)
 
 /**
  * createFirmUser({ firmId, email, role, clearanceLevel }) → { uid }. Partner only.
@@ -311,7 +307,7 @@ export const createFirmUserOp: FirmOperation<{ uid: string }> = {
   target: "users",
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
-    requirePartner(caller)
+    await requirePartner(caller, "identity.manage_users")
     forbidPlatformAdmin(data)
     const email = parseEmail(data.email)
     const role = parseRole(data.role)
@@ -349,7 +345,6 @@ export const createFirmUserOp: FirmOperation<{ uid: string }> = {
     return { uid }
   },
 }
-export const createFirmUserHandler = callableHandler(createFirmUserOp)
 
 /**
  * setUserClaims({ firmId, uid, role?, clearanceLevel? }). Partner only, same firm, never self.
@@ -372,7 +367,7 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
   target: "users",
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
-    requirePartner(caller)
+    await requirePartner(caller, "identity.set_claims")
     forbidPlatformAdmin(data)
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
@@ -419,7 +414,6 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
     return { uid, role: change.result.role, clearanceLevel: change.result.clearanceLevel }
   },
 }
-export const setUserClaimsHandler = callableHandler(setUserClaimsOp)
 
 /** Writes a ClaimsResult to the users doc and its server-only claims_sync record in one transaction. */
 function writeClaimsState(tx: Transaction, uid: string, r: ClaimsResult): void {
@@ -527,7 +521,7 @@ export const deactivateUserOp: FirmOperation<{ uid: string; active: false }> = {
   target: "users",
   run: async ({ caller }, data, audit) => {
     audit.firmId = caller.firmId
-    requirePartner(caller)
+    await requirePartner(caller, "identity.deactivate")
     const uid = parseUid(data.uid)
     audit.target = `users/${uid}`
     if (uid === caller.uid) throw new HttpError(403, "self_change_forbidden")
@@ -548,9 +542,3 @@ export const deactivateUserOp: FirmOperation<{ uid: string; active: false }> = {
     return { uid, active: false }
   },
 }
-export const deactivateUserHandler = callableHandler(deactivateUserOp)
-
-export const onboardFirm = onCall(CALLABLE_OPTIONS, onboardFirmHandler)
-export const createFirmUser = onCall(CALLABLE_OPTIONS, createFirmUserHandler)
-export const setUserClaims = onCall(CALLABLE_OPTIONS, setUserClaimsHandler)
-export const deactivateUser = onCall(CALLABLE_OPTIONS, deactivateUserHandler)

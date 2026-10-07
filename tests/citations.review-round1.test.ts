@@ -7,7 +7,7 @@ import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/run
 import { newStore } from "@/platform/spine/store"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
-import { extractCitations, normaliseCitation } from "@/services/d4-2/citations"
+import { extractCitations, normaliseCitation, isUnrecognisedRef } from "@/services/d4-2/citations"
 import { seedJudgment, seedTreatment, verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
@@ -89,10 +89,10 @@ const MATRIX: Array<[string, string[]]> = [
 describe("extractor format matrix (every string in the review)", () => {
   it.each(MATRIX)("%j", (input, expected) => {
     const got = extractCitations(input)
-    if (expected.every((ref) => ref.startsWith("UNRECOGNISED: "))) {
+    if (expected.every(isUnrecognisedRef)) {
       // Suspects: the exact display text is not the contract; that nothing resolves is.
       expect(got.length).toBeGreaterThan(0)
-      expect(got.every((ref) => ref.startsWith("UNRECOGNISED: "))).toBe(true)
+      expect(got.every(isUnrecognisedRef)).toBe(true)
     } else {
       expect(got).toEqual(expected)
     }
@@ -133,7 +133,7 @@ describe("no string resolves to a different authority", () => {
       seedJudgment(store, id, id, "full", cite)
     }
     for (const [input, expected] of MATRIX) {
-      if (!expected.every((ref) => ref.startsWith("UNRECOGNISED: "))) continue
+      if (!expected.every(isUnrecognisedRef)) continue
       const res = verifyCitations(store, extractCitations(input))
       expect(res.status, input).toBe("UNVERIFIED")
       expect(res.findings.every((f) => f.judgmentId === null), input).toBe(true)

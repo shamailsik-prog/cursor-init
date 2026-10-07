@@ -42,8 +42,11 @@ export type CharsetCheck =
   | { ok: true; normalised: string }
   | { ok: false; violations: CharsetViolation[] }
 
+/** A draft refusal code: disguising characters, or a body / title over its size cap (SEC-1). */
+export type DraftRefusalCode = "unsupported_characters" | "draft_too_large" | "title_too_long"
+
 export class DraftCharsetError extends Error {
-  readonly code = "unsupported_characters"
+  readonly code: DraftRefusalCode = "unsupported_characters"
   constructor(readonly violations: CharsetViolation[]) {
     super(
       `draft contains ${violations.length} unsupported character(s): ` +
@@ -64,9 +67,20 @@ const CATEGORIES = [
 ] as const
 const CATEGORY_RE = CATEGORIES.map((c) => [c, new RegExp(`^\\p{gc=${c}}$`, "u")] as const)
 
+// SEC-1: per-code-point answers are cached, so the check costs a constant per character.
+const categoryCache = new Map<string, string>()
 function category(ch: string): string {
-  for (const [name, re] of CATEGORY_RE) if (re.test(ch)) return name
-  return "Cn"
+  const cached = categoryCache.get(ch)
+  if (cached !== undefined) return cached
+  let found = "Cn"
+  for (const [name, re] of CATEGORY_RE) {
+    if (re.test(ch)) {
+      found = name
+      break
+    }
+  }
+  categoryCache.set(ch, found)
+  return found
 }
 
 const BIDI_CONTROLS = new Set([0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069])
@@ -94,9 +108,16 @@ const INTRA_WORD_MARKS = new Set(["\u2018", "\u2019", "\u02bc"])
  * them (math alphanumerics such as U+1D4D2, Common script): a token of those is a Latin token
  * for the confusable rules (fuzz, R3 item 10: "\u{1d4d2}\u{1d473}\u{1f74c}" for "CLC").
  */
+const latinLikeCache = new Map<string, boolean>()
 function isLatinLike(ch: string): boolean {
-  if (RE_LATIN_LETTER.test(ch) || COMPAT_ALLOWED.has(ch)) return true
-  return RE_LETTER.test(ch) && /^[A-Za-z]+$/.test(ch.normalize("NFKD").replace(RE_MARK, ""))
+  const cached = latinLikeCache.get(ch)
+  if (cached !== undefined) return cached
+  const value =
+    RE_LATIN_LETTER.test(ch) ||
+    COMPAT_ALLOWED.has(ch) ||
+    (RE_LETTER.test(ch) && /^[A-Za-z]+$/.test(ch.normalize("NFKD").replace(RE_MARK, "")))
+  latinLikeCache.set(ch, value)
+  return value
 }
 const RE_MARK = /\p{M}/gu
 // Orthographic Latin letters that do not decompose to ASCII but are ordinary in names/text.
@@ -140,8 +161,20 @@ function letterScript(ch: string): string | null {
  * or ZWSP between two letters of the same script dropped, and a ZWSP next to a blank. Anything
  * else (between digits, across scripts, a BOM mid-text, bidi, other controls) stays refused.
  */
+const problemCache = new Map<string, string | null>()
+
 /** Why a single character is refused (null when allowed); neighbours matter for ZWNJ/ZWJ only. */
 function characterProblem(ch: string, before: string, after: string): string | null {
+  const cp = ch.codePointAt(0) ?? 0
+  if (cp === 0x200c || cp === 0x200d) return uncachedCharacterProblem(ch, before, after)
+  const cached = problemCache.get(ch)
+  if (cached !== undefined) return cached
+  const problem = uncachedCharacterProblem(ch, "", "")
+  problemCache.set(ch, problem)
+  return problem
+}
+
+function uncachedCharacterProblem(ch: string, before: string, after: string): string | null {
   const cp = ch.codePointAt(0) ?? 0
   const cat = category(ch)
   if (cat === "Cc") return "control character"
@@ -210,7 +243,14 @@ export function checkDraftCharset(rawBody: string): CharsetCheck {
   // (🝌 -> C, ⊤ -> T, ∪ -> U, × -> x, ∣ -> l) is refused when glued to a Latin letter, or when it
   // stands as its own token next to an abbreviation-like token (2-6 capital letters, any
   // punctuation inside): "2018 🝌 L〰C 789". "5 × 10", "Length × Width", "A ∪ B" stay allowed.
-  const tokens = [...body.matchAll(/\S+/gu)].map((m) => ({ text: m[0], at: [...body.slice(0, m.index ?? 0)].length }))
+  // SEC-1: code-point position of each UTF-16 index, built once (not a prefix copy per token)
+  const cpIndex = new Int32Array(body.length + 1)
+  for (let i = 0, k = 0; i <= body.length; i += 1) {
+    cpIndex[i] = k
+    const c = body.charCodeAt(i)
+    if (!(c >= 0xd800 && c <= 0xdbff && i + 1 < body.length && body.charCodeAt(i + 1) >= 0xdc00 && body.charCodeAt(i + 1) <= 0xdfff)) k += 1
+  }
+  const tokens = [...body.matchAll(/\S+/gu)].map((m) => ({ text: m[0], at: cpIndex[m.index ?? 0] ?? 0 }))
   const abbreviationLike = (token: string | undefined) => {
     const letters = [...(token ?? "")].filter((c) => RE_LETTER.test(c)).join("")
     return letters.length >= 2 && letters.length <= 6 && /^[A-Z]+$/.test(letters)
@@ -241,7 +281,7 @@ export function checkDraftCharset(rawBody: string): CharsetCheck {
     // no letter context for an encoded character: ZWNJ/ZWJ count as refused here
     const problem = value > 0x10ffff ? "out-of-range code point" : characterProblem(decoded, "", "")
     if (problem) {
-      const position = [...body.slice(0, m.index ?? 0)].length
+      const position = cpIndex[m.index ?? 0] ?? 0
       violations.push({ codePoint: codePointLabel(Math.min(value, 0x10ffff)), position, category: category(decoded), reason: `HTML entity decodes to a refused character: ${problem}` })
     }
   }
@@ -332,9 +372,35 @@ export function normaliseDraftBody(body: string): string {
   return out
 }
 
-/** Throws DraftCharsetError, or returns the normalised body. */
+/**
+ * SEC-1: size caps, checked before any analysis. The charset check and the citation gate are
+ * linear in the text, and these caps bound one request's CPU (tests/citations.time-budget).
+ * Lengths are UTF-16 code units (String.length).
+ */
+export const MAX_DRAFT_BODY_CHARS = 500_000
+export const MAX_DRAFT_TITLE_CHARS = 500
+
+/** A draft body or title over its cap: 422 with `code` draft_too_large / title_too_long. */
+export class DraftSizeError extends DraftCharsetError {
+  override readonly code: DraftRefusalCode
+  constructor(code: "draft_too_large" | "title_too_long", limit: number) {
+    super([])
+    this.code = code
+    this.message = code === "draft_too_large" ? `draft body exceeds ${limit} characters` : `draft title exceeds ${limit} characters`
+    this.name = "DraftSizeError"
+  }
+}
+
+/** Throws DraftCharsetError (DraftSizeError over MAX_DRAFT_BODY_CHARS), or returns the normalised body. */
 export function requireSupportedDraftBody(body: string): string {
+  if (typeof body === "string" && body.length > MAX_DRAFT_BODY_CHARS) throw new DraftSizeError("draft_too_large", MAX_DRAFT_BODY_CHARS)
   const check = checkDraftCharset(body)
   if (!check.ok) throw new DraftCharsetError(check.violations)
   return check.normalised
+}
+
+/** requireSupportedDraftBody for a title: DraftSizeError over MAX_DRAFT_TITLE_CHARS. */
+export function requireSupportedDraftTitle(title: string): string {
+  if (typeof title === "string" && title.length > MAX_DRAFT_TITLE_CHARS) throw new DraftSizeError("title_too_long", MAX_DRAFT_TITLE_CHARS)
+  return requireSupportedDraftBody(title)
 }

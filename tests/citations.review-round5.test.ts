@@ -4,13 +4,12 @@ import { POST as DRAFTS } from "@/app/api/d4/drafts/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { newStore } from "@/platform/spine/store"
 import { addMember, createMatter } from "@/services/d1-2/matters"
-import { extractCitations } from "@/services/d4-2/citations"
+import { extractCitations, isUnrecognisedRef as isSuspect } from "@/services/d4-2/citations"
 import { ownCaseReferenceMatcher } from "@/services/d4-1/drafts"
 import { checkDraftCharset } from "@/services/d4-2/draftCharset"
 import { seedJudgment, seedTreatment, verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
-const isSuspect = (ref: string) => ref.startsWith("UNRECOGNISED: ")
 afterEach(() => resetRuntimeStoreForTests())
 let n = 0
 const key = () => `00000000-0000-4000-8555-${String(++n).padStart(12, "0")}`

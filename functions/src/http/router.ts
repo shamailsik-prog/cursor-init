@@ -13,6 +13,7 @@ import {
   syncMfaStatusOp,
 } from "../p5/mfa"
 import { createFirmUserOp, deactivateUserOp, onboardFirmOp, setUserClaimsOp } from "../p5/identity"
+import { recordGatePassOp } from "../p5/gates"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -20,8 +21,9 @@ import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKin
 
 /**
  * The HTTP entry `api` (L18 §4.1): GET/POST/PUT under /api/{domain}/{service}/{function},
- * with `Authorization: Bearer <ID token>` and `X-Firm-Id`. Each route runs the
- * same P5 Operation as its callable; the firm comes from X-Firm-Id, never the body.
+ * with `Authorization: Bearer <ID token>` and `X-Firm-Id`. It is the only entry point to
+ * the P5 operations (U-1: there are no onCall callables); the firm comes from X-Firm-Id,
+ * never the body, and every POST needs an Idempotency-Key.
  *
  * Per request: route (404 route_not_found / 405 method_not_allowed) → body
  * checks for POST/PUT (413 payload_too_large over 1 MB, 415
@@ -49,8 +51,9 @@ export type Route = {
 export const MAX_BODY_BYTES = 1024 * 1024
 
 const IDENTITY = "/api/platform/identity"
+const GATES = "/api/platform/gates"
 
-/** A POST route whose rate-limit kind is the operation's own (the callable applies the same kind). */
+/** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
   method: "POST",
   path,
@@ -69,6 +72,8 @@ export const ROUTES: readonly Route[] = [
   post(`${IDENTITY}/disableMfa`, disableMfaOp),
   post(`${IDENTITY}/generateRecoveryCodes`, generateRecoveryCodesOp, { redactReplay: true }),
   post(`${IDENTITY}/syncMfaStatus`, syncMfaStatusOp),
+  // firmless (platformAdmin): R-5 gate passes; no X-Firm-Id, like onboardFirm (E-26 exception)
+  post(`${GATES}/recordGatePass`, recordGatePassOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
@@ -140,7 +145,7 @@ class AuthFailure extends Error {
 /**
  * An authentication failure: counts against the client IP's per-minute limit
  * (over it → 429, with no audit row), then is audited as a deny under the
- * route's action, like the callable path, and answered with its own status.
+ * route's action, and answered with its own status.
  */
 async function authFailed(op: Operation, req: ApiRequest, failure: AuthFailure, now: number): Promise<never> {
   if (!(failure.cause instanceof HttpError)) throw failure.cause

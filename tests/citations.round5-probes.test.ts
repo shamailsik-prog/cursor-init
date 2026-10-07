@@ -3,13 +3,12 @@ import { afterEach, describe, expect, it } from "vitest"
 import { POST as DRAFTS } from "@/app/api/d4/drafts/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
-import { extractCitations, type AnalyseOptions } from "@/services/d4-2/citations"
+import { extractCitations, type AnalyseOptions, isUnrecognisedRef as isSuspect } from "@/services/d4-2/citations"
 import { ownCaseReferenceMatcher } from "@/services/d4-1/drafts"
 import { checkDraftCharset } from "@/services/d4-2/draftCharset"
 import { seedJudgment, seedTreatment } from "@/services/d4-2/draftingIntelligence"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
-const isSuspect = (ref: string) => ref.startsWith("UNRECOGNISED: ")
 // "none": ruled non-authority, reads nothing; "blocked": suspects only; "refused": charset 422;
 // a string: that exact citation is read (and then gated)
 type Expect = "none" | "blocked" | "refused" | string

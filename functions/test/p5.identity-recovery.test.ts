@@ -1,14 +1,17 @@
-// Final audit FN-1 / FN-2: post-commit failures in the identity callables.
+// Final audit FN-1 / FN-2: post-commit failures in the identity operations, driven through the
+// HTTP api (U-1: their only entry point).
 // FN-1: the platformAdmin onboardFirm path resumes the same firm after a claims failure.
 // FN-2: every setUserClaims claims-sync failure writes an incident row, and the revert is audited.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { adminAuth, adminDb } from "../src/admin"
-import { onboardFirmHandler, setUserClaimsHandler } from "../src/p5/identity"
-import { EMULATORS, callableAuth, mintIdToken, uniq } from "./emu"
+import { apiCall, viaApi } from "./api"
+import { EMULATORS, mintIdToken, uniq } from "./emu"
 
-const req = async (token: string, data: Record<string, unknown>) => ({ auth: await callableAuth(token), data }) as never
+const onboardFirmHandler = viaApi<{ firmId: string }>("onboardFirm")
+const setUserClaimsHandler = viaApi("setUserClaims")
+const req = async (token: string, data: Record<string, unknown>) => apiCall(token, data)
 
 async function auditRows(actorId: string, action: string) {
   const snap = await adminDb().collection("audit_log").where("actorId", "==", actorId).where("action", "==", action).get()
@@ -45,7 +48,7 @@ describe.skipIf(!EMULATORS)("FN-1: platformAdmin onboardFirm is resumable", () =
     const pending = (await adminDb().collection("platform_onboarding").doc(uid).get()).data()
     expect(typeof pending?.firmId).toBe("string")
 
-    const res = (await onboardFirmHandler(await req(token, { name: "Second" }))) as { firmId: string }
+    const res = await onboardFirmHandler(await req(token, { name: "Second" }))
     expect(res.firmId).toBe(pending?.firmId)
 
     const rows = await auditRows(uid, "identity.onboardFirm")

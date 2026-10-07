@@ -35,8 +35,8 @@ import {
 } from "@/app/api/d2/ops-reporting/dispatch"
 
 const TOKENS: Record<string, Record<string, unknown>> = {
-  "token-partner-a": { uid: "partner_a", firmId: "firmA", role: "partner" },
-  "token-associate-a": { uid: "associate_a", firmId: "firmA" },
+  "token-partner-a": { uid: "partner_a", firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" },
+  "token-associate-a": { uid: "associate_a", firmId: "firmA", role: "associate", clearanceLevel: "privileged" },
 }
 
 const NON_CORE_FLAGS = (Object.keys(FLAG_REGISTRY) as FeatureFlag[]).filter(

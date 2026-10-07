@@ -2,12 +2,11 @@
 import { describe, expect, it } from "vitest"
 import courtsSeed from "@/data/courts.json"
 import { loadCourts, normalise } from "@/core/case-number-normaliser"
-import { extractCitations } from "@/services/d4-2/citations"
+import { extractCitations, isUnrecognisedRef as isSuspect } from "@/services/d4-2/citations"
 import { ownCaseReferenceMatcher } from "@/services/d4-1/drafts"
 
 const courts = loadCourts(courtsSeed as never)
 
-const isSuspect = (ref: string) => ref.startsWith("UNRECOGNISED: ")
 
 describe("FP1: a non-authority prefix immediately before No. is not a case reference", () => {
   it.each([

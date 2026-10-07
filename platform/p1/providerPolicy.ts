@@ -78,7 +78,8 @@ const PRIVILEGED_REQUIREMENTS: ProviderRequirements = { minimiseContent: true, s
  *   0 public, 1 internal       any configured provider
  *   2 confidential             providers with an executed DPA
  *   3 privileged               executed DPA; content minimisation; trace PII-scrubbed
- *   4 privileged-restricted    in-region providers only; otherwise deterministic-only
+ *   4 privileged-restricted    in-region providers with an executed DPA (U-3: never less
+ *                              than rank 3); otherwise deterministic-only
  *                              or a partner-authorised exception with recorded reason
  * Unknown labels and unconfigured providers are refused (fail closed).
  */
@@ -107,6 +108,11 @@ export function providerAllowedFor(
     return config.dpaExecuted
       ? { allowed: true, requirements: PRIVILEGED_REQUIREMENTS }
       : { allowed: false, reason: "L18 §4.6: privileged requires a provider with an executed DPA" }
+  }
+  // U-3: rank 4 is never less constrained than rank 3 — in-region AND an executed DPA, and the
+  // same minimisation / scrubbed-trace obligations.
+  if (!config.dpaExecuted) {
+    return { allowed: false, reason: "L18 §4.6: privileged-restricted requires a provider with an executed DPA" }
   }
   if (config.inRegion) return { allowed: true, requirements: PRIVILEGED_REQUIREMENTS }
   // TODO(firm): L18 §4.6 / L17.13a/h — the deterministic-only path and the

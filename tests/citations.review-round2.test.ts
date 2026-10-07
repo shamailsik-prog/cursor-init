@@ -8,7 +8,7 @@ import { POST as DRAFTS } from "@/app/api/d4/drafts/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { newStore } from "@/platform/spine/store"
 import { addMember, createMatter } from "@/services/d1-2/matters"
-import { extractCitations } from "@/services/d4-2/citations"
+import { extractCitations, isUnrecognisedRef } from "@/services/d4-2/citations"
 import { seedJudgment, seedTreatment, verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
@@ -104,7 +104,7 @@ describe("round-2 extractor matrix", () => {
     }
     expect(refs.length, input).toBeGreaterThan(0)
     for (const ref of refs) {
-      expect(ref.startsWith("UNRECOGNISED: ") || WRITTEN.has(ref), `${input} -> ${ref}`).toBe(true)
+      expect(isUnrecognisedRef(ref) || WRITTEN.has(ref), `${input} -> ${ref}`).toBe(true)
     }
   })
 

@@ -19,6 +19,18 @@ export type User = {
   firmId: string
   role: Role
   clearanceLevel: Classification
+  /**
+   * users/{uid}.active: written by Cloud Functions (createUser / deactivateUser). A firebase-mode
+   * session requires `active === true` (platform/p5/identityPolicy.ts, SEC-2).
+   */
+  active?: boolean
+}
+
+/** firms/{firmId}, as far as the identity policy reads it (written by Cloud Functions only). */
+export type FirmRecord = {
+  id: string
+  /** E-19: roles that must sign in with a second factor. */
+  mfaEnforcedRoles?: string[]
 }
 
 export type MatterMember = {
@@ -5603,6 +5615,7 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
 
 export class SpineStore {
   users: Map<string, User> = new SessionScopedUserMap()
+  firms = new Map<string, FirmRecord>()
   members = new Map<string, MatterMember>()
   matters = new Map<string, Matter>()
   documents = new Map<string, DocumentRecord>()

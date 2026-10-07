@@ -29,7 +29,7 @@
  */
 
 /** Prefix for a suspected authority the strict extractor could not read. Never resolvable. */
-import { DRAFT_READINGS, digitRunTainted, foldDraftText, type FoldedText } from "@/services/d4-2/citationFold"
+import { DRAFT_READINGS, digitRunTainted, foldDraftReadings, foldDraftText, type FoldedText } from "@/services/d4-2/citationFold"
 
 export const UNRECOGNISED_PREFIX = "UNRECOGNISED: "
 
@@ -74,11 +74,14 @@ const COURTS: ReadonlyArray<readonly [string, readonly string[]]> = [
 
 const COURT_ALTERNATION = COURTS.flatMap(([, alts]) => alts).join("|")
 
+// Compiled once (SEC-1: no regex compilation per hit).
+const COURT_MATCHERS = COURTS.map(([canonical, alts]) => [canonical, alts.map((alt) => new RegExp(`^(?:${alt})$`, "iu"))] as const)
+
 function canonicalCourt(raw: string): string | null {
   const trimmed = raw.trim()
-  for (const [canonical, alts] of COURTS) {
+  for (const [canonical, alts] of COURT_MATCHERS) {
     for (const alt of alts) {
-      if (new RegExp(`^(?:${alt})$`, "iu").test(trimmed)) return canonical
+      if (alt.test(trimmed)) return canonical
     }
   }
   return null
@@ -113,9 +116,13 @@ const REPORTERS: ReadonlyArray<readonly [string, string]> = [
   ["KLR", flex("KLR")],
 ]
 
+const REPORTER_MATCHERS = REPORTERS.map(([canonical, pattern]) => [canonical, new RegExp(`^(?:${pattern})$`, "iu")] as const)
+const RE_PLD = new RegExp(`^(?:${flex("PLD")})$`, "iu")
+
 function canonicalReporter(raw: string): string | null {
-  for (const [canonical, pattern] of REPORTERS) {
-    if (new RegExp(`^(?:${pattern})$`, "iu").test(raw.trim())) return canonical
+  const trimmed = raw.trim()
+  for (const [canonical, pattern] of REPORTER_MATCHERS) {
+    if (pattern.test(trimmed)) return canonical
   }
   return null
 }
@@ -128,23 +135,32 @@ const PAGE_SEP = "(?:\\s*-\\s*|\\s+)"
 const PAGE = "(\\d+)"
 
 const REPORTER_FIRST = new RegExp(
-  `${NB}(${flex("PLD")}|${flex("PLJ")}|${flex("NLR")}|${flex("KLR")})\\s*,?\\s*${YEAR}\\s+(${COURT_ALTERNATION})${NA}(?:\\s*${PAREN})?${PAGE_SEP}${PAGE}`,
+  `${NB}(${flex("PLD")}|${flex("PLJ")}|${flex("NLR")}|${flex("KLR")})\\s*(?:,\\s*)?${YEAR}\\s+(${COURT_ALTERNATION})${NA}(?:\\s*${PAREN})?${PAGE_SEP}${PAGE}`,
   "giu"
 )
 
 const YEAR_FIRST = new RegExp(
-  `${NB}${YEAR}\\s*,?\\s*(${REPORTERS.map(([, p]) => p).join("|")})${NA}(?:\\s+(${COURT_ALTERNATION})${NA})?(?:\\s*${PAREN})?${PAGE_SEP}${PAGE}`,
+  `${NB}${YEAR}\\s*(?:,\\s*)?(${REPORTERS.map(([, p]) => p).join("|")})${NA}(?:\\s+(${COURT_ALTERNATION})${NA})?(?:\\s*${PAREN})?${PAGE_SEP}${PAGE}`,
   "giu"
 )
 
 // ---- broad (suspected-citation) detector -------------------------------------------------
-const ABBR = "(?:\\p{Lu}{2,}[\\p{L}&]*|(?:\\p{L}{1,3}\\.\\s?){2,}|\\p{Lu}(?:\\s\\p{Lu}){1,4}(?!\\p{L}))"
-const COURTISH = "(?:\\p{Lu}[\\p{L}.&]*)"
+// SEC-1 (linear time): no pattern here may scan an unbounded run once per start position, or
+// split one run in several ambiguous ways. An abbreviation's letter run is capped at
+// ABBR_TAIL letters and a dotted run at ABBR_GROUPS groups (a real reporter or court is far
+// shorter; a longer run of capitals is not an abbreviation). "\p{Lu}{2,}[\p{L}&]*" is written
+// "\p{Lu}\p{Lu}[\p{L}&]*" (same language, one parse), "\s*[-,]?\s*" as "\s*(?:[-,]\s*)?",
+// and a court word is atomic ("(?=(X))\1": only its full length can be followed by a blank,
+// a bracket or a digit, so no other split can match).
+const ABBR_TAIL = 40
+const ABBR_GROUPS = 16
+const ABBR = `(?:\\p{Lu}\\p{Lu}[\\p{L}&]{0,${ABBR_TAIL}}|(?:\\p{L}{1,3}\\.\\s?){2,${ABBR_GROUPS}}|\\p{Lu}(?:\\s\\p{Lu}){1,4}(?!\\p{L}))`
+const COURTISH = "(?=(\\p{Lu}[\\p{L}.&]*))\\1"
 const BROAD_YEAR_FIRST = new RegExp(
-  `(?<![\\p{N}])[(\\[]?(?:19|20)\\d{2}[)\\]]?\\s*[-,]?\\s*${ABBR}(?:\\s*${ABBR})?\\s*(?:\\([^()]{0,30}\\)\\s*)?(?:[-(\\[]\\s*|p\\.\\s*|at\\s+)?\\d+`,
+  `(?<![\\p{N}])[(\\[]?(?:19|20)\\d{2}[)\\]]?\\s*(?:[-,]\\s*)?${ABBR}(?:\\s*${ABBR})?\\s*(?:\\([^()]{0,30}\\)\\s*)?(?:[-(\\[]\\s*|p\\.\\s*|at\\s+)?\\d+`,
   "gu"
 )
-const BROAD_GLUED = /(?<![\p{N}])(?:19|20)\d{2}\p{Lu}{2,}[\p{L}]*\d+/gu
+const BROAD_GLUED = /(?<![\p{N}])(?:19|20)\d{2}\p{Lu}\p{Lu}\p{L}*\d+/gu
 const BROAD_REPORTER_FIRST = new RegExp(
   `(?<![\\p{L}])${ABBR}\\s*[(\\[]?(?:19|20)\\d{2}[)\\]]?\\s+(?:${COURTISH}\\s*){1,3}(?:\\([^()]{0,30}\\)\\s*)?(?:[-(\\[]\\s*)?\\d+`,
   "gu"
@@ -171,7 +187,8 @@ const CASE_REFERENCE = new RegExp(
       "H\\.?\\s?R\\.?\\s?C\\.?",
       "Reference",
     ].join("|") +
-    ")\\s*No[s]?\\.?\\s*[\\p{L}]?-?\\s*\\d+\\s*(?:of|/)\\s*(?:19|20)\\d{2}",
+    // "\s*\p{L}?-?\s*" written without its ambiguous blank runs (SEC-1; same language)
+    ")\\s*No[s]?\\.?\\s*(?:\\p{L}-?\\s*|-\\s*)?\\d+\\s*(?:of|/)\\s*(?:19|20)\\d{2}",
   "giu"
 )
 
@@ -272,7 +289,7 @@ function strictHits(folded: FoldedText, ambiguous: Array<Span & { raw: string }>
   for (const m of text.matchAll(REPORTER_FIRST)) {
     const [whole, rawReporter, year, rawCourt, sub, page] = m
     if (!whole || !rawReporter || !year || !rawCourt || !page) continue
-    const reporter = new RegExp(`^(?:${flex("PLD")})$`, "iu").test(rawReporter.trim())
+    const reporter = RE_PLD.test(rawReporter.trim())
       ? "PLD"
       : canonicalReporter(rawReporter)
     const court = canonicalCourt(rawCourt)
@@ -313,19 +330,14 @@ function strictHits(folded: FoldedText, ambiguous: Array<Span & { raw: string }>
   })
 }
 
+const RE_LATIN_LETTER_IN = /(?=\p{L})\p{Script=Latin}/u
+const RE_OTHER_LETTER_IN = /(?=\p{L})\P{Script=Latin}/u
 function mixedScriptTokens(text: string): Array<Span & { raw: string }> {
   const out: Array<Span & { raw: string }> = []
   // R4 FP6: per letter run — split at blanks, brackets, slashes and double quotes (not apostrophes)
   for (const m of text.matchAll(/[^\s()[\]{}/\\"\u201c\u201d\u00ab\u00bb\u2018]+/gu)) {
     const token = m[0]
-    let latin = false
-    let other = false
-    for (const ch of token) {
-      if (!/\p{L}/u.test(ch)) continue
-      if (/\p{Script=Latin}/u.test(ch)) latin = true
-      else other = true
-    }
-    if (latin && other) {
+    if (RE_LATIN_LETTER_IN.test(token) && RE_OTHER_LETTER_IN.test(token)) {
       const start = m.index ?? 0
       out.push({ start, end: start + token.length, raw: token })
     }
@@ -380,14 +392,48 @@ const SKELETON_UPPER_GLUED = new RegExp(
   "gu"
 )
 
+// SEC-1: the acronym rules read at most this many characters before / after a reporter token
+// (enough for the 3-4 tokens they look at; a token or blank run longer than this is not part of
+// a citation), never the whole rest of the draft.
+const CONTEXT_WINDOW = 160
+
+/** The first `k` whitespace-separated tokens of `s`. */
+function headTokens(s: string, k: number): string[] {
+  const out: string[] = []
+  const re = /\S+/gu
+  for (let m = re.exec(s); m && out.length < k; m = re.exec(s)) out.push(m[0])
+  return out
+}
+
+/** The last `k` whitespace-separated tokens of text[from, to). */
+function lastTokens(text: string, from: number, to: number, k: number): string[] {
+  const out: string[] = []
+  let j = to
+  while (out.length < k) {
+    while (j > from && /\s/u.test(text[j - 1] ?? "")) j -= 1
+    if (j <= from) break
+    const end = j
+    while (j > from && !/\s/u.test(text[j - 1] ?? "")) j -= 1
+    out.unshift(text.slice(j, end))
+  }
+  return out
+}
+
+const isAsciiSpace = (c: number) => c === 0x20 || (c >= 0x09 && c <= 0x0d)
+
 function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
   const text = folded.text
   const skel: string[] = []
   const map: number[] = []
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i] ?? ""
-    if (/[\p{L}\p{N}\s]/u.test(ch)) {
-      const blank = /\s/.test(ch)
+    const c = ch.charCodeAt(0)
+    const keep =
+      c < 0x80
+        ? (c >= 0x30 && c <= 0x39) || ((c | 0x20) >= 0x61 && (c | 0x20) <= 0x7a) || isAsciiSpace(c)
+        : /[\p{L}\p{N}\s]/u.test(ch)
+    if (keep) {
+      const blank = c < 0x80 ? isAsciiSpace(c) : /\s/.test(ch)
       // collapse runs of blanks: "PL  D" is "PL D"
       if (blank && skel[skel.length - 1] === " ") continue
       skel.push(blank ? " " : ch)
@@ -395,6 +441,17 @@ function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
     }
   }
   const skeleton = skel.join("")
+  // digitsUpTo[i]: ASCII digits in skeleton[0, i); spaceBefore[i]: last space index < i (or -1)
+  const digitsUpTo = new Int32Array(skeleton.length + 1)
+  const spaceBefore = new Int32Array(skeleton.length + 1)
+  let lastSpace = -1
+  for (let i = 0; i < skeleton.length; i += 1) {
+    const c = skeleton.charCodeAt(i)
+    digitsUpTo[i + 1] = (digitsUpTo[i] ?? 0) + (c >= 0x30 && c <= 0x39 ? 1 : 0)
+    spaceBefore[i] = lastSpace
+    if (c === 0x20) lastSpace = i
+  }
+  spaceBefore[skeleton.length] = lastSpace
   const out: Array<Span & { raw: string }> = []
   for (const pattern of [SKELETON_REPORTER, SKELETON_AIR, SKELETON_UPPER_GLUED]) {
     for (const m of skeleton.matchAll(pattern)) {
@@ -410,11 +467,15 @@ function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
       // catches a split year "201 8 CLC 789" — or a number right after and a year within
       // ACRONYM_AFTER_YEAR_TOKENS tokens after it ("CLC 789 Lahore 2018"). Glued digits count.
       if (ACRONYM_REPORTERS.has(m[0].replace(/\s/g, "").toUpperCase())) {
-        const beforeToken = skeleton.slice(0, ms).split(" ").filter(Boolean).pop() ?? ""
-        const afterRawFull = text.slice((map[me - 1] ?? 0) + 1)
+        // the last skeleton token before the match (skeleton blanks are single spaces)
+        const tokenEnd = ms > 0 && skeleton[ms - 1] === " " ? ms - 1 : ms
+        const tokenStart = (spaceBefore[tokenEnd] ?? -1) + 1
+        const beforeTokenHasDigit = (digitsUpTo[tokenEnd] ?? 0) - (digitsUpTo[tokenStart] ?? 0) > 0
+        const afterFrom = (map[me - 1] ?? 0) + 1
+        const afterRawFull = text.slice(afterFrom, afterFrom + CONTEXT_WINDOW)
         const afterRaw = afterRawFull.replace(/^\s*\([^()\n]{0,30}\)/u, "")
-        const afterTokens = afterRaw.split(/\s+/).filter(Boolean)
-        const digitsBefore = /[0-9]/.test(skeleton[ms - 1] ?? "") || /[0-9]/.test(beforeToken)
+        const afterTokens = headTokens(afterRaw, 4)
+        const digitsBefore = /[0-9]/.test(skeleton[ms - 1] ?? "") || beforeTokenHasDigit
         // the next token has digits ("789", "<789", "77,"), or is a connector ("page", "at", "p.")
         // or bare punctuation followed by a token with digits
         const first = afterTokens[0] ?? ""
@@ -422,30 +483,31 @@ function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
           /[0-9]/.test(first) ||
           /[0-9]/.test(skeleton[me] ?? "") ||
           ((/^(?:page|pp?\.?|at|vol\.?|no\.?)$/iu.test(first) || !/\p{L}/u.test(first)) && /[0-9]/.test(afterTokens[1] ?? ""))
-        const yearAfter = afterTokens
-          .slice(1, 1 + ACRONYM_AFTER_YEAR_TOKENS)
-          .some((token) => /(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])/.test(token))
+        const yearAfter = () =>
+          afterTokens.slice(1, 1 + ACRONYM_AFTER_YEAR_TOKENS).some((token) => /(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])/.test(token))
         // …or junk between the token and a nearby number (markup residue such as
         // "CLC<s>pan class=\"c\"> 789" is never prose; "bill of Rs. 4,500" is)
-        const junkThenNumber = (() => {
+        const junkThenNumber = () => {
           const at = afterTokens.slice(0, 4).findIndex((token) => /[0-9]/.test(token))
-          return at > 0 && afterTokens.slice(0, at).some((token) => /[^\p{L}\p{N}.,;:'()\u2019-]/u.test(token))
-        })()
+          return at > 0 && afterTokens.slice(0, at).some((token) => /[^\p{L}\p{N}.,;:'()’-]/u.test(token))
+        }
         // R5-1 (reviewer's rule): a year within 3 tokens before or after, and a number within 4
         // tokens after reached only through citation filler — court names, at / page / p. / pp. /
         // Vol., bracketed text, punctuation ("2018 CLC Lahore 789", "2019 PLC at page 77",
         // "CLC (2018) 789"). Ordinary words in between ("PLC entered into …", "PTCL bill of Rs.")
         // keep prose clean.
-        const textBefore = text.slice(0, map[ms] ?? 0)
-        const yearNear = [...textBefore.split(/\s+/).filter(Boolean).slice(-ACRONYM_YEAR_WINDOW), ...afterRawFull.split(/\s+/).filter(Boolean).slice(0, ACRONYM_YEAR_WINDOW)]
-          .some((token) => RE_YEAR_IN_TOKEN.test(token))
-        const fillerThenNumber = (() => {
+        const citationShape = () => {
+          const beforeAt = map[ms] ?? 0
+          const before = lastTokens(text, Math.max(0, beforeAt - CONTEXT_WINDOW), beforeAt, ACRONYM_YEAR_WINDOW)
+          const yearNear = [...before, ...headTokens(afterRawFull, ACRONYM_YEAR_WINDOW)].some((token) => RE_YEAR_IN_TOKEN.test(token))
+          if (!yearNear) return false
           const filler = CITATION_FILLER.exec(afterRawFull)?.[0] ?? ""
           const words = filler.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length
           return words <= 3 && /^[0-9]/.test(afterRawFull.slice(filler.length))
-        })()
-        const citationShape = yearNear && fillerThenNumber
-        if (!citationShape && !((numberAfter || junkThenNumber) && (digitsBefore || yearAfter))) continue
+        }
+        // (evaluated cheapest first; the same condition as before)
+        const keep = ((numberAfter || junkThenNumber()) && (digitsBefore || yearAfter())) || citationShape()
+        if (!keep) continue
       }
       const start = map[ms] ?? 0
       const end = (map[me - 1] ?? start) + 1
@@ -475,14 +537,157 @@ const STATUTE_WORD = /^(?:Act|Ordinance|Rules|Regulations?|S\.?R\.?O\.?|Notifica
 const NON_AUTHORITY_WORD =
   /^(?:FIR|F\.I\.R\.?|Challan|Diary|Rapt|Mutation|Intiqal|Khasra|Khewat|Khatooni|Cheque|Check|Letter|Memo|Notice|CNIC|Plot|House|Account|A\/C|Receipt|Invoice|Registration|Vehicle)$/iu
 const RE_NO_ANCHOR = /No[s]?\.?\s*\p{L}?-?\s*\d/u
+// SEC-1: the statute / non-authority words are short; the word before "No." is read from at
+// most this many characters (a longer token is never one of them).
+const WORD_WINDOW = 64
 
 /** A "… No. n of yyyy" whose word right before "No." is a statute or non-authority word (N12, R4 FP1). */
 function isExcludedReference(text: string, matchStart: number, match: string): boolean {
   const at = match.search(RE_NO_ANCHOR)
   if (at < 0) return false
-  const before = text.slice(0, matchStart + at).trimEnd()
-  const word = (before.split(/\s+/).pop() ?? "").replace(/^[("'\u201c]+|[,;:]+$/gu, "")
+  // the last whitespace-separated token before "No." (trailing blanks skipped)
+  let end = matchStart + at
+  while (end > 0 && /\s/u.test(text[end - 1] ?? "")) end -= 1
+  const window = text.slice(Math.max(0, end - WORD_WINDOW), end)
+  const word = (window.split(/\s+/).pop() ?? "").replace(/^[("'“]+|[,;:]+$/gu, "")
   return STATUTE_WORD.test(word) || NON_AUTHORITY_WORD.test(word)
+}
+
+/**
+ * CASE_REFERENCE_GENERIC.matchAll(text), in linear time (SEC-1). The regex's run of 1-6 type
+ * words can be parsed in exponentially many ways, and it was retried at every position. Here:
+ * every "No" where the regex tail matches is an anchor; the type words can never cross the
+ * anchor's digits, so each anchor is the only one reachable from the starts before it, and the
+ * match from a start ends where the tail does. The starts that reach the anchor through 1-6 type
+ * words are found by a backward search, and the leftmost one (after the previous match, not
+ * preceded by a letter) is the match regex.matchAll would give.
+ */
+const GENERIC_TAIL = /No[s]?\.?\s*(?:\p{L}-?\s*|-\s*)?\d+(?:\s*-\s*\p{L}(?![\p{L}]))?\s*(?:of|\/|-)\s*(?:19|20)\d{2}/uy
+const CASE_KEYWORDS = ["case", "petition", "appeal", "application", "reference", "revision", "review", "suit", "motion", "bail", "writ", "original"]
+const charClassCache = new Map<number, number>()
+const CLASS_LETTER = 1
+const CLASS_UPPER = 2
+const CLASS_BLANK = 4
+function charClass(cp: number): number {
+  const cached = charClassCache.get(cp)
+  if (cached !== undefined) return cached
+  const ch = String.fromCodePoint(cp)
+  const value = (/\p{L}/u.test(ch) ? CLASS_LETTER : 0) | (/\p{Lu}/u.test(ch) ? CLASS_UPPER : 0) | (/\s/u.test(ch) ? CLASS_BLANK : 0)
+  charClassCache.set(cp, value)
+  return value
+}
+/** Code point at UTF-16 index i (as the u-flag regex reads it), with its length. */
+function cpAt(text: string, i: number): [number, number] {
+  const cp = text.codePointAt(i) ?? 0
+  return [cp, cp > 0xffff ? 2 : 1]
+}
+/** Start of the code point that ends at UTF-16 index i. */
+function cpBefore(text: string, i: number): number {
+  const low = text.charCodeAt(i - 1)
+  if (i >= 2 && low >= 0xdc00 && low <= 0xdfff) {
+    const high = text.charCodeAt(i - 2)
+    if (high >= 0xd800 && high <= 0xdbff) return i - 2
+  }
+  return i - 1
+}
+const isLetterAt = (text: string, i: number) => i < text.length && (charClass(cpAt(text, i)[0]) & CLASS_LETTER) !== 0
+const isBlankAt = (text: string, i: number) => i < text.length && (charClass(cpAt(text, i)[0]) & CLASS_BLANK) !== 0
+
+/** Every end of "(?:\p{L}{1,4}\.){1,6}\p{L}{0,4}\.?" from p. */
+function dottedTypeWordEnds(text: string, p: number): number[] {
+  const ends: number[] = []
+  let x = p
+  for (let group = 0; group < 6; group += 1) {
+    let y = x
+    let letters = 0
+    while (letters < 4 && isLetterAt(text, y)) {
+      y += cpAt(text, y)[1]
+      letters += 1
+    }
+    if (letters === 0 || text[y] !== ".") break
+    x = y + 1
+    let z = x
+    for (let tail = 0; ; tail += 1) {
+      ends.push(z)
+      if (tail === 4 || !isLetterAt(text, z)) {
+        if (text[z] === ".") ends.push(z + 1)
+        break
+      }
+      z += cpAt(text, z)[1]
+    }
+  }
+  return ends
+}
+
+function leftmostGenericStart(text: string, anchor: number, lowest: number): number | null {
+  const seen = new Set<number>()
+  const starts: number[] = []
+  let frontier = [anchor]
+  for (let words = 1; words <= 6 && frontier.length > 0; words += 1) {
+    const next: number[] = []
+    const add = (p: number) => {
+      if (p < lowest || seen.has(p)) return
+      seen.add(p)
+      next.push(p)
+      starts.push(p)
+    }
+    const alt1Walked = new Set<number>()
+    for (const q of frontier) {
+      // the type word ends at e: q, or the start of the blank run before q
+      let e = q
+      while (e > 0 && isBlankAt(text, cpBefore(text, e))) e = cpBefore(text, e)
+      if (e === 0) continue
+      // keywords (lower case, then not a letter)
+      if (!isLetterAt(text, e)) {
+        for (const word of CASE_KEYWORDS) if (e >= word.length && text.startsWith(word, e - word.length)) add(e - word.length)
+      }
+      // "\p{Lu}[\p{L}&]*\.?": every capital in the [\p{L}&] run that ends at e (or before its dot)
+      let r = text[e - 1] === "." ? e - 1 : e
+      while (r > lowest && !alt1Walked.has(r)) {
+        alt1Walked.add(r)
+        const i = cpBefore(text, r)
+        const ch = text[i]
+        const cls = charClass(cpAt(text, i)[0])
+        if (ch !== "&" && (cls & CLASS_LETTER) === 0) break
+        if (cls & CLASS_UPPER) add(i)
+        r = i
+      }
+      // dotted words: letters and dots only, at most 6 groups of 4 letters then 4 letters and a
+      // dot (35 code points); a start is a letter in the letters-and-dots run that ends at e
+      let p = e
+      for (let steps = 0; steps < 35 && p > lowest; steps += 1) {
+        const i = cpBefore(text, p)
+        if (text[i] !== "." && !isLetterAt(text, i)) break
+        p = i
+        if (text[p] !== "." && !seen.has(p) && dottedTypeWordEnds(text, p).includes(e)) add(p)
+      }
+    }
+    frontier = next
+  }
+  let best: number | null = null
+  for (const p of starts) {
+    if (p < lowest || (best !== null && p >= best)) continue
+    if (p > 0 && isLetterAt(text, cpBefore(text, p))) continue
+    best = p
+  }
+  return best
+}
+
+function genericCaseReferences(text: string): Array<{ index: number; raw: string }> {
+  const out: Array<{ index: number; raw: string }> = []
+  let lowest = 0
+  for (let a = text.indexOf("No"); a >= 0; a = text.indexOf("No", a + 1)) {
+    if (a < lowest) continue
+    GENERIC_TAIL.lastIndex = a
+    const tail = GENERIC_TAIL.exec(text)
+    if (!tail) continue
+    const start = leftmostGenericStart(text, a, lowest)
+    if (start === null) continue
+    const end = a + tail[0].length
+    out.push({ index: start, raw: text.slice(start, end) })
+    lowest = end
+  }
+  return out
 }
 
 // ---- Urdu script (R3 N11) ------------------------------------------------------------------
@@ -530,6 +735,77 @@ const URDU_CASE_REFERENCE = new RegExp(
   "gu"
 )
 
+// SEC-1: URDU_CASE_REFERENCE.matchAll in linear time. The regex retried its "up to 4 words"
+// prefix at every character; here every "نمبر" where the tail matches is an anchor (the
+// prefix words cannot cross its digits, so it is the only anchor reachable from the starts
+// before it), and the leftmost start is the start of the furthest of the up-to-4
+// blank-separated [Arabic or "."] runs right before it — or the previous match's end, when
+// that falls inside one of them (the regex has no lookbehind, so a start inside a run is valid).
+const URDU_CASE_TAIL = new RegExp(
+  `${foldDraftText("نمبر").text}\\s*\\d+(?:\\s*-\\s*\\p{L})?\\s*(?:${["بابت", "آف", "سال", "سن"]
+    .map((word) => foldDraftText(word).text)
+    .join("|")}|\\/|-)\\s*(?:19|20)\\d{2}`,
+  "uy"
+)
+const RE_URDU_WORD_CHAR = /[\p{Script=Arabic}.]/u
+const RE_BLANK = /\s/u
+
+function urduCaseReferences(text: string): Array<{ index: number; raw: string }> {
+  const out: Array<{ index: number; raw: string }> = []
+  const wordChar = (i: number) => i >= 0 && RE_URDU_WORD_CHAR.test(String.fromCodePoint(text.codePointAt(i) ?? 0))
+  const blank = (i: number) => i >= 0 && RE_BLANK.test(String.fromCodePoint(text.codePointAt(i) ?? 0))
+  let lowest = 0
+  for (let a = text.indexOf(URDU_NUMBER_WORD); a >= 0; a = text.indexOf(URDU_NUMBER_WORD, a + 1)) {
+    if (a < lowest) continue
+    URDU_CASE_TAIL.lastIndex = a
+    const tail = URDU_CASE_TAIL.exec(text)
+    if (!tail) continue
+    // walk back over up to 4 "run + blanks" units
+    let start = a
+    for (let unit = 0; unit < 4; unit += 1) {
+      let i = start
+      if (!blank(cpBefore(text, i)) || i === 0) break
+      while (i > 0 && blank(cpBefore(text, i))) i = cpBefore(text, i)
+      if (i === 0 || !wordChar(cpBefore(text, i))) break
+      while (i > 0 && wordChar(cpBefore(text, i))) i = cpBefore(text, i)
+      start = i
+      if (start <= lowest) break
+    }
+    if (start < lowest) {
+      // the previous match ended inside a unit: the leftmost start is the first word character
+      // (or the anchor) at or after it
+      let i = lowest
+      while (i < a && !wordChar(i)) i += cpAt(text, i)[1]
+      start = i
+    }
+    const end = a + tail[0].length
+    out.push({ index: start, raw: text.slice(start, end) })
+    lowest = end
+  }
+  return out
+}
+
+/** `text.slice(0, end).replace(/\s+/gu, " ").trimEnd()`, last `need` characters only. */
+function collapsedTail(text: string, end: number, need: number): string {
+  let i = end
+  while (i > 0 && RE_BLANK.test(text[i - 1] ?? "")) i -= 1
+  const out: string[] = []
+  let length = 0
+  while (i > 0 && length < need) {
+    if (RE_BLANK.test(text[i - 1] ?? "")) {
+      while (i > 0 && RE_BLANK.test(text[i - 1] ?? "")) i -= 1
+      out.push(" ")
+      length += 1
+    } else {
+      out.push(text[i - 1] ?? "")
+      length += 1
+      i -= 1
+    }
+  }
+  return out.reverse().join("")
+}
+const URDU_BEFORE_NEED = Math.max(URDU_CASE_WORD.length, ...URDU_NON_AUTHORITY.map((w) => w.length)) + 1
+
 function urduSuspects(folded: FoldedText): Array<Span & { raw: string }> {
   const text = folded.text
   const out: Array<Span & { raw: string }> = []
@@ -541,21 +817,48 @@ function urduSuspects(folded: FoldedText): Array<Span & { raw: string }> {
     if (!/[0-9]/.test(text.slice(lo, start) + text.slice(end, hi))) continue
     out.push({ start, end, raw: text.slice(lo, hi) })
   }
-  for (const m of text.matchAll(URDU_CASE_REFERENCE)) {
-    const start = m.index ?? 0
+  // clause marks, for "the clause around a مقدمہ نمبر" (computed once, lazily)
+  let prevMark: Int32Array | null = null
+  let nextMark: Int32Array | null = null
+  const clauseFacts = new Map<string, { courtNamed: boolean; firContext: boolean }>()
+  for (const m of urduCaseReferences(text)) {
+    const start = m.index
     // R4 FP1: FIR / case-diary / challan / mutation / khasra numbers are not authorities
-    const before = text.slice(0, start + m[0].indexOf(URDU_NUMBER_WORD)).replace(/\s+/gu, " ").trimEnd()
+    const before = collapsedTail(text, start + m.raw.indexOf(URDU_NUMBER_WORD), URDU_BEFORE_NEED)
     if (URDU_NON_AUTHORITY.some((prefix) => before.endsWith(prefix))) continue
     if (before.endsWith(URDU_CASE_WORD)) {
-      const clauseStart = Math.max(text.lastIndexOf("\u06d4", start), text.lastIndexOf(".", start), text.lastIndexOf("\n", start), 0)
-      const clauseEndAt = text.slice(start).search(/[\u06d4.\n]/u)
-      const clause = text.slice(clauseStart, clauseEndAt < 0 ? text.length : start + clauseEndAt)
-      const after = text.slice(start + m[0].length, start + m[0].length + 20).trimStart()
+      if (!prevMark || !nextMark) {
+        prevMark = new Int32Array(text.length + 1)
+        nextMark = new Int32Array(text.length + 1)
+        let last = -1
+        for (let i = 0; i < text.length; i += 1) {
+          if (/[۔.\n]/u.test(text[i] ?? "")) last = i
+          prevMark[i] = last
+        }
+        let next = text.length
+        nextMark[text.length] = text.length
+        for (let i = text.length - 1; i >= 0; i -= 1) {
+          if (/[۔.\n]/u.test(text[i] ?? "")) next = i
+          nextMark[i] = next
+        }
+      }
+      const clauseStart = Math.max(prevMark[start] ?? -1, 0)
+      const clauseEnd = nextMark[start] ?? text.length
+      const after = text.slice(start + m.raw.length, start + m.raw.length + 20).trimStart()
       // F-1: a court named in the clause means a court case, whatever FIR words surround it
-      const courtNamed = URDU_COURT_NAMES.some((w) => clause.includes(w)) || RE_ENGLISH_COURT_NAME.test(clause)
-      if (!courtNamed && (after.startsWith(URDU_UNDER_SECTION) || URDU_FIR_CONTEXT.some((w) => clause.includes(w)))) continue
+      const key = `${clauseStart}:${clauseEnd}`
+      let facts = clauseFacts.get(key)
+      if (!facts) {
+        const clause = text.slice(clauseStart, clauseEnd)
+        facts = {
+          courtNamed: URDU_COURT_NAMES.some((w) => clause.includes(w)) || RE_ENGLISH_COURT_NAME.test(clause),
+          firContext: URDU_FIR_CONTEXT.some((w) => clause.includes(w)),
+        }
+        clauseFacts.set(key, facts)
+      }
+      if (!facts.courtNamed && (after.startsWith(URDU_UNDER_SECTION) || facts.firContext)) continue
     }
-    out.push({ start, end: start + m[0].length, raw: m[0] })
+    out.push({ start, end: start + m.raw.length, raw: m.raw })
   }
   return out
 }
@@ -658,7 +961,8 @@ function editDistanceSuspects(folded: FoldedText): Array<Span & { raw: string }>
     const token = clean(tokens[i]?.raw ?? "")
     if ([...token].length < 3 || /\d/.test(token) || !isAbbreviationLike(token)) continue
     const upper = token.toUpperCase()
-    if (EDIT_REPORTERS.includes(upper) || !EDIT_REPORTERS.some((r) => editDistanceAtMostOne(upper, r))) continue
+    const length = [...upper].length
+    if (EDIT_REPORTERS.includes(upper) || !EDIT_REPORTERS.some((r) => Math.abs(r.length - length) <= 1 && editDistanceAtMostOne(upper, r))) continue
     const yearFirst = isYear(i - 1) && (isNumber(i + 1) || (isCourtWord(i + 1) && isNumber(i + 2)))
     const reporterFirst = isYear(i + 1) && (isNumber(i + 2) || (isCourtWord(i + 2) && isNumber(i + 3)))
     if (!yearFirst && !reporterFirst) continue
@@ -702,33 +1006,111 @@ const OWN_CASE_CONTEXT_CHARS = 400
 // A sentence ends at a newline or at . ! ? ۔ before a blank — unless the word ending there is an
 // abbreviation ("No.", "C.P.", "v.", "Art.", "Hon.", a single letter).
 const ABBREVIATION_END = /(?:^|\s)(?:No|Nos|v|vs|Art|Arts|Sec|pp?|Vol|Mr|Mrs|Ms|Dr|M\/s|St|Hon|Crl|Civ|Const|Pet|Misc|\p{L}|(?:\p{L}{1,4}\.)+\p{L}{0,4})$/u
-function isSentenceEnd(text: string, at: number): boolean {
-  const ch = text[at] ?? ""
-  if (ch === "\n") return true
-  if (!/[.!?\u06d4]/u.test(ch) || !/\s/u.test(text[at + 1] ?? "")) return false
-  return ch !== "." || !ABBREVIATION_END.test(text.slice(Math.max(0, at - 20), at))
-}
-function sentenceTail(before: string): string {
-  for (let i = before.length - 1; i >= 0; i -= 1) if (isSentenceEnd(before, i)) return before.slice(i + 1)
-  return before
-}
-function sentenceHead(after: string): string {
-  for (let i = 0; i < after.length; i += 1) if (isSentenceEnd(after, i)) return after.slice(0, i)
-  return after
+/**
+ * Sentence ends in the window text[from, to), as `isSentenceEnd(text.slice(from, to), j - from)`
+ * would see them, memoised by absolute position (SEC-1: every case reference used to re-scan
+ * its 400-character context with a regex per character).
+ */
+class SentenceEnds {
+  private readonly memo: Int8Array
+  constructor(private readonly text: string) {
+    this.memo = new Int8Array(text.length)
+  }
+  /** Is text[j] a sentence end, reading only text[from, to)? */
+  at(j: number, from: number, to: number): boolean {
+    const c = this.text.charCodeAt(j)
+    if (c === 0x0a) return true
+    if (c !== 0x2e && c !== 0x21 && c !== 0x3f && c !== 0x06d4) return false
+    if (j + 1 >= to || !/\s/u.test(this.text[j + 1] ?? "")) return false
+    if (c !== 0x2e) return true
+    if (j - 20 < from) return !ABBREVIATION_END.test(this.text.slice(from, j))
+    const known = this.memo[j]
+    if (known) return known === 1
+    const end = !ABBREVIATION_END.test(this.text.slice(j - 20, j))
+    this.memo[j] = end ? 1 : 2
+    return end
+  }
+  /** sentenceTail(text.slice(from, to)) */
+  tail(from: number, to: number): string {
+    for (let j = to - 1; j >= from; j -= 1) if (this.at(j, from, to)) return this.text.slice(j + 1, to)
+    return this.text.slice(from, to)
+  }
+  /** sentenceHead(text.slice(from, to)) */
+  head(from: number, to: number): string {
+    for (let j = from; j < to; j += 1) if (this.at(j, from, to)) return this.text.slice(from, j)
+    return this.text.slice(from, to)
+  }
 }
 
-function isOwnCase(raw: string, options: AnalyseOptions, preceding = "", following = ""): boolean {
-  if (!options.isOwnCaseReference) return false
-  // R6 F-2: the whole sentence around the reference
-  const context: OwnCaseContext = { before: sentenceTail(preceding), after: sentenceHead(following) }
+/** The last `k` whitespace-separated tokens of text[from, to) after its last newline. */
+function lastTokensOnLine(text: string, from: number, to: number, k: number): string[] {
+  const out: string[] = []
+  let j = to
+  while (out.length < k) {
+    while (j > from && /\s/u.test(text[j - 1] ?? "")) {
+      if (text[j - 1] === "\n") return out
+      j -= 1
+    }
+    if (j <= from) break
+    const end = j
+    while (j > from && !/\s/u.test(text[j - 1] ?? "")) j -= 1
+    out.unshift(text.slice(j, end))
+  }
+  return out
+}
+
+function isOwnCase(raw: string, options: AnalyseOptions, text: string, sentences: SentenceEnds, start: number, end: number): boolean {
+  const matcher = options.isOwnCaseReference
+  if (!matcher) return false
+  const from = Math.max(0, start - OWN_CASE_CONTEXT_CHARS)
+  const to = Math.min(text.length, end + OWN_CASE_CONTEXT_CHARS)
+  // R6 F-2: the whole sentence around the reference (computed when the matcher reads it)
+  let before: string | undefined
+  let after: string | undefined
+  const context: OwnCaseContext = {
+    get before() {
+      before ??= sentences.tail(from, start)
+      return before
+    },
+    get after() {
+      after ??= sentences.head(end, to)
+      return after
+    },
+  }
   // R4 FP2: also try the match extended by up to 3 preceding words on the same line ("Family"
   // before "Suit No. …", "Bail" before "Application No. …").
-  const before = (preceding.split("\n").pop() ?? "").split(/\s+/).filter(Boolean).slice(-3)
-  const words = [...before, ...raw.split(/\s+/)]
+  const words = [...lastTokensOnLine(text, from, start, 3), ...raw.split(/\s+/)]
   for (let i = 0; i < words.length; i += 1) {
-    if (options.isOwnCaseReference(words.slice(i).join(" "), context)) return true
+    if (matcher(words.slice(i).join(" "), context)) return true
   }
   return false
+}
+
+/**
+ * Which characters a set of disjoint spans covers (span id + 1 per UTF-16 index), so "does this
+ * span overlap one already taken" costs the span's length, not the number of spans (SEC-1).
+ * Same answer as `spans.some((s) => overlaps(s, span))`.
+ */
+class Coverage {
+  private readonly owner: Int32Array
+  private next = 1
+  constructor(length: number) {
+    this.owner = new Int32Array(length + 1)
+  }
+  overlaps(start: number, end: number): boolean {
+    if (end <= start) {
+      // an empty span overlaps a span that strictly contains its position
+      const left = start > 0 ? (this.owner[start - 1] ?? 0) : 0
+      return left !== 0 && left === (this.owner[start] ?? 0)
+    }
+    for (let i = start; i < end; i += 1) if (this.owner[i] !== 0) return true
+    return false
+  }
+  take(start: number, end: number): void {
+    const id = this.next
+    this.next += 1
+    for (let i = start; i < end; i += 1) this.owner[i] = id
+  }
 }
 
 function analyse(
@@ -739,16 +1121,22 @@ function analyse(
   const ambiguous: Array<Span & { raw: string }> = []
   const strict = strictHits(folded, ambiguous)
   const accepted: StrictHit[] = []
+  // sorted by start: a hit overlaps an accepted one iff it starts before the last accepted end
   for (const hit of strict.sort((a, b) => a.start - b.start || b.end - a.end)) {
-    if (accepted.some((prev) => overlaps(prev, hit))) continue
+    const last = accepted[accepted.length - 1]
+    if (last && overlaps(last, hit)) continue
     accepted.push(hit)
   }
+  const acceptedCover = new Coverage(text.length)
+  for (const hit of accepted) acceptedCover.take(hit.start, hit.end)
 
   const suspects: Array<Span & { raw: string }> = []
+  const suspectCover = new Coverage(text.length)
   const addSuspect = (start: number, end: number, raw: string) => {
-    if (accepted.some((hit) => overlaps(hit, { start, end }))) return
-    if (suspects.some((s) => overlaps(s, { start, end }))) return
+    if (acceptedCover.overlaps(start, end)) return
+    if (suspectCover.overlaps(start, end)) return
     suspects.push({ start, end, raw })
+    suspectCover.take(start, end)
   }
   for (const a of ambiguous) addSuspect(a.start, a.end, a.raw)
   for (const pattern of [BROAD_YEAR_FIRST, BROAD_GLUED, BROAD_REPORTER_FIRST]) {
@@ -757,14 +1145,16 @@ function analyse(
       addSuspect(start, start + m[0].length, m[0])
     }
   }
-  for (const pattern of [CASE_REFERENCE, CASE_REFERENCE_GENERIC]) {
-    for (const m of text.matchAll(pattern)) {
-      if (isExcludedReference(text, m.index ?? 0, m[0])) continue
-      const mEnd = (m.index ?? 0) + m[0].length
-      if (isOwnCase(m[0], options, text.slice(Math.max(0, (m.index ?? 0) - OWN_CASE_CONTEXT_CHARS), m.index ?? 0), text.slice(mEnd, mEnd + OWN_CASE_CONTEXT_CHARS))) continue
-      const start = m.index ?? 0
-      addSuspect(start, start + m[0].length, m[0])
-    }
+  const sentences = new SentenceEnds(text)
+  const caseReferences = [
+    ...[...text.matchAll(CASE_REFERENCE)].map((m) => ({ index: m.index ?? 0, raw: m[0] })),
+    ...genericCaseReferences(text),
+  ]
+  for (const m of caseReferences) {
+    if (isExcludedReference(text, m.index, m.raw)) continue
+    const mEnd = m.index + m.raw.length
+    if (isOwnCase(m.raw, options, text, sentences, m.index, mEnd)) continue
+    addSuspect(m.index, mEnd, m.raw)
   }
   for (const hit of reporterFallback(folded)) addSuspect(hit.start, hit.end, hit.raw)
   for (const hit of shapeSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
@@ -773,7 +1163,7 @@ function analyse(
   for (const hit of urduSuspects(folded)) addSuspect(hit.start, hit.end, hit.raw)
   // Mixed-script tokens are suspects even beside a strict hit: never map confusables.
   for (const token of mixedScriptTokens(text)) {
-    if (!suspects.some((s) => overlaps(s, token))) suspects.push(token)
+    if (!suspectCover.overlaps(token.start, token.end)) suspects.push(token)
   }
   return { accepted, suspects }
 }
@@ -809,32 +1199,42 @@ function resolveSpelledReporters(input: string): string {
   return out
 }
 
+const head = (citation: string) => citation.replace(/ \d+(?: \([^()]*\))?$/, "")
+
 export function analyseCitations(input: string, options: AnalyseOptions = {}): CitationAnalysis {
   // R3 N8: analyse the plain-text reading and the markup-stripped reading; union the findings.
   // (plus a lenient strip that also removes "<…>" junk a browser would show — fuzz, R3 item 10)
   // R5-4: spelled-out reporter names are resolved to their abbreviations before every reading
   // ("2018 Civil Law Cases 789" -> "2018 CLC 789"); the replacement keeps the meaning.
   const resolved = resolveSpelledReporters(input ?? "")
-  const readings = DRAFT_READINGS.map((options) => foldDraftText(resolved, options))
+  const readings = foldDraftReadings(resolved, DRAFT_READINGS)
   if (readings.every((v) => !v.text)) return { citations: [], suspects: [] }
+  // A reading identical to another (no markup to strip) is the same object: analysed once.
+  const analysed = new Map<FoldedText, { citations: string[]; citationSet: Set<string>; heads: Set<string>; suspects: string[] }>()
   const results = readings.map((folded) => {
+    const known = analysed.get(folded)
+    if (known) return known
     const { accepted, suspects } = analyse(folded, options)
-    return {
-      citations: [...new Set(accepted.map((hit) => hit.citation))],
+    const citations = [...new Set(accepted.map((hit) => hit.citation))]
+    const result = {
+      citations,
+      citationSet: new Set(citations),
+      heads: new Set(citations.map((citation) => head(citation))),
       suspects: suspects.sort((a, b) => a.start - b.start).map((s) => s.raw),
     }
+    analysed.set(folded, result)
+    return result
   })
   // A citation read in only one reading is kept only when the other reading is clean of it:
   // no suspect at all and no other page under the same reporter/year ("2019 SCMR\n123 *4*"
   // reads as page 123 in plain text but "123 4" — ambiguous — once the emphasis is removed).
-  const head = (citation: string) => citation.replace(/ \d+(?: \([^()]*\))?$/, "")
   const citations: string[] = []
   const demoted: string[] = []
   for (const citation of [...new Set(results.flatMap((r) => r.citations))]) {
-    const missingFrom = results.filter((r) => !r.citations.includes(citation))
-    const inconsistent = missingFrom.some(
-      (r) => r.suspects.length > 0 || r.citations.some((other) => head(other) === head(citation))
-    )
+    const missingFrom = results.filter((r) => !r.citationSet.has(citation))
+    // (a reading that lacks the citation has another one under the same head iff the head is in
+    // its set: the citation itself is not in that reading)
+    const inconsistent = missingFrom.some((r) => r.suspects.length > 0 || r.heads.has(head(citation)))
     if (inconsistent) demoted.push(citation)
     else citations.push(citation)
   }
@@ -880,3 +1280,13 @@ export function normaliseCitation(raw: string): string | null {
   }
   return result
 }
+
+/**
+ * The linear-time scanners and the regexes they replace (SEC-1), for the equivalence test
+ * (tests/citations.time-budget.test.ts): on any text the scanner yields exactly the regex's
+ * matchAll (index and text).
+ */
+export const LINEAR_SCANNERS_FOR_TESTS = {
+  genericCaseReferences: { scan: genericCaseReferences, regex: CASE_REFERENCE_GENERIC },
+  urduCaseReferences: { scan: urduCaseReferences, regex: URDU_CASE_REFERENCE },
+} as const

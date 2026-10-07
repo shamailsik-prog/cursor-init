@@ -50,12 +50,6 @@ export async function mintIdToken(
   return { uid: user.uid, token: body.idToken, email }
 }
 
-/** What the onCall runtime hands a handler: a verified (not revocation-checked) token. */
-export async function callableAuth(token: string) {
-  const decoded = await adminAuth().verifyIdToken(token)
-  return { uid: decoded.uid, token: decoded, rawToken: token } as never
-}
-
 const MFA_PHONE = "+15555550100"
 
 async function emulatorPost(path: string, body: unknown): Promise<Record<string, unknown>> {

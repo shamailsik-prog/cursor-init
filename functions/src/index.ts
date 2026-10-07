@@ -3,8 +3,7 @@ import { REGION } from "./health"
 
 setGlobalOptions({ region: REGION })
 
+// U-1 (L18 §4.1): the HTTP `api` is the only entry point to the P5 operations — the firm comes
+// from X-Firm-Id and every POST carries an Idempotency-Key. There are no onCall callables.
 export { health } from "./health"
-export { onboardFirm, createFirmUser, setUserClaims, deactivateUser } from "./p5/identity"
-export { enforceMfaForRole, generateRecoveryCodes, approveMfaDisable, disableMfa, syncMfaStatus } from "./p5/mfa"
-export { recordGatePass } from "./p5/gates"
 export { api } from "./http/router"

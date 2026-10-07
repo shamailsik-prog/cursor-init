@@ -2,8 +2,9 @@
 //   public 0 / internal 1   any configured provider
 //   confidential 2          providers with an executed DPA
 //   privileged 3            DPA + content minimisation + PII-scrubbed trace
-//   privileged-restricted 4 in-region providers only; otherwise deterministic-only or
-//                           partner-authorised exception with recorded reason
+//   privileged-restricted 4 in-region providers only (with an executed DPA, as rank 3 —
+//                           U-3); otherwise deterministic-only or partner-authorised
+//                           exception with recorded reason
 // (L17.3 §21, L19.11 §2 for the same rules seen from the gateway / research side.)
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
@@ -33,7 +34,9 @@ function expected(label: Classification, c: ProviderConfig): boolean {
     case "privileged":
       return c.dpaExecuted
     case "privileged-restricted":
-      return c.inRegion
+      // U-3 (final spec audit): in-region AND an executed DPA — rank 4 is never less
+      // constrained than rank 3
+      return c.inRegion && c.dpaExecuted
   }
 }
 
@@ -90,6 +93,23 @@ describe("L18 §4.6 provider table: every rank x {dpaExecuted, inRegion}", () =>
       if (!allowed) expect(result.event).toBe("ai.call.blocked")
     }
   )
+})
+
+describe("U-3: the table is monotonic in rank", () => {
+  it.each(COMBOS)("dpaExecuted=$dpaExecuted inRegion=$inRegion: a provider allowed at a rank is allowed at every lower rank", (c) => {
+    setProviderConfigForTests({ openai: c })
+    const allowed = LABELS.map((label) => providerAllowedFor("openai", label).allowed)
+    for (let rank = 1; rank < allowed.length; rank += 1) {
+      if (allowed[rank]) expect(allowed[rank - 1], `${LABELS[rank]} allowed but ${LABELS[rank - 1]} refused`).toBe(true)
+    }
+  })
+
+  it("an in-region provider without an executed DPA is refused at privileged-restricted", () => {
+    setProviderConfigForTests({ openai: { dpaExecuted: false, inRegion: true } })
+    const decision = providerAllowedFor("openai", "privileged-restricted")
+    expect(decision.allowed).toBe(false)
+    if (!decision.allowed) expect(decision.reason).toMatch(/§4\.6.*DPA/)
+  })
 })
 
 describe("§4.6 provider configuration", () => {

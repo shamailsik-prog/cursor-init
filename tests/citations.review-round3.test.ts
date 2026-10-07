@@ -4,12 +4,11 @@ import { POST as DRAFTS } from "@/app/api/d4/drafts/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { newStore } from "@/platform/spine/store"
 import { addMember, createMatter } from "@/services/d1-2/matters"
-import { extractCitations } from "@/services/d4-2/citations"
+import { extractCitations, isUnrecognisedRef as isSuspect } from "@/services/d4-2/citations"
 import { checkDraftCharset } from "@/services/d4-2/draftCharset"
 import { seedJudgment, seedTreatment, verifyCitations } from "@/services/d4-2/draftingIntelligence"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
-const isSuspect = (ref: string) => ref.startsWith("UNRECOGNISED: ")
 
 describe("N9: thousands separators make the page ambiguous; the ', 1240' pinpoint stays", () => {
   it.each(["see 2019 SCMR 1,234", "see 2019 SCMR 1.234", "see 2019 SCMR 1'234", "see 2019 SCMR 1’234", "see 2019 SCMR 1٬234", "see 2019 SCMR 1 234", "see PLD 2019 SC 1,234"])(

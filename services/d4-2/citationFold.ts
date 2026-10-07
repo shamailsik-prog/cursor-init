@@ -87,54 +87,98 @@ export function asciiDigit(cp: number): string {
 
 type Folding = { out: string[]; taint: boolean[]; pending: boolean }
 
-/** Character-level folding of `segment` onto `f` (see the module comment). */
-function foldChars(f: Folding, segment: string): void {
-  const push = (ch: string) => {
-    f.out.push(ch)
-    f.taint.push(f.pending)
-    f.pending = false
-  }
-  for (const original of segment) {
-    // A blank other than U+0020 (NBSP, em space, tab, …) folds to " " but is marked, so a
-    // ", 1240" pinpoint needs a real space (fuzz, R3 item 10). Marking a blank never affects
-    // digitRunTainted, which only looks between two digits.
-    const ocp = original.codePointAt(0) ?? 0
-    if (original !== " " && (BLANKS.has(ocp) || RE_SPACE.test(original))) {
-      f.pending = true
-      push(" ")
-      continue
-    }
+/**
+ * How one code point folds: the characters it pushes, in order, with `null` standing for "a
+ * removal happened here" (the next pushed character is tainted). Computed once per distinct
+ * non-ASCII code point and cached (SEC-1: folding is one pass with a constant cost per
+ * character).
+ */
+type FoldPlan = ReadonlyArray<string | null>
+const planCache = new Map<string, FoldPlan>()
+
+function planFor(original: string): FoldPlan {
+  const cached = planCache.get(original)
+  if (cached) return cached
+  const plan: Array<string | null> = []
+  // A blank other than U+0020 (NBSP, em space, tab, …) folds to " " but is marked, so a
+  // ", 1240" pinpoint needs a real space (fuzz, R3 item 10). Marking a blank never affects
+  // digitRunTainted, which only looks between two digits.
+  const ocp = original.codePointAt(0) ?? 0
+  if (original !== " " && (BLANKS.has(ocp) || RE_SPACE.test(original))) {
+    plan.push(null, " ")
+  } else {
     // R5-2: a number that is not a decimal digit but decomposes to one — superscript, subscript,
     // circled digits — is a footnote marker or ornament, not part of the number: its digits are
     // tainted on both sides, so glued to a digit run ("123\u2074") the number is ambiguous.
     const compatNumber = /^\p{No}$/u.test(original) && original.normalize("NFKD") !== original
-    if (compatNumber) f.pending = true
+    if (compatNumber) plan.push(null)
     for (const ch of original.normalize("NFKD")) {
       const cp = ch.codePointAt(0) ?? 0
       if (ch === "\n" || ch === "\r") {
-        if (ch === "\n") push("\n")
+        if (ch === "\n") plan.push("\n")
         continue
       }
       if (BLANKS.has(cp) || RE_SPACE.test(ch)) {
-        push(" ")
+        plan.push(" ")
         continue
       }
       if (RE_MARK.test(ch) || RE_DROP.test(ch) || RE_CC.test(ch)) {
-        f.pending = true
+        plan.push(null)
         continue
       }
       if (RE_ND.test(ch)) {
-        push(cp < 0x80 ? ch : asciiDigit(cp))
+        plan.push(cp < 0x80 ? ch : asciiDigit(cp))
         continue
       }
       if (cp === 0x2212 || RE_PD.test(ch)) {
-        push("-")
+        plan.push("-")
         continue
       }
-      push(ch)
+      plan.push(ch)
     }
-    if (compatNumber) f.pending = true
+    if (compatNumber) plan.push(null)
   }
+  planCache.set(original, plan)
+  return plan
+}
+
+/** Character-level folding of `segment` onto `f` (see the module comment). */
+function foldChars(f: Folding, segment: string): void {
+  const { out, taint } = f
+  let pending = f.pending
+  for (const original of segment) {
+    const cu = original.charCodeAt(0)
+    if (cu < 0x80) {
+      // ASCII fast path (same result as planFor): NFKD is the identity; "\n" is kept, "\r"
+      // dropped untainted, a tab is a marked blank, any other control is a removal.
+      if (cu >= 0x20 && cu !== 0x7f) {
+        out.push(original)
+        taint.push(pending)
+        pending = false
+      } else if (cu === 0x0a) {
+        out.push("\n")
+        taint.push(pending)
+        pending = false
+      } else if (cu === 0x09) {
+        out.push(" ")
+        taint.push(true)
+        pending = false
+      } else if (cu !== 0x0d) {
+        pending = true
+      }
+      continue
+    }
+    for (const step of planFor(original)) {
+      if (step === null) {
+        pending = true
+      } else {
+        out.push(step)
+        taint.push(pending)
+        pending = false
+      }
+    }
+  }
+  f.pending = pending
 }
 
 /** One markup-removal pass over code-point arrays; removals taint the next character. */
@@ -144,6 +188,8 @@ function stripMarkupOnce(
   pattern: RegExp = MARKUP
 ): { out: string[]; taint: boolean[]; changed: boolean } {
   const text = chars.join("")
+  // Nothing to remove: the caller stops on `changed: false` (SEC-1: no copy of the text).
+  if (text.search(pattern) < 0) return { out: chars, taint: marks, changed: false }
   // UTF-16 offset -> code point index
   const index: number[] = []
   chars.forEach((ch, i) => {
@@ -205,26 +251,41 @@ export type FoldOptions = {
 export const DRAFT_READINGS: ReadonlyArray<FoldOptions> = [{ markup: "keep" }, { markup: "strip" }, { markup: "lenient" }]
 
 export function foldDraftText(raw: string, options: FoldOptions = {}): FoldedText {
+  return foldDraftReadings(raw, [options])[0] as FoldedText
+}
+
+/**
+ * Every reading of `raw` in one call (SEC-1): phase 1 (character folding) runs once and is
+ * shared. A reading whose markup pass removes nothing is the same object as the plain-text
+ * reading, so callers can analyse it once.
+ */
+export function foldDraftReadings(raw: string, readings: ReadonlyArray<FoldOptions> = DRAFT_READINGS): FoldedText[] {
   // Phase 1: fold every character first, so invisibles, marks, odd dashes or blanks inside
   // markup cannot hide the markup itself ("<\u2E3Ab>", "&nbs\u{E0034}p;").
   const first: Folding = { out: [], taint: [], pending: false }
   foldChars(first, raw)
+  let plain: FoldedText | null = null
+  return readings.map((options) => {
+    // Phase 2: remove markup on the folded text, repeatedly until nothing changes (nested or
+    // interleaved markup such as "<b<span…>>" or "&*nbsp;" peels off layer by layer); decoded
+    // entities are folded again.
+    // first.out is already one entry per code point, aligned with first.taint
+    let current = { out: first.out, taint: first.taint }
+    // every pass removes at least one token, so this terminates; the cap only bounds work
+    for (let pass = 0; options.markup !== "keep" && pass < 64; pass += 1) {
+      const next = stripMarkupOnce(current.out, current.taint, options.markup === "lenient" ? MARKUP_LENIENT : MARKUP)
+      if (!next.changed) break
+      current = next
+    }
+    if (current.out === first.out && plain) return plain
+    const folded = joinHyphenation(current.out, current.taint)
+    if (current.out === first.out) plain = folded
+    return folded
+  })
+}
 
-  // Phase 2: remove markup on the folded text, repeatedly until nothing changes (nested or
-  // interleaved markup such as "<b<span…>>" or "&*nbsp;" peels off layer by layer); decoded
-  // entities are folded again.
-  // first.out is already one entry per code point, aligned with first.taint
-  let current = { out: first.out, taint: first.taint }
-  // every pass removes at least one token, so this terminates; the cap only bounds work
-  for (let pass = 0; options.markup !== "keep" && pass < 64; pass += 1) {
-    const next = stripMarkupOnce(current.out, current.taint, options.markup === "lenient" ? MARKUP_LENIENT : MARKUP)
-    if (!next.changed) break
-    current = next
-  }
-  const out = current.out
-  const taint = current.taint
-
-  // Phase 3: join a hyphenated line break between letters ("SC-\nMR" -> "SCMR").
+/** Phase 3: join a hyphenated line break between letters ("SC-\nMR" -> "SCMR"). */
+function joinHyphenation(out: string[], taint: boolean[]): FoldedText {
   const text: string[] = []
   const marks: boolean[] = []
   for (let i = 0; i < out.length; i += 1) {

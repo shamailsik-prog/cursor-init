@@ -64,7 +64,7 @@ beforeEach(() => {
   vi.stubEnv("FIREBASE_PROJECT_ID", "demo-sikander")
   verifyIdToken.mockReset()
   verifyIdToken.mockImplementation(async (token: string) => {
-    if (token === "token-partner-a") return { uid: "partner_a", firmId: "firmA" }
+    if (token === "token-partner-a") return { uid: "partner_a", firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
     throw new Error("invalid token")
   })
 })

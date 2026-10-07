@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
-import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
 import { createRouter, ROUTES } from "../src/http/router"
-import { onboardFirmHandler } from "../src/p5/identity"
-import { recordGatePassHandler } from "../src/p5/gates"
-import { EMULATORS, callableAuth, mintIdToken, mockRes } from "./emu"
+import { EMULATORS, mintIdToken, mockRes } from "./emu"
+import { apiCall, apiErrorOf, expectKind, viaApi } from "./api"
+
+// U-1: the operations are driven through the HTTP api, their only entry point.
+const onboardFirmHandler = viaApi("onboardFirm")
+const recordGatePassHandler = viaApi("recordGatePass")
 
 /**
  * R-5 (L18 R-5, v19 line 6724): no second firm is onboarded until tenant
@@ -14,22 +16,11 @@ import { EMULATORS, callableAuth, mintIdToken, mockRes } from "./emu"
  * audited; onboardFirm's platformAdmin path refuses a second firm until then.
  */
 
-async function httpsErrorOf(p: Promise<unknown>): Promise<HttpsError> {
-  try {
-    await p
-  } catch (e) {
-    expect(e).toBeInstanceOf(HttpsError)
-    return e as HttpsError
-  }
-  throw new Error("expected HttpsError, promise resolved")
-}
-
-function expectHttps(err: HttpsError, code: string, detail: string) {
-  expect({ code: err.code, details: err.details }).toEqual({ code, details: { code: detail } })
-}
+const httpsErrorOf = apiErrorOf
+const expectHttps = expectKind
 
 async function req(token: string, data: Record<string, unknown>) {
-  return { auth: await callableAuth(token), data } as never
+  return apiCall(token, data)
 }
 
 async function auditRows(actorId: string, action: string) {

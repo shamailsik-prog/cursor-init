@@ -1,10 +1,9 @@
 // Review round 6 probe fn7 (secrev6/repo/tests/sr6/fn7.probe.test.ts) as a regression matrix.
 import { describe, expect, it } from "vitest"
-import { extractCitations, type AnalyseOptions } from "@/services/d4-2/citations"
+import { extractCitations, type AnalyseOptions, isUnrecognisedRef as isSuspect } from "@/services/d4-2/citations"
 import { ownCaseReferenceMatcher } from "@/services/d4-1/drafts"
 import { checkDraftCharset } from "@/services/d4-2/draftCharset"
 
-const isSuspect = (ref: string) => ref.startsWith("UNRECOGNISED: ")
 // "none": reads nothing; "blocked": suspects only; "refused": charset 422; a string: exact read
 type Expect = "none" | "blocked" | "refused" | string
 const shc: AnalyseOptions = { isOwnCaseReference: ownCaseReferenceMatcher({ courtId: "SHC", caseNumber: "CP 12/2019" }) }

@@ -1,35 +1,23 @@
-import type { CallableRequest } from "firebase-functions/v2/https"
 import type { DocumentData, Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
-import { HttpError, toHttpsError } from "../http/errors"
-import { clientIp, rateLimit, rateLimitAnonymous, type RateKind } from "../http/rateLimit"
+import { HttpError } from "../http/errors"
+import type { RateKind } from "../http/rateLimit"
 import { errorCode, logFailure } from "../log"
 import { appendAudit } from "./audit"
-import {
-  callableSession,
-  callerWithoutFirm,
-  hasSecondFactor,
-  isRole,
-  type Caller,
-  type FirmlessIdentity,
-  type Role,
-} from "./auth"
+import { isRole, type Caller, type FirmlessIdentity, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
+import { requirePermission } from "./permission"
+import type { FirmAdminAction } from "@/platform/p5/permissionDecision"
 
 /**
- * Shared scaffolding for the P5 operations (identity.ts, mfa.ts): the
- * Operation type that both entry points run (the onCall callables here via
- * `callableHandler`, the HTTP `api` via http/router.ts), request parsing, the
- * one-audit-row-per-call CallAudit / audited wrapper, and the target-user checks.
+ * Shared scaffolding for the P5 operations (identity.ts, mfa.ts, gates.ts): the
+ * Operation type the HTTP `api` runs (http/router.ts — the only entry point, U-1),
+ * request parsing, the one-audit-row-per-call CallAudit / runAudited wrapper, and
+ * the target-user checks.
  */
 
 export type Data = Record<string, unknown>
-
-export function dataOf(request: CallableRequest<unknown>): Data {
-  const d = request.data
-  return d !== null && typeof d === "object" && !Array.isArray(d) ? (d as Data) : {}
-}
 
 /** Collects the audit context of one call and writes its single row. */
 export class CallAudit {
@@ -121,27 +109,17 @@ export async function runAudited<T>(audit: CallAudit, body: () => Promise<T>): P
   }
 }
 
-/** Like `runAudited`, with failures mapped to HttpsError for the callable protocol. */
-export async function audited<T>(audit: CallAudit, body: () => Promise<T>): Promise<T> {
-  try {
-    return await runAudited(audit, body)
-  } catch (err) {
-    throw toHttpsError(err)
-  }
-}
-
 /** A firm-bound, authenticated session: the Caller and whether the token has a second factor. */
 export type Session = { caller: Caller; secondFactor: boolean }
 
 export type { FirmlessIdentity }
 
 /**
- * One P5 operation, independent of its transport. The entry point
+ * One P5 operation, independent of its transport. The HTTP router
  * authenticates (firm-bound or firmless), applies the per-user rate limit for
- * `kind` (the HTTP route takes the same kind), creates the CallAudit for
- * `action` / `target` and runs `run` inside `runAudited`, so the callable and
- * the HTTP route share one implementation. `mfaExempt(uid, data)` exempts the
- * call from the firm's MFA policy (see requireAuth / callerFromCallable).
+ * `kind`, creates the CallAudit for `action` / `target` and runs `run` inside
+ * `runAudited`. `mfaExempt(uid, data)` exempts the call from the firm's MFA
+ * policy (see bindHttpSession).
  */
 export type FirmOperation<T = unknown> = {
   auth: "firm"
@@ -161,59 +139,13 @@ export type FirmlessOperation<T = unknown> = {
 export type Operation<T = unknown> = FirmOperation<T> | FirmlessOperation<T>
 
 /**
- * The onCall handler for an operation: the firm comes from `data.firmId`
- * (callableSession), or the firmless path (callerWithoutFirm).
- *
- * Rate limits match the HTTP `api`: an auth failure first counts against the
- * client IP from `request.rawRequest` (60/min; over it the call is refused
- * with no audit row), then is audited as a deny as before. After auth the
- * per-user limit for `op.kind` applies (shared counters with HTTP, per-firm
- * overrides). A refused call fails with `resource-exhausted`, details
- * `{ code: "rate_limited", retryAfter }`, and is not audited.
- * `opts.now` pins the clock (tests).
+ * Authorises a firm-administration operation through P5 checkPermission with its explicit
+ * action (identity.manage_users, identity.set_claims, identity.deactivate, mfa.enforce,
+ * mfa.approve_disable): partner only, decided by the shared table and audited (U-2 / I-3).
+ * Deny → 403 partner_only.
  */
-export function callableHandler<T>(
-  op: Operation<T>,
-  opts: { now?: () => number } = {}
-): (request: CallableRequest<unknown>) => Promise<T> {
-  const clock = opts.now ?? Date.now
-  return async (request) => {
-    const data = dataOf(request)
-    const now = clock()
-    // request.auth is the runtime-verified token; unauthenticated calls are "anonymous".
-    const audit = new CallAudit(op.action, request.auth?.uid ?? "anonymous", op.target)
-
-    let run: () => Promise<T>
-    let limit: () => Promise<void>
-    try {
-      if (op.auth === "firmless") {
-        const who = await callerWithoutFirm(request.auth)
-        run = () => op.run(who, data, audit)
-        limit = () => rateLimit(who, op.kind, { now })
-      } else {
-        const mfaExempt = request.auth !== undefined && op.mfaExempt?.(request.auth.uid, data) === true
-        const { caller, firm } = await callableSession(request.auth, data.firmId as string, { mfaExempt })
-        run = () => op.run({ caller, secondFactor: hasSecondFactor(request.auth!.token) }, data, audit)
-        limit = () => rateLimit(caller, op.kind, { firm, now })
-      }
-    } catch (err) {
-      // rawRequest is always set by the onCall runtime; direct handler calls (tests) may omit it.
-      if (err instanceof HttpError && request.rawRequest) {
-        await rateLimitAnonymous(clientIp(request.rawRequest), now).catch((limitErr: unknown) => {
-          throw toHttpsError(limitErr)
-        })
-      }
-      return audited(audit, () => Promise.reject(err))
-    }
-    await limit().catch((limitErr: unknown) => {
-      throw toHttpsError(limitErr)
-    })
-    return audited(audit, run)
-  }
-}
-
-export function requirePartner(caller: Caller): void {
-  if (caller.role !== "partner") throw new HttpError(403, "partner_only")
+export async function requirePartner(caller: Caller, action: FirmAdminAction): Promise<void> {
+  await requirePermission(caller, action)
 }
 
 /** A safe single Firestore document id: non-empty, ≤128 chars, no "/", not "." / "..", not reserved `__*__`. */

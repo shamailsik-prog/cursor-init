@@ -142,6 +142,7 @@ import type {
   DocumentWorkflow,
   WorkflowEvent,
   User,
+  FirmRecord,
   SpineStore,
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationRow,
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementRow,
@@ -188,6 +189,11 @@ export type UserRepository = {
   upsert(row: User): Promise<void>
   get(id: string): Promise<User | null>
   listByFirm(firmId: string): Promise<User[]>
+}
+
+/** firms/{firmId} — read-only here (Cloud Functions are the only writers). */
+export type FirmRepository = {
+  get(id: string): Promise<FirmRecord | null>
 }
 
 export type EntityRepository = {
@@ -1858,6 +1864,7 @@ export type TenancyExternalSessionIdentityBridgeRepository = {
 export type SpineRepositories = {
   matters: MatterRepository
   users: UserRepository
+  firms: FirmRepository
   entities: EntityRepository
   entityLinks: EntityLinkRepository
   members: MatterMemberRepository
@@ -2099,6 +2106,11 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         return [...store.users.keys()]
           .map((id) => storedUserRecord(store, id))
           .filter((row): row is User => Boolean(row) && row!.firmId === firmId)
+      },
+    },
+    firms: {
+      async get(id) {
+        return store.firms.get(id) ?? null
       },
     },
     entities: {
