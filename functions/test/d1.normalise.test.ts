@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
   nameForms,
+  skeleton,
+  usesFallback,
   normaliseCnic,
   normaliseNtn,
   normalisePhone,
@@ -103,5 +105,39 @@ describe("nameForms", () => {
   })
   it("returns no forms for an empty name", () => {
     expect(nameForms("  ")).toEqual([])
+  })
+})
+
+describe("script variants (review fixes)", () => {
+  it("folds Sindhi keheh and other kaf forms", () => {
+    expect(nameForms("جوڪھيو")).toContainEqual(["jokhio"])
+    expect(nameForms("جوكھیو")).toContainEqual(["jokhio"])
+  })
+  it("removes ZWNJ/ZWJ before splitting", () => {
+    expect(nameForms("جوکھ\u200Cیو")).toContainEqual(["jokhio"])
+    expect(nameForms("جوکھ\u200Dیو")).toContainEqual(["jokhio"])
+  })
+})
+
+describe("skeleton / usesFallback", () => {
+  it("builds consonant skeletons", () => {
+    expect(skeleton(["babar"])).toEqual(["br"])
+    expect(skeleton(["bbr"])).toEqual(["br"])
+    expect(skeleton(["jokhio"])).toEqual(["jk"])
+    expect(skeleton(["jwkhyw"])).toEqual(["jk"])
+    expect(skeleton(["aeh"])).toEqual([])
+  })
+  it("flags names that went through the per-character fallback", () => {
+    expect(usesFallback("بابر")).toBe(true)
+    expect(usesFallback("بابر", new Map([["بابر", ["babar"]]]))).toBe(false)
+    expect(usesFallback("محمد علی")).toBe(false)
+    expect(usesFallback("Babar")).toBe(false)
+  })
+  it("knows the grown seed table and variant groups", () => {
+    expect(nameForms("عبداللہ")).toContainEqual(["abdullah"])
+    expect(nameForms("چوہدری")).toContainEqual(["chaudhry"])
+    expect(nameForms("Hasan Omar Yusuf")).toContainEqual(["hassan", "umar", "yousuf"])
+    expect(nameForms("Aisha Siddiqi")).toContainEqual(["ayesha", "siddiqui"])
+    expect(nameForms("Choudhry Parvez")).toContainEqual(["pervaiz"])
   })
 })

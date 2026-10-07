@@ -28,7 +28,7 @@ function foldArabic(word: string): string {
     .normalize("NFKC")
     .replace(/[ً-ٰٟـ‌‍]/g, "")
     .replace(/[يىےۓیۍێې]/g, "ی") // yeh forms -> Urdu yeh
-    .replace(/ك/g, "ک") // Arabic kaf -> keheh
+    .replace(/[كڪګڬڭ]/g, "ک") // kaf forms (Arabic, Sindhi) -> keheh
     .replace(/[هھہۂۃە]/g, "ہ") // heh forms -> heh goal
     .replace(/[أإٱ]/g, "ا") // hamza/wasla alef -> alef
 }
@@ -42,7 +42,8 @@ for (const group of VARIANT_GROUPS) for (const v of group) CANON.set(v, group[0]
 
 const MAX_FORMS = 32
 
-function romanise(word: string, firmMap?: ReadonlyMap<string, string[]>): string[] {
+/** Roman alternatives for an Arabic-script word, or null when only the fallback could handle it. */
+function lookup(word: string, firmMap?: ReadonlyMap<string, string[]>): string[] | null {
   const folded = foldArabic(word)
   if (firmMap) {
     for (const [k, v] of firmMap) {
@@ -50,10 +51,37 @@ function romanise(word: string, firmMap?: ReadonlyMap<string, string[]>): string
     }
   }
   const seeded = SEED.get(folded)
-  if (seeded) return [seeded]
+  return seeded ? [seeded] : null
+}
+
+function romanise(word: string, firmMap?: ReadonlyMap<string, string[]>): string[] {
+  const known = lookup(word, firmMap)
+  if (known) return known
   let out = ""
-  for (const ch of folded) out += CHAR_TABLE[ch] ?? (/[a-z0-9]/i.test(ch) ? ch.toLowerCase() : "")
+  for (const ch of foldArabic(word)) out += CHAR_TABLE[ch] ?? (/[a-z0-9]/i.test(ch) ? ch.toLowerCase() : "")
   return out === "" ? [] : [out]
+}
+
+const splitWords = (name: string): string[] =>
+  name
+    .normalize("NFKC")
+    .replace(/[\u200C\u200D]/g, "")
+    .split(/[^\p{L}\p{N}\p{M}]+/u)
+    .filter((w) => w !== "")
+
+/** True iff some Arabic-script word is in neither the firm map nor the seed table (lossy fallback). */
+export function usesFallback(name: string, firmMap?: ReadonlyMap<string, string[]>): boolean {
+  return splitWords(name).some((w) => ARABIC.test(w) && lookup(w, firmMap) === null)
+}
+
+/**
+ * Consonant skeleton per token, for loose comparison of fallback transliterations with Roman
+ * spellings: lowercase, drop a e i o u w y h, collapse repeated letters, drop emptied tokens.
+ */
+export function skeleton(tokens: string[]): string[] {
+  return tokens
+    .map((t) => t.toLowerCase().replace(/[aeiouwyh]/g, "").replace(/(.)\1+/g, "$1"))
+    .filter((t) => t !== "")
 }
 
 /**
@@ -62,10 +90,7 @@ function romanise(word: string, firmMap?: ReadonlyMap<string, string[]>): string
  * input reading; a firm-map entry with several spellings adds one form per alternative.
  */
 export function nameForms(name: string, firmMap?: ReadonlyMap<string, string[]>): string[][] {
-  const words = name
-    .normalize("NFKC")
-    .split(/[^\p{L}\p{N}\p{M}]+/u)
-    .filter((w) => w !== "")
+  const words = splitWords(name)
   let forms: string[][] = [[]]
   for (const word of words) {
     const alts = ARABIC.test(word) ? romanise(word, firmMap) : [word.toLowerCase()]

@@ -10,7 +10,18 @@ export const VARIANT_GROUPS: readonly (readonly string[])[] = [
   ["ali", "aly"],
   ["hussain", "hussein", "husain"],
   ["ahmed", "ahmad"],
-  ["shaikh", "sheikh", "shekh"]
+  ["shaikh", "sheikh", "shekh"],
+  ["hassan", "hasan"],
+  ["umar", "omar"],
+  ["usman", "osman", "uthman"],
+  ["yousuf", "yusuf", "yousaf"],
+  ["ayesha", "aisha", "aysha"],
+  ["fatima", "fatimah"],
+  ["siddiqui", "siddiqi"],
+  ["qureshi", "qureishi"],
+  ["chaudhry", "chaudhary", "choudhry"],
+  ["pervaiz", "parvez", "pervez"],
+  ["javed", "javaid"]
 ]
 
 /** Honorifics and titles, dropped when other tokens remain. */
@@ -49,7 +60,36 @@ export const WORD_SEED: Readonly<Record<string, string>> = {
   میمن: "memon",
   سومرو: "soomro",
   بلوچ: "baloch",
-  جوکھیو: "jokhio"
+  جوکھیو: "jokhio",
+  عبداللہ: "abdullah",
+  عبد: "abdul",
+  فاطمہ: "fatima",
+  عائشہ: "ayesha",
+  حسن: "hassan",
+  عمر: "umar",
+  عثمان: "usman",
+  بلال: "bilal",
+  ابراہیم: "ibrahim",
+  یوسف: "yousuf",
+  اسلم: "aslam",
+  اکرم: "akram",
+  رضا: "raza",
+  زاہد: "zahid",
+  طارق: "tariq",
+  نواز: "nawaz",
+  شاہ: "shah",
+  بیگم: "begum",
+  صدیقی: "siddiqui",
+  قریشی: "qureshi",
+  چوہدری: "chaudhry",
+  راجہ: "raja",
+  ملک: "malik",
+  سید: "syed",
+  نور: "noor",
+  اقبال: "iqbal",
+  پرویز: "pervaiz",
+  جاوید: "javed",
+  ناصر: "nasir"
 }
 
 /** Per-character fallback, keyed by code points AFTER folding (see `foldArabic`). */
