@@ -26,46 +26,59 @@ export type CoreRequestPredicate = (request: Request) => boolean | Promise<boole
  * per REFUSAL_AUDIT_TTL_MS, so a client polling a frozen route cannot grow the audit log without
  * bound. In-memory and per process (a cold start or another instance may write one more row);
  * expired keys are swept on insert once the map passes REFUSAL_AUDIT_SWEEP_AT entries.
+ *
+ * Final audit F5: the entry holds the covering write itself. A refusal deduped while that write
+ * is in flight awaits it, and if it fails writes its own row (failing the request if that fails
+ * too), so no refusal is answered without a durable row covering it.
  */
 const REFUSAL_AUDIT_TTL_MS = 60_000
 const REFUSAL_AUDIT_SWEEP_AT = 1_000
-const recentRefusals = new Map<string, number>()
-
-function shouldAuditRefusal(key: string, now: number): boolean {
-  const until = recentRefusals.get(key)
-  if (until !== undefined && until > now) return false
-  if (recentRefusals.size >= REFUSAL_AUDIT_SWEEP_AT) {
-    for (const [k, expiry] of recentRefusals) if (expiry <= now) recentRefusals.delete(k)
-  }
-  recentRefusals.set(key, now + REFUSAL_AUDIT_TTL_MS)
-  return true
-}
+type RefusalAudit = { until: number; write: Promise<void> }
+const recentRefusals = new Map<string, RefusalAudit>()
 
 export function resetRefusalAuditDedupeForTests(): void {
   recentRefusals.clear()
+}
+
+async function writeRefusalRow(session: HandlerSession, target: string, flag: FeatureFlag, now: number) {
+  const store = getRuntimeStore()
+  const repos = await getRuntimeRepositories(store)
+  await repos.audit.append({
+    id: store.id("aud"),
+    firmId: session.firmId,
+    action: "feature_disabled",
+    actorId: session.userId,
+    target,
+    classification: "internal",
+    reason: flag,
+    at: now,
+  })
 }
 
 async function auditRefusal(request: Request, session: HandlerSession, flag: FeatureFlag) {
   const target = `${request.method.toUpperCase()} ${new URL(request.url).pathname}`
   const now = Date.now()
   const key = `${session.firmId}|${session.userId}|${target}|${flag}`
-  if (!shouldAuditRefusal(key, now)) return
+  const covering = recentRefusals.get(key)
+  if (covering && covering.until > now) {
+    try {
+      await covering.write
+      return
+    } catch {
+      // The covering write failed: this refusal writes its own row below.
+    }
+  }
+  if (recentRefusals.size >= REFUSAL_AUDIT_SWEEP_AT) {
+    for (const [k, entry] of recentRefusals) if (entry.until <= now) recentRefusals.delete(k)
+  }
+  const entry: RefusalAudit = { until: now + REFUSAL_AUDIT_TTL_MS, write: writeRefusalRow(session, target, flag, now) }
+  // Claimed before the write completes, so concurrent refusals wait on this one write.
+  recentRefusals.set(key, entry)
   try {
-    const store = getRuntimeStore()
-    const repos = await getRuntimeRepositories(store)
-    await repos.audit.append({
-      id: store.id("aud"),
-      firmId: session.firmId,
-      action: "feature_disabled",
-      actorId: session.userId,
-      target,
-      classification: "internal",
-      reason: flag,
-      at: now,
-    })
+    await entry.write
   } catch (error) {
-    // The minute was claimed before the write; release it so the next refusal is audited.
-    recentRefusals.delete(key)
+    // Release the minute so the next refusal is audited.
+    if (recentRefusals.get(key) === entry) recentRefusals.delete(key)
     throw error
   }
 }
