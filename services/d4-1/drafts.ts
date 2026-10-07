@@ -8,7 +8,7 @@ import {
   type CitationFinding,
 } from "@/services/d4-2/draftingIntelligence"
 import { extractCitations } from "@/services/d4-2/citations"
-import { requireSupportedDraftBody } from "@/services/d4-2/draftCharset"
+import { requireSupportedDraftBody, requireSupportedDraftTitle } from "@/services/d4-2/draftCharset"
 import courtsSeed from "@/data/courts.json"
 import { loadCourts, normalise as normaliseCaseNumber } from "@/core/case-number-normaliser"
 
@@ -42,9 +42,33 @@ const SEAT_MENTIONS: ReadonlyArray<readonly [Set<string>, RegExp]> = (() => {
     return [ids, new RegExp(`(?<![\\p{L}])${words}(?![\\p{L}])`, "iu")] as const
   })
 })()
+/**
+ * `pattern.test`, fast for "iu" patterns with \b (SEC-1): V8 runs \b under the u+i flags about
+ * 50 times slower, which made the own-case check the slowest part of a large draft. The same
+ * pattern without \b (a superset) finds every candidate start; the exact pattern is then tried
+ * at each, so the answer is pattern.test(text).
+ */
+function mentionTest(pattern: RegExp): (text: string) => boolean {
+  if (!(pattern.flags.includes("i") && pattern.flags.includes("u") && pattern.source.includes("\\b"))) {
+    return (text) => pattern.test(text)
+  }
+  const loose = new RegExp(pattern.source.replaceAll("\\b", ""), "giu")
+  const exact = new RegExp(pattern.source, "iuy")
+  return (text) => {
+    loose.lastIndex = 0
+    for (let m = loose.exec(text); m; m = loose.exec(text)) {
+      exact.lastIndex = m.index
+      if (exact.test(text)) return true
+      loose.lastIndex = m.index + ((text.codePointAt(m.index) ?? 0) > 0xffff ? 2 : 1)
+    }
+    return false
+  }
+}
+const COURT_NAME_TESTS = COURT_NAME_MENTIONS.map(([id, pattern]) => [id, mentionTest(pattern)] as const)
+
 /** Each court mention in the text, as the set of courts it can mean. */
 function courtMentions(text: string): Array<ReadonlySet<string>> {
-  const named = COURT_NAME_MENTIONS.filter(([, pattern]) => pattern.test(text)).map(([id]) => new Set([id]))
+  const named = COURT_NAME_TESTS.filter(([, test]) => test(text)).map(([id]) => new Set([id]))
   // a seat city inside an explicit court name ("Lahore High Court") adds nothing new
   const seats = SEAT_MENTIONS.filter(([, pattern]) => pattern.test(text)).map(([ids]) => ids)
   return [...named, ...seats]
@@ -64,23 +88,47 @@ export function ownCaseReferenceMatcher(matter: {
   courtId: string
   caseNumber: string | null
 }): (raw: string, context?: OwnCaseContext) => boolean {
+  // SEC-1: the citation gate asks this for every word suffix of every case reference in a
+  // draft. A reference can only be the recorded number if its digits end with the recorded
+  // number and year (both readings below keep digits verbatim and in order), so the rest is
+  // skipped for every other reference; answers are memoised per reference text.
+  let memoFor: string | null = null
+  let requiredDigits = ""
+  let memo = new Map<string, boolean>()
+  const isRecordedNumber = (raw: string, caseNumber: string): boolean => {
+    if (memoFor !== caseNumber) {
+      const tail = /(\d{1,6})(?:-[A-Z])?\/(\d{4})$/.exec(caseNumber)
+      requiredDigits = tail ? `${tail[1]}${tail[2]}` : caseNumber.replace(/[^0-9]/g, "")
+      memo = new Map()
+      memoFor = caseNumber
+    }
+    if (!raw.replace(/[^0-9]/g, "").endsWith(requiredDigits)) return false
+    const known = memo.get(raw)
+    if (known !== undefined) return known
+    let same: boolean | undefined
+    try {
+      const result = normaliseCaseNumber(raw, matter.courtId, courts)
+      if (result.status !== "REJECT") same = result.canonical === caseNumber
+    } catch {
+      // fall through to the raw comparison
+    }
+    // R4 FP2: the normaliser cannot parse this reference — accept it when it is written the
+    // same way as the recorded number (case, dots, "No.", "of"/"/" and spacing aside).
+    same ??= comparableCaseNumber(raw) === comparableCaseNumber(caseNumber)
+    memo.set(raw, same)
+    return same
+  }
   return (raw, context) => {
     if (!matter.caseNumber) return false
+    // (the number is compared first: the court mentions below only matter for the recorded one)
+    if (!isRecordedNumber(raw, matter.caseNumber)) return false
     // R5-4 / R6 F-2: every court mentioned in the reference's sentence must admit the matter's court
     // ("The Supreme Court in C.P. No. 12 of 2019" is not an SHC matter's C.P. No. 12 of 2019).
     if (context) {
       const mentions = courtMentions(`${context.before} ${raw} ${context.after}`)
       if (mentions.some((ids) => !ids.has(matter.courtId))) return false
     }
-    try {
-      const result = normaliseCaseNumber(raw, matter.courtId, courts)
-      if (result.status !== "REJECT") return result.canonical === matter.caseNumber
-    } catch {
-      // fall through to the raw comparison
-    }
-    // R4 FP2: the normaliser cannot parse this reference — accept it when it is written the
-    // same way as the recorded number (case, dots, "No.", "of"/"/" and spacing aside).
-    return comparableCaseNumber(raw) === comparableCaseNumber(matter.caseNumber)
+    return true
   }
 }
 import { getDocumentTypes } from "@/lib/foundation-data"
@@ -181,7 +229,7 @@ export function runDraftPreflight(
   // disguise text; analyse the normalised body (NFC, ASCII digits/dashes).
   const body = input.draftBody === undefined ? "" : requireSupportedDraftBody(input.draftBody)
   // R4-2: the title is court-facing text too — same refusal, same gate.
-  const title = input.draftTitle === undefined ? "" : requireSupportedDraftBody(input.draftTitle)
+  const title = input.draftTitle === undefined ? "" : requireSupportedDraftTitle(input.draftTitle)
   const caller = { actorId: input.actorId, firmId: matter.firmId }
   // Module 33: the gate checks union(extracted from the body, caller-listed), never only the latter.
   const refs = [
@@ -249,7 +297,7 @@ export function composeDraft(
   // The stored body is exactly the analysed body: refused if it has disguising characters,
   // otherwise normalised (NFC, ASCII digits/dashes) before the gate reads it and it is saved.
   const body = requireSupportedDraftBody(input.body)
-  const title = requireSupportedDraftBody(input.title)
+  const title = requireSupportedDraftTitle(input.title)
   // The gate always reads the title and body being saved, whatever the caller put in preflight.
   const gate = runDraftPreflight(store, { ...input.preflight, draftBody: body, draftTitle: title }, { recordOverride: true })
   if (!gate.ok) {
