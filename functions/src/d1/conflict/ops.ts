@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData, type Transaction } from "firebase-admin/firestore"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
 import type { Caller } from "../../p5/auth"
@@ -9,7 +9,7 @@ import { consumeDailyConflict } from "../dailyLimit"
 import { parseKeys, parseName } from "../validate"
 import { discloseFor, matterIdsOf, type DisclosedCheck, type StoredCheck } from "./disclosure"
 import { clientKeys, loadRegistry, runEngine } from "./engine"
-import type { Subject } from "./match"
+import { summarise, type Hit, type Subject } from "./match"
 
 /**
  * Module 6 conflict check operations (spec P2-3..P2-6, P2-13, P2-15, P2-17, P2-19, P2-20).
@@ -200,5 +200,187 @@ export const getConflictResultOp: FirmOperation<DisclosedCheck> = {
     const members = await memberMatters(caller, matterIdsOf(stored))
     await audit.allow()
     return discloseFor(caller, stored, members)
+  },
+}
+
+export const MIN_REVIEW_NOTE = 20
+export const MIN_WAIVER_NOTE = 50
+
+/** The hit types that cross sides (a client who is also the opposing party, or the reverse). */
+const ROLE_CROSSING = new Set(["direct_adverse", "former_client", "adverse_history"])
+
+const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "")
+
+/** The check for a decision, read inside `tx`; another firm's or a missing check is 404 not_found (existence not revealed). */
+async function readCheck(tx: Transaction, caller: Caller, checkId: string): Promise<StoredCheck> {
+  const row = (await tx.get(checks().doc(checkId))).data()
+  if (!row || row.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+  return storedCheck(checkId, row)
+}
+
+/** The decided check as the caller may see it, once the transaction has committed. */
+async function disclosed(caller: Caller, check: StoredCheck): Promise<DisclosedCheck> {
+  return discloseFor(caller, check, await memberMatters(caller, matterIdsOf(check)))
+}
+
+function trailRow(caller: Caller, check: StoredCheck, kind: "review_resolved" | "waived", detail: Record<string, unknown>) {
+  return {
+    firmId: caller.firmId,
+    checkId: check.checkId,
+    kind,
+    actorId: caller.uid,
+    detail,
+    classification: check.classification,
+    createdAt: FieldValue.serverTimestamp(),
+  }
+}
+
+/**
+ * resolveReviewItem({ checkId, hitIndex, resolution: "different_person" | "same_person", note })
+ * (P2-7). A hit still awaiting review is resolved by a partner or associate: `different_person`
+ * → outcome NONE; `same_person` → FLAG with confirmed identity when the hit crosses sides, NONE
+ * when it is an informational same-role hit. The result is recomputed with the match.ts
+ * precedence; the check is cleared when it becomes CLEAR. Returns the disclosed check.
+ */
+export const resolveReviewItemOp: FirmOperation<DisclosedCheck> = {
+  auth: "firm",
+  kind: "general",
+  action: "conflict.resolve_review",
+  target: "conflict_checks",
+  run: async ({ caller, now: clock }, data, audit) => {
+    audit.firmId = caller.firmId
+    audit.target = `firms/${caller.firmId}`
+    await requirePermission(caller, "conflict.resolve_review")
+    const checkId = data.checkId
+    const { hitIndex, resolution } = data
+    if (!isSafeDocId(checkId) || typeof hitIndex !== "number" || !Number.isInteger(hitIndex) || hitIndex < 0) {
+      throw new HttpError(400, "invalid_query")
+    }
+    if (resolution !== "different_person" && resolution !== "same_person") throw new HttpError(400, "invalid_query")
+    const note = text(data.note)
+    audit.target = `conflict_checks/${checkId}`
+    const at = new Date(clock ?? Date.now()).toISOString()
+
+    const db = adminDb()
+    const updated = await db.runTransaction(async (tx): Promise<StoredCheck> => {
+      const check = await readCheck(tx, caller, checkId)
+      if (check.boundMatterId !== null) throw new HttpError(409, "check_already_bound")
+      const hit = check.hits[hitIndex]
+      if (!hit || hit.outcome !== "POSSIBLE_CANDIDATE_REVIEW" || hit.review !== undefined) throw new HttpError(409, "not_review_item")
+      if (note.length < MIN_REVIEW_NOTE) throw new HttpError(400, "note_too_short")
+
+      const outcome: Hit["outcome"] = resolution === "same_person" && ROLE_CROSSING.has(hit.type) ? "FLAG" : "NONE"
+      const resolved: Hit = {
+        ...hit,
+        outcome,
+        ...(outcome === "FLAG" ? { identityBasis: "confirmed_identity" as const } : {}),
+        review: { resolution, by: caller.uid, note, at },
+      }
+      const hits = check.hits.map((h, i) => (i === hitIndex ? resolved : h))
+      const { result, identityBasis } = summarise(hits)
+      const decision = result === "CLEAR" ? "cleared" : "pending"
+
+      await audit.stage(tx, "allow", "ok")
+      tx.update(checks().doc(checkId), plain({ hits, result, identityBasis, decision }))
+      tx.create(db.collection("conflict_events").doc(), trailRow(caller, check, "review_resolved", { hitIndex, resolution, note, result, identityBasis }))
+      return { ...check, hits, result, identityBasis, decision }
+    })
+    audit.committed()
+    return disclosed(caller, updated)
+  },
+}
+
+/**
+ * recordPartnerWaiver({ checkId, note, clientConsent, consentReference }) (P2-8). A partner
+ * waives a FLAG check once: no review item open, note of at least 50 characters, the client's
+ * consent and its reference, and a clearance that covers the check. Immutable; the check
+ * becomes cleared and `conflict.waived` is emitted. Returns the disclosed check.
+ */
+export const recordPartnerWaiverOp: FirmOperation<DisclosedCheck> = {
+  auth: "firm",
+  kind: "general",
+  action: "conflict.waive",
+  target: "conflict_checks",
+  run: async ({ caller, now: clock }, data, audit) => {
+    audit.firmId = caller.firmId
+    audit.target = `firms/${caller.firmId}`
+    await requirePermission(caller, "conflict.waive")
+    const checkId = data.checkId
+    if (!isSafeDocId(checkId)) throw new HttpError(400, "invalid_query")
+    const note = text(data.note)
+    const consentReference = text(data.consentReference)
+    audit.target = `conflict_checks/${checkId}`
+    const at = new Date(clock ?? Date.now()).toISOString()
+
+    const db = adminDb()
+    const updated = await db.runTransaction(async (tx): Promise<StoredCheck> => {
+      const ref = checks().doc(checkId)
+      const row = (await tx.get(ref)).data()
+      if (!row || row.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+      const check = storedCheck(checkId, row)
+      if (check.boundMatterId !== null) throw new HttpError(409, "check_already_bound")
+      if (row.waiver !== undefined) throw new HttpError(409, "already_waived")
+      if (check.result !== "FLAG") throw new HttpError(409, "not_waivable")
+      if (check.hits.some((h) => h.outcome === "POSSIBLE_CANDIDATE_REVIEW" && h.review === undefined)) throw new HttpError(409, "review_pending")
+      if (note.length < MIN_WAIVER_NOTE) throw new HttpError(400, "note_too_short")
+      if (data.clientConsent !== true || consentReference === "") throw new HttpError(400, "consent_required")
+      if (!isKnownClassification(check.classification) || rankOf(check.classification) > rankOf(caller.clearanceLevel)) {
+        throw new HttpError(403, "exceeds_own_clearance")
+      }
+
+      await audit.stage(tx, "allow", "ok")
+      tx.update(ref, { waiver: { partnerId: caller.uid, note, clientConsent: true, consentReference, at }, decision: "cleared" })
+      tx.create(db.collection("conflict_events").doc(), trailRow(caller, check, "waived", { partnerId: caller.uid, requestedBy: check.requestedBy, consentReference }))
+      tx.create(db.collection("events").doc(`${checkId}_waived`), {
+        name: "conflict.waived",
+        firmId: caller.firmId,
+        payload: { checkId, partnerId: caller.uid },
+        classification: check.classification,
+        occurredAt: FieldValue.serverTimestamp(),
+        idempotencyKey: `${checkId}:waived`,
+      })
+      return { ...check, decision: "cleared" }
+    })
+    audit.committed()
+    return disclosed(caller, updated)
+  },
+}
+
+type TrailItem = { kind: string; actorId: string; detail: unknown; createdAt: string | null }
+
+/**
+ * getConflictTrail(?checkId=) (P2-8, P2-14) → the check's `conflict_events` rows, oldest first.
+ * A partner reads any check of the firm; an associate only a check they requested (403
+ * role_not_permitted otherwise). Another firm's or a missing check → 404 not_found.
+ */
+export const getConflictTrailOp: FirmOperation<{ items: TrailItem[]; nextCursor: null }> = {
+  auth: "firm",
+  kind: "general",
+  action: "conflict.read_trail",
+  target: "conflict_checks",
+  run: async ({ caller }, data, audit) => {
+    audit.firmId = caller.firmId
+    audit.target = `firms/${caller.firmId}`
+    await requirePermission(caller, "conflict.read_trail")
+    const checkId = data.checkId
+    if (!isSafeDocId(checkId)) throw new HttpError(400, "invalid_query")
+    audit.target = `conflict_checks/${checkId}`
+    const row = (await checks().doc(checkId).get()).data()
+    if (!row || row.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+    if (caller.role !== "partner" && row.requestedBy !== caller.uid) throw new HttpError(403, "role_not_permitted")
+
+    const snap = await adminDb().collection("conflict_events").where("firmId", "==", caller.firmId).where("checkId", "==", checkId).get()
+    const millis = (d: DocumentData) => (d.createdAt instanceof Timestamp ? d.createdAt.toMillis() : 0)
+    const items = snap.docs
+      .map((d) => d.data())
+      .sort((a, b) => millis(a) - millis(b))
+      .map((d): TrailItem => ({
+        kind: d.kind,
+        actorId: d.actorId,
+        detail: d.detail,
+        createdAt: d.createdAt instanceof Timestamp ? d.createdAt.toDate().toISOString() : null,
+      }))
+    await audit.allow()
+    return { items, nextCursor: null }
   },
 }

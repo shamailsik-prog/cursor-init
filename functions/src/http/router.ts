@@ -16,7 +16,7 @@ import { createFirmUserOp, deactivateUserOp, onboardFirmOp, setUserClaimsOp } fr
 import { recordGatePassOp } from "../p5/gates"
 import { setFirmNumberingOp } from "../d1/client/numberingOp"
 import { getClientOp, listClientsOp, registerClientOp } from "../d1/client/ops"
-import { getConflictResultOp, runConflictCheckOp } from "../d1/conflict/ops"
+import { getConflictResultOp, getConflictTrailOp, recordPartnerWaiverOp, resolveReviewItemOp, runConflictCheckOp } from "../d1/conflict/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -89,6 +89,9 @@ export const ROUTES: readonly Route[] = [
   get(`${D1_CLIENT}/listClients`, listClientsOp),
   post(`${D1_CONFLICT}/runConflictCheck`, runConflictCheckOp),
   get(`${D1_CONFLICT}/getConflictResult`, getConflictResultOp),
+  post(`${D1_CONFLICT}/resolveReviewItem`, resolveReviewItemOp),
+  post(`${D1_CONFLICT}/recordPartnerWaiver`, recordPartnerWaiverOp),
+  get(`${D1_CONFLICT}/getConflictTrail`, getConflictTrailOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>

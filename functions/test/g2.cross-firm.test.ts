@@ -75,6 +75,9 @@ const PROBES: Record<string, Probe> = {
   listClients: { data: () => ({}), target: false },
   runConflictCheck: { data: () => ({ client: { name: "G2 Probe Client" }, opposingParties: [{ name: "G2 Probe Opponent" }] }), target: false },
   getConflictResult: { data: () => ({ checkId: "g2-probe-check" }), target: false },
+  resolveReviewItem: { data: () => ({ checkId: "g2-probe-check", hitIndex: 0, resolution: "different_person", note: "G2 probe note of at least twenty characters" }), target: false },
+  recordPartnerWaiver: { data: () => ({ checkId: "g2-probe-check", note: "G2 probe waiver note that is comfortably longer than fifty characters", clientConsent: true, consentReference: "G2-REF" }), target: false },
+  getConflictTrail: { data: () => ({ checkId: "g2-probe-check" }), target: false },
 }
 
 const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps] as unknown as Record<string, unknown>[]
