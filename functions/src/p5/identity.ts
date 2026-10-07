@@ -204,6 +204,11 @@ async function emailTaken(email: string): Promise<boolean> {
  * R-5: once a firm exists (`platform/bootstrap`), the platformAdmin path
  * refuses a second firm with 409 second_firm_forbidden (audited as a deny)
  * until `platform/gates.g2PassedAt` is set by recordGatePass (gates.ts).
+ *
+ * FN-1: every created firm also writes `platform_onboarding/{uid}` (server-only)
+ * in the same transaction. If setting the claims fails after commit, a retry
+ * resumes that firm (allow `onboarding_resume`), as the founder path resumes
+ * from `platform/bootstrap`, instead of creating and orphaning another firm.
  */
 export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
   auth: "firmless",
@@ -222,6 +227,9 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
     const firmId = firmRef.id
 
     const userRef = db.collection("users").doc(uid)
+    // FN-1: per-caller pending marker, written with the firm, so a retry after a post-commit
+    // failure (setCustomUserClaims) resumes the same firm instead of creating another.
+    const pendingRef = db.collection("platform_onboarding").doc(uid)
     const founderDoc = (founderFirmId: string) => ({ firmId: founderFirmId, ...FOUNDER, mfaEnabled: false, active: true })
 
     const outcome = await db.runTransaction(async (tx) => {
@@ -240,6 +248,21 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
           if (userDoc.exists) tx.set(userRef, { firmId: firstFirmId, ...FOUNDER, active: true }, { merge: true })
           else tx.set(userRef, { ...founderDoc(firstFirmId), createdAt: FieldValue.serverTimestamp() })
           return { kind: "resumed" as const, firmId: firstFirmId }
+        }
+      }
+      const pendingFirmId: unknown = (await tx.get(pendingRef)).data()?.firmId
+      if (isSafeDocId(pendingFirmId)) {
+        const [firm, userDoc] = await Promise.all([
+          tx.get(db.collection("firms").doc(pendingFirmId)),
+          tx.get(userRef),
+        ])
+        if (firm.exists && userDoc.data()?.active !== false) {
+          audit.firmId = pendingFirmId
+          audit.target = `firms/${pendingFirmId}`
+          await audit.stage(tx, "allow", "onboarding_resume")
+          if (userDoc.exists) tx.set(userRef, { firmId: pendingFirmId, ...FOUNDER, active: true }, { merge: true })
+          else tx.set(userRef, { ...founderDoc(pendingFirmId), createdAt: FieldValue.serverTimestamp() })
+          return { kind: "resumed" as const, firmId: pendingFirmId }
         }
       }
       if (bootstrap.exists && !isPlatformAdmin) {
@@ -264,6 +287,7 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
       if (!bootstrap.exists) tx.create(bootstrapRef, { firstFirmId: firmId, founderUid: uid, at: now })
       tx.create(firmRef, { name, dataResidency: "PK", plan: "internal", createdAt: now })
       tx.set(userRef, { ...founderDoc(firmId), createdAt: now })
+      tx.set(pendingRef, { firmId, at: now })
       return { kind: "created" as const, firmId }
     })
     audit.committed()
