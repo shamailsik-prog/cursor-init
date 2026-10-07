@@ -65,7 +65,7 @@ const DEFAULT_INGEST_CLASSIFICATION: Classification = "privileged"
  * email intake channel, so WhatsApp is the only one today; team_portal is the staff upload
  * portal (L18 §10.1 "Team Upload Portal"). Add any new client-facing channel here.
  */
-export const CLIENT_SOURCED_CHANNELS: ReadonlySet<string> = new Set(["whatsapp"])
+const CLIENT_SOURCED_CHANNELS: ReadonlySet<string> = new Set(["whatsapp"])
 
 /** max(privileged, matter classification); an unreadable matter label floors at the most restrictive. */
 function defaultIngestClassification(matterClassification: unknown): Classification {
