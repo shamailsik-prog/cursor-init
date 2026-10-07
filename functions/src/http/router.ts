@@ -15,6 +15,7 @@ import {
 import { createFirmUserOp, deactivateUserOp, onboardFirmOp, setUserClaimsOp } from "../p5/identity"
 import { recordGatePassOp } from "../p5/gates"
 import { setFirmNumberingOp } from "../d1/client/numberingOp"
+import { getClientOp, listClientsOp, registerClientOp } from "../d1/client/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -65,6 +66,9 @@ const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay
   ...extra,
 })
 
+/** A GET route; its data is the query string. */
+const get = (path: string, handler: Operation): Route => ({ method: "GET", path, handler, kind: handler.kind })
+
 export const ROUTES: readonly Route[] = [
   post(`${IDENTITY}/onboardFirm`, onboardFirmOp),
   post(`${IDENTITY}/createFirmUser`, createFirmUserOp),
@@ -78,6 +82,9 @@ export const ROUTES: readonly Route[] = [
   // firmless (platformAdmin): R-5 gate passes; no X-Firm-Id, like onboardFirm (E-26 exception)
   post(`${GATES}/recordGatePass`, recordGatePassOp),
   post(`${D1_CLIENT}/setFirmNumbering`, setFirmNumberingOp),
+  post(`${D1_CLIENT}/registerClient`, registerClientOp),
+  get(`${D1_CLIENT}/getClient`, getClientOp),
+  get(`${D1_CLIENT}/listClients`, listClientsOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
