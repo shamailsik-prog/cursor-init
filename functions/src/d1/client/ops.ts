@@ -110,11 +110,17 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       // Reads first: prefixes, entities sharing a key, the clients of those entities, then the counter.
       const { clientPrefix } = await readPrefixes(tx, caller.firmId)
       const matched = new Map<string, KeyName[]>()
+      const matchedClass = new Map<string, Classification>()
       for (const key of KEY_ORDER) {
         const value = keys[key]
         if (value === undefined) continue
         const snap = await tx.get(entities().where("firmId", "==", caller.firmId).where(ENTITY_FIELD[key], "==", value))
-        for (const doc of snap.docs) matched.set(doc.id, [...(matched.get(doc.id) ?? []), key])
+        for (const doc of snap.docs) {
+          matched.set(doc.id, [...(matched.get(doc.id) ?? []), key])
+          // Monotonic classification (P2-13): an unreadable label counts as the highest rank.
+          const raw = doc.data().classification
+          matchedClass.set(doc.id, isKnownClassification(raw) ? raw : "privileged-restricted")
+        }
       }
       const duplicates: RegisterResult["possibleDuplicates"] = []
       for (const [entityId, matchedKeys] of matched) {
@@ -155,6 +161,8 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       })
       for (const [otherId, matchedKeys] of matched) {
         const [a, b] = [entityRef.id, otherId].sort()
+        const existing = matchedClass.get(otherId) ?? "privileged-restricted"
+        const linkClassification = rankOf(existing) > rankOf(classification) ? existing : classification
         for (const key of matchedKeys) {
           tx.create(db.collection("entity_links").doc(`${caller.firmId}_${a}_${b}_${key}`), {
             firmId: caller.firmId,
@@ -163,7 +171,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
             key,
             state: "candidate",
             disputed: false,
-            classification,
+            classification: linkClassification,
             createdAt: FieldValue.serverTimestamp(),
           })
         }

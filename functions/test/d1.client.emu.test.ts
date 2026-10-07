@@ -137,6 +137,26 @@ describe.skipIf(!EMULATORS)("registerClient", () => {
     expect(links.docs[0].data()).toMatchObject({ firmId, leftId: a, rightId: b, key: "cnic", state: "candidate", disputed: false })
   })
 
+  it("a link takes the higher classification of the two entities; an internal caller gets no duplicate report for a privileged match but the link is written", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const clerk = await mintIdToken(claims(firmId, "clerk", "internal"))
+    const priv = await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210199999991", classification: "privileged" }) } as never)
+    const res = await registerClient({ token: clerk.token, data: body(firmId, { cnic: "42101-9999999-1", classification: "internal" }) } as never)
+    expect(res.possibleDuplicates).toEqual([])
+    const links = await adminDb().collection("entity_links").where("firmId", "==", firmId).get()
+    expect(links.size).toBe(1)
+    expect(links.docs[0].data()).toMatchObject({ key: "cnic", state: "candidate", classification: "privileged" })
+    // the reverse order: a privileged newcomer matching an internal entity is also privileged
+    const firm2 = await newFirm()
+    const p2 = await mintIdToken(claims(firm2, "partner"))
+    await registerClient({ token: p2.token, data: body(firm2, { cnic: "4210188888881", classification: "internal" }) } as never)
+    await registerClient({ token: p2.token, data: body(firm2, { cnic: "4210188888881", classification: "privileged" }) } as never)
+    const l2 = await adminDb().collection("entity_links").where("firmId", "==", firm2).get()
+    expect(l2.docs[0].data().classification).toBe("privileged")
+    expect(priv.clientId).toBeTruthy()
+  })
+
   it("an entity sharing several keys gets one link per key; another firm's entity never matches", async () => {
     const firmId = await newFirm()
     const other = await newFirm()
