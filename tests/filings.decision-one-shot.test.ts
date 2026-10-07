@@ -86,7 +86,7 @@ describe("FilingRepository.decideIfPending (memory)", () => {
   function pkg(status: FilingPackage["status"]): FilingPackage {
     return {
       id: "pkg_1", firmId: "firmA", matterId: "mat_1", draftId: "drf_1", classification: "internal",
-      citationStatus: "VERIFIED", temporalAllOk: true, status, createdBy: "associate_a", createdAt: 1,
+      citationStatus: "OK", temporalAllOk: true, status, createdBy: "associate_a", createdAt: 1,
       approvedBy: null, approvalReason: null, draftBodySha256: "x", citedRefs: [],
     } as FilingPackage
   }
