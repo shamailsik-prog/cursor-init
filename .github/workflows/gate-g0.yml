@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the product + phase-audit-doc guard (G-0 [15]) diffs against the PR base.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -29,6 +32,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
       - name: Gate G-0 static
+        env:
+          # pull_request: the PR's base commit; push: origin/main (present because fetch-depth is 0).
+          BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
         run: bash ci_gates/gate_g0.sh
       - name: Lint
         run: npm run lint
