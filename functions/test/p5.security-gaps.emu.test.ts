@@ -7,11 +7,13 @@
  * sanitising, setUserClaims' Auth-claim firm check, email parsing, and gate
  * evidence validation.
  */
+import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
 import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
 import { RateLimitedError } from "../src/http/errors"
+import { IDEMPOTENCY_LEASE_MS, IDEMPOTENCY_TTL_MS, requestHash, withIdempotency } from "../src/http/idempotency"
 import { rateLimit, rateLimitAnonymous, windowId } from "../src/http/rateLimit"
 import { callerWithoutFirm, firmlessFromToken, requireAuth, verifyBearer, type Caller } from "../src/p5/auth"
 import { recordGatePassHandler } from "../src/p5/gates"
@@ -332,4 +334,71 @@ describe.skipIf(!EMULATORS)("gate evidence validation", () => {
     expect(detail(await httpsErrorOf(record(evidence)))).toBe("invalid_evidence")
   })
 
+})
+
+describe.skipIf(!EMULATORS)("idempotency claims at their boundaries", () => {
+  const ROUTE = "POST /api/t/x"
+  const NOW = Date.UTC(2026, 9, 7, 12, 0, 0)
+
+  function scope(over: Record<string, unknown> = {}) {
+    return { firmId: uniq("firm"), uid: uniq("u"), route: ROUTE, key: randomUUID(), body: { a: 1 }, now: NOW, ...over }
+  }
+
+  async function seed(s: ReturnType<typeof scope>, doc: Record<string, unknown>) {
+    const ref = adminDb().collection("idempotency_keys").doc(`${s.firmId || "_nofirm"}_${(s.key as string).toLowerCase()}`)
+    await ref.set({ firmId: s.firmId, uid: s.uid, route: ROUTE, requestHash: requestHash(s.body), ...doc })
+  }
+
+  const ok = async () => ({ status: 200, body: { ran: true } })
+
+  it("a firmless key is stored under _nofirm, lower-cased", async () => {
+    const s = scope({ firmId: "", key: randomUUID().toUpperCase() })
+    await withIdempotency(s, ok)
+    const doc = (await adminDb().collection("idempotency_keys").doc(`_nofirm_${(s.key as string).toLowerCase()}`).get()).data()
+    expect(doc).toMatchObject({ status: "done", route: ROUTE, response: { status: 200, body: { ran: true } } })
+  })
+
+  it("a key expiring exactly now is still live (replayed)", async () => {
+    const s = scope()
+    await seed(s, { status: "done", response: { status: 201, body: { first: true } }, expiresAt: Timestamp.fromMillis(NOW) })
+    await expect(withIdempotency(s, ok)).resolves.toEqual({ status: 201, body: { first: true, reused: true } })
+  })
+
+  it("an in_progress claim exactly at its lease still answers 409; one ms later it is taken over", async () => {
+    const live = scope()
+    await seed(live, {
+      status: "in_progress",
+      claimedAt: Timestamp.fromMillis(NOW - IDEMPOTENCY_LEASE_MS),
+      expiresAt: Timestamp.fromMillis(NOW + IDEMPOTENCY_TTL_MS),
+    })
+    await expect(withIdempotency(live, ok)).rejects.toMatchObject({ status: 409, code: "idempotency_in_progress" })
+    const stale = scope()
+    await seed(stale, {
+      status: "in_progress",
+      claimedAt: Timestamp.fromMillis(NOW - IDEMPOTENCY_LEASE_MS - 1),
+      expiresAt: Timestamp.fromMillis(NOW + IDEMPOTENCY_TTL_MS),
+    })
+    await expect(withIdempotency(stale, ok)).resolves.toEqual({ status: 200, body: { ran: true } })
+  })
+
+  it.each([
+    ["a non-numeric status", { status: "200", body: {} }],
+    ["an array body", { status: 200, body: [1] }],
+    ["a null body", { status: 200, body: null }],
+    ["a null response", null],
+  ])("a done claim with %s is never replayed (409)", async (_label, response) => {
+    const s = scope()
+    await seed(s, { status: "done", response, claimedAt: Timestamp.fromMillis(NOW), expiresAt: Timestamp.fromMillis(NOW + IDEMPOTENCY_TTL_MS) })
+    await expect(withIdempotency(s, ok)).rejects.toMatchObject({ status: 409, code: "idempotency_in_progress" })
+  })
+
+  it("redacts only a stored 2xx body", async () => {
+    const a = scope()
+    await withIdempotency({ ...a, redact: true }, ok)
+    await expect(withIdempotency({ ...a, redact: true }, ok)).resolves.toEqual({ status: 200, body: { redacted: true, reused: true } })
+    const b = scope()
+    const refused = async () => ({ status: 422, body: { error: { code: "x" } } })
+    await withIdempotency({ ...b, redact: true }, refused)
+    await expect(withIdempotency({ ...b, redact: true }, refused)).resolves.toEqual({ status: 422, body: { error: { code: "x" }, reused: true } })
+  })
 })
