@@ -1,0 +1,70 @@
+name: Mutation testing
+
+# StrykerJS on the security-critical modules (docs/audits/mutation-report.md).
+# Weekly and on demand only: a full run takes hours, far too slow for per-PR CI
+# (measured locally on 4 cores: see docs/audits/README.md "Mutation testing").
+# Each job fails when its mutation score is below 85 (thresholds.break in
+# stryker.config.mjs and functions/stryker.config.mjs).
+on:
+  workflow_dispatch:
+  schedule:
+    # Sundays 02:17 UTC.
+    - cron: "17 2 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  next:
+    name: Mutation (Next app security modules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Stryker (npm run mutation)
+        run: npm run mutation
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-next
+          path: reports/mutation/next/
+          retention-days: 30
+
+  functions:
+    name: Mutation (functions P5 + HTTP, under emulators)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      # The Firestore emulator is a Java process.
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      # Root install provides firebase-tools (the emulators); functions/ has its own lockfile.
+      - run: npm ci
+      - run: npm --prefix functions ci
+      - name: Stryker under emulators (npm run mutation:functions)
+        run: npm run mutation:functions
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-functions
+          path: functions/reports/mutation/
+          retention-days: 30

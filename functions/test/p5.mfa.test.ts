@@ -753,3 +753,54 @@ function injectFailure(step: "updateUser" | "approvalMark" | "usersDoc" | "revok
   const spy = vi.spyOn(DocumentReference.prototype, "update").mockImplementation(impl as never)
   return () => spy.mockRestore()
 }
+
+/**
+ * The approver is re-checked when the approval is used (mutation testing,
+ * docs/audits/mutation-report.md): an approver who has since left the firm,
+ * stopped being a partner, been deactivated, or is cleared below the subject
+ * no longer counts as the second partner. Also: an approval expiring exactly
+ * now is expired.
+ */
+describe.skipIf(!EMULATORS)("disableMfa: the approver is re-checked at use", () => {
+  async function setup() {
+    const firmId = await newFirm(["associate"])
+    const subject = await mintMfaIdToken(claims(firmId, "associate", "confidential"))
+    await adminDb().collection("users").doc(subject.uid).update({ mfaEnabled: true })
+    const { codes } = (await generateRecoveryCodesHandler(await req(subject.token, { firmId }))) as { codes: string[] }
+    const partnerB = await mintIdToken(claims(firmId, "partner"))
+    const approvalId = ((await approveMfaDisableHandler(await req(partnerB.token, { firmId, uid: subject.uid }))) as {
+      approvalId: string
+    }).approvalId
+    const disable = async () =>
+      disableMfaHandler(await req(subject.firstFactorToken, { firmId, uid: subject.uid, recoveryCode: codes[0], approvalId }))
+    return { firmId, subject, partnerB, approvalId, disable }
+  }
+
+  it.each([
+    ["moved to another firm", { firmId: "elsewhere" }],
+    ["no longer a partner", { role: "associate" }],
+    ["deactivated", { active: false }],
+    ["cleared below the subject", { clearanceLevel: "internal" }],
+    ["with an unreadable clearance", { clearanceLevel: "secret" }],
+  ])("an approver %s → second_partner_required, MFA kept", async (_label, change) => {
+    const { subject, partnerB, disable } = await setup()
+    await adminDb().collection("users").doc(partnerB.uid).update(change)
+    expectHttps(await httpsErrorOf(disable()), "permission-denied", "second_partner_required")
+    expect(await enrolledUids(subject.uid)).toHaveLength(1)
+  })
+
+  it("an approver cleared exactly at the subject's level still counts", async () => {
+    const { partnerB, disable, subject } = await setup()
+    await adminDb().collection("users").doc(partnerB.uid).update({ clearanceLevel: "confidential" })
+    await expect(disable()).resolves.toEqual({ uid: subject.uid, mfaEnabled: false })
+  })
+
+  it("an approval for another subject, or expiring now, does not count", async () => {
+    const { approvalId, disable } = await setup()
+    await adminDb().collection("mfa_disable_approvals").doc(approvalId).update({ expiresAt: Timestamp.fromMillis(Date.now()) })
+    expectHttps(await httpsErrorOf(disable()), "permission-denied", "second_partner_required")
+    const other = await setup()
+    await adminDb().collection("mfa_disable_approvals").doc(other.approvalId).update({ subjectUid: uniq("someone") })
+    expectHttps(await httpsErrorOf(other.disable()), "permission-denied", "second_partner_required")
+  })
+})
