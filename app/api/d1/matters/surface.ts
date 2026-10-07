@@ -18,7 +18,9 @@ export const BodySchema = z.discriminatedUnion("action", [
     action: z.literal("add_member"),
     actorId: idField,
     matterId: idField,
-    userId: idField,
+    // The user being assigned (a subject, not the caller): a top-level `userId` is bound to
+    // the session by withSession, which would make assigning anyone else impossible.
+    memberUserId: idField,
   }),
   z.object({
     action: z.literal("confirm_engagement"),

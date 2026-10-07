@@ -252,7 +252,7 @@ async function handlePost(request: Request) {
         member = assignMatterMember(store, {
           actorId: parsed.actorId,
           matterId: parsed.matterId,
-          userId: parsed.userId,
+          userId: parsed.memberUserId,
         })
       } catch (err) {
         if (err instanceof MembershipAssignmentError) {

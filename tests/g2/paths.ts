@@ -148,6 +148,16 @@ const D1_D3_D2_PATHS: ReadPath[] = [
     control: { as: "clerk_a", call: () => get("/api/d1/matters", { limit: "100" }), shows: (a) => a.matterTitle },
   },
   {
+    service: "D1-2", channel: "web", route: "/api/d1/matters", method: "POST", selector: "action=add_member", kind: "write",
+    note: "partner-member assignment (fix/sec-gaps R1 #6); its response echoes the membership row",
+    base: ({ B }) => post("/api/d1/matters", { action: "add_member", matterId: B.matterId, memberUserId: "associate_b" }),
+    aimed: (a, b) => [
+      deny("firm-A matterId", post("/api/d1/matters", { action: "add_member", matterId: a.matterId, memberUserId: "associate_b" }), /"unknown matter"/),
+      deny("firm-A member on a firm-B matter", post("/api/d1/matters", { action: "add_member", matterId: b.matterId, memberUserId: "clerk_a" }), /"unknown member user"/),
+    ],
+    control: { as: "partner_a", call: (a) => post("/api/d1/matters", { action: "add_member", matterId: a.matterId, memberUserId: "associate_a" }) },
+  },
+  {
     service: "D1-2", channel: "web", route: "/api/d1/matters", method: "POST", selector: "action=confirm_engagement", kind: "write",
     base: ({ B }) => post("/api/d1/matters", { action: "confirm_engagement", matterId: B.matterId }),
     aimed: (a) => [deny("firm-A matterId", post("/api/d1/matters", { action: "confirm_engagement", matterId: a.matterId }), /"cross-firm access denied"/)],

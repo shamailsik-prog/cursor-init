@@ -23,7 +23,7 @@ function setup() {
 describe("POST /api/d1/matters add_member", () => {
   it("a non-member partner cannot add themselves: 403 self_assignment_forbidden", async () => {
     const { store, matterId } = setup()
-    const res = await post({ action: "add_member", actorId: "partner_x", matterId, userId: "partner_x" })
+    const res = await post({ action: "add_member", actorId: "partner_x", matterId, memberUserId: "partner_x" })
     expect(res.status).toBe(403)
     expect(((await res.json()) as { code: string }).code).toBe("self_assignment_forbidden")
     expect(store.members.has(store.memberKey(matterId, "partner_x"))).toBe(false)
@@ -31,20 +31,20 @@ describe("POST /api/d1/matters add_member", () => {
 
   it("a non-member partner cannot add someone else either", async () => {
     const { store, matterId } = setup()
-    const res = await post({ action: "add_member", actorId: "partner_x", matterId, userId: "clerk_a" })
+    const res = await post({ action: "add_member", actorId: "partner_x", matterId, memberUserId: "clerk_a" })
     expect(res.status).toBe(403)
     expect(store.members.has(store.memberKey(matterId, "clerk_a"))).toBe(false)
   })
 
   it("only a partner member assigns; the assignment is audited", async () => {
     const { store, matterId } = setup()
-    const byAssociate = await post({ action: "add_member", actorId: "associate_a", matterId, userId: "clerk_a" })
+    const byAssociate = await post({ action: "add_member", actorId: "associate_a", matterId, memberUserId: "clerk_a" })
     expect(byAssociate.status).toBe(403)
-    const ok = await post({ action: "add_member", actorId: "partner_a", matterId, userId: "partner_x" })
+    const ok = await post({ action: "add_member", actorId: "partner_a", matterId, memberUserId: "partner_x" })
     expect(ok.status).toBe(200)
     expect(store.members.has(store.memberKey(matterId, "partner_x"))).toBe(true)
     expect(store.audit.some((row) => row.action === "matter_member_add" && row.actorId === "partner_a" && row.target === matterId)).toBe(true)
-    const crossFirm = await post({ action: "add_member", actorId: "partner_a", matterId, userId: "partner_b" })
+    const crossFirm = await post({ action: "add_member", actorId: "partner_a", matterId, memberUserId: "partner_b" })
     expect(crossFirm.status).toBeGreaterThanOrEqual(400)
   })
 })
@@ -54,12 +54,12 @@ describe("assignee role validation (review R2 N5)", () => {
     const { store, matterId } = setup()
     store.users.set("accounts_x", { id: "accounts_x", firmId: "firmA", role: "accounts", clearanceLevel: "internal" })
     for (const userId of ["client_a", "accounts_x"]) {
-      const res = await post({ action: "add_member", actorId: "partner_a", matterId, userId })
+      const res = await post({ action: "add_member", actorId: "partner_a", matterId, memberUserId: userId })
       expect(res.status).toBe(403)
       expect(((await res.json()) as { code: string }).code).toBe("assignee_role_forbidden")
       expect(store.members.has(store.memberKey(matterId, userId))).toBe(false)
     }
-    const cross = await post({ action: "add_member", actorId: "partner_a", matterId, userId: "partner_b" })
+    const cross = await post({ action: "add_member", actorId: "partner_a", matterId, memberUserId: "partner_b" })
     expect(cross.status).toBeGreaterThanOrEqual(400)
     expect(store.members.has(store.memberKey(matterId, "partner_b"))).toBe(false)
   })
