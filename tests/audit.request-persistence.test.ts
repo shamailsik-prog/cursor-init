@@ -1,6 +1,6 @@
 // Review round 1, finding 4: checkPermission rows on GET paths were never persisted, the
 // in-memory log grew without bound, and index-based write-through could cross-pick rows.
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { GET as FILINGS_GET } from "@/app/api/d4/filings/route"
 import { withSession } from "@/platform/http/withSession"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
@@ -16,6 +16,7 @@ import { setRequestAuditSinkForTests } from "@/platform/persistence/requestAudit
 import type { AuditEntry } from "@/platform/spine/store"
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   setRequestAuditSinkForTests(null)
   resetRuntimeStoreForTests()
 })
@@ -34,6 +35,10 @@ function seedPackages() {
 
 describe("request audit rows are persisted before the response (GET and POST)", () => {
   it("filings GET views persist every permission_check row they create", async () => {
+    // dispatch, artifacts and annexures are frozen behind LEGACY_GOVERNANCE_CHAINS (E-24):
+    // with the flag off they answer 404 before any permission check. Their audit path is
+    // proven with the layer re-enabled; the frozen-default case is the next test.
+    vi.stubEnv("SIKANDER_FLAG_LEGACY_GOVERNANCE_CHAINS", "true")
     const { store } = seedPackages()
     const flushed: AuditEntry[] = []
     setRequestAuditSinkForTests(async (rows) => {
@@ -48,6 +53,25 @@ describe("request audit rows are persisted before the response (GET and POST)", 
     expect(created.length).toBeGreaterThan(0)
     expect(flushed.filter((row) => row.action === "permission_check")).toEqual(created)
     expect(created.every((row) => isAuditRowPersisted(row))).toBe(true)
+  })
+
+  it("with LEGACY_GOVERNANCE_CHAINS off, the frozen views are refused and the live package view still persists its rows", async () => {
+    vi.stubEnv("SIKANDER_FLAG_LEGACY_GOVERNANCE_CHAINS", "false")
+    const { store } = seedPackages()
+    const flushed: AuditEntry[] = []
+    setRequestAuditSinkForTests(async (rows) => {
+      flushed.push(...rows)
+    })
+    for (const view of ["dispatch", "artifacts", "annexures"]) {
+      const res = await FILINGS_GET(new Request(`http://127.0.0.1/api/d4/filings?userId=partner_a&view=${view}`))
+      expect(res.status).toBe(404)
+    }
+    const before = store.audit.length
+    const res = await FILINGS_GET(new Request("http://127.0.0.1/api/d4/filings?userId=partner_a&view=packages"))
+    expect(res.status).toBe(200)
+    const created = store.audit.slice(before).filter((row) => row.action === "permission_check")
+    expect(created.length).toBeGreaterThan(0)
+    expect(created.every((row) => isAuditRowPersisted(row) && flushed.includes(row))).toBe(true)
   })
 
   it("without a test sink the rows go through the audit repository (memory mode) and are marked persisted", async () => {

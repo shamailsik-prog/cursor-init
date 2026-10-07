@@ -221,17 +221,22 @@ describe("LEGACY_GOVERNANCE_CHAINS off (default)", () => {
   })
 
   it("keeps the partner-override citation path on create_package", async () => {
+    // fix/sec-gaps binds the override to the authenticated caller: the overriding partner
+    // makes the call. An associate naming a partner is refused, frozen or not.
     const { matterId, draftId } = seedDraft()
-    const response = await post(filingsPost, "/api/d4/filings", {
+    const body = {
       action: "create_package",
-      actorId: "associate_a",
       matterId,
       draftId,
       classification: "internal",
       citedJudgmentIds: [],
       temporalCitations: [],
       partnerOverride: { partnerId: "partner_a", reason: "override for test" },
-    })
+    }
+    const byAssociate = await post(filingsPost, "/api/d4/filings", { ...body, actorId: "associate_a" })
+    expect(byAssociate.status).toBe(403)
+    expect(((await byAssociate.json()) as { code?: string }).code).toBe("OVERRIDE_FORBIDDEN")
+    const response = await post(filingsPost, "/api/d4/filings", { ...body, actorId: "partner_a" })
     expect(response.status).toBe(200)
   })
 

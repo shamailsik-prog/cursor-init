@@ -91,9 +91,14 @@ export function gateByFlag(
  * packages with pagination and matter scoping", "filters filing packages by
  * readiness after partner approval", "blocks filing package creation when
  * preflight overruled gate fails"):
- *   POST action create_package (incl. the citation gate and partnerOverride)
- *   POST action decide_package (partner approval)
+ *   POST action create_package (incl. the citation gate, the session-bound partnerOverride
+ *        and its audit, the draft charset refusal, the stored judgment ids and the draft lock)
+ *   POST action decide_package (partner approval, incl. the bodySha256 check against the
+ *        durable draft, the judgment-id re-check at approval, the override audit and the
+ *        draft lock/unlock)
  *   GET  the package list (no `view`, or view=packages)
+ * fix/sec-gaps added no filings action or view: every approval-path check it added runs
+ * inside these two actions, so the core list is unchanged.
  * Everything else (dispatch queue, annexures, submission/transport, escalation,
  * closure and settlement chains) is frozen.
  */
