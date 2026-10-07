@@ -9,7 +9,6 @@
  */
 import { randomUUID } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { HttpsError } from "firebase-functions/v2/https"
 
 const spies = vi.hoisted(() => ({ appendAudit: vi.fn(), logFailure: vi.fn() }))
 vi.mock("../src/p5/audit", () => ({ appendAudit: spies.appendAudit }))
@@ -18,7 +17,7 @@ vi.mock("../src/log", async (importOriginal) => ({
   logFailure: spies.logFailure,
 }))
 
-import { HttpError, RateLimitedError, toHttpsError } from "../src/http/errors"
+import { HttpError, RateLimitedError } from "../src/http/errors"
 import { canonicalJson, isStorableResult, isUuidV4, requestHash } from "../src/http/idempotency"
 import { DEFAULT_LIMITS, MAX_LIMIT_OVERRIDE, clientIp, limitFor } from "../src/http/rateLimit"
 import { createRouter, type Route } from "../src/http/router"
@@ -26,7 +25,6 @@ import { TokenRejectedError, hasSecondFactor, isRole, type Caller } from "../src
 import { isKnownClassification, rankOf } from "../src/p5/classification"
 import {
   CallAudit,
-  dataOf,
   isSafeDocId,
   parseRole,
   parseUid,
@@ -64,46 +62,9 @@ describe("errors", () => {
     expect(new RateLimitedError(7)).toMatchObject({ name: "RateLimitedError", status: 429, code: "rate_limited", retryAfter: 7 })
   })
 
-  it("toHttpsError passes an HttpsError through untouched", () => {
-    const original = new HttpsError("permission-denied", "already mapped", { code: "x" })
-    expect(toHttpsError(original)).toBe(original)
-  })
-
-  it("maps anything that is not an HttpError to a bare internal error, leaking nothing", () => {
-    const err = toHttpsError(new Error("password=hunter2"))
-    expect({ code: err.code, message: err.message, details: err.details }).toEqual({
-      code: "internal",
-      message: "internal",
-      details: { code: "internal" },
-    })
-  })
-
-  it.each([
-    [400, "invalid-argument"],
-    [401, "unauthenticated"],
-    [403, "permission-denied"],
-    [404, "not-found"],
-    [503, "unavailable"],
-    [418, "internal"],
-    [500, "internal"],
-  ])("status %i maps to %s, keeping the machine code", (status, code) => {
-    const err = toHttpsError(new HttpError(status, "the_code"))
-    expect({ code: err.code, message: err.message, details: err.details }).toEqual({
-      code,
-      message: "the_code",
-      details: { code: "the_code" },
-    })
-  })
-
-  it("409 is already-exists only for already_exists; 429 carries retryAfter", () => {
-    expect(toHttpsError(new HttpError(409, "already_exists")).code).toBe("already-exists")
-    expect(toHttpsError(new HttpError(409, "last_partner")).code).toBe("failed-precondition")
-    const limited = toHttpsError(new RateLimitedError(12))
-    expect({ code: limited.code, details: limited.details }).toEqual({
-      code: "resource-exhausted",
-      details: { code: "rate_limited", retryAfter: 12 },
-    })
-  })
+  // toHttpsError (the callable error mapping) was removed with the onCall callables (U-1). The
+  // HTTP router answers { status, { error: { code } } } itself, and its non-HttpError → 500
+  // "internal" mapping is covered in http.test.ts.
 })
 
 describe("classification, roles and second factors", () => {
@@ -135,12 +96,6 @@ describe("classification, roles and second factors", () => {
 })
 
 describe("request parsing and target checks", () => {
-  it("dataOf takes only a plain object", () => {
-    const obj = { a: 1 }
-    expect(dataOf({ data: obj } as never)).toBe(obj)
-    for (const data of [null, undefined, [1], "s", 5]) expect(dataOf({ data } as never)).toEqual({})
-  })
-
   it("isSafeDocId: one Firestore document id, at most 128 characters", () => {
     for (const ok of ["a", "a.b", "x".repeat(128), "__x", "x__", "a__b__", "__a__b"]) expect(isSafeDocId(ok)).toBe(true)
     for (const bad of ["", "x".repeat(129), "a/b", ".", "..", "__x__", "____", 5, null]) expect(isSafeDocId(bad)).toBe(false)
@@ -166,9 +121,20 @@ describe("request parsing and target checks", () => {
     expect(() => requireTargetWithinOwnClearance(top, "garbage")).not.toThrow()
   })
 
-  it("requirePartner refuses every other role", () => {
-    expect(() => requirePartner({ role: "partner" } as Caller)).not.toThrow()
-    expect(httpErrorOf(() => requirePartner({ role: "associate" } as Caller))).toMatchObject({ status: 403, code: "partner_only" })
+  it("requirePartner allows a partner and refuses every other role with 403 partner_only, each decision audited", async () => {
+    // Adapted after I-3 / U-2: requirePartner is async and decides through checkPermission (the
+    // shared permissionDecision table) with a firm-administration action, writing one row.
+    const caller = (role: string) => ({ uid: "u1", firmId: "f1", role, clearanceLevel: "internal" }) as Caller
+    await expect(requirePartner(caller("partner"), "identity.set_claims")).resolves.toBeUndefined()
+    expect(spies.appendAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: "identity.set_claims", decision: "allow", firmId: "f1", actorId: "u1", target: "firms/f1" })
+    )
+    for (const role of ["associate", "clerk", "intern", "accounts", "client"]) {
+      await expect(requirePartner(caller(role), "identity.set_claims")).rejects.toMatchObject({ status: 403, code: "partner_only" })
+      expect(spies.appendAudit).toHaveBeenLastCalledWith(expect.objectContaining({ decision: "deny", reason: "partner-only" }))
+    }
+    spies.appendAudit.mockRejectedValueOnce(new Error("down"))
+    await expect(requirePartner(caller("partner"), "identity.set_claims")).rejects.toMatchObject({ status: 503, code: "audit_unavailable" })
   })
 })
 

@@ -6,35 +6,31 @@
  * email for firmless callers, the rate-limit counter refusal and IP key
  * sanitising, setUserClaims' Auth-claim firm check, email parsing, and gate
  * evidence validation.
+ *
+ * Adapted after U-1: the operations run through the HTTP api (functions/test/api.ts viaApi), so a
+ * refusal is an ApiError (HTTP status and code) instead of an HttpsError (kind and details.code).
  */
 import { randomUUID } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
-import { HttpsError } from "firebase-functions/v2/https"
 import { adminAuth, adminDb } from "../src/admin"
 import { RateLimitedError } from "../src/http/errors"
 import { IDEMPOTENCY_LEASE_MS, IDEMPOTENCY_TTL_MS, requestHash, withIdempotency } from "../src/http/idempotency"
 import { rateLimit, rateLimitAnonymous, windowId } from "../src/http/rateLimit"
-import { callerWithoutFirm, firmlessFromToken, requireAuth, verifyBearer, type Caller } from "../src/p5/auth"
-import { recordGatePassHandler } from "../src/p5/gates"
-import { createFirmUserHandler, setUserClaimsHandler } from "../src/p5/identity"
+import { firmlessFromToken, requireAuth, verifyBearer, type Caller } from "../src/p5/auth"
 import { checkPermission } from "../src/p5/permission"
-import { EMULATORS, callableAuth, mintIdToken, uniq } from "./emu"
+import { apiCall, apiErrorOf, viaApi, type ApiError } from "./api"
+import { EMULATORS, mintIdToken, uniq } from "./emu"
 
-async function httpsErrorOf(p: Promise<unknown>): Promise<HttpsError> {
-  try {
-    await p
-  } catch (e) {
-    expect(e).toBeInstanceOf(HttpsError)
-    return e as HttpsError
-  }
-  throw new Error("expected HttpsError, promise resolved")
-}
+const createFirmUserHandler = viaApi("createFirmUser")
+const setUserClaimsHandler = viaApi("setUserClaims")
+const recordGatePassHandler = viaApi("recordGatePass")
 
-const detail = (err: HttpsError) => (err.details as { code?: string }).code
+const httpsErrorOf = apiErrorOf
+const detail = (err: ApiError) => err.code
 
 async function req(token: string | null, data: Record<string, unknown>) {
-  return { auth: token ? await callableAuth(token) : undefined, data } as never
+  return apiCall(token, data)
 }
 
 async function auditRows(actorId: string) {
@@ -213,21 +209,8 @@ describe.skipIf(!EMULATORS)("verified email for firmless callers", () => {
     await expect(firmlessFromToken({ uid: uniq("ghost") } as never)).rejects.toMatchObject({ status: 401, code: "invalid_token" })
   })
 
-  it("callerWithoutFirm reports the email only when it is verified, and needs a numeric auth_time", async () => {
-    const verified = await mintIdToken(null, { emailVerified: true })
-    expect((await callerWithoutFirm(await callableAuth(verified.token))).verifiedEmail).toBe(verified.email)
-    const unverified = await mintIdToken(null)
-    expect((await callerWithoutFirm(await callableAuth(unverified.token))).verifiedEmail).toBeUndefined()
-    const auth = (await callableAuth(verified.token)) as unknown as { uid: string; token: Record<string, unknown> }
-    await expect(callerWithoutFirm({ ...auth, token: { ...auth.token, auth_time: "1" } } as never)).rejects.toMatchObject({
-      status: 401,
-      code: "invalid_token",
-    })
-    await expect(
-      callerWithoutFirm({ ...auth, token: { ...auth.token, email: 5, email_verified: true } } as never)
-    ).resolves.toMatchObject({ verifiedEmail: undefined })
-    await expect(callerWithoutFirm({ ...auth, uid: uniq("ghost") } as never)).rejects.toMatchObject({ status: 401, code: "invalid_token" })
-  })
+  // callerWithoutFirm (the callable firmless identity, with its auth_time check) was removed with
+  // the onCall callables (U-1). Its verified-email branches are the firmlessFromToken cases above.
 })
 
 describe.skipIf(!EMULATORS)("rate-limit counters", () => {
@@ -268,7 +251,7 @@ describe.skipIf(!EMULATORS)("identity input and firm checks", () => {
     const target = await mintIdToken({ firmId: uniq("other"), role: "associate", clearanceLevel: "internal" }, { userDoc: false })
     await adminDb().collection("users").doc(target.uid).set({ firmId, role: "associate", clearanceLevel: "internal", active: true })
     const err = await httpsErrorOf(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" })))
-    expect([err.code, detail(err)]).toEqual(["permission-denied", "cross_firm"])
+    expect([err.status, detail(err)]).toEqual([403, "cross_firm"])
   })
 
   it("setUserClaims refuses a target with no Auth user as cross_firm", async () => {
