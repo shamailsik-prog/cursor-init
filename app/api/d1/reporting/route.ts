@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { REPORTING_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
@@ -28,18 +29,6 @@ import {
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 
 const RELEVANCE_FRESH_WINDOW_MS = 24 * 60 * 60 * 1000
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function normalizeTerms(value: string | null): string[] {
   if (!value) return []

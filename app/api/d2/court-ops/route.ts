@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { COURT_OPS_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
@@ -53,18 +54,6 @@ type ResolveWorkflowBody = {
 }
 
 type Body = WhatsAppBody | AcknowledgeBody | ResolveFollowUpBody | ResolveWorkflowBody
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function isWorkflowStatus(value: unknown): value is WorkflowStatus {
   return (

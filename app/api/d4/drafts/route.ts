@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession, type HandlerSession } from "@/platform/http/withSession"
@@ -61,18 +62,6 @@ type ComposeBody = {
 }
 
 type Body = PreflightBody | ComposeBody
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function normalizeTerms(value: string | null): string[] {
   if (!value) return []

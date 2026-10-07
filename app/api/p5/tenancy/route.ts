@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { TENANCY_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
@@ -330,18 +331,6 @@ type Body =
   | AttestExternalSessionIdentityBridgeBody
   | QuarantineExternalSessionIdentityBridgeBody
   | ClearExternalSessionIdentityBridgeBody
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function parseBoolean(value: string | null): boolean {
   return value === "1" || value === "true" || value === "yes"

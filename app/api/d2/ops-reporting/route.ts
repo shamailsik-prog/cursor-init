@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession } from "@/platform/http/withSession"
@@ -589,18 +590,6 @@ const WAIVER_EXPIRY_DISPUTE_ADJUDICATION_DUE_MS = 8 * 60 * 60 * 1000
 const REMEDIATION_SLA_BREACH_RESOLUTION_CHECKPOINT_DUE_MS = 6 * 60 * 60 * 1000
 const WAIVER_EXPIRY_DISPUTE_ADJUDICATION_SLO_EXTENSION_MS = 8 * 60 * 60 * 1000
 const REMEDIATION_SLA_BREACH_RESOLUTION_CHECKPOINT_EXPIRY_WARNING_MS = 4 * 60 * 60 * 1000
-
-function parseLimit(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 25
-  if (!Number.isFinite(parsed) || parsed < 1) return 25
-  return Math.min(parsed, 100)
-}
-
-function parseCursor(value: string | null): number {
-  const parsed = value ? Number.parseInt(value, 10) : 0
-  if (!Number.isFinite(parsed) || parsed < 0) return 0
-  return parsed
-}
 
 function normalizeTerms(value: string | null): string[] {
   if (!value) return []
