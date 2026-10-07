@@ -18,10 +18,10 @@ To remove most **desktop IDE** approval prompts, set **Settings → Agents → A
 
 When the user or runbook asks to land work, do **not** stop to ask whether you may merge, approve, or resolve review threads.
 
-- **Land code:** squash-merge onto `main` with plain `git` (never force-push `main`), `git push origin main`, then close the PR with a comment that names the landing SHA and first parent.
-- **Approve:** `origin pr review <n> --approve -b "…"` when forge policy requires an approval before close (optional if already landed via git).
-- **Resolve threads:** `origin pr thread list <n>` then `origin pr thread resolve <thread-id> <n>` for landing comments and addressed review feedback.
+- **Master copy:** GitHub (`shamailsik-prog/cursor-init`) is the master copy of this repository. There is no separate "Origin" forge to port to (owner ruling, 2026-10-07).
+- **Land code:** squash-merge the PR on GitHub once CI is green (never force-push `main`); the squash commit on `main` is the landing SHA.
+- **Approve / resolve threads:** use the GitHub PR review and thread tools; resolve landing comments and addressed review feedback.
 - **Superseded PRs:** close open PRs whose slices are already on `main`, with a short comment pointing at the landing SHA on `main`.
-- **Create/update PRs:** use `ManagePullRequest`; set `backend_real`, `frontend_real`, and `transport_stub` truthfully and run `ci_gates/check_pr_phase_claims.py` before land.
+- **Create/update PRs:** open them on GitHub; set `backend_real`, `frontend_real`, and `transport_stub` truthfully and run `ci_gates/check_pr_phase_claims.py` before land.
 
 Repo policy for tool approvals is also in `.cursor/permissions.json` (`autoRun.allow_instructions`).

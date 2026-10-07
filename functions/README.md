@@ -85,8 +85,9 @@ has passed (R-5, see "Gates" below). To keep a stranger from winning that race:
    Create the founder account by hand in the console or with the Admin SDK,
    and make sure its email is verified.
 2. **Set the founder email** for the deployed functions:
-   `SIKANDER_BOOTSTRAP_FOUNDER_EMAIL=<founder address>`. Use `functions/.env.<projectId>`
-   or your deploy pipeline's env. On hosted runs (`K_SERVICE` or
+   `SIKANDER_BOOTSTRAP_FOUNDER_EMAIL=<founder address>`. It is committed in
+   `functions/.env` (`ss@nhslegal.com`, owner ruling O-2); override per project with
+   `functions/.env.<projectId>` or your deploy pipeline's env. On hosted runs (`K_SERVICE` or
    `FUNCTION_TARGET` set), the first-firm bootstrap needs the caller's
    **verified** token email to equal this value; matching is trimmed and
    case-insensitive. If the variable is unset, the result is
