@@ -57,3 +57,17 @@ describe("F-2: own-case court check knows seat cities, benches and apex phrases,
     expect(extractCitations("IN THE COURT OF SESSIONS JUDGE, LAHORE\nBail Application No. 456 of 2025", lhc)).toEqual([])
   })
 })
+
+describe("F-3: more spelled-out reporter names (checked against REPORTER_TOKENS: SCR, KLR, GBLR, PTCL)", () => {
+  it.each([
+    ["Relying on 2019 Supreme Court Reports 100.", "2019 SCR 100"],
+    ["Relying on 2001 Karachi Law Reports 1.", "2001 KLR 1"],
+    ["Relying on 2019 Gilgit-Baltistan Law Reports 5.", "2019 GBLR 5"],
+    ["Relying on 2019 Gilgit Baltistan Law Reports 5.", "2019 GBLR 5"],
+    ["Relying on 2019 Pakistan Tax & Corporate Law 1234.", "2019 PTCL 1234"],
+    ["Relying on 2019 Pakistan Tax and Corporate Law 1234.", "2019 PTCL 1234"],
+    ["Relying on 2019 Supreme Court\nMonthly Review 1234.", "2019 SCMR 1234"],
+  ])("%j -> %s", (text, citation) => {
+    expect(extractCitations(text)).toContain(citation)
+  })
+})

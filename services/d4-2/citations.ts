@@ -789,6 +789,13 @@ const SPELLED_REPORTERS: ReadonlyArray<readonly [string, string]> = [
   ["Pakistan Labour Cases", "PLC"],
   ["Pakistan Law Journal", "PLJ"],
   ["National Law Reporter", "NLR"],
+  // R6 F-3 (tokens checked against REPORTER_TOKENS)
+  ["Supreme Court Reports", "SCR"],
+  ["Karachi Law Reports", "KLR"],
+  ["Gilgit-Baltistan Law Reports", "GBLR"],
+  ["Gilgit Baltistan Law Reports", "GBLR"],
+  ["Pakistan Tax & Corporate Law", "PTCL"],
+  ["Pakistan Tax and Corporate Law", "PTCL"],
 ]
 const SPELLED_REPORTER_PATTERNS = SPELLED_REPORTERS.map(
   ([name, abbreviation]) => [new RegExp(`(?<![\\p{L}])${name.split(" ").map(escapeRe).join("\\s+")}(?![\\p{L}])`, "giu"), abbreviation] as const
