@@ -116,3 +116,10 @@ Open items that need the partner are in ES2-4 of the erratum (O-15 to O-24). Eng
   spec-safe).
 - **Citation gate:** add unlisted spelled-out reporter names as they are found.
 - **Later plans:** the Module 6 conflict engine; pre-existing deviations carried from `main` (E-39).
+
+## Owner rulings, 2026-10-07
+
+| # | Ruling | Reason | Cost if wrong |
+| --- | --- | --- | --- |
+| O-1 | GitHub (`shamailsik-prog/cursor-init`) is the master copy. The "port to Origin" step in PR #4 is withdrawn; AGENTS.md no longer refers to an Origin forge. | Owner instruction: "GitHub is the master copy". | None known; if an upstream mirror reappears, merges on GitHub could again be overwritten. |
+| O-2 | The first-firm founder email is `ss@nhslegal.com`, committed as `SIKANDER_BOOTSTRAP_FOUNDER_EMAIL` in `functions/.env`. | Owner instruction. Firebase loads `functions/.env` for every project on deploy; the value is an address, not a secret. | Changing the founder means editing one line before the first deploy. |
