@@ -9,6 +9,10 @@ export default defineConfig({
     // still pass. Threads pool avoids that false non-zero exit.
     pool: "threads",
     include: ["tests/**/*.test.ts"],
+    // Heavy legacy route-wiring tests take 2.5-6.4 s on a loaded machine; the 5 s
+    // default flakes on CI runners. 15 s matches functions/vitest.config.ts.
+    testTimeout: 15000,
+    hookTimeout: 15000,
     // Route handlers fail closed (Firebase auth) unless told otherwise; the
     // unit suite opts into the local-only insecure-dev mode.
     // Legacy chain test files opt into LEGACY_GOVERNANCE_CHAINS (Erratum E-24).
