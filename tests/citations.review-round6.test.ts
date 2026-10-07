@@ -71,3 +71,24 @@ describe("F-3: more spelled-out reporter names (checked against REPORTER_TOKENS:
     expect(extractCitations(text)).toContain(citation)
   })
 })
+
+describe("F-4: a sentence starting with a numeral after a citation is prose; ambiguous pages stay closed", () => {
+  it.each([
+    ["Reliance is placed on 2015 SCMR 100. 5 witnesses were examined.", ["2015 SCMR 100"]],
+    ["See 2015 SCMR 100.  12 days later the order was passed.", ["2015 SCMR 100"]],
+    ["See PLD 2010 SC 1. 3 of the 5 grounds fail.", ["PLD 2010 SC 1"]],
+    ["See 2015 SCMR 100. 2 Witnesses were examined.", ["2015 SCMR 100"]],
+    ["See 2015 SCMR 100. 5. The next point.", ["2015 SCMR 100"]],
+  ])("%j", (text, expected) => {
+    expect(extractCitations(text)).toEqual(expected)
+  })
+  it.each([
+    "Relying on 2019 PCrLJ\r\n4. 4 for the proposition.",
+    "Relying on 2019 PCrLJ 4.\n4 a < b for the proposition.",
+    "see 2019 SCMR 12. 34 for that",
+    "see 2019 SCMR 12.  34",
+    "see 2019 SCMR 12. 34 the case",
+  ])("%j stays ambiguous", (text) => {
+    expect(blocked(extractCitations(text)), JSON.stringify(extractCitations(text))).toBe(true)
+  })
+})

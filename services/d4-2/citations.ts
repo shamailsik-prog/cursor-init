@@ -201,7 +201,10 @@ function ambiguousTail(rest: string): boolean {
   // Fuzz R5: on the same line, a period, blanks and digits that are not an enumeration ("5.",
   // "5)") — "PCrLJ 4. 4 for …", "4.<FF>4" — are ambiguous, across one line break too; an ellipsis,
   // a blank line or "5." stay prose.
-  return /^(?:[^\S\n]*\.(?:[^\S\n]+|[^\S\n]*\n[^\S\n]*)\d+(?![\d.)])|[\p{P}\p{S}]+\d|[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
+  // R6 F-4: …unless the numeral starts a sentence — followed by a content word ("5 witnesses",
+  // "3 of the 5", "12 days") or a capitalised sentence starter ("2 Witnesses") — not by a
+  // preposition/article that continues a broken page ("4. 4 for the …", "12. 34 the …").
+  return /^(?:[^\S\n]*\.(?:[^\S\n]+|[^\S\n]*\n[^\S\n]*)\d+(?![\d.)])(?![^\S\n]+(?:(?!(?:for|the|a|an|to|at|in|on|by|with|from|as|and|or|that|which|is|was|per|via)(?![\p{L}]))\p{Ll}{2,}|(?:Days|Weeks|Months|Years|Hours|Witnesses|Persons|Accused|Grounds|Issues|Points|Questions|Applications|Cases|Judges|Members|Petitioners|Respondents|Appellants)(?![\p{L}]))(?![\p{L}]))|[\p{P}\p{S}]+\d|[\p{L}\p{N}]|\s*[-/][\s\-/]*[\p{L}\p{N}]|\s+\d|\s*[,.'\u2019\u066b\u066c]\d|[^\S\n]*['\u2019\u066b\u066c][^\p{L}\p{N}]{0,6}\d|[^\S\n]*,(?! \d)[^\p{L}\p{N}\n]{1,6}\d|[^\S\n]*\.(?=[ .]*[^\s.\p{L}\p{N}])[^\p{L}\p{N}\n]{1,6}\d|\s*[<>][^\p{L}\p{N}]{0,6}\d|[,.'\u2019\u066b\u066c][<&]|[;:)\]"\u201d!?>][\p{L}\p{N}]|[^\s.,;:)\]'"\u201d\u2019!?>])/u.test(rest)
 }
 
 function trailingParen(rest: string): { length: number; key: string } | null {

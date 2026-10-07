@@ -60,6 +60,9 @@ const PASSAGES: Array<[string, string]> = [
   ["year then capital org", "In 2023 SECP issued 4 show-cause notices to the company under the Companies Act, 2017."],
   ["year then capital org 2", "Since 2020 NADRA has issued 2 CNICs to the petitioner, the second on 01.02.2022."],
   ["year then capital 3", "The 2022 PTCL bill of Rs. 4,500 was disputed."],
+  // R6 F-4: the reviewer's sentence-starting-numeral prose examples
+  ["numeral sentence after citation", "Reliance is placed on 2015 SCMR 100. 5 witnesses were examined."],
+  ["numeral of the after citation", "PLD 2010 SC 1. 3 of the 5 grounds fail."],
 ]
 
 /** Headings that carry the matter's own case number: [courtId, raw case number]. */
@@ -68,7 +71,7 @@ const OWN_CASE: Record<string, [string, string]> = {
   "writ heading": ["IHC", "Writ Petition No. 1234 of 2025"],
   "bail heading": ["LHC", "Bail Application No. 456 of 2025"],
 }
-const VERIFIED_LISTS = new Set(["case list verified with pinpoints", "case list pinpoint", "case list with names", "case list semicolon", "supra reference"])
+const VERIFIED_LISTS = new Set(["case list verified with pinpoints", "case list pinpoint", "case list with names", "case list semicolon", "supra reference", "numeral sentence after citation", "numeral of the after citation"])
 
 const PASTES: Array<[string, string]> = [
   ["PDF paste ligature fi", "The suit was ﬁled on 12.01.2024 and the written statement was ﬂagged as late."],
@@ -123,8 +126,8 @@ async function preflight(label: string, body: string, recordOwnCase: boolean) {
   return { status: res.status, result: json.result?.result }
 }
 
-describe("review round 4 false-positive corpus (48 passages, preflight API)", () => {
-  it("has 48 passages", () => expect(PASSAGES).toHaveLength(48))
+describe("false-positive corpus (50 passages, preflight API)", () => {
+  it("has 50 passages (48 + the two R6 F-4 examples)", () => expect(PASSAGES).toHaveLength(50))
 
   it("0% false positives with the matters' own case numbers recorded; verified case lists stay VERIFIED", async () => {
     const flagged: string[] = []
@@ -137,7 +140,7 @@ describe("review round 4 false-positive corpus (48 passages, preflight API)", ()
         expect(result?.citations.every((c) => c.status === "VERIFIED"), label).toBe(true)
       }
     }
-    console.log(`FP corpus (own case recorded): ${flagged.length}/48 = ${((100 * flagged.length) / 48).toFixed(1)}%`)
+    console.log(`FP corpus (own case recorded): ${flagged.length}/${PASSAGES.length} = ${((100 * flagged.length) / PASSAGES.length).toFixed(1)}%`)
     expect(flagged).toEqual([])
   }, 120_000)
 
@@ -147,7 +150,7 @@ describe("review round 4 false-positive corpus (48 passages, preflight API)", ()
       const { result } = await preflight(label, body, false)
       if (!result?.ok) flagged.push(label)
     }
-    console.log(`FP corpus (own case not recorded): ${flagged.length}/48 = ${((100 * flagged.length) / 48).toFixed(1)}%`)
+    console.log(`FP corpus (own case not recorded): ${flagged.length}/${PASSAGES.length} = ${((100 * flagged.length) / PASSAGES.length).toFixed(1)}%`)
     expect(flagged.sort()).toEqual(Object.keys(OWN_CASE).sort())
   }, 120_000)
 })
