@@ -88,8 +88,8 @@ The router gains GET support with query parameters (the router already types GET
 ## 5. Firestore rules
 
 New blocks, default deny everywhere else stays:
-- `conflict_checks`, `conflict_events`, `counters`, `transliteration_map`: no client SDK writes; `conflict_checks` read only by the requester or a partner of the same firm (detail disclosure stays server-side, so reads return the stored per-requester view only). `conflict_events` read partner only.
-- `matter_parties`: same-firm staff read with clearance; no SDK writes.
+- `conflict_checks`, `conflict_events`, `counters`, `transliteration_map`: no client SDK writes; `conflict_checks` client-SDK read only by a same-firm partner (staff) cleared to the check's classification; the stored row is unredacted, so the requester reads through `getConflictResult` (server-side disclosure). `conflict_events` read partner only.
+- `matter_parties`: read by same firm AND cleared on `classification` AND (partner OR member of the row's `matterId`); a standalone registry row (`matterId` null) is partner-only; no SDK writes.
 - `matter_events`: member read; no SDK writes.
 - `matters`: unchanged (create already denied to the SDK; E-38).
 

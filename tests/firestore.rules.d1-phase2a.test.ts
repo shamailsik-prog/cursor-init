@@ -95,6 +95,17 @@ beforeAll(async () => {
     // A client-role user named as requester and a firm-B row (fixture for the cross-firm list).
     await setDoc(doc(db, "conflict_checks", "rowClientOwn"), { ...row("conflict_checks", "internal"), requestedBy: CLIENT.uid })
     await setDoc(doc(db, "matter_events", "rowOtherMatter"), { ...row("matter_events", "internal"), matterId: MATTER_NO_MEMBERS })
+    await setDoc(doc(db, "matter_parties", "rowOtherMatter"), { ...row("matter_parties", "internal"), matterId: MATTER_NO_MEMBERS })
+    await setDoc(doc(db, "matter_parties", "rowNullMatter"), { ...row("matter_parties", "internal"), matterId: null })
+    // A check by ASSOC (cleared to it) whose stored, unredacted hit names a matter ASSOC is not on.
+    await setDoc(doc(db, "conflict_checks", "rowHitsHidden"), {
+      ...row("conflict_checks", "internal"),
+      requestedBy: ASSOC.uid,
+      hits: [{ subjectIndex: 0, hitRole: "opposing", type: "direct_adverse", basis: "name", score: 0.92, identityBasis: "candidate_only",
+        outcome: "POSSIBLE_CANDIDATE_REVIEW", matchedName: "Muhammad Ali", matterId: MATTER_NO_MEMBERS, matterNo: "SA/2026/0007",
+        matterClassification: "internal", reliedOnLinkIds: [] }],
+      boundMatterId: null,
+    })
   })
 })
 
@@ -140,20 +151,22 @@ describe.each(SERVER_ONLY)("Phase 2a %s: server-only", (name) => {
   })
 })
 
-describe("conflict_checks: requester or partner, with clearance", () => {
-  it("the requesting associate reads their own check; a partner reads it too", async () => {
-    await assertSucceeds(getDoc(doc(await as(ASSOC), "conflict_checks", "rowInternal")))
+describe("conflict_checks: same-firm partner with clearance only (the requester reads via getConflictResult)", () => {
+  it("a requesting associate cannot read their own unredacted check (it names a matter they are not on); a partner can", async () => {
+    // The stored row is unredacted: discloseFor (functions/src/d1/conflict/disclosure.ts) hides matterId /
+    // matterNo / matterClassification / boundMatterId from a non-member non-partner, so the
+    // client SDK must never hand the raw row to the requester.
+    await assertFails(getDoc(doc(await as(ASSOC), "conflict_checks", "rowHitsHidden")))
+    await assertFails(getDocs(query(collection(await as(ASSOC), "conflict_checks"), where("firmId", "==", FIRM), where("requestedBy", "==", ASSOC.uid))))
+    await assertSucceeds(getDoc(doc(await as(PARTNER), "conflict_checks", "rowHitsHidden")))
     await assertSucceeds(getDoc(doc(await as(PARTNER), "conflict_checks", "rowInternal")))
   })
-  it("an associate cannot read another user's conflict check", async () => {
+  it("no non-partner reads a check: the requester, another associate, a clerk", async () => {
+    await assertFails(getDoc(doc(await as(ASSOC), "conflict_checks", "rowInternal")))
     await assertFails(getDoc(doc(await as(ASSOC_OTHER), "conflict_checks", "rowInternal")))
-    await assertFails(getDocs(query(collection(await as(ASSOC_OTHER), "conflict_checks"), where("firmId", "==", FIRM), where("requestedBy", "==", ASSOC.uid))))
-  })
-  it("a clerk (staff, not the requester) cannot read it", async () => {
     await assertFails(getDoc(doc(await as(CLERK), "conflict_checks", "rowInternal")))
   })
-  it("the requester is still bound by clearance on the check's classification", async () => {
-    await assertFails(getDoc(doc(await as(ASSOC), "conflict_checks", "rowPriv")))
+  it("a partner below the check's classification is denied", async () => {
     await assertFails(getDoc(doc(await as(PARTNER_LOW), "conflict_checks", "rowPriv")))
     await assertSucceeds(getDoc(doc(await as(PARTNER), "conflict_checks", "rowPriv")))
   })
@@ -174,7 +187,7 @@ describe("conflict_events: same-firm partner with clearance only", () => {
   })
 })
 
-describe.each(["matter_parties", "entity_links", "entities"])("%s: same-firm staff with clearance", (name) => {
+describe.each(["entity_links", "entities"])("%s: same-firm staff with clearance", (name) => {
   it("staff read, member or not (associate, clerk, partner)", async () => {
     await assertSucceeds(getDoc(doc(await as(ASSOC_OTHER), name, "rowInternal")))
     await assertSucceeds(getDoc(doc(await as(CLERK), name, "rowInternal")))
@@ -184,6 +197,29 @@ describe.each(["matter_parties", "entity_links", "entities"])("%s: same-firm sta
     await assertFails(getDoc(doc(await as(ASSOC), name, "rowPriv")))
     await assertFails(getDoc(doc(await as(PARTNER_LOW), name, "rowPriv")))
     await assertSucceeds(getDoc(doc(await as(PARTNER), name, "rowPriv")))
+  })
+})
+
+describe("matter_parties: same-firm, cleared, and a partner or a member of the party's matter", () => {
+  it("a cleared member associate reads; a cleared non-member associate or clerk does not", async () => {
+    await assertSucceeds(getDoc(doc(await as(ASSOC), "matter_parties", "rowInternal")))
+    await assertFails(getDoc(doc(await as(ASSOC_OTHER), "matter_parties", "rowInternal")))
+    await assertFails(getDoc(doc(await as(CLERK), "matter_parties", "rowInternal")))
+    await assertSucceeds(getDoc(doc(await as(PARTNER), "matter_parties", "rowInternal")))
+  })
+  it("a partner who is not a member of the party's matter can read (conflict review)", async () => {
+    await assertSucceeds(getDoc(doc(await as(PARTNER), "matter_parties", "rowOtherMatter")))
+    await assertFails(getDoc(doc(await as(ASSOC), "matter_parties", "rowOtherMatter")))
+  })
+  it("a standalone registry row (matterId null) is partner-only", async () => {
+    await assertFails(getDoc(doc(await as(ASSOC), "matter_parties", "rowNullMatter")))
+    await assertFails(getDoc(doc(await as(CLERK), "matter_parties", "rowNullMatter")))
+    await assertSucceeds(getDoc(doc(await as(PARTNER), "matter_parties", "rowNullMatter")))
+  })
+  it("a member below the row's classification is denied, partner included", async () => {
+    await assertFails(getDoc(doc(await as(ASSOC), "matter_parties", "rowPriv")))
+    await assertFails(getDoc(doc(await as(PARTNER_LOW), "matter_parties", "rowPriv")))
+    await assertSucceeds(getDoc(doc(await as(PARTNER), "matter_parties", "rowPriv")))
   })
 })
 
@@ -218,5 +254,13 @@ describe("matter_members create stamps createdAt (listMatters orders by it)", ()
   })
   it("createdAt == request.time (serverTimestamp) is allowed", async () => {
     await assertSucceeds(setDoc(doc(await as(PARTNER), "matter_members", `${MATTER}_${NEW.uid}`), { ...member, createdAt: serverTimestamp() }))
+  })
+  it("createdAt is frozen: a member partner cannot rewrite it on update", async () => {
+    const past = Timestamp.fromDate(new Date("2020-01-01T00:00:00Z"))
+    await assertFails(updateDoc(doc(await as(PARTNER), "matter_members", `${MATTER}_${NEW.uid}`), { createdAt: past }))
+    await assertFails(updateDoc(doc(await as(PARTNER), "matter_members", `${MATTER}_${NEW.uid}`), { createdAt: serverTimestamp() }))
+  })
+  it("an update leaving createdAt alone is still allowed (control)", async () => {
+    await assertSucceeds(updateDoc(doc(await as(PARTNER), "matter_members", `${MATTER}_${NEW.uid}`), { note: "lead" }))
   })
 })

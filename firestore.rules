@@ -104,7 +104,7 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.firmId == request.auth.token.firmId
         && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.role in ['partner', 'associate', 'clerk', 'intern'];
       allow update: if sameFirm() && isPartner() && isMember(resource.data.matterId) && firmIdUnchanged()
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId']);
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId', 'createdAt']);
       allow delete: if sameFirm() && isPartner() && isMember(resource.data.matterId);
     }
     match /clients/{id} {
@@ -172,9 +172,9 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
     match /conflict_checks/{id} {
-      // The requester or a partner; detail disclosure stays server-side (the stored per-requester view).
-      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification)
-        && (isPartner() || resource.data.get('requestedBy', '') == request.auth.uid);
+      // Partner only: the stored row is unredacted (hits[].matterId / matterNo / matterClassification,
+      // boundMatterId); discloseFor redacts those server-side, so the requester reads via getConflictResult.
+      allow read: if sameFirm() && isPartner() && isStaff() && cleared(resource.data.classification);
       allow create, update, delete: if false;
     }
     match /conflict_events/{id} {
@@ -182,7 +182,9 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
     match /matter_parties/{id} {
-      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      // A partner, or a member of the party's matter; a standalone registry row (matterId null) is partner-only.
+      allow read: if sameFirm() && cleared(resource.data.classification)
+        && (isPartner() || memberReader(resource.data.matterId));
       allow create, update, delete: if false;
     }
     match /matter_events/{id} {
