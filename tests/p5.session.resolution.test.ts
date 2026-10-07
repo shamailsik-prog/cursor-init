@@ -6,6 +6,12 @@
  * auth-mode parsing, the Bearer grammar, firebase-admin initialisation, the
  * uid / firm-claim / firm-header checks, the authoritative repository lookup,
  * and the exact error codes and messages.
+ *
+ * Adapted after SEC-2 (platform/p5/identityPolicy.ts, shared with Cloud Functions): the token
+ * must carry firmId, role and clearanceLevel claims (403 NO_CLAIMS), the record must be active
+ * (403 INACTIVE_USER, which replaced USER_NOT_PROVISIONED), a role claim that differs from the
+ * record is 401 CLAIMS_STALE (it was ignored with a warning), and firms/{firmId} is read for the
+ * MFA policy (a failed read is 503 IDENTITY_UNAVAILABLE).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { User } from "@/platform/spine/store"
@@ -27,7 +33,9 @@ vi.mock("firebase-admin/auth", () => ({ getAuth: admin.getAuth }))
 const runtime = vi.hoisted(() => ({
   store: null as unknown as import("@/platform/spine/store").SpineStore,
   repoUsers: new Map<string, User>(),
+  repoFirms: new Map<string, { id: string; mfaEnforcedRoles?: string[] }>(),
   repoFails: false,
+  firmFails: false,
   repoReads: 0,
 }))
 vi.mock("@/platform/spine/runtimeStore", () => ({ getRuntimeStore: () => runtime.store }))
@@ -38,6 +46,12 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         runtime.repoReads += 1
         if (runtime.repoFails) throw new Error("firestore unreachable")
         return runtime.repoUsers.get(id) ?? null
+      },
+    },
+    firms: {
+      get: async (id: string) => {
+        if (runtime.firmFails) throw new Error("firestore unreachable")
+        return runtime.repoFirms.get(id) ?? null
       },
     },
   }),
@@ -53,7 +67,9 @@ import {
 } from "@/platform/p5/session"
 import { newStore } from "@/platform/spine/store"
 
-const partner: User = { id: "partner_a", firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
+const partner: User = { id: "partner_a", firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted", active: true }
+/** The verified token of `partner`: all three identity claims, as the identity policy requires. */
+const partnerToken = { uid: "partner_a", firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }
 
 function req(headers: Record<string, string> = {}): Request {
   return new Request("http://127.0.0.1/api/x", { headers })
@@ -77,13 +93,15 @@ beforeEach(() => {
   resetSessionStateForTests()
   runtime.store = newStore()
   runtime.repoUsers = new Map([[partner.id, partner]])
+  runtime.repoFirms = new Map([["firmA", { id: "firmA" }]])
   runtime.repoFails = false
+  runtime.firmFails = false
   runtime.repoReads = 0
   admin.apps = []
   admin.initializeApp.mockClear()
   admin.applicationDefault.mockClear()
   admin.verifyIdToken.mockReset()
-  admin.verifyIdToken.mockResolvedValue({ uid: "partner_a", firmId: "firmA" })
+  admin.verifyIdToken.mockResolvedValue(partnerToken)
   admin.getAuth.mockReset()
   admin.getAuth.mockImplementation(() => ({ verifyIdToken: admin.verifyIdToken }))
   vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
@@ -296,24 +314,37 @@ describe("token verification", () => {
     expect(err).toMatchObject({ status: 401, code: "AUTH_INVALID", message: "invalid or expired token" })
   })
 
-  it("403 USER_NOT_PROVISIONED for a verified uid with no record", async () => {
-    admin.verifyIdToken.mockResolvedValue({ uid: "ghost" })
+  it("403 INACTIVE_USER for a verified uid with no record, or an inactive one", async () => {
+    admin.verifyIdToken.mockResolvedValue({ ...partnerToken, uid: "ghost" })
     const err = await authError(resolveSession(good()))
-    expect(err).toMatchObject({ status: 403, code: "USER_NOT_PROVISIONED", message: "user not provisioned" })
+    expect(err).toMatchObject({ status: 403, code: "INACTIVE_USER", message: "user is not active" })
+    for (const active of [false, undefined, "true"]) {
+      runtime.repoUsers.set("partner_a", { ...partner, active } as unknown as User)
+      admin.verifyIdToken.mockResolvedValue(partnerToken)
+      expect(await authError(resolveSession(good()))).toMatchObject({ status: 403, code: "INACTIVE_USER" })
+    }
   })
 })
 
 describe("firm binding", () => {
-  it("takes the firm from the record when the token has no firm claim, or a non-string one", async () => {
-    for (const firmId of [undefined, 42]) {
-      admin.verifyIdToken.mockResolvedValue({ uid: "partner_a", firmId })
-      await expect(resolveSession(good())).resolves.toMatchObject({ firmId: "firmA", userId: "partner_a" })
+  it("403 NO_CLAIMS when the token has no firm claim, a non-string one or an empty one (the record never supplies it)", async () => {
+    for (const firmId of [undefined, 42, ""]) {
+      admin.verifyIdToken.mockResolvedValue({ ...partnerToken, firmId })
+      const err = await authError(resolveSession(good()))
+      expect(err).toMatchObject({ status: 403, code: "NO_CLAIMS", message: "missing or malformed identity claims" })
     }
   })
 
-  it("refuses a firm claim that disagrees with the record even when the header matches the record", async () => {
-    admin.verifyIdToken.mockResolvedValue({ uid: "partner_a", firmId: "firmB" })
+  it("refuses a firm claim that disagrees with the header even when the header matches the record", async () => {
+    admin.verifyIdToken.mockResolvedValue({ ...partnerToken, firmId: "firmB" })
     const err = await authError(resolveSession(good()))
+    expect(err).toMatchObject({ status: 403, code: "FIRM_MISMATCH", message: "firm scope mismatch" })
+  })
+
+  it("refuses a record in another firm even when the firm claim and the header agree", async () => {
+    runtime.repoFirms.set("firmB", { id: "firmB" })
+    admin.verifyIdToken.mockResolvedValue({ ...partnerToken, firmId: "firmB" })
+    const err = await authError(resolveSession(good({ [FIRM_HEADER]: "firmB" })))
     expect(err).toMatchObject({ status: 403, code: "FIRM_MISMATCH", message: "firm scope mismatch" })
   })
 
@@ -337,34 +368,54 @@ describe("firm binding", () => {
 
 describe("role and clearance claims", () => {
   it.each(["partner", "associate", "clerk", "intern", "accounts", "client"] as const)(
-    "a known role claim (%s) that differs from the record is ignored, with a warning",
+    "a known role claim (%s) that differs from the record is 401 CLAIMS_STALE (the record is never overridden)",
     async (role) => {
       const recordRole = role === "clerk" ? "partner" : "clerk"
-      runtime.repoUsers.set("u2", { id: "u2", firmId: "firmA", role: recordRole, clearanceLevel: "internal" })
-      admin.verifyIdToken.mockResolvedValue({ uid: "u2", role })
-      await expect(resolveSession(good())).resolves.toMatchObject({ role: recordRole })
-      expect(warn).toHaveBeenCalledWith("[auth] role claim for u2 differs from record; using record")
+      runtime.repoUsers.set("u2", { id: "u2", firmId: "firmA", role: recordRole, clearanceLevel: "internal", active: true })
+      admin.verifyIdToken.mockResolvedValue({ uid: "u2", firmId: "firmA", role, clearanceLevel: "internal" })
+      const err = await authError(resolveSession(good()))
+      expect(err).toMatchObject({ status: 401, code: "CLAIMS_STALE", message: "identity claims are stale; refresh the token" })
     }
   )
 
-  it("does not warn for a matching, unknown or non-string role claim", async () => {
-    for (const role of ["partner", "admin", 7]) {
-      admin.verifyIdToken.mockResolvedValue({ uid: "partner_a", role })
-      await expect(resolveSession(good())).resolves.toMatchObject({ role: "partner" })
+  it("accepts a matching role claim; an unknown, non-string or missing role claim is 403 NO_CLAIMS", async () => {
+    await expect(resolveSession(good())).resolves.toMatchObject({ role: "partner" })
+    for (const role of ["admin", 7, undefined]) {
+      admin.verifyIdToken.mockResolvedValue({ ...partnerToken, role })
+      expect(await authError(resolveSession(good()))).toMatchObject({ status: 403, code: "NO_CLAIMS" })
     }
-    expect(warn).not.toHaveBeenCalled()
   })
 
-  it("lets a clearance claim restrict but never raise the record, and ignores an unknown one", async () => {
-    runtime.repoUsers.set("u3", { id: "u3", firmId: "firmA", role: "associate", clearanceLevel: "confidential" })
+  it("lets a clearance claim restrict but never raise the record; an unknown one is 403 NO_CLAIMS", async () => {
+    runtime.repoUsers.set("u3", { id: "u3", firmId: "firmA", role: "associate", clearanceLevel: "confidential", active: true })
+    const token = (clearanceLevel: unknown) => ({ uid: "u3", firmId: "firmA", role: "associate", clearanceLevel })
     const clearance = async (clearanceLevel: unknown) => {
-      admin.verifyIdToken.mockResolvedValue({ uid: "u3", clearanceLevel })
+      admin.verifyIdToken.mockResolvedValue(token(clearanceLevel))
       return ((await resolveSession(good())) as { clearance: string }).clearance
     }
     expect(await clearance("internal")).toBe("internal")
     expect(await clearance("privileged-restricted")).toBe("confidential")
     expect(await clearance("confidential")).toBe("confidential")
-    expect(await clearance("top-secret")).toBe("confidential")
+    admin.verifyIdToken.mockResolvedValue(token("top-secret"))
+    expect(await authError(resolveSession(good()))).toMatchObject({ status: 403, code: "NO_CLAIMS" })
+  })
+
+  it("applies the firm's MFA policy read from firms/{firmId}: 403 MFA_REQUIRED without a second factor", async () => {
+    runtime.repoFirms.set("firmA", { id: "firmA", mfaEnforcedRoles: ["partner"] })
+    const err = await authError(resolveSession(good()))
+    expect(err).toMatchObject({ status: 403, code: "MFA_REQUIRED", message: "a second factor is required for this role" })
+    admin.verifyIdToken.mockResolvedValue({ ...partnerToken, firebase: { sign_in_second_factor: "phone" } })
+    await expect(resolveSession(good())).resolves.toMatchObject({ userId: "partner_a" })
+    runtime.repoFirms.set("firmA", { id: "firmA", mfaEnforcedRoles: ["associate"] })
+    admin.verifyIdToken.mockResolvedValue(partnerToken)
+    await expect(resolveSession(good())).resolves.toMatchObject({ userId: "partner_a" })
+  })
+
+  it("fails closed (503 IDENTITY_UNAVAILABLE) when firms/{firmId} cannot be read", async () => {
+    runtime.firmFails = true
+    const err = await authError(resolveSession(good()))
+    expect(err).toMatchObject({ status: 503, code: "IDENTITY_UNAVAILABLE", message: "identity service unavailable" })
+    expect(errorLog).toHaveBeenCalledWith("[auth] firm lookup failed", expect.any(Error))
   })
 
   it("returns exactly the verified session", async () => {

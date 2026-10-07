@@ -200,12 +200,14 @@ describe("resolveCommitteeScope", () => {
     expect((await resolveCommitteeScope(nameless, repos({}), actor, { matterId: "m1" })).partyNames).toEqual([])
   })
 
-  it("treats an unreadable matter label as privileged-restricted", async () => {
+  it("refuses a matter whose label is unreadable (403 clearance), even to a privileged-restricted partner", async () => {
+    // Final audit I-3: checkPermission (the shared decision table) refuses an unreadable matter
+    // classification outright, so the scope is never built; it used to be read as
+    // privileged-restricted, which a privileged-restricted caller could pass.
     const m = { ...matter("m1"), classification: "bogus" } as unknown as Matter
     const store = storeWith({ matter: m, member: true })
-    expect((await resolveCommitteeScope(store, repos({}), actor, { matterId: "m1" })).classification).toBe(
-      "privileged-restricted"
-    )
+    const err = await scopeError(resolveCommitteeScope(store, repos({}), actor, { matterId: "m1" }))
+    expect(err).toMatchObject({ status: 403, code: "FORBIDDEN", message: "permission denied: clearance" })
   })
 
   it("raises the label to the strictest referenced document and de-duplicates ids", async () => {

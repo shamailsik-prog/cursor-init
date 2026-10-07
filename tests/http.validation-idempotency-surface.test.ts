@@ -3,8 +3,8 @@
  * (platform/http/validation.ts, idempotency.ts, surface.ts), unit level.
  * Written against the surviving mutants of `npm run mutation`
  * (docs/audits/mutation-report.md): size caps at their boundaries, the body
- * stream error path, UUID v4 anchoring, replay-cache expiry and eviction
- * order, and the surface guards' refusals.
+ * stream error path, UUID v4 anchoring, replay-store expiry, lease and eviction
+ * order, the replay / refusal answers, and the surface guards' refusals.
  */
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
@@ -18,10 +18,11 @@ import {
   readJsonLimited,
 } from "@/platform/http/validation"
 import {
-  IdempotencyCache,
-  IdempotencyConflictError,
   IdempotencyError,
+  IdempotencyStore,
+  beginIdempotentRequest,
   requireIdempotencyKey,
+  resetIdempotencyForTests,
 } from "@/platform/http/idempotency"
 import {
   SurfaceError,
@@ -152,97 +153,134 @@ describe("idempotency keys", () => {
     }
   })
 
-  it("errors carry their status, name and default message", () => {
+  it("the key error carries its status, name and default message", () => {
+    // IdempotencyConflictError (409) is gone: a reused key is now a 422 response from
+    // beginIdempotentRequest, asserted below.
     expect(new IdempotencyError()).toMatchObject({
       status: 400,
       name: "IdempotencyError",
       message: "Idempotency-Key header required",
     })
-    expect(new IdempotencyConflictError()).toMatchObject({
-      status: 409,
-      name: "IdempotencyConflictError",
-      message: "Idempotency-Key reused with a different request payload",
-    })
   })
 })
 
-describe("IdempotencyCache", () => {
-  it("expires an entry exactly at its TTL, in get and getReplay, and drops it", () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(1_000)
-    const cache = new IdempotencyCache<string>(100, 10)
-    cache.set("a", "A", "fp")
-    vi.setSystemTime(1_099)
-    expect(cache.get("a")).toBe("A")
-    expect(cache.getReplay("a", "fp")).toEqual({ body: "A", conflict: false })
-    vi.setSystemTime(1_100)
-    expect(cache.get("a")).toBeUndefined()
-    expect(cache.size).toBe(0)
-    cache.set("b", "B", "fp")
-    vi.setSystemTime(1_200)
-    expect(cache.getReplay("b", "other")).toEqual({ conflict: false })
-    expect(cache.size).toBe(0)
+// Adapted after final audit F4 / SEC-4: the per-route IdempotencyCache was replaced by one
+// shared IdempotencyStore (explicit `now`, check-and-reserve claims, 422 on key reuse). The same
+// mutant classes are targeted on it: the TTL and lease boundaries, conflict only on a different
+// fingerprint, pruning of expired entries, eviction order and byte accounting.
+describe("IdempotencyStore boundaries", () => {
+  const limits = { ttlMs: 100, maxEntries: 10, maxBytes: 10_000, maxEntryBytes: 1_000, leaseMs: 50 }
+  const claimed = (s: IdempotencyStore, key: string, fp: string, now: number): number => {
+    const begun = s.begin(key, fp, now)
+    if (begun.kind !== "claimed") throw new Error(`expected a claim for ${key}, got ${begun.kind}`)
+    return begun.claimId
+  }
+  const done = (s: IdempotencyStore, key: string, body: unknown, now: number, fp = "fp") =>
+    s.complete(key, claimed(s, key, fp, now), body, now)
+
+  it("expires an entry exactly at its TTL, for a replay and for a reuse check, and drops it", () => {
+    const s = new IdempotencyStore(limits)
+    done(s, "a", "A", 1_000)
+    expect(s.begin("a", "fp", 1_099)).toEqual({ kind: "replay", body: "A" })
+    expect(s.begin("a", "other", 1_099)).toEqual({ kind: "reused" })
+    expect(s.begin("a", "other", 1_100).kind).toBe("claimed")
+    expect(s.size).toBe(1)
+    expect(s.storedBytes).toBe(0)
   })
 
-  it("reports a conflict only for a different fingerprint, and a miss as no conflict", () => {
-    const cache = new IdempotencyCache<string>(60_000, 10)
-    expect(cache.getReplay("nope", "fp")).toEqual({ conflict: false })
-    cache.set("a", "A", "fp1")
-    expect(cache.getReplay("a", "fp2")).toEqual({ conflict: true })
-    cache.set("b", "B")
-    expect(cache.getReplay("b", "any")).toEqual({ body: "B", conflict: false })
+  it("reports reuse only for a different fingerprint; a miss is a claim", () => {
+    const s = new IdempotencyStore(limits)
+    expect(s.begin("nope", "fp", 0).kind).toBe("claimed")
+    done(s, "a", "A", 0, "fp1")
+    expect(s.begin("a", "fp2", 1)).toEqual({ kind: "reused" })
+    expect(s.begin("a", "fp1", 1)).toEqual({ kind: "replay", body: "A" })
+    const live = claimed(s, "b", "fp1", 1)
+    expect(live).toBeGreaterThan(0)
+    expect(s.begin("b", "fp2", 2)).toEqual({ kind: "reused" })
+    expect(s.begin("b", "fp1", 2)).toEqual({ kind: "in_progress" })
   })
 
-  it("prunes every expired entry on get, getReplay and set", () => {
-    vi.useFakeTimers()
-    const touches: [(c: IdempotencyCache<string>) => unknown, number][] = [
-      [(c) => c.get("fresh"), 1],
-      [(c) => c.getReplay("fresh", "fp"), 1],
-      [(c) => c.set("new", "N"), 2],
-    ]
-    for (const [touch, sizeAfter] of touches) {
-      vi.setSystemTime(0)
-      const cache = new IdempotencyCache<string>(100, 10)
-      cache.set("old1", "1")
-      cache.set("old2", "2")
-      vi.setSystemTime(150)
-      cache.set("fresh", "F")
-      expect(cache.size).toBe(1)
-      vi.setSystemTime(0)
-      cache.set("old3", "3")
-      vi.setSystemTime(200)
-      expect(cache.size).toBe(2)
-      touch(cache)
-      expect(cache.size).toBe(sizeAfter)
+  it("an in-progress claim holds until its lease ends, inclusive, then may be taken over", () => {
+    const s = new IdempotencyStore(limits)
+    claimed(s, "a", "fp", 0)
+    expect(s.begin("a", "fp", 50)).toEqual({ kind: "in_progress" })
+    expect(s.begin("a", "fp", 51).kind).toBe("claimed")
+  })
+
+  it("prunes expired entries from the head on begin and on complete", () => {
+    for (const touch of ["begin", "complete"] as const) {
+      const s = new IdempotencyStore(limits)
+      done(s, "old1", "1", 0)
+      done(s, "old2", "2", 0)
+      const id = claimed(s, "fresh", "fp", 60)
+      expect(s.size).toBe(3)
+      if (touch === "begin") claimed(s, "new", "fp", 100)
+      else s.complete("fresh", id, "F", 100)
+      expect(s.size).toBe(touch === "begin" ? 2 : 1)
+      expect(s.storedBytes).toBe(touch === "begin" ? 0 : JSON.stringify("F").length * 2)
     }
   })
 
-  it("prune() alone removes expired entries", () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(0)
-    const cache = new IdempotencyCache<string>(100, 10)
-    cache.set("a", "A")
-    vi.setSystemTime(100)
-    cache.prune()
-    expect(cache.size).toBe(0)
+  it("keeps exactly maxEntries and evicts the least recently used, counting a replay as a use", () => {
+    const s = new IdempotencyStore({ ...limits, maxEntries: 2 })
+    done(s, "a", "A", 1)
+    done(s, "b", "B", 2)
+    expect(s.size).toBe(2)
+    expect(s.begin("a", "fp", 3)).toEqual({ kind: "replay", body: "A" }) // a is now the most recent
+    done(s, "c", "C", 4)
+    expect(s.size).toBe(2)
+    expect(s.begin("b", "fp", 5).kind).toBe("claimed") // b was evicted
+    expect(s.begin("c", "fp", 5)).toEqual({ kind: "replay", body: "C" })
   })
 
-  it("keeps exactly maxEntries and evicts the oldest by write time, not insertion order", () => {
-    vi.useFakeTimers()
-    const cache = new IdempotencyCache<string>(60_000, 2)
-    vi.setSystemTime(1)
-    cache.set("a", "A")
-    vi.setSystemTime(2)
-    cache.set("b", "B")
-    expect(cache.size).toBe(2)
-    vi.setSystemTime(3)
-    cache.set("a", "A2") // rewritten: now the newest, still first in insertion order
-    vi.setSystemTime(4)
-    cache.set("c", "C")
-    expect(cache.size).toBe(2)
-    expect(cache.get("b")).toBeUndefined()
-    expect(cache.get("a")).toBe("A2")
-    expect(cache.get("c")).toBe("C")
+  it("accounts stored bytes as UTF-16 code units, at the per-entry cap inclusive, and frees them on eviction", () => {
+    const body = "x".repeat(498) // JSON "\"x...x\"" = 500 chars = 1000 bytes: exactly the cap
+    const s = new IdempotencyStore({ ...limits, maxEntries: 1 })
+    done(s, "a", body, 0)
+    expect(s.storedBytes).toBe(1_000)
+    expect(s.begin("a", "fp", 1)).toEqual({ kind: "replay", body })
+    done(s, "b", "y", 2)
+    expect(s.storedBytes).toBe(6)
+    done(s, "c", "x".repeat(499), 3)
+    expect(s.storedBytes).toBe(0)
+    expect(s.begin("c", "fp", 4)).toEqual({ kind: "unavailable" })
+  })
+})
+
+describe("beginIdempotentRequest answers", () => {
+  const KEY = "3b241101-e2bb-4255-8caf-4136c566a962"
+  const post = () => new Request("http://x/api/route", { method: "POST" })
+  afterEach(() => resetIdempotencyForTests())
+
+  it("replays a completed key with reused: true, and refuses reuse, in-progress and an unstorable response", async () => {
+    const first = beginIdempotentRequest(post(), KEY, "fp")
+    expect(first.claim).toBeDefined()
+    first.claim!.complete({ ok: 1 })
+    const replay = beginIdempotentRequest(post(), KEY, "fp").response!
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ result: { ok: 1 }, idempotencyKey: KEY, reused: true })
+
+    const reused = beginIdempotentRequest(post(), KEY.toUpperCase(), "other").response!
+    expect(reused.status).toBe(422)
+    expect(await reused.json()).toEqual({
+      code: "idempotency_key_reused",
+      error: "Idempotency-Key reused with a different request payload",
+    })
+
+    const KEY2 = "3b241101-e2bb-4255-8caf-4136c566a963"
+    expect(beginIdempotentRequest(post(), KEY2, "fp").claim).toBeDefined()
+    const busy = beginIdempotentRequest(post(), KEY2, "fp").response!
+    expect(busy.status).toBe(409)
+    expect(await busy.json()).toEqual({ code: "idempotency_in_progress", error: "a request with this Idempotency-Key is in progress" })
+
+    const KEY3 = "3b241101-e2bb-4255-8caf-4136c566a964"
+    beginIdempotentRequest(post(), KEY3, "fp").claim!.complete("x".repeat(3 * 1024 * 1024))
+    const gone = beginIdempotentRequest(post(), KEY3, "fp").response!
+    expect(gone.status).toBe(409)
+    expect(await gone.json()).toEqual({
+      code: "idempotency_replay_unavailable",
+      error: "this Idempotency-Key was already used; its response is not available for replay",
+    })
   })
 })
 

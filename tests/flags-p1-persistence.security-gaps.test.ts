@@ -19,7 +19,8 @@ import { classificationRank, type Classification } from "@/platform/p1/types"
 import { providerAllowedFor, setProviderConfigForTests, type ProviderId } from "@/platform/p1/providerPolicy"
 import { AuditAppendConflictError, auditRowsEqual } from "@/platform/persistence/auditAppendConflictError"
 import { syncFirmAudit } from "@/platform/persistence/auditSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { normalizeAuditEntryInPlace } from "@/platform/persistence/auditWriteThrough"
+import { isAuditRowPersisted, markAuditRowPersisted } from "@/platform/audit/requestAudit"
 import {
   PersistenceConfigurationError,
   getRuntimeRepositories,
@@ -171,40 +172,48 @@ describe("audit row helpers", () => {
     expect(auditRowsEqual(null, {})).toBe(false)
   })
 
-  it("syncFirmAudit replaces only that firm's rows with the repository's", async () => {
+  it("syncFirmAudit replaces that firm's persisted rows with the repository's, keeping rows still owed", async () => {
+    // Adapted after review R2 N2 / final audit F8: the log is replaced in place (store.audit is
+    // read-only), and this firm's local rows that are not persisted yet stay (their request's
+    // flush or the retry queue still owes them), unless the repository already has that id.
     const store = newStore()
     const row = (id: string, firmId: string) => ({ id, firmId, action: "x", actorId: "u", at: 1 }) as AuditEntry
-    store.audit = [row("a1", "firmA"), row("b1", "firmB"), row("a2", "firmA")]
-    const repos = { audit: { listByFirm: async (firm: string) => (firm === "firmA" ? [row("a9", "firmA")] : []) } }
+    const a1 = row("a1", "firmA")
+    markAuditRowPersisted(a1)
+    const local = row("a2", "firmA")
+    const dup = row("a3", "firmA")
+    const log = store.audit
+    store.audit.replaceAll([a1, row("b1", "firmB"), local, dup])
+    const fromRepo = [row("a9", "firmA"), row("a3", "firmA")]
+    const repos = { audit: { listByFirm: async (firm: string) => (firm === "firmA" ? fromRepo : []) } }
     await syncFirmAudit(store, repos as unknown as SpineRepositories, "firmA")
-    expect(store.audit.map((r) => r.id)).toEqual(["b1", "a9"])
+    expect(store.audit.map((r) => r.id)).toEqual(["b1", "a2", "a9", "a3"])
+    expect(store.audit[3]).toBe(fromRepo[1])
+    expect(store.audit).toBe(log)
+    expect(fromRepo.every(isAuditRowPersisted)).toBe(true)
+    expect(isAuditRowPersisted(local)).toBe(false)
   })
 
-  it("persistAuditEntriesSince fills id/firm/at, keeps given values, skips holes, and refuses a row with no firm", async () => {
+  it("normalizeAuditEntryInPlace fills id/firm/at on the row itself, keeps given values, and refuses a row with no firm", () => {
+    // Adapted after final audit F8: persistAuditEntriesSince (an index walk over store.audit,
+    // which also skipped holes) is removed; the end-of-request flush normalises each of the
+    // request's own rows by object with normalizeAuditEntryInPlace, so that is what is targeted.
     const store = newStore()
     store.users.set("u1", { id: "u1", firmId: "firmA", role: "partner", clearanceLevel: "internal" })
-    const appended: AuditEntry[] = []
-    const repos = { audit: { append: async (r: AuditEntry) => void appended.push(r) } } as unknown as SpineRepositories
-    store.audit = [
-      { id: "old", firmId: "firmA", action: "skip-me", actorId: "u1", at: 1 } as AuditEntry,
-      { action: "fill", actorId: "u1" } as unknown as AuditEntry,
-      { id: "keep", firmId: "firmB", action: "given", actorId: "u1", at: 42 } as AuditEntry,
-    ]
-    // A hole in the array (a removed entry) is skipped, not normalised.
-    store.audit.length = 4
-    await persistAuditEntriesSince(store, repos, 1)
-    expect(appended).toHaveLength(2)
-    expect(appended[0]).toMatchObject({ firmId: "firmA", action: "fill" })
-    expect(appended[0].id).toMatch(/^aud_/)
-    expect(typeof appended[0].at).toBe("number")
-    expect(appended[1]).toEqual({ id: "keep", firmId: "firmB", action: "given", actorId: "u1", at: 42 })
-    expect(store.audit[1]).toBe(appended[0])
+    const fill = { action: "fill", actorId: "u1" } as unknown as AuditEntry
+    const before = Date.now()
+    expect(normalizeAuditEntryInPlace(store, fill)).toBe(fill)
+    expect(fill).toMatchObject({ firmId: "firmA", action: "fill" })
+    expect(fill.id).toMatch(/^aud_/)
+    expect(fill.at).toBeGreaterThanOrEqual(before)
+    expect(fill.at).toBeLessThanOrEqual(Date.now())
 
-    store.audit.push({ action: "orphan", actorId: "nobody" } as unknown as AuditEntry)
-    await expect(persistAuditEntriesSince(store, repos, 4)).rejects.toThrow(
-      "unable to resolve audit firm for action orphan"
-    )
-    expect(appended).toHaveLength(2)
+    const given = { id: "keep", firmId: "firmB", action: "given", actorId: "u1", at: 42 } as AuditEntry
+    normalizeAuditEntryInPlace(store, given)
+    expect(given).toEqual({ id: "keep", firmId: "firmB", action: "given", actorId: "u1", at: 42 })
+
+    const orphan = { action: "orphan", actorId: "nobody" } as unknown as AuditEntry
+    expect(() => normalizeAuditEntryInPlace(store, orphan)).toThrow("unable to resolve audit firm for action orphan")
   })
 })
 
