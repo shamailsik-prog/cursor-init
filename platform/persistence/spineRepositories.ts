@@ -1,3 +1,4 @@
+import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import type {
   DocumentRecord,
   DraftRecord,
@@ -218,6 +219,8 @@ export type DraftRepository = {
   create(row: DraftRecord): Promise<void>
   get(id: string): Promise<DraftRecord | null>
   listByFirm(firmId: string): Promise<DraftRecord[]>
+  /** Server-side filing lock (review R1 #5); a missing draft is a no-op. */
+  setLocked(id: string, locked: boolean): Promise<void>
 }
 
 export type WorkflowRepository = {
@@ -669,6 +672,12 @@ export type WorkflowOpsLatticeViewRepository<TRow> = {
 export type AuditRepository = {
   append(row: AuditEntry): Promise<void>
   listByFirm(firmId: string): Promise<AuditEntry[]>
+}
+
+/** Durable store for audit rows that could not be persisted (R3 N13); server-only. */
+export type AuditDeadLetterRepository = {
+  append(letter: AuditDeadLetter): Promise<void>
+  list(): Promise<AuditDeadLetter[]>
 }
 
 export type CommitteeBrainOutputRepository = {
@@ -1839,6 +1848,7 @@ export type SpineRepositories = {
   members: MatterMemberRepository
   documents: DocumentRepository
   drafts: DraftRepository
+  auditDeadLetter: AuditDeadLetterRepository
   workflow: WorkflowRepository
   filings: FilingRepository
   filingPacketArtifacts: FilingPacketArtifactRepository
@@ -2147,6 +2157,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return [...store.drafts.values()].filter((row) => row.firmId === firmId)
+      },
+      async setLocked(id, locked) {
+        const current = store.drafts.get(id)
+        if (current) store.drafts.set(id, { ...current, locked })
       },
     },
     workflow: {
@@ -3244,6 +3258,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         return store.intimations.filter((row) => row.matterId === matterId)
       },
     },
+    auditDeadLetter: {
+      async append(letter) {
+        // idempotent like the Firestore id `${row.id}_${deadLetteredAt}`: a retried write after
+        // an ambiguous failure never stores a second copy
+        if (store.auditDeadLetters.some((l) => l.row === letter.row && l.deadLetteredAt === letter.deadLetteredAt)) return
+        store.auditDeadLetters.push(letter)
+      },
+      async list() {
+        return [...store.auditDeadLetters]
+      },
+    },
     audit: {
       async append(row) {
         if (row.id) {
@@ -3251,11 +3276,15 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           if (existing) {
             // Identical re-append (retry / overlapping write-through) is a no-op; a row
             // with differing content is rejected, never replaced.
-            if (auditRowsEqual(existing, row)) return
+            if (auditRowsEqual(existing, row)) {
+              markAuditRowPersisted(row)
+              return
+            }
             throw new AuditAppendConflictError(row.id)
           }
         }
         store.audit.push(row)
+        markAuditRowPersisted(row)
       },
       async listByFirm(firmId) {
         return store.audit.filter((row) => row.firmId === firmId)

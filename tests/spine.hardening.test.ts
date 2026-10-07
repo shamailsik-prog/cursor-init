@@ -243,10 +243,12 @@ describe("G-1 spine hardening", () => {
     seedJudgment(store, "j-old", "Cited authority", "single")
     seedJudgment(store, "j-later", "Larger bench", "larger")
     seedTreatment(store, "j-later", "j-old", "overruled", "larger")
-    const blocked = verifyCitations(store, ["j-old"], {
-      partnerId: "intern1",
-      reason: "because I said so",
-    })
+    const blocked = verifyCitations(
+      store,
+      ["j-old"],
+      { partnerId: "intern1", reason: "because I said so" },
+      { actorId: "intern1", firmId: "firmA" }
+    )
     expect(blocked.status).toBe("OVERRULED")
   })
 

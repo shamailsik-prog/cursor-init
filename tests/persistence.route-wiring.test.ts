@@ -12,6 +12,16 @@ const baseStore = {
         clearanceLevel: "privileged",
       },
     ],
+    // R2 N6: escalation-closure rows are visible only to a partner member of every package's matter.
+    [
+      "partner_a",
+      {
+        id: "partner_a",
+        firmId: "firmA",
+        role: "partner",
+        clearanceLevel: "privileged-restricted",
+      },
+    ],
   ]),
   matters: new Map([
     [
@@ -31,8 +41,18 @@ const baseStore = {
   ]),
   entities: new Map(),
   links: [],
-  members: new Map([["mat_1_associate_a", { matterId: "mat_1", userId: "associate_a", firmId: "firmA" }]]),
+  members: new Map([
+    ["mat_1_associate_a", { matterId: "mat_1", userId: "associate_a", firmId: "firmA" }],
+    ["mat_1_partner_a", { matterId: "mat_1", userId: "partner_a", firmId: "firmA" }],
+  ]),
   jobs: [],
+  // P5 checkPermission appends one audit row per decision and fails closed without an audit log.
+  audit: [] as unknown[],
+  auditSeq: 0,
+  id(prefix: string) {
+    this.auditSeq += 1
+    return `${prefix}_${this.auditSeq}`
+  },
   documents: new Map(),
   filingPackages: new Map(),
   filingPacketArtifacts: new Map(),
@@ -157,9 +177,11 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       get: vi.fn().mockResolvedValue(null),
       listByFirm: vi.fn().mockResolvedValue([
         { matterId: "mat_1", userId: "associate_a", firmId: "firmA" },
+        { matterId: "mat_1", userId: "partner_a", firmId: "firmA" },
       ]),
       listByMatter: vi.fn().mockResolvedValue([
         { matterId: "mat_1", userId: "associate_a", firmId: "firmA" },
+        { matterId: "mat_1", userId: "partner_a", firmId: "firmA" },
       ]),
     },
     documents: {
@@ -181,6 +203,7 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       create: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
       listByFirm: vi.fn().mockResolvedValue([]),
+      setLocked: vi.fn(),
     },
     workflow: {
       createOrUpdate: vi.fn(),
@@ -6677,7 +6700,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_compliance_digests&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_compliance_digests&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6689,7 +6712,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_followup_queue&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_followup_queue&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6703,7 +6726,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_sla_window_configs&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_sla_window_configs&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6715,7 +6738,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_auto_assignment_rules&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_auto_assignment_rules&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6727,7 +6750,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_sla_windows&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_sla_windows&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6741,7 +6764,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_attestations&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_attestations&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6755,7 +6778,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_sla_exception_digests&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_sla_exception_digests&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6769,7 +6792,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_attestation_disputes&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_attestation_disputes&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6783,7 +6806,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_sla_exception_enforcement&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_sla_exception_enforcement&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6797,7 +6820,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_queue&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_queue&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6811,7 +6834,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_enforcement_rebalance&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_enforcement_rebalance&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6825,7 +6848,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_quorum&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_quorum&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6839,7 +6862,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_execution&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_execution&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6853,7 +6876,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_slo&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_slo&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6867,7 +6890,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_safeguards&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_safeguards&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6881,7 +6904,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_slo_debt_remediation&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_slo_debt_remediation&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6895,7 +6918,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_safeguard_expiry&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_rebalance_safeguard_expiry&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6909,7 +6932,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_debt_burndown&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_adjudication_debt_burndown&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6923,7 +6946,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_safeguard_expiry_attestations&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_safeguard_expiry_attestations&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6937,7 +6960,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_burndown_recalibration&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_burndown_recalibration&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6951,7 +6974,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_expiry_attestation_queue&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_expiry_attestation_queue&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6965,7 +6988,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_burndown_settlement&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_burndown_settlement&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6979,7 +7002,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_expiry_attestation_queue_drain&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_expiry_attestation_queue_drain&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -6993,7 +7016,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_settlement_attestation&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_settlement_attestation&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -7007,7 +7030,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_queue_drain_reconciliation&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_queue_drain_reconciliation&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -7021,7 +7044,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_settlement_arbitration&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_settlement_arbitration&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)
@@ -7035,7 +7058,7 @@ describe("Route wiring uses repository adapters", () => {
     const { GET } = await import("@/app/api/d4/filings/route")
     const res = await GET(
       new Request(
-        "http://127.0.0.1/api/d4/filings?view=closure_queue_reentry_compliance&userId=associate_a&limit=10&cursor=0"
+        "http://127.0.0.1/api/d4/filings?view=closure_queue_reentry_compliance&userId=partner_a&limit=10&cursor=0"
       )
     )
     expect(res.status).toBe(200)

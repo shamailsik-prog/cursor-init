@@ -1,3 +1,4 @@
+import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   collection,
   doc,
@@ -335,6 +336,9 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         return listByFirm<DraftRecord>(db, "drafts", firmId)
+      },
+      async setLocked(id, locked) {
+        await updateById<DraftRecord>(db, "drafts", id, { locked })
       },
     },
     workflow: {
@@ -1753,6 +1757,18 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           .filter((row) => row.matterId === matterId)
       },
     },
+    auditDeadLetter: {
+      async append(letter) {
+        // Full row kept (R3 N13); undefined fields dropped because Firestore rejects them.
+        const row = JSON.parse(JSON.stringify(letter.row)) as AuditEntry
+        const id = `${row.id ?? "noid"}_${letter.deadLetteredAt}`
+        await setDoc(doc(db, "audit_dead_letter", id), { row, reason: letter.reason, deadLetteredAt: letter.deadLetteredAt })
+      },
+      async list() {
+        const rows = await getDocs(collection(db, "audit_dead_letter"))
+        return rows.docs.map((entry) => entry.data() as AuditDeadLetter)
+      },
+    },
     audit: {
       async append(row) {
         if (!row.id) {
@@ -1772,6 +1788,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           }
           tx.set(ref, payload)
         })
+        markAuditRowPersisted(row)
       },
       async listByFirm(firmId) {
         return listByFirm<AuditEntry & { firmId: string }>(db, "audit_log", firmId)

@@ -1,3 +1,4 @@
+import { AuditLog, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import { createHash, randomUUID } from "node:crypto"
 import type { Classification } from "@/platform/p1/types"
 import { classificationRank, isClassification } from "@/platform/p1/types"
@@ -52,6 +53,8 @@ export type Job = {
   firmId: string
   jobType: string
   documentId: string
+  /** The document's matter (null = loose vault). R-2: the jobs rule scopes reads by it. */
+  matterId: string | null
   classification: Classification
   idempotencyKey: string
 }
@@ -102,6 +105,8 @@ export type AuditEntry = {
   target: string
   classification: Classification
   reason?: string
+  /** citation_gate_override rows: the authorities cleared, as "<ref>:<VERIFIED|UNVERIFIED|OVERRULED>". */
+  overriddenAuthorities?: string[]
   authBoundary?: TenancyAuthBoundary
   sessionReferenceId?: string | null
   externalSessionId?: string | null
@@ -383,6 +388,8 @@ export type Judgment = {
   id: string
   title: string
   benchType: "single" | "division" | "full" | "larger"
+  /** Reported citation (e.g. "2019 SCMR 1234"); Module 33 matches extracted citations on it. */
+  citation?: string
 }
 
 export type TreatmentRow = {
@@ -409,6 +416,11 @@ export type DraftRecord = {
   createdBy: string
   createdAt: number
   status: "draft"
+  /**
+   * Set server-side while a filing package referencing this draft is pending or approved;
+   * the Firestore rules deny body edits (and any client change to the flag) when true.
+   */
+  locked?: boolean
 }
 
 export type WorkflowStatus =
@@ -450,13 +462,17 @@ export type FilingPackage = {
   matterId: string
   draftId: string
   classification: Classification
-  citationStatus: "OK" | "OVERRULED"
+  citationStatus: "OK" | "OVERRULED" | "UNVERIFIED"
   temporalAllOk: boolean
   status: "pending_partner_approval" | "approved" | "rejected"
   createdBy: string
   createdAt: number
   approvedBy: string | null
   approvalReason: string | null
+  /** sha256 (hex) of the draft body the gate checked at creation; approval requires a match. */
+  draftBodySha256?: string
+  /** Judgment ids / citations the caller listed at creation; re-checked at approval (R1 #8). */
+  citedRefs?: string[]
 }
 
 export type FilingPacketArtifactComponent = {
@@ -5596,7 +5612,14 @@ export class SpineStore {
   links: EntityLink[] = []
   followUps: FollowUp[] = []
   intimations: Intimation[] = []
-  audit: AuditEntry[] = []
+  /**
+   * Bounded, request-collected audit log (platform/audit/requestAudit.ts). Readonly: replacing
+   * the object would silently disable per-request persistence (review R2 N2); use
+   * `audit.replaceAll(rows)` to change its contents.
+   */
+  readonly audit: AuditLog = new AuditLog()
+  /** In-memory audit_dead_letter repository (R3 N13): full rows that could not be persisted. */
+  auditDeadLetters: AuditDeadLetter[] = []
   sectionVersions: StatuteSectionVersion[] = []
   judgments = new Map<string, Judgment>()
   treatments: TreatmentRow[] = []

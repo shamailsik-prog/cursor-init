@@ -283,7 +283,7 @@ async function handleGet(request: Request) {
   if (!actor) {
     return NextResponse.json({ error: "unknown actor" }, { status: 404 })
   }
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     return NextResponse.json({ error: "actor role not allowed for reporting search" }, { status: 403 })
   }
 

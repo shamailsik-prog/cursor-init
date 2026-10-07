@@ -36,6 +36,8 @@ import { runWithSession } from "@/platform/p5/requestSession"
 import { errorResponse, internalErrorResponse } from "@/platform/http/errors"
 import { attachParsedBody, maxUploadRequestBytes, readBodyLimited } from "@/platform/http/validation"
 import { undeclaredQueryParam, unknownParamResponse, type RouteSurface } from "@/platform/http/surface"
+import { runWithRequestAudit } from "@/platform/audit/requestAudit"
+import { flushRequestAudit } from "@/platform/persistence/requestAuditFlush"
 
 /**
  * The caller as seen by a handler. `null` only for public routes and for
@@ -221,13 +223,39 @@ function claimedIdentity(url: URL, parsed: unknown): string | null {
   return null
 }
 
+/**
+ * Runs the handler with a request-scoped audit collector and persists every audit row it
+ * created (checkPermission decisions included) before the response leaves — GET and POST
+ * alike (review round 1, finding 4). If persisting fails the caller gets 503
+ * AUDIT_UNAVAILABLE instead of the response: a read never returns data whose access was not
+ * durably audited. For a POST whose effect has already been committed the 503 is still
+ * returned and the failure is logged; the true fix is an async P5 that awaits the durable
+ * append before allowing (tracked as a follow-up).
+ */
+async function runAudited(request: Request, run: () => Promise<Response> | Response): Promise<Response> {
+  const outcome = await runWithRequestAudit(run)
+  try {
+    await flushRequestAudit(outcome.rows)
+  } catch (err) {
+    const committed = hasBody(request) && !("error" in outcome)
+    console.error(
+      `[audit] could not persist ${outcome.rows.length} audit row(s) for ${describe(request)}` +
+        (committed ? " — the request's effect may already be committed (async P5 is the fix)" : ""),
+      err
+    )
+    return errorResponse(503, "AUDIT_UNAVAILABLE", "audit log unavailable")
+  }
+  if ("error" in outcome) throw outcome.error
+  return outcome.value
+}
+
 export async function withSession(
   request: Request,
   handler: RouteHandler,
   options: SessionRouteOptions = {}
 ): Promise<Response> {
   try {
-    if (options.public) return await handler(request, null)
+    if (options.public) return await runAudited(request, () => handler(request, null))
 
     let session: Awaited<ReturnType<typeof resolveSession>>
     try {
@@ -268,7 +296,7 @@ export async function withSession(
             mode: "insecure-dev",
           }
         : null
-      return await handler(devRequest, devSession)
+      return await runAudited(request, () => handler(devRequest, devSession))
     }
 
     const bound = await bindRequestToSession(request, session, options)
@@ -286,7 +314,7 @@ export async function withSession(
     // for this request only.
     return await runWithSession(
       { userId: session.userId, firmId: session.firmId, clearance: session.clearance },
-      () => handler(bound, handlerSession)
+      () => runAudited(request, () => handler(bound, handlerSession))
     )
   } catch (err) {
     return internalErrorResponse(err, describe(request))

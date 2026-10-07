@@ -20,11 +20,13 @@ import {
   readJsonLimited,
 } from "@/platform/http/validation"
 import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
+import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
 
@@ -48,10 +50,30 @@ function requireActor(actorId: string, firmId?: string) {
   const actor = store.users.get(actorId)
   if (!actor) throw new PublicError("unknown actor")
   if (firmId && actor.firmId !== firmId) throw new PublicError("cross-firm actor denied")
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     throw new PublicError("actor role not allowed for document ingest")
   }
   return actor
+}
+
+const DEFAULT_INGEST_CLASSIFICATION: Classification = "privileged"
+
+/**
+ * Client-sourced ingest channels (L17.3 "default privileged for client-sourced material").
+ * Review R1 #9: these are floored at privileged even when the uploader labels them lower.
+ * The spec's client portal was dropped in favour of L8.1 WhatsApp self-service and §4 lists no
+ * email intake channel, so WhatsApp is the only one today; team_portal is the staff upload
+ * portal (L18 §10.1 "Team Upload Portal"). Add any new client-facing channel here.
+ */
+export const CLIENT_SOURCED_CHANNELS: ReadonlySet<string> = new Set(["whatsapp"])
+
+/** max(privileged, matter classification); an unreadable matter label floors at the most restrictive. */
+function defaultIngestClassification(matterClassification: unknown): Classification {
+  if (matterClassification === undefined) return DEFAULT_INGEST_CLASSIFICATION
+  if (!isClassification(matterClassification)) return "privileged-restricted"
+  return rankOf(matterClassification) > rankOf(DEFAULT_INGEST_CLASSIFICATION)
+    ? matterClassification
+    : DEFAULT_INGEST_CLASSIFICATION
 }
 
 function canViewDocument(
@@ -61,12 +83,7 @@ function canViewDocument(
 ): boolean {
   const user = store.users.get(userId)
   if (!user) return false
-  if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
-  if (doc.matterId) {
-    return store.members.has(store.memberKey(doc.matterId, userId))
-  }
-  return user.role !== "client" && user.role !== "intern"
+  return canReadDocument(store, user, doc)
 }
 
 export async function GET(request: Request) {
@@ -176,13 +193,32 @@ async function handlePost(request: Request) {
     const priorAuditCount = store.audit.length
     const actor = requireActor(parsed.actorId, parsed.firmId)
     await syncFirmMembers(store, repos, actor.firmId)
-    if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification)) {
+    const matterId = parsed.matterId ?? null
+    const matterForDefault = matterId ? store.matters.get(matterId) : undefined
+    // L17.3 Human control: "Initial classification set at ingest (default privileged for
+    // client-sourced material)". Material arriving without a label is treated as
+    // client-sourced; the default is floored at the matter's classification.
+    let classification: Classification =
+      parsed.classification ?? defaultIngestClassification(matterForDefault?.classification)
+    if (
+      CLIENT_SOURCED_CHANNELS.has(parsed.sourceChannel) &&
+      rankOf(classification) < rankOf(DEFAULT_INGEST_CLASSIFICATION)
+    ) {
+      classification = DEFAULT_INGEST_CLASSIFICATION
+    }
+    if (rankOf(actor.clearanceLevel) < rankOf(classification)) {
       return NextResponse.json(
         { error: "actor clearance is below requested document classification" },
         { status: 403 }
       )
     }
-    const matterId = parsed.matterId ?? null
+    if (!matterId && !canUseLooseVault(actor)) {
+      // E-18: loose vault is clerk/partner with clearance >= confidential (as the rules' authorNew()).
+      return NextResponse.json(
+        { error: "loose vault is limited to clerk and partner roles with confidential clearance" },
+        { status: 403 }
+      )
+    }
     if (matterId) {
       const matter = store.matters.get(matterId)
       if (!matter) return NextResponse.json({ error: "unknown matter" }, { status: 404 })
@@ -195,7 +231,7 @@ async function handlePost(request: Request) {
           { status: 403 }
         )
       }
-      if (rankOf(parsed.classification) < rankOfStoredOrMax(matter.classification)) {
+      if (rankOf(classification) < rankOfStoredOrMax(matter.classification)) {
         return NextResponse.json(
           { error: "document classification cannot be lower than matter classification" },
           { status: 400 }
@@ -212,8 +248,9 @@ async function handlePost(request: Request) {
       matterId,
       bytes,
       sourceChannel: parsed.sourceChannel,
-      classification: parsed.classification,
+      classification,
       idempotencyKey: key,
+      callerClearance: actor.clearanceLevel,
     })
 
     const inMemoryDoc = store.documents.get(write.docId)

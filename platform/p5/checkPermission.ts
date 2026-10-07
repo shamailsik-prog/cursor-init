@@ -7,7 +7,70 @@ export type PermissionDecision = {
   reason: string
 }
 
+/** The only actions the accounts role may take (L17.6: getIntimationRegister, recordAccountsEntry). */
+export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set([
+  "intimation_register",
+  "record_accounts_entry",
+])
+
+/**
+ * P5 permission check (Layer 18 §4.5): "returns allow/deny with reason; logs to
+ * auditPrivilegeAccess". Every decision appends exactly one `permission_check` row to the
+ * spine audit log. What "fail closed" means here, precisely:
+ *   - if the in-process append throws, the decision is deny `audit_unavailable`;
+ *   - the durable write happens when the request ends: `withSession` persists every row the
+ *     request created through the audit repository before the response is returned, and
+ *     answers 503 AUDIT_UNAVAILABLE if that fails. A read therefore never returns data whose
+ *     access decision was not durably audited; a write whose effect already committed still
+ *     gets 503 and is logged.
+ * Awaiting the durable append *before* returning allow needs an async P5 — the true fix,
+ * tracked as a follow-up (checkPermission is synchronous at ~225 call sites).
+ */
 export function checkPermission(
+  store: SpineStore,
+  userId: string,
+  action: string,
+  matterId?: string,
+  extra?: { scope?: "own_matters" }
+): PermissionDecision {
+  const decision = decide(store, userId, action, matterId, extra)
+  try {
+    appendPermissionAudit(store, userId, action, matterId, decision)
+  } catch {
+    return { allow: false, reason: "audit_unavailable" }
+  }
+  return decision
+}
+
+function appendPermissionAudit(
+  store: SpineStore,
+  userId: string,
+  action: string,
+  matterId: string | undefined,
+  decision: PermissionDecision
+): void {
+  const user = store.users.get(userId)
+  const matter = matterId ? store.matters.get(matterId) : undefined
+  const classification: Classification = matter
+    ? isClassification(matter.classification)
+      ? matter.classification
+      : "privileged-restricted"
+    : "internal"
+  store.audit.push({
+    id: store.id("aud"),
+    // A decision with no resolvable principal is still recorded (under the matter's firm
+    // when known) so the write-through never drops it for want of a firm.
+    firmId: user?.firmId ?? matter?.firmId ?? "_unresolved",
+    at: Date.now(),
+    action: "permission_check",
+    actorId: userId,
+    target: matterId ?? action,
+    classification,
+    reason: `${decision.allow ? "allow" : "deny"}:${action}:${decision.reason}`,
+  })
+}
+
+function decide(
   store: SpineStore,
   userId: string,
   action: string,
@@ -16,6 +79,19 @@ export function checkPermission(
 ): PermissionDecision {
   const user = store.users.get(userId)
   if (!user) return { allow: false, reason: "no-user" }
+
+  // L17.6 #41: "The accounts role is defined in L4.7 with read access to the intimation
+  // register only — no matter documents." Membership does not widen it.
+  if (user.role === "accounts") {
+    if (!ACCOUNTS_REGISTER_ACTIONS.has(action)) {
+      return { allow: false, reason: "accounts-register-only" }
+    }
+    if (matterId) {
+      const matter = store.matters.get(matterId)
+      if (!matter || matter.firmId !== user.firmId) return { allow: false, reason: "cross-firm" }
+    }
+    return { allow: true, reason: "accounts-register" }
+  }
 
   if (user.role === "intern" && (action === "research" || action === "draft")) {
     return { allow: false, reason: "intern-channel-denied" }

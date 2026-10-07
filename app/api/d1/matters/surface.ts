@@ -15,6 +15,12 @@ export const BodySchema = z.discriminatedUnion("action", [
     memberUserIds: z.array(idField).max(200).optional(),
   }),
   z.object({
+    action: z.literal("add_member"),
+    actorId: idField,
+    matterId: idField,
+    userId: idField,
+  }),
+  z.object({
     action: z.literal("confirm_engagement"),
     actorId: idField,
     matterId: idField,

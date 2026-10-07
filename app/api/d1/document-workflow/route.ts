@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { BodySchema, DOCUMENT_WORKFLOW_SURFACE } from "./surface"
+import { canReadDocument } from "@/platform/p5/documentAccess"
 import { z } from "zod"
 import { DEFAULT_JSON_BODY_BYTES, parseBody, readJsonLimited } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
@@ -12,7 +13,7 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { type Classification } from "@/platform/p1/types"
-import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
@@ -58,10 +59,7 @@ function canViewWorkflowDocument(
 ): boolean {
   const user = store.users.get(userId)
   if (!user) return false
-  if (user.firmId !== doc.firmId) return false
-  if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(doc.classification)) return false
-  if (doc.matterId) return store.members.has(store.memberKey(doc.matterId, userId))
-  return user.role !== "client" && user.role !== "intern"
+  return canReadDocument(store, user, doc)
 }
 
 async function persistWorkflowEventsSince(

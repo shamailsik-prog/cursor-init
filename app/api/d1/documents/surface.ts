@@ -11,7 +11,8 @@ export const BodySchema = z.discriminatedUnion("action", [
     matterId: idField.nullable().optional(),
     contentBase64: base64Field,
     sourceChannel: z.enum(["web", "team_portal", "whatsapp", "bulk"]),
-    classification: classificationField,
+    // Optional: an unlabelled upload defaults to privileged (L17.3), floored at the matter.
+    classification: classificationField.optional(),
   }),
 ])
 

@@ -12,7 +12,7 @@ type OpsActor = {
 function requireOpsActor(store: SpineStore, userId: string): OpsActor {
   const actor = store.users.get(userId)
   if (!actor) throw new PublicError("unknown actor")
-  if (actor.role === "client" || actor.role === "intern") {
+  if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     throw new PublicError("actor role not allowed for court ops")
   }
   return actor

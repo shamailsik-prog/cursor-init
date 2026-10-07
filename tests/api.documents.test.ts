@@ -87,6 +87,61 @@ describe("POST/GET /api/d1/documents", () => {
     expect(second.result.ocrJobs).toBe(1)
   })
 
+  it("scopes content-hash dedup to the matter: a non-member re-uploading another matter's file gets a new document in their own matter (R-2)", async () => {
+    const store = getRuntimeStore()
+    const partnerOnly = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Partner-only matter",
+      courtId: "SHC",
+      classification: "privileged",
+    })
+    addMember(store, partnerOnly.id, "partner_a", "firmA")
+    const clerkMatter = seedMatter("internal")
+    const bytes = b64("%PDF-shared-evidence%")
+
+    const original = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId: partnerOnly.id,
+        contentBase64: bytes,
+        sourceChannel: "web",
+        classification: "privileged",
+      },
+      "0d6b7e1f-2a3c-4d5e-8f60-718293a4b5c6"
+    )
+    expect(original.status).toBe(200)
+    const originalDoc = ((await original.json()) as { result: { doc: { id: string } } }).result.doc
+
+    const dup = await post(
+      {
+        action: "ingest",
+        actorId: "clerk_a",
+        firmId: "firmA",
+        matterId: clerkMatter,
+        contentBase64: bytes,
+        sourceChannel: "web",
+        classification: "confidential",
+      },
+      "1e7c8f20-3b4d-4e6f-9071-8293a4b5c6d7"
+    )
+    expect(dup.status).toBe(200)
+    const dupJson = (await dup.json()) as {
+      result: { reused: boolean; ocrJobs: number; doc: { id: string; matterId: string; classification: string } }
+    }
+    expect(dupJson.result.reused).toBe(false)
+    expect(dupJson.result.doc.id).not.toBe(originalDoc.id)
+    expect(dupJson.result.doc.matterId).toBe(clerkMatter)
+    // Review R1 #3 / E-30: the caller's own label; other matters are never consulted.
+    expect(dupJson.result.doc.classification).toBe("confidential")
+    expect(dupJson.result.ocrJobs).toBe(1)
+    // The other matter's record is untouched (no classification side effects either way).
+    expect(store.documents.get(originalDoc.id)?.classification).toBe("privileged")
+    expect(store.documents.get(originalDoc.id)?.matterId).toBe(partnerOnly.id)
+  })
+
   it("rejects same key with different payload", async () => {
     const matterId = seedMatter("internal")
     const key = "a47956f0-f9f7-4474-a66c-c533f4b8ecf8"
@@ -116,6 +171,96 @@ describe("POST/GET /api/d1/documents", () => {
     )
     expect(a.status).toBe(200)
     expect(b.status).toBe(409)
+  })
+
+  it("defaults an unlabelled upload to privileged, floored at the matter's classification (L17.3)", async () => {
+    const internalMatter = seedMatter("internal")
+    const unlabelled = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId: internalMatter,
+        contentBase64: b64("%PDF-client-letter%"),
+        sourceChannel: "whatsapp",
+      },
+      "2a3b4c5d-6e7f-4081-9a2b-3c4d5e6f7a81"
+    )
+    expect(unlabelled.status).toBe(200)
+    const one = (await unlabelled.json()) as { result: { doc: { classification: string } } }
+    expect(one.result.doc.classification).toBe("privileged")
+
+    const store = getRuntimeStore()
+    const restricted = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Partner-only",
+      courtId: "SHC",
+      classification: "privileged-restricted",
+    })
+    addMember(store, restricted.id, "partner_a", "firmA")
+    const floored = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId: restricted.id,
+        contentBase64: b64("%PDF-restricted%"),
+        sourceChannel: "web",
+      },
+      "3b4c5d6e-7f80-4192-8b3c-4d5e6f7a8b92"
+    )
+    expect(floored.status).toBe(200)
+    const two = (await floored.json()) as { result: { doc: { classification: string } } }
+    expect(two.result.doc.classification).toBe("privileged-restricted")
+
+    const explicit = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId: internalMatter,
+        contentBase64: b64("%PDF-public-order%"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      "4c5d6e7f-8091-42a3-9c4d-5e6f7a8b9ca3"
+    )
+    const three = (await explicit.json()) as { result: { doc: { classification: string } } }
+    expect(three.result.doc.classification).toBe("internal")
+  })
+
+  it("floors client-sourced uploads (whatsapp) at privileged even with an explicit lower label (review R1 #9)", async () => {
+    const matterId = seedMatter("internal")
+    const viaWhatsapp = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: b64("%PDF-client-voice-note%"),
+        sourceChannel: "whatsapp",
+        classification: "internal",
+      },
+      "5d6e7f80-91a2-43b4-8c5d-6e7f8091a2b4"
+    )
+    expect(viaWhatsapp.status).toBe(200)
+    const w = (await viaWhatsapp.json()) as { result: { doc: { classification: string } } }
+    expect(w.result.doc.classification).toBe("privileged")
+    const viaWeb = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: b64("%PDF-staff-note%"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      "6e7f8091-a2b3-44c5-9d6e-7f8091a2b3c5"
+    )
+    const web = (await viaWeb.json()) as { result: { doc: { classification: string } } }
+    expect(web.result.doc.classification).toBe("internal")
   })
 
   it("enforces matter classification floor and firm/member boundaries", async () => {

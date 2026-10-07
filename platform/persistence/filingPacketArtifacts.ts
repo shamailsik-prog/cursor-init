@@ -15,7 +15,7 @@ export function buildFilingPacketArtifactRow(
 ): FilingPacketArtifactRow {
   const draftNote = draft ? undefined : "draft record not found"
   const citationNote =
-    filingPackage.citationStatus === "OK" ? undefined : "citation gate is overruled"
+    filingPackage.citationStatus === "OK" ? undefined : "citation gate is not satisfied"
   const temporalNote =
     filingPackage.temporalAllOk ? undefined : "temporal gate has mismatch"
   const approvalNote =
