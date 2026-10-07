@@ -24,7 +24,6 @@ import {
   buildClientSearchIndexRow,
   buildMatterSearchIndexRow,
 } from "@/platform/persistence/matterClientSearchIndex"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -488,7 +487,6 @@ async function handlePost(request: Request) {
       }
       await repos.matterReportExportAnalytics.upsert(nextRow)
       store.matterReportExportAnalytics.set(nextRow.id, nextRow)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "reporting_matter_export_recorded",
         actorId: actor.id,
@@ -496,7 +494,6 @@ async function handlePost(request: Request) {
         classification: matter.classification,
         reason: `${nextRow.lastExportScope}:${nextRow.lastExportFormat}:${nextRow.lastExportReason}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: actionOf(REPORTING_SURFACE, parsed),
         exportAnalytics: nextRow,
@@ -518,7 +515,6 @@ async function handlePost(request: Request) {
     )
     await repos.matterReportRelevanceSnapshots.upsert(nextSnapshot)
     store.matterReportRelevanceSnapshots.set(nextSnapshot.id, nextSnapshot)
-    const priorAuditCount = store.audit.length
     store.audit.push({
       action: "reporting_matter_relevance_recomputed",
       actorId: actor.id,
@@ -526,7 +522,6 @@ async function handlePost(request: Request) {
       classification: matter.classification,
       reason: recomputeReason,
     })
-    await persistAuditEntriesSince(store, repos, priorAuditCount)
     const payload = {
       action: actionOf(REPORTING_SURFACE, parsed),
       relevanceSnapshot: nextSnapshot,

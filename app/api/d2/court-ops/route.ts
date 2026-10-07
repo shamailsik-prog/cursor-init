@@ -12,7 +12,6 @@ import {
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildCourtOpsActivityRow, buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import { WHATSAPP_GRAMMAR_HELP, handleWhatsApp, whatsAppCommandName } from "@/services/d2-1/whatsapp"
 import {
@@ -263,7 +262,6 @@ async function handlePost(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
-      const priorAuditCount = store.audit.length
       acknowledgeCourtOpsItem(store, {
         actorId: parsed.actorId,
         queueType: parsed.queueType,
@@ -287,7 +285,6 @@ async function handlePost(request: Request) {
           detail: parsed.reason ?? "acknowledged by operator",
         })
       )
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "acknowledge_item",
         queueType: parsed.queueType,
@@ -305,7 +302,6 @@ async function handlePost(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
-      const priorAuditCount = store.audit.length
       resolveFollowUp(store, {
         actorId: parsed.actorId,
         followUpId: parsed.followUpId,
@@ -330,7 +326,6 @@ async function handlePost(request: Request) {
           })
         )
       }
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "resolve_follow_up", followUpId: parsed.followUpId }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -344,7 +339,6 @@ async function handlePost(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
-      const priorAuditCount = store.audit.length
       const priorEvents = store.workflowEvents.length
       const row = resolveWorkflowBlocker(store, {
         actorId: parsed.actorId,
@@ -354,7 +348,6 @@ async function handlePost(request: Request) {
       })
       await repos.workflow.createOrUpdate(row)
       await persistWorkflowEventsSince(repos, store, priorEvents, "court_ops_resolve_workflow")
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = { action: "resolve_workflow", row }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

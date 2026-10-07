@@ -6,8 +6,20 @@ import {
 } from "@firebase/rules-unit-testing"
 import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
 import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
-import { newStore } from "@/platform/spine/store"
+import { normalizeAuditEntryInPlace } from "@/platform/persistence/auditWriteThrough"
+import { isAuditRowPersisted, markAuditRowPersisted } from "@/platform/audit/requestAudit"
+import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
+import { newStore, type AuditEntry, type SpineStore } from "@/platform/spine/store"
+
+/** Persists rows as the request flush does: normalise in place, append, mark persisted. */
+async function persistRows(store: SpineStore, repos: SpineRepositories, rows: readonly AuditEntry[]) {
+  for (const row of rows) {
+    if (isAuditRowPersisted(row)) continue
+    normalizeAuditEntryInPlace(store, row)
+    await repos.audit.append(row)
+    markAuditRowPersisted(row)
+  }
+}
 
 const RULES = readFileSync("firestore.rules", "utf8")
 
@@ -5072,8 +5084,8 @@ describe("Firestore repository adapters", () => {
       runtime.audit.push(entry("mat_overlap_a"))
       const priorB = runtime.audit.length
       runtime.audit.push(entry("mat_overlap_b"))
-      await persistAuditEntriesSince(runtime, repos, 0)
-      await expect(persistAuditEntriesSince(runtime, repos, priorB)).resolves.toBeUndefined()
+      await persistRows(runtime, repos, runtime.audit.slice(0))
+      await expect(persistRows(runtime, repos, runtime.audit.slice(priorB))).resolves.toBeUndefined()
       const overlapRows = (await repos.audit.listByFirm("firmA")).filter((row) =>
         row.target.startsWith("mat_overlap_")
       )

@@ -3,9 +3,21 @@ import {
   AuditAppendConflictError,
   createMemoryRepositories,
 } from "@/platform/persistence/spineRepositories"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
+import { normalizeAuditEntryInPlace } from "@/platform/persistence/auditWriteThrough"
+import { isAuditRowPersisted, markAuditRowPersisted } from "@/platform/audit/requestAudit"
+import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { syncFirmAudit } from "@/platform/persistence/auditSync"
-import { newStore, type AuditEntry } from "@/platform/spine/store"
+import { newStore, type AuditEntry, type SpineStore } from "@/platform/spine/store"
+
+/** Persists rows as the request flush does: normalise in place, append, mark persisted. */
+async function persistRows(store: SpineStore, repos: SpineRepositories, rows: readonly AuditEntry[]) {
+  for (const row of rows) {
+    if (isAuditRowPersisted(row)) continue
+    normalizeAuditEntryInPlace(store, row)
+    await repos.audit.append(row)
+    markAuditRowPersisted(row)
+  }
+}
 
 function auditRow(overrides: Partial<AuditEntry> = {}): AuditEntry {
   return {
@@ -72,7 +84,7 @@ describe("audit log append-only (memory repository)", () => {
       target: "mat_1",
       classification: "internal",
     })
-    await persistAuditEntriesSince(store, repos, prior)
+    await persistRows(store, repos, store.audit.slice(prior))
     const ids = store.audit.slice(prior).map((row) => row.id)
     expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true)
     expect(new Set(ids).size).toBe(2)
@@ -99,10 +111,10 @@ describe("audit log append-only (memory repository)", () => {
     const priorB = runtime.audit.length
     pushEntry(runtime, "mat_b") // request B, interleaved before A persists
     // A persists its range, which also covers B's row; then B persists its own range.
-    await persistAuditEntriesSince(runtime, repos, priorA)
-    await expect(persistAuditEntriesSince(runtime, repos, priorB)).resolves.toBeUndefined()
+    await persistRows(runtime, repos, runtime.audit.slice(priorA))
+    await expect(persistRows(runtime, repos, runtime.audit.slice(priorB))).resolves.toBeUndefined()
     pushEntry(runtime, "mat_c")
-    await expect(persistAuditEntriesSince(runtime, repos, priorA)).resolves.toBeUndefined()
+    await expect(persistRows(runtime, repos, runtime.audit.slice(priorA))).resolves.toBeUndefined()
     const rows = await repos.audit.listByFirm("firmA")
     expect(rows.map((row) => row.target).sort()).toEqual(["mat_a", "mat_b", "mat_c"])
   })
@@ -113,9 +125,9 @@ describe("audit log append-only (memory repository)", () => {
     const repos = createMemoryRepositories(backing)
     pushEntry(runtime, "mat_a")
     pushEntry(runtime, "mat_b")
-    await persistAuditEntriesSince(runtime, repos, 0)
+    await persistRows(runtime, repos, runtime.audit.slice(0))
     await syncFirmAudit(runtime, repos, "firmA")
-    await expect(persistAuditEntriesSince(runtime, repos, 0)).resolves.toBeUndefined()
+    await expect(persistRows(runtime, repos, runtime.audit.slice(0))).resolves.toBeUndefined()
     expect(await repos.audit.listByFirm("firmA")).toHaveLength(2)
   })
 
@@ -124,10 +136,10 @@ describe("audit log append-only (memory repository)", () => {
     const backing = newStore()
     const repos = createMemoryRepositories(backing)
     pushEntry(runtime, "mat_a")
-    await persistAuditEntriesSince(runtime, repos, 0)
+    await persistRows(runtime, repos, runtime.audit.slice(0))
     const persisted = runtime.audit[0]!
     runtime.audit[0] = { ...persisted, target: "mat_tampered" }
-    await expect(persistAuditEntriesSince(runtime, repos, 0)).rejects.toBeInstanceOf(
+    await expect(persistRows(runtime, repos, runtime.audit.slice(0))).rejects.toBeInstanceOf(
       AuditAppendConflictError
     )
     const rows = await repos.audit.listByFirm("firmA")

@@ -24,7 +24,6 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
@@ -190,7 +189,6 @@ async function handlePost(request: Request) {
   }
 
   try {
-    const priorAuditCount = store.audit.length
     const actor = requireActor(parsed.actorId, parsed.firmId)
     await syncFirmMembers(store, repos, actor.firmId)
     const matterId = parsed.matterId ?? null
@@ -283,7 +281,6 @@ async function handlePost(request: Request) {
       classification: doc.classification,
       reason: write.reused ? "reused" : "created",
     })
-    await persistAuditEntriesSince(store, repos, priorAuditCount)
 
     const payload = {
       action: "ingest",

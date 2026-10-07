@@ -18,7 +18,6 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import {
   addMember,
@@ -207,7 +206,6 @@ async function handlePost(request: Request) {
         }
         throw err
       }
-      const priorAuditCount = store.audit.length
       const matter = {
         id: store.id("mat"),
         firmId: parsed.firmId,
@@ -234,7 +232,6 @@ async function handlePost(request: Request) {
         target: matter.id,
         classification: matter.classification,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "create",
         matter,
@@ -248,7 +245,6 @@ async function handlePost(request: Request) {
       await syncFirmMembers(store, repo, actor.firmId)
       const matter = store.matters.get(parsed.matterId) ?? (await repo.matters.get(parsed.matterId))
       if (matter) store.matters.set(matter.id, matter)
-      const priorAuditCount = store.audit.length
       let member: { matterId: string; userId: string; firmId: string }
       try {
         member = assignMatterMember(store, {
@@ -263,7 +259,6 @@ async function handlePost(request: Request) {
         throw err
       }
       await repo.members.upsert(member)
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = { action: "add_member", member }
       idempotency.set(key, payload, fingerprint)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -276,7 +271,6 @@ async function handlePost(request: Request) {
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
-      const priorAuditCount = store.audit.length
       const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
       const updatedMatter = store.matters.get(parsed.matterId)
@@ -298,7 +292,6 @@ async function handlePost(request: Request) {
         target: parsed.matterId,
         classification: matter.classification,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "confirm_engagement",
         matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
@@ -325,7 +318,6 @@ async function handlePost(request: Request) {
           { status: 403 }
         )
       }
-      const priorAuditCount = store.audit.length
       const priorFollowUpIds = new Set(store.followUps.map((row) => row.id))
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)
       const updatedMatter = store.matters.get(parsed.matterId)
@@ -347,7 +339,6 @@ async function handlePost(request: Request) {
         classification: matter.classification,
         reason: result.status,
       })
-      await persistAuditEntriesSince(store, repo, priorAuditCount)
       const payload = {
         action: "record_case_number",
         result,

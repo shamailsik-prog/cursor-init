@@ -16,7 +16,6 @@ import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmEntities } from "@/platform/persistence/entitySync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { buildClientSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import { conflictCheck, createClient } from "@/services/d1-1/clients"
 
@@ -151,7 +150,6 @@ async function handlePost(request: Request) {
       }
 
       await syncFirmEntities(store, repos, parsed.firmId)
-      const priorAuditCount = store.audit.length
       const existingLinkKeys = new Set(
         store.links
           .filter((row) => row.firmId === parsed.firmId)
@@ -179,7 +177,6 @@ async function handlePost(request: Request) {
         classification: entity.classification,
         firmId: entity.firmId,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "create",
         entity,

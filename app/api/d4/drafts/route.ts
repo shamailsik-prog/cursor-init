@@ -17,7 +17,6 @@ import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import {
   buildDraftTemplateAnalyticsRow,
   draftTemplateAnalyticsId,
@@ -320,9 +319,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       const actor = store.users.get(input.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
       const result = runDraftPreflight(store, input)
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: "preflight",
         result,
@@ -343,7 +340,6 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       const actor = store.users.get(preflightInput.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
-      const priorAuditCount = store.audit.length
       // Pre-check only for the 422 body; composeDraft re-runs the gate and records any override.
       const gate = runDraftPreflight(store, preflightInput, { recordOverride: false })
       if (!gate.ok) {
@@ -367,7 +363,6 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         target: draft.id,
         classification: draft.classification,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       await repos.drafts.create(draft)
       const template = listTemplateCatalog("").find((item) => item.id === draft.templateId)
       const analyticsId = draftTemplateAnalyticsId(draft.templateId)

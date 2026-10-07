@@ -576,7 +576,6 @@ import {
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
-import { persistAuditEntriesSince } from "@/platform/persistence/auditWriteThrough"
 import { checkPermission } from "@/platform/p5/checkPermission"
 
 const idempotency = new IdempotencyCache<unknown>(24 * 60 * 60 * 1000, 1000)
@@ -19161,7 +19160,6 @@ if (
       }
       await repos.workflowOpsAlertDigests.upsert(next)
       store.workflowOpsAlertDigests.set(next.id, next)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_digest_acknowledged",
         actorId: actor.id,
@@ -19169,7 +19167,6 @@ if (
         classification: next.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: next,
@@ -19191,7 +19188,6 @@ if (
       }
       await repos.workflowOpsAlertDigests.upsert(next)
       store.workflowOpsAlertDigests.set(next.id, next)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_digest_snoozed",
         actorId: actor.id,
@@ -19199,7 +19195,6 @@ if (
         classification: next.classification,
         reason: `${reason}:${snoozedUntil}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: next,
@@ -19221,7 +19216,6 @@ if (
       }
       await repos.workflowOpsAlertAttestations.upsert(nextAttestation)
       store.workflowOpsAlertAttestations.set(nextAttestation.id, nextAttestation)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_attested",
         actorId: actor.id,
@@ -19229,7 +19223,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19253,7 +19246,6 @@ if (
       }
       await repos.workflowOpsAlertEscalationLedgers.upsert(nextEscalation)
       store.workflowOpsAlertEscalationLedgers.set(nextEscalation.id, nextEscalation)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_escalation_opened",
         actorId: actor.id,
@@ -19261,7 +19253,6 @@ if (
         classification: nextEscalation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19290,7 +19281,6 @@ if (
       }
       await repos.workflowOpsAlertEscalationLedgers.upsert(nextEscalation)
       store.workflowOpsAlertEscalationLedgers.set(nextEscalation.id, nextEscalation)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_escalation_owner_assigned",
         actorId: actor.id,
@@ -19298,7 +19288,6 @@ if (
         classification: nextEscalation.classification,
         reason: `${reason}:${ownerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19333,7 +19322,6 @@ if (
       await repos.workflowOpsAlertAttestations.upsert(nextAttestation)
       store.workflowOpsAlertAttestations.set(nextAttestation.id, nextAttestation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_attestation_dispute_opened",
         actorId: actor.id,
@@ -19341,7 +19329,6 @@ if (
         classification: nextDispute.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19373,7 +19360,6 @@ if (
       await repos.workflowOpsAlertAttestationDisputes.upsert(nextDispute)
       store.workflowOpsAlertAttestationDisputes.set(nextDispute.id, nextDispute)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_attestation_dispute_reviewer_assigned",
         actorId: actor.id,
@@ -19381,7 +19367,6 @@ if (
         classification: nextDispute.classification,
         reason: `${reason}:${reviewerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19422,7 +19407,6 @@ if (
       await repos.workflowOpsAlertAttestations.upsert(nextAttestation)
       store.workflowOpsAlertAttestations.set(nextAttestation.id, nextAttestation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_attestation_dispute_resolved",
         actorId: actor.id,
@@ -19430,7 +19414,6 @@ if (
         classification: nextDispute.classification,
         reason: `${reason}:${resolutionOutcome}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19454,7 +19437,6 @@ if (
       await repos.workflowOpsAlertEscalationClosures.upsert(nextClosure)
       store.workflowOpsAlertEscalationClosures.set(nextClosure.id, nextClosure)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_escalation_closure_checkpoint_recorded",
         actorId: actor.id,
@@ -19462,7 +19444,6 @@ if (
         classification: nextClosure.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19499,7 +19480,6 @@ if (
       await repos.workflowOpsAlertEscalationLedgers.upsert(nextEscalation)
       store.workflowOpsAlertEscalationLedgers.set(nextEscalation.id, nextEscalation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_escalation_closure_closed",
         actorId: actor.id,
@@ -19507,7 +19487,6 @@ if (
         classification: nextClosure.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19545,7 +19524,6 @@ if (
       await repos.workflowOpsAlertEscalationLedgers.upsert(nextEscalation)
       store.workflowOpsAlertEscalationLedgers.set(nextEscalation.id, nextEscalation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_escalation_closure_reopened",
         actorId: actor.id,
@@ -19553,7 +19531,6 @@ if (
         classification: nextClosure.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19592,7 +19569,6 @@ if (
       await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert(nextEnforcement)
       store.workflowOpsAlertDisputeEnforcementLedgers.set(nextEnforcement.id, nextEnforcement)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_dispute_enforcement_started",
         actorId: actor.id,
@@ -19600,7 +19576,6 @@ if (
         classification: nextEnforcement.classification,
         reason: `${reason}:${ownerId ?? "unassigned"}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19630,7 +19605,6 @@ if (
       await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert(nextEnforcement)
       store.workflowOpsAlertDisputeEnforcementLedgers.set(nextEnforcement.id, nextEnforcement)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_dispute_enforcement_completed",
         actorId: actor.id,
@@ -19638,7 +19612,6 @@ if (
         classification: nextEnforcement.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19663,7 +19636,6 @@ if (
       await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert(nextEnforcement)
       store.workflowOpsAlertDisputeEnforcementLedgers.set(nextEnforcement.id, nextEnforcement)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_dispute_enforcement_waived",
         actorId: actor.id,
@@ -19671,7 +19643,6 @@ if (
         classification: nextEnforcement.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19697,7 +19668,6 @@ if (
       await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert(nextReconciliation)
       store.workflowOpsAlertClosureDebtReconciliationDigests.set(nextReconciliation.id, nextReconciliation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_closure_reopen_debt_flagged",
         actorId: actor.id,
@@ -19705,7 +19675,6 @@ if (
         classification: nextReconciliation.classification,
         reason: `${reason}:${nextReconciliation.outstandingDebtCount}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19736,7 +19705,6 @@ if (
       await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert(nextReconciliation)
       store.workflowOpsAlertClosureDebtReconciliationDigests.set(nextReconciliation.id, nextReconciliation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_closure_debt_reconciliation_started",
         actorId: actor.id,
@@ -19744,7 +19712,6 @@ if (
         classification: nextReconciliation.classification,
         reason: `${reason}:${ownerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19770,7 +19737,6 @@ if (
       await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert(nextReconciliation)
       store.workflowOpsAlertClosureDebtReconciliationDigests.set(nextReconciliation.id, nextReconciliation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_closure_debt_reconciliation_resolved",
         actorId: actor.id,
@@ -19778,7 +19744,6 @@ if (
         classification: nextReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19805,7 +19770,6 @@ if (
       await repos.workflowOpsAlertEnforcementAttestations.upsert(nextAttestation)
       store.workflowOpsAlertEnforcementAttestations.set(nextAttestation.id, nextAttestation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_dispute_enforcement_attested",
         actorId: actor.id,
@@ -19813,7 +19777,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19848,7 +19811,6 @@ if (
       await repos.workflowOpsAlertEnforcementAttestations.upsert(nextAttestation)
       store.workflowOpsAlertEnforcementAttestations.set(nextAttestation.id, nextAttestation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_dispute_enforcement_attestation_reopened",
         actorId: actor.id,
@@ -19856,7 +19818,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19892,7 +19853,6 @@ if (
       await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(nextVariance)
       store.workflowOpsAlertClosureDebtVarianceDigests.set(nextVariance.id, nextVariance)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_closure_debt_variance_opened",
         actorId: actor.id,
@@ -19900,7 +19860,6 @@ if (
         classification: nextVariance.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19931,7 +19890,6 @@ if (
       await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(nextVariance)
       store.workflowOpsAlertClosureDebtVarianceDigests.set(nextVariance.id, nextVariance)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_closure_debt_variance_owner_assigned",
         actorId: actor.id,
@@ -19939,7 +19897,6 @@ if (
         classification: nextVariance.classification,
         reason: `${reason}:${ownerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -19966,7 +19923,6 @@ if (
       await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(nextVariance)
       store.workflowOpsAlertClosureDebtVarianceDigests.set(nextVariance.id, nextVariance)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_closure_debt_variance_resolved",
         actorId: actor.id,
@@ -19974,7 +19930,6 @@ if (
         classification: nextVariance.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20024,7 +19979,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDigests.upsert(nextWaiverExpiryDigest)
       store.workflowOpsAlertWaiverExpiryDigests.set(nextWaiverExpiryDigest.id, nextWaiverExpiryDigest)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_enforcement_waiver_created",
         actorId: actor.id,
@@ -20032,7 +19986,6 @@ if (
         classification: nextWaiver.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20074,7 +20027,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDigests.upsert(nextWaiverExpiryDigest)
       store.workflowOpsAlertWaiverExpiryDigests.set(nextWaiverExpiryDigest.id, nextWaiverExpiryDigest)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_enforcement_waiver_attested",
         actorId: actor.id,
@@ -20082,7 +20034,6 @@ if (
         classification: nextWaiver.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20131,7 +20082,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDigests.upsert(nextWaiverExpiryDigest)
       store.workflowOpsAlertWaiverExpiryDigests.set(nextWaiverExpiryDigest.id, nextWaiverExpiryDigest)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_enforcement_waiver_waived",
         actorId: actor.id,
@@ -20139,7 +20089,6 @@ if (
         classification: nextWaiver.classification,
         reason: `${reason}:${waiverExpiresAt ?? "no_expiry"}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20177,7 +20126,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDigests.upsert(nextWaiverExpiryDigest)
       store.workflowOpsAlertWaiverExpiryDigests.set(nextWaiverExpiryDigest.id, nextWaiverExpiryDigest)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_digest_acknowledged",
         actorId: actor.id,
@@ -20185,7 +20133,6 @@ if (
         classification: nextWaiverExpiryDigest.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20243,7 +20190,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDigests.upsert(nextWaiverExpiryDigest)
       store.workflowOpsAlertWaiverExpiryDigests.set(nextWaiverExpiryDigest.id, nextWaiverExpiryDigest)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_digest_extended",
         actorId: actor.id,
@@ -20251,7 +20197,6 @@ if (
         classification: nextWaiverExpiryDigest.classification,
         reason: `${reason}:${waiverExpiresAt}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20310,7 +20255,6 @@ if (
       await repos.workflowOpsAlertVarianceRemediationSlaLedgers.upsert(nextSlaLedger)
       store.workflowOpsAlertVarianceRemediationSlaLedgers.set(nextSlaLedger.id, nextSlaLedger)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_queued",
         actorId: actor.id,
@@ -20318,7 +20262,6 @@ if (
         classification: nextQueue.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20383,7 +20326,6 @@ if (
       await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(nextVariance)
       store.workflowOpsAlertClosureDebtVarianceDigests.set(nextVariance.id, nextVariance)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_owner_assigned",
         actorId: actor.id,
@@ -20391,7 +20333,6 @@ if (
         classification: nextQueue.classification,
         reason: `${reason}:${ownerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20450,7 +20391,6 @@ if (
       await repos.workflowOpsAlertClosureDebtVarianceDigests.upsert(nextVariance)
       store.workflowOpsAlertClosureDebtVarianceDigests.set(nextVariance.id, nextVariance)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_resolved",
         actorId: actor.id,
@@ -20458,7 +20398,6 @@ if (
         classification: nextQueue.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20502,7 +20441,6 @@ if (
       await repos.workflowOpsAlertVarianceRemediationSlaLedgers.upsert(nextSlaLedger)
       store.workflowOpsAlertVarianceRemediationSlaLedgers.set(nextSlaLedger.id, nextSlaLedger)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_sla_acknowledged",
         actorId: actor.id,
@@ -20510,7 +20448,6 @@ if (
         classification: nextSlaLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20548,7 +20485,6 @@ if (
       await repos.workflowOpsAlertVarianceRemediationSlaLedgers.upsert(nextSlaLedger)
       store.workflowOpsAlertVarianceRemediationSlaLedgers.set(nextSlaLedger.id, nextSlaLedger)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_sla_resolved",
         actorId: actor.id,
@@ -20556,7 +20492,6 @@ if (
         classification: nextSlaLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20594,7 +20529,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDisputes.upsert(nextDispute)
       store.workflowOpsAlertWaiverExpiryDisputes.set(nextDispute.id, nextDispute)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_opened",
         actorId: actor.id,
@@ -20602,7 +20536,6 @@ if (
         classification: nextDispute.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20647,7 +20580,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDisputes.upsert(nextDispute)
       store.workflowOpsAlertWaiverExpiryDisputes.set(nextDispute.id, nextDispute)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_reviewer_assigned",
         actorId: actor.id,
@@ -20655,7 +20587,6 @@ if (
         classification: nextDispute.classification,
         reason: `${reason}:${reviewerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20696,7 +20627,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDisputes.upsert(nextDispute)
       store.workflowOpsAlertWaiverExpiryDisputes.set(nextDispute.id, nextDispute)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_resolved",
         actorId: actor.id,
@@ -20704,7 +20634,6 @@ if (
         classification: nextDispute.classification,
         reason: `${reason}:${resolutionOutcome}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20745,7 +20674,6 @@ if (
       await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.upsert(nextEscalation)
       store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.set(nextEscalation.id, nextEscalation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_sla_breach_escalation_opened",
         actorId: actor.id,
@@ -20753,7 +20681,6 @@ if (
         classification: nextEscalation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20799,7 +20726,6 @@ if (
       await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.upsert(nextEscalation)
       store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.set(nextEscalation.id, nextEscalation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_sla_breach_escalation_owner_assigned",
         actorId: actor.id,
@@ -20807,7 +20733,6 @@ if (
         classification: nextEscalation.classification,
         reason: `${reason}:${ownerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20847,7 +20772,6 @@ if (
       await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.upsert(nextEscalation)
       store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.set(nextEscalation.id, nextEscalation)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_sla_breach_escalation_resolved",
         actorId: actor.id,
@@ -20855,7 +20779,6 @@ if (
         classification: nextEscalation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20901,7 +20824,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.upsert(nextAdjudication)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudications.set(nextAdjudication.id, nextAdjudication)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_opened",
         actorId: actor.id,
@@ -20909,7 +20831,6 @@ if (
         classification: nextAdjudication.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -20962,7 +20883,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.upsert(nextAdjudication)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudications.set(nextAdjudication.id, nextAdjudication)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_panel_owner_assigned",
         actorId: actor.id,
@@ -20970,7 +20890,6 @@ if (
         classification: nextAdjudication.classification,
         reason: `${reason}:${panelOwnerId}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21017,7 +20936,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.upsert(nextAdjudication)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudications.set(nextAdjudication.id, nextAdjudication)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_resolved",
         actorId: actor.id,
@@ -21025,7 +20943,6 @@ if (
         classification: nextAdjudication.classification,
         reason: `${reason}:${resolutionOutcome}`,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21079,7 +20996,6 @@ if (
         nextCheckpoint
       )
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_opened",
         actorId: actor.id,
@@ -21087,7 +21003,6 @@ if (
         classification: nextCheckpoint.classification,
         reason: checkpointOwnerId ? `${reason}:${checkpointOwnerId}` : reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21147,7 +21062,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_digest_checkpointed",
@@ -21156,7 +21070,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21221,7 +21134,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_entry_recorded",
@@ -21230,7 +21142,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21292,7 +21203,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_finalized",
@@ -21301,7 +21211,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21361,7 +21270,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_outbound_registry_registered",
@@ -21370,7 +21278,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21437,7 +21344,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_ack_recon_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attested",
@@ -21446,7 +21352,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21508,7 +21413,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_finalized",
@@ -21517,7 +21421,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21568,7 +21471,6 @@ if (
         nextCheckpoint
       )
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_recorded",
         actorId: actor.id,
@@ -21576,7 +21478,6 @@ if (
         classification: nextCheckpoint.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21625,7 +21526,6 @@ if (
         nextCheckpoint
       )
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_reopened",
         actorId: actor.id,
@@ -21633,7 +21533,6 @@ if (
         classification: nextCheckpoint.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21684,7 +21583,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.upsert(nextSlo)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.set(nextSlo.id, nextSlo)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_stewardship_opened",
         actorId: actor.id,
@@ -21692,7 +21590,6 @@ if (
         classification: nextSlo.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21748,7 +21645,6 @@ if (
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.upsert(nextSlo)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.set(nextSlo.id, nextSlo)
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_deadline_extended",
         actorId: actor.id,
@@ -21756,7 +21652,6 @@ if (
         classification: nextSlo.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21822,7 +21717,6 @@ if (
         nextDebtRemediation
       )
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_breach_acknowledged",
         actorId: actor.id,
@@ -21830,7 +21724,6 @@ if (
         classification: nextSlo.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21880,7 +21773,6 @@ if (
       }
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.upsert(nextDebt)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.set(nextDebt.id, nextDebt)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation_recorded",
         actorId: actor.id,
@@ -21888,7 +21780,6 @@ if (
         classification: nextDebt.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21928,7 +21819,6 @@ if (
       }
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.upsert(nextDebt)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.set(nextDebt.id, nextDebt)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_tier_downshifted",
         actorId: actor.id,
@@ -21936,7 +21826,6 @@ if (
         classification: nextDebt.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -21980,7 +21869,6 @@ if (
       }
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.upsert(nextDebt)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.set(nextDebt.id, nextDebt)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_breach_closure_attested",
         actorId: actor.id,
@@ -21988,7 +21876,6 @@ if (
         classification: nextDebt.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22041,7 +21928,6 @@ if (
         nextAttestation
       )
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_opened",
@@ -22050,7 +21936,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22107,7 +21992,6 @@ if (
         nextAttestation
       )
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attested",
@@ -22116,7 +22000,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22198,7 +22081,6 @@ if (
         nextExceptionReconciliation
       )
 
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_acknowledged",
@@ -22207,7 +22089,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22273,7 +22154,6 @@ if (
         nextException.id,
         nextException
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_opened",
@@ -22282,7 +22162,6 @@ if (
         classification: nextException.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22345,7 +22224,6 @@ if (
         nextException.id,
         nextException
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_owner_assigned",
@@ -22354,7 +22232,6 @@ if (
         classification: nextException.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22408,7 +22285,6 @@ if (
         nextException.id,
         nextException
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciled",
@@ -22417,7 +22293,6 @@ if (
         classification: nextException.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22494,7 +22369,6 @@ if (
         nextBurndown.id,
         nextBurndown
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_target_set",
         actorId: actor.id,
@@ -22502,7 +22376,6 @@ if (
         classification: nextBurndown.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22549,7 +22422,6 @@ if (
         nextBurndown.id,
         nextBurndown
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_backlog_attested",
         actorId: actor.id,
@@ -22557,7 +22429,6 @@ if (
         classification: nextBurndown.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22606,7 +22477,6 @@ if (
         nextBurndown.id,
         nextBurndown
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_checkpointed",
@@ -22615,7 +22485,6 @@ if (
         classification: nextBurndown.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22683,7 +22552,6 @@ if (
         nextQueue.id,
         nextQueue
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_triaged",
@@ -22692,7 +22560,6 @@ if (
         classification: nextQueue.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22752,7 +22619,6 @@ if (
         nextQueue.id,
         nextQueue
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_handoff_attested",
@@ -22761,7 +22627,6 @@ if (
         classification: nextQueue.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22825,7 +22690,6 @@ if (
         nextQueue.id,
         nextQueue
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_auto_drain_checkpointed",
@@ -22834,7 +22698,6 @@ if (
         classification: nextQueue.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22892,7 +22755,6 @@ if (
         nextSettlement.id,
         nextSettlement
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_drift_acknowledged",
@@ -22901,7 +22763,6 @@ if (
         classification: nextSettlement.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -22950,7 +22811,6 @@ if (
         nextSettlement.id,
         nextSettlement
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_target_lock_attested",
@@ -22959,7 +22819,6 @@ if (
         classification: nextSettlement.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23011,7 +22870,6 @@ if (
         nextSettlement.id,
         nextSettlement
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_rollback_resolution_closed",
@@ -23020,7 +22878,6 @@ if (
         classification: nextSettlement.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23083,7 +22940,6 @@ if (
         nextDrain.id,
         nextDrain
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_handoff_timeout_escalated",
@@ -23092,7 +22948,6 @@ if (
         classification: nextDrain.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23151,7 +23006,6 @@ if (
         nextDrain.id,
         nextDrain
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_stale_reassignment_attested",
@@ -23160,7 +23014,6 @@ if (
         classification: nextDrain.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23227,7 +23080,6 @@ if (
         nextDrain.id,
         nextDrain
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_drain_override_checkpointed",
@@ -23236,7 +23088,6 @@ if (
         classification: nextDrain.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23280,7 +23131,6 @@ if (
         nextAttestation.id,
         nextAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_post_resolution_verification_checkpointed",
@@ -23289,7 +23139,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23330,7 +23179,6 @@ if (
         nextAttestation.id,
         nextAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_lock_release_attested",
@@ -23339,7 +23187,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23385,7 +23232,6 @@ if (
         nextAttestation.id,
         nextAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_dispute_reopen_safeguarded",
@@ -23394,7 +23240,6 @@ if (
         classification: nextAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23440,7 +23285,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_forced_reconciliation_attested",
@@ -23449,7 +23293,6 @@ if (
         classification: nextReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23505,7 +23348,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reassignment_rollback_checkpointed",
@@ -23514,7 +23356,6 @@ if (
         classification: nextReconciliation.classification,
         reason: rollbackToOwnerId,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23571,7 +23412,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_timeout_reentry_controlled",
@@ -23580,7 +23420,6 @@ if (
         classification: nextReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23637,7 +23476,6 @@ if (
         nextArbitration.id,
         nextArbitration
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_verification_override_petitioned",
@@ -23646,7 +23484,6 @@ if (
         classification: nextArbitration.classification,
         reason: overrideReason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23696,7 +23533,6 @@ if (
         nextArbitration.id,
         nextArbitration
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_panel_confirmation_attested",
@@ -23705,7 +23541,6 @@ if (
         classification: nextArbitration.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23760,7 +23595,6 @@ if (
         nextArbitration.id,
         nextArbitration
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_reopen_veto_checkpointed",
@@ -23769,7 +23603,6 @@ if (
         classification: nextArbitration.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23822,7 +23655,6 @@ if (
         nextCompliance.id,
         nextCompliance
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_exception_attested",
@@ -23831,7 +23663,6 @@ if (
         classification: nextCompliance.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23892,7 +23723,6 @@ if (
         nextCompliance.id,
         nextCompliance
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_timeout_waiver_checkpointed",
@@ -23901,7 +23731,6 @@ if (
         classification: nextCompliance.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -23954,7 +23783,6 @@ if (
         nextCompliance.id,
         nextCompliance
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_reconciliation_resumed",
@@ -23963,7 +23791,6 @@ if (
         classification: nextCompliance.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24027,7 +23854,6 @@ if (
         nextDisposition.id,
         nextDisposition
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_final_ruling_issued",
@@ -24036,7 +23862,6 @@ if (
         classification: nextDisposition.classification,
         reason: rulingSummary,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24099,7 +23924,6 @@ if (
         nextDisposition.id,
         nextDisposition
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_dissent_memorialized",
@@ -24108,7 +23932,6 @@ if (
         classification: nextDisposition.classification,
         reason: dissentNote,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24171,7 +23994,6 @@ if (
         nextDisposition.id,
         nextDisposition
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_ruling_publication_checkpointed",
@@ -24180,7 +24002,6 @@ if (
         classification: nextDisposition.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24242,7 +24063,6 @@ if (
         nextDebtRetirement.id,
         nextDebtRetirement
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_exception_debt_assigned",
@@ -24251,7 +24071,6 @@ if (
         classification: nextDebtRetirement.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24312,7 +24131,6 @@ if (
         nextDebtRetirement.id,
         nextDebtRetirement
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_attested",
@@ -24321,7 +24139,6 @@ if (
         classification: nextDebtRetirement.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24390,7 +24207,6 @@ if (
         nextDebtRetirement.id,
         nextDebtRetirement
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_aging_auto_escalated",
@@ -24399,7 +24215,6 @@ if (
         classification: nextDebtRetirement.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24463,7 +24278,6 @@ if (
         nextPublicationGovernance.id,
         nextPublicationGovernance
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_publication_correction_logged",
@@ -24472,7 +24286,6 @@ if (
         classification: nextPublicationGovernance.classification,
         reason: correctionNote,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24537,7 +24350,6 @@ if (
         nextPublicationGovernance.id,
         nextPublicationGovernance
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_publication_rollback_checkpointed",
@@ -24546,7 +24358,6 @@ if (
         classification: nextPublicationGovernance.classification,
         reason: rollbackReason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24606,7 +24417,6 @@ if (
         nextPublicationGovernance.id,
         nextPublicationGovernance
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_distribution_attestation_reviewed",
@@ -24615,7 +24425,6 @@ if (
         classification: nextPublicationGovernance.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24680,7 +24489,6 @@ if (
         nextDisputeReconciliation.id,
         nextDisputeReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_opened",
@@ -24689,7 +24497,6 @@ if (
         classification: nextDisputeReconciliation.classification,
         reason: disputeReason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24747,7 +24554,6 @@ if (
         nextDisputeReconciliation.id,
         nextDisputeReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_resolved",
@@ -24756,7 +24562,6 @@ if (
         classification: nextDisputeReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24819,7 +24624,6 @@ if (
         nextDisputeReconciliation.id,
         nextDisputeReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_rollback_controlled",
@@ -24828,7 +24632,6 @@ if (
         classification: nextDisputeReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24892,7 +24695,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_channel_registered",
@@ -24901,7 +24703,6 @@ if (
         classification: nextAuditLedger.classification,
         reason: distributionChannelRegistry,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -24967,7 +24768,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_attestation_signer_roster_recorded",
@@ -24976,7 +24776,6 @@ if (
         classification: nextAuditLedger.classification,
         reason: attestationSignerRoster,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25040,7 +24839,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_publication_freeze_checkpointed",
@@ -25049,7 +24847,6 @@ if (
         classification: nextAuditLedger.classification,
         reason: publicationFreezeReason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25106,7 +24903,6 @@ if (
         nextClosureVerification.id,
         nextClosureVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_attested",
@@ -25115,7 +24911,6 @@ if (
         classification: nextClosureVerification.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25179,7 +24974,6 @@ if (
         nextClosureVerification.id,
         nextClosureVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_rollback_verification_checkpointed",
@@ -25188,7 +24982,6 @@ if (
         classification: nextClosureVerification.classification,
         reason: rollbackVerificationNote,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25252,7 +25045,6 @@ if (
         nextClosureVerification.id,
         nextClosureVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_dispute_archive_checkpointed",
@@ -25261,7 +25053,6 @@ if (
         classification: nextClosureVerification.classification,
         reason: disputeArchiveReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25325,7 +25116,6 @@ if (
         nextPartnerHandoffAttestation.id,
         nextPartnerHandoffAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_outbound_registry_registered",
@@ -25334,7 +25124,6 @@ if (
         classification: nextPartnerHandoffAttestation.classification,
         reason: outboundPartnerHandoffRegistry,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25400,7 +25189,6 @@ if (
         nextPartnerHandoffAttestation.id,
         nextPartnerHandoffAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_attested",
@@ -25409,7 +25197,6 @@ if (
         classification: nextPartnerHandoffAttestation.classification,
         reason: partnerHandoffReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25476,7 +25263,6 @@ if (
         nextPartnerHandoffAttestation.id,
         nextPartnerHandoffAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_outbound_registry_freeze_override_checkpointed",
@@ -25485,7 +25271,6 @@ if (
         classification: nextPartnerHandoffAttestation.classification,
         reason: outboundRegistryFreezeOverrideReason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25549,7 +25334,6 @@ if (
         nextArchivalExport.id,
         nextArchivalExport
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_checkpointed",
@@ -25558,7 +25342,6 @@ if (
         classification: nextArchivalExport.classification,
         reason: archivalExportReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25625,7 +25408,6 @@ if (
         nextArchivalExport.id,
         nextArchivalExport
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_sla_breach_digested",
@@ -25634,7 +25416,6 @@ if (
         classification: nextArchivalExport.classification,
         reason: closureVerificationSlaBreachDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25689,7 +25470,6 @@ if (
         nextArchivalExport.id,
         nextArchivalExport
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_finalized",
@@ -25698,7 +25478,6 @@ if (
         classification: nextArchivalExport.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25765,7 +25544,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_outbound_registry_attestation_ledger_checkpointed",
@@ -25774,7 +25552,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: outboundAttestationLedgerReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25841,7 +25618,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_handoff_partner_delivery_receipt_freeze_override_digested",
@@ -25850,7 +25626,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: partnerDeliveryReceiptFreezeOverrideDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25899,7 +25674,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_outbound_registry_attestation_ledger_sealed",
@@ -25908,7 +25682,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -25972,7 +25745,6 @@ if (
         nextPartnerDeliveryReceipt.id,
         nextPartnerDeliveryReceipt
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_sla_breach_digested",
@@ -25981,7 +25753,6 @@ if (
         classification: nextPartnerDeliveryReceipt.classification,
         reason: partnerDeliverySlaBreachDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26048,7 +25819,6 @@ if (
         nextPartnerDeliveryReceipt.id,
         nextPartnerDeliveryReceipt
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_attested",
@@ -26057,7 +25827,6 @@ if (
         classification: nextPartnerDeliveryReceipt.classification,
         reason: archivalExportTransportBoundaryReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26112,7 +25881,6 @@ if (
         nextPartnerDeliveryReceipt.id,
         nextPartnerDeliveryReceipt
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt_finalized",
@@ -26121,7 +25889,6 @@ if (
         classification: nextPartnerDeliveryReceipt.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26190,7 +25957,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_delivery_receipt_freeze_override_seal_verification_checkpointed",
@@ -26199,7 +25965,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26267,7 +26032,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_delivery_receipt_freeze_override_seal_verified",
@@ -26276,7 +26040,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealVerificationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26326,7 +26089,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_partner_delivery_receipt_freeze_override_seal_verification_finalized",
@@ -26335,7 +26097,6 @@ if (
         classification: nextSealVerification.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26402,7 +26163,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciled",
@@ -26411,7 +26171,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: archivalExportTransportBoundaryReceiptReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26475,7 +26234,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_digest_checkpointed",
@@ -26484,7 +26242,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: transportBoundaryReceiptReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26555,7 +26312,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_finalized",
@@ -26564,7 +26320,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26634,7 +26389,6 @@ if (
         nextCustodyHandoff.id,
         nextCustodyHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_checkpointed",
@@ -26643,7 +26397,6 @@ if (
         classification: nextCustodyHandoff.classification,
         reason: archivalExportCustodyHandoffReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26710,7 +26463,6 @@ if (
         nextCustodyHandoff.id,
         nextCustodyHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handed_off",
@@ -26719,7 +26471,6 @@ if (
         classification: nextCustodyHandoff.classification,
         reason: archivalExportCustodyHandoffDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26768,7 +26519,6 @@ if (
         nextCustodyHandoff.id,
         nextCustodyHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_finalized",
@@ -26777,7 +26527,6 @@ if (
         classification: nextCustodyHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26851,7 +26600,6 @@ if (
         nextClosureAttestation.id,
         nextClosureAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_digest_checkpointed",
@@ -26860,7 +26608,6 @@ if (
         classification: nextClosureAttestation.classification,
         reason: transportBoundaryReceiptReconciliationClosureAttestationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26934,7 +26681,6 @@ if (
         nextClosureAttestation.id,
         nextClosureAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attested",
@@ -26943,7 +26689,6 @@ if (
         classification: nextClosureAttestation.classification,
         reason: transportBoundaryReceiptReconciliationClosureAttestationReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -26996,7 +26741,6 @@ if (
         nextClosureAttestation.id,
         nextClosureAttestation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_finalized",
@@ -27005,7 +26749,6 @@ if (
         classification: nextClosureAttestation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27069,7 +26812,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_checkpointed",
@@ -27078,7 +26820,6 @@ if (
         classification: nextAck.classification,
         reason: archivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentCheckpointReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27128,7 +26869,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledged",
@@ -27137,7 +26877,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27181,7 +26920,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_finalized",
@@ -27190,7 +26928,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27252,7 +26989,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_digest_checkpointed",
@@ -27261,7 +26997,6 @@ if (
         classification: nextAck.classification,
         reason: closureAttestationExternalTransportReceiptAcknowledgmentDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27311,7 +27046,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledged",
@@ -27320,7 +27054,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27367,7 +27100,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_finalized",
@@ -27376,7 +27108,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27434,7 +27165,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciled",
@@ -27443,7 +27173,6 @@ if (
         classification: nextReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27509,7 +27238,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_digest_checkpointed",
@@ -27518,7 +27246,6 @@ if (
         classification: nextReconciliation.classification,
         reason: custodyHandoffExternalTransportReceiptAcknowledgmentReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27570,7 +27297,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_finalized",
@@ -27579,7 +27305,6 @@ if (
         classification: nextReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27637,7 +27362,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciled",
@@ -27646,7 +27370,6 @@ if (
         classification: nextReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27712,7 +27435,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_digest_checkpointed",
@@ -27721,7 +27443,6 @@ if (
         classification: nextReconciliation.classification,
         reason: closureAttestationExternalTransportReceiptAcknowledgmentReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27773,7 +27494,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_finalized",
@@ -27782,7 +27502,6 @@ if (
         classification: nextReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27841,7 +27560,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_digest_checkpointed",
@@ -27850,7 +27568,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27915,7 +27632,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_entry_recorded",
@@ -27924,7 +27640,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -27986,7 +27701,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_finalized",
@@ -27995,7 +27709,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28054,7 +27767,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_outbound_registry_registered",
@@ -28063,7 +27775,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28130,7 +27841,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attested",
@@ -28139,7 +27849,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28201,7 +27910,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_finalized",
@@ -28210,7 +27918,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28281,7 +27988,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_outbound_registry_registered",
@@ -28290,7 +27996,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28355,7 +28060,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attested",
@@ -28364,7 +28068,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28433,7 +28136,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_outbound_registry_freeze_override_checkpointed",
@@ -28442,7 +28144,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason: outboundRegistryFreezeOverrideReason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28509,7 +28210,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_outbound_registry_attestation_ledger_checkpointed",
@@ -28518,7 +28218,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: outboundAttestationLedgerReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28593,7 +28292,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_partner_delivery_receipt_freeze_override_digested",
@@ -28602,7 +28300,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: partnerDeliveryReceiptFreezeOverrideDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28654,7 +28351,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_outbound_registry_attestation_ledger_sealed",
@@ -28663,7 +28359,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28741,7 +28436,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_checkpointed",
@@ -28750,7 +28444,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28819,7 +28512,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verified",
@@ -28828,7 +28520,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealVerificationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28879,7 +28570,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_finalized",
@@ -28888,7 +28578,6 @@ if (
         classification: nextSealVerification.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -28959,7 +28648,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_checkpointed",
@@ -28968,7 +28656,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29037,7 +28724,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verified",
@@ -29046,7 +28732,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealVerificationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29097,7 +28782,6 @@ if (
         nextSealVerification.id,
         nextSealVerification
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_finalized",
@@ -29106,7 +28790,6 @@ if (
         classification: nextSealVerification.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29177,7 +28860,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciled",
@@ -29186,7 +28868,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: archivalExportTransportBoundaryReceiptReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29251,7 +28932,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_digest_checkpointed",
@@ -29260,7 +28940,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: transportBoundaryReceiptReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29340,7 +29019,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_closure_attestation_digest_checkpointed",
@@ -29349,7 +29027,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: transportBoundaryReceiptReconciliationClosureAttestationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29406,7 +29083,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_closure_attestation_finalized",
@@ -29415,7 +29091,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29487,7 +29162,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_checkpointed",
@@ -29496,7 +29170,6 @@ if (
         classification: nextAck.classification,
         reason: transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentCheckpointReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29547,7 +29220,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_finalized",
@@ -29556,7 +29228,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29627,7 +29298,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_digest_checkpointed",
@@ -29636,7 +29306,6 @@ if (
         classification: nextAck.classification,
         reason: ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29687,7 +29356,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_finalized",
@@ -29696,7 +29364,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29756,7 +29423,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciled",
@@ -29765,7 +29431,6 @@ if (
         classification: nextReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29841,7 +29506,6 @@ if (
         nextReconciliation.id,
         nextReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_digest_checkpointed",
@@ -29850,7 +29514,6 @@ if (
         classification: nextReconciliation.classification,
         reason: ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29909,7 +29572,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_digest_checkpointed",
@@ -29918,7 +29580,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -29983,7 +29644,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_entry_recorded",
@@ -29992,7 +29652,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30054,7 +29713,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_finalized",
@@ -30063,7 +29721,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30124,7 +29781,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_outbound_registry_registered",
@@ -30133,7 +29789,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30198,7 +29853,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attested",
@@ -30207,7 +29861,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30276,7 +29929,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_outbound_registry_freeze_override_checkpointed",
@@ -30285,7 +29937,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason: outboundRegistryFreezeOverrideReason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30357,7 +30008,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_checkpointed",
@@ -30366,7 +30016,6 @@ if (
         classification: nextAck.classification,
         reason: transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentCheckpointReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30430,7 +30079,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged",
@@ -30439,7 +30087,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30490,7 +30137,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_finalized",
@@ -30499,7 +30145,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30570,7 +30215,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_digest_checkpointed",
@@ -30579,7 +30223,6 @@ if (
         classification: nextAck.classification,
         reason: ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30643,7 +30286,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged",
@@ -30652,7 +30294,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30703,7 +30344,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_finalized",
@@ -30712,7 +30352,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30772,7 +30411,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_outbound_registry_attestation_ledger_checkpointed",
@@ -30781,7 +30419,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: outboundAttestationLedgerReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30848,7 +30485,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_digested",
@@ -30857,7 +30493,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: partnerDeliveryReceiptFreezeOverrideDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30908,7 +30543,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_outbound_registry_attestation_ledger_sealed",
@@ -30917,7 +30551,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -30982,7 +30615,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledger_checkpointed",
@@ -30991,7 +30623,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: outboundAttestationLedgerReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31056,7 +30687,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_digested",
@@ -31065,7 +30695,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: partnerDeliveryReceiptFreezeOverrideDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31117,7 +30746,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledger_sealed",
@@ -31126,7 +30754,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31191,7 +30818,6 @@ if (
         })
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert(nextSealVerification)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verification_checkpointed",
@@ -31200,7 +30826,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31262,7 +30887,6 @@ if (
         })
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert(nextSealVerification)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verified",
@@ -31271,7 +30895,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealVerificationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31317,7 +30940,6 @@ if (
       }
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert(nextSealVerification)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verification_finalized",
@@ -31326,7 +30948,6 @@ if (
         classification: nextSealVerification.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31390,7 +31011,6 @@ if (
         })
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert(nextSealVerification)
       store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verification_checkpointed",
@@ -31399,7 +31019,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31461,7 +31080,6 @@ if (
         })
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert(nextSealVerification)
       store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verified",
@@ -31470,7 +31088,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealVerificationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31516,7 +31133,6 @@ if (
       }
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.upsert(nextSealVerification)
       store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verification_finalized",
@@ -31525,7 +31141,6 @@ if (
         classification: nextSealVerification.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31592,7 +31207,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_digested",
@@ -31601,7 +31215,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: partnerDeliveryReceiptFreezeOverrideDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31652,7 +31265,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_outbound_registry_attestation_ledger_sealed",
@@ -31661,7 +31273,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31726,7 +31337,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledger_checkpointed",
@@ -31735,7 +31345,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: outboundAttestationLedgerReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31800,7 +31409,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_digested",
@@ -31809,7 +31417,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason: partnerDeliveryReceiptFreezeOverrideDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31861,7 +31468,6 @@ if (
         nextOutboundRegistryAttestationLedger.id,
         nextOutboundRegistryAttestationLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledger_sealed",
@@ -31870,7 +31476,6 @@ if (
         classification: nextOutboundRegistryAttestationLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -31935,7 +31540,6 @@ if (
         })
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.upsert(nextSealVerification)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verification_checkpointed",
@@ -31944,7 +31548,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32006,7 +31609,6 @@ if (
         })
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.upsert(nextSealVerification)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verified",
@@ -32015,7 +31617,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealVerificationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32061,7 +31662,6 @@ if (
       }
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.upsert(nextSealVerification)
       store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verification_finalized",
@@ -32070,7 +31670,6 @@ if (
         classification: nextSealVerification.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32134,7 +31733,6 @@ if (
         })
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.upsert(nextSealVerification)
       store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verification_checkpointed",
@@ -32143,7 +31741,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32205,7 +31802,6 @@ if (
         })
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.upsert(nextSealVerification)
       store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verified",
@@ -32214,7 +31810,6 @@ if (
         classification: nextSealVerification.classification,
         reason: partnerDeliveryReceiptFreezeOverrideSealVerificationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32260,7 +31855,6 @@ if (
       }
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.upsert(nextSealVerification)
       store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.set(nextSealVerification.id, nextSealVerification)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verification_finalized",
@@ -32269,7 +31863,6 @@ if (
         classification: nextSealVerification.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32341,7 +31934,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciled",
@@ -32350,7 +31942,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: archivalExportTransportBoundaryReceiptReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32415,7 +32006,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_digest_checkpointed",
@@ -32424,7 +32014,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: transportBoundaryReceiptReconciliationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32503,7 +32092,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_finalized",
@@ -32512,7 +32100,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32589,7 +32176,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_closure_attestation_digest_checkpointed",
@@ -32598,7 +32184,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: transportBoundaryReceiptReconciliationClosureAttestationDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32680,7 +32265,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_closure_attested",
@@ -32689,7 +32273,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason: transportBoundaryReceiptReconciliationClosureAttestationReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32743,7 +32326,6 @@ if (
         nextTransportBoundaryReceiptReconciliation.id,
         nextTransportBoundaryReceiptReconciliation
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliation_closure_attestation_finalized",
@@ -32752,7 +32334,6 @@ if (
         classification: nextTransportBoundaryReceiptReconciliation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32822,7 +32403,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_checkpointed",
@@ -32831,7 +32411,6 @@ if (
         classification: nextAck.classification,
         reason: transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentCheckpointReference,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32895,7 +32474,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged",
@@ -32904,7 +32482,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -32955,7 +32532,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_finalized",
@@ -32964,7 +32540,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33035,7 +32610,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_digest_checkpointed",
@@ -33044,7 +32618,6 @@ if (
         classification: nextAck.classification,
         reason: ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentDigest,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33108,7 +32681,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledged",
@@ -33117,7 +32689,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33168,7 +32739,6 @@ if (
         nextAck.id,
         nextAck
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliation_external_transport_receipt_acknowledgment_finalized",
@@ -33177,7 +32747,6 @@ if (
         classification: nextAck.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33237,7 +32806,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_digest_checkpointed",
@@ -33246,7 +32814,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33311,7 +32878,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_entry_recorded",
@@ -33320,7 +32886,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33382,7 +32947,6 @@ if (
         nextAuditLedger.id,
         nextAuditLedger
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_external_distribution_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_distribution_audit_ledgers_outbound_registry_attestation_ledgers_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_external_distribution_audit_ledger_finalized",
@@ -33391,7 +32955,6 @@ if (
         classification: nextAuditLedger.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33451,7 +33014,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_outbound_registry_registered",
@@ -33460,7 +33022,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33527,7 +33088,6 @@ if (
         nextPartnerHandoff.id,
         nextPartnerHandoff
       )
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action:
           "ops_reporting_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_debt_retirement_dispute_reconciliation_closure_verification_archival_export_transport_boundary_receipt_reconciliation_ack_recon_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgment_reconciliations_partner_handoff_attested",
@@ -33536,7 +33096,6 @@ if (
         classification: nextPartnerHandoff.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,
@@ -33560,7 +33119,6 @@ if (
       }
       await repos.workflowOpsAlertEscalationLedgers.upsert(nextEscalation)
       store.workflowOpsAlertEscalationLedgers.set(nextEscalation.id, nextEscalation)
-      const priorAuditCount = store.audit.length
       store.audit.push({
         action: "ops_reporting_alert_escalation_resolved",
         actorId: actor.id,
@@ -33568,7 +33126,6 @@ if (
         classification: nextEscalation.classification,
         reason,
       })
-      await persistAuditEntriesSince(store, repos, priorAuditCount)
       const payload = {
         action: parsed.action,
         digest: current,

@@ -178,3 +178,35 @@ describe("the spine audit log is bounded", () => {
     expect(log.filter(() => true)).not.toBeInstanceOf(AuditLog)
   })
 })
+
+// Final audit F8: the in-route index write-through persisted (and failed on) rows pushed by
+// concurrent requests. Routes now rely on the end-of-request flush of their own rows only.
+describe("a request persists only its own audit rows (final audit F8)", () => {
+  it("a concurrent request's unresolvable row neither fails nor is persisted by this request", async () => {
+    const store = getRuntimeStore()
+    const ghost: AuditEntry = { action: "x", actorId: "ghost", target: "t", classification: "internal" }
+    const realId = store.id.bind(store)
+    // While matter create runs, another request (its own audit context) pushes a row whose
+    // firm cannot be resolved.
+    const spy = vi.spyOn(store, "id").mockImplementation((prefix: string) => {
+      if (prefix === "mat") void runWithRequestAudit(() => { store.audit.push(ghost) })
+      return realId(prefix)
+    })
+    const persistedBatches: AuditEntry[][] = []
+    setRequestAuditSinkForTests(async (rows) => {
+      persistedBatches.push([...rows])
+    })
+    const { POST: MATTERS_POST } = await import("@/app/api/d1/matters/route")
+    const res = await MATTERS_POST(
+      new Request("http://127.0.0.1/api/d1/matters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": "f8f8f8f8-0000-4000-8000-000000000001" },
+        body: JSON.stringify({ action: "create", actorId: "partner_a", firmId: "firmA", clientId: "client_a", title: "t", courtId: "SHC", classification: "internal" }),
+      })
+    )
+    spy.mockRestore()
+    expect(res.status).toBe(200)
+    expect(persistedBatches.flat()).not.toContain(ghost)
+    expect(persistedBatches.flat().some((row) => row.action === "matter_create")).toBe(true)
+  })
+})
