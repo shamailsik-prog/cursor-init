@@ -801,7 +801,7 @@ const SPELLED_REPORTERS: ReadonlyArray<readonly [string, string]> = [
   ["Pakistan Tax and Corporate Law", "PTCL"],
 ]
 const SPELLED_REPORTER_PATTERNS = SPELLED_REPORTERS.map(
-  ([name, abbreviation]) => [new RegExp(`(?<![\\p{L}])${name.split(" ").map(escapeRe).join("\\s+")}(?![\\p{L}])`, "giu"), abbreviation] as const
+  ([name, abbreviation]) => [new RegExp(`(?<![\\p{L}])${name.split(" ").map(escapeRe).join("[\\s\\u2010-\\u2015-]+")}(?![\\p{L}])`, "giu"), abbreviation] as const
 )
 function resolveSpelledReporters(input: string): string {
   let out = input
