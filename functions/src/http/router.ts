@@ -17,6 +17,7 @@ import { recordGatePassOp } from "../p5/gates"
 import { setFirmNumberingOp } from "../d1/client/numberingOp"
 import { getClientOp, listClientsOp, registerClientOp } from "../d1/client/ops"
 import { getConflictResultOp, getConflictTrailOp, recordPartnerWaiverOp, resolveReviewItemOp, runConflictCheckOp } from "../d1/conflict/ops"
+import { advanceStageOp, closeMatterOp, getMatterOp, listMattersOp, openMatterOp } from "../d1/matter/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -58,6 +59,7 @@ const IDENTITY = "/api/platform/identity"
 const GATES = "/api/platform/gates"
 const D1_CLIENT = "/api/d1/client"
 const D1_CONFLICT = "/api/d1/conflict"
+const D1_MATTER = "/api/d1/matter"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
@@ -92,6 +94,11 @@ export const ROUTES: readonly Route[] = [
   post(`${D1_CONFLICT}/resolveReviewItem`, resolveReviewItemOp),
   post(`${D1_CONFLICT}/recordPartnerWaiver`, recordPartnerWaiverOp),
   get(`${D1_CONFLICT}/getConflictTrail`, getConflictTrailOp),
+  post(`${D1_MATTER}/openMatter`, openMatterOp),
+  get(`${D1_MATTER}/getMatter`, getMatterOp),
+  get(`${D1_MATTER}/listMatters`, listMattersOp),
+  post(`${D1_MATTER}/advanceStage`, advanceStageOp),
+  post(`${D1_MATTER}/closeMatter`, closeMatterOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>

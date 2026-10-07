@@ -18,6 +18,7 @@ import * as gates from "../src/p5/gates"
 import * as numbering from "../src/d1/client/numberingOp"
 import * as clientOps from "../src/d1/client/ops"
 import * as conflictOps from "../src/d1/conflict/ops"
+import * as matterOps from "../src/d1/matter/ops"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -78,9 +79,14 @@ const PROBES: Record<string, Probe> = {
   resolveReviewItem: { data: () => ({ checkId: "g2-probe-check", hitIndex: 0, resolution: "different_person", note: "G2 probe note of at least twenty characters" }), target: false },
   recordPartnerWaiver: { data: () => ({ checkId: "g2-probe-check", note: "G2 probe waiver note that is comfortably longer than fifty characters", clientConsent: true, consentReference: "G2-REF" }), target: false },
   getConflictTrail: { data: () => ({ checkId: "g2-probe-check" }), target: false },
+  openMatter: { data: () => ({ conflictCheckId: "g2-probe-check", title: "G2 probe matter", classification: "internal" }), target: false },
+  getMatter: { data: () => ({ matterId: "g2-probe-matter" }), target: false },
+  listMatters: { data: () => ({}), target: false },
+  advanceStage: { data: () => ({ matterId: "g2-probe-matter", to: "filed" }), target: false },
+  closeMatter: { data: () => ({ matterId: "g2-probe-matter", reason: "G2 probe closure reason, long enough" }), target: false },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
