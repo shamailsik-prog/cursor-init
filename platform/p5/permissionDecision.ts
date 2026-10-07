@@ -12,6 +12,8 @@
  *   - accounts (L17.6 #41): only ACCOUNTS_REGISTER_ACTIONS, never matter documents, and a
  *     named matter must be in the caller's firm  -> deny accounts-register-only / cross-firm
  *   - intern: no research / draft                -> deny intern-channel-denied
+ *   - a staff-only action (STAFF_ONLY_ACTIONS) by a client or under an own_matters scope
+ *                                                -> deny staff-only
  *   - client or own_matters scope: no research / draft; list_matters is own matters only
  *   - list_matters                               -> allow
  *   - a named matter: same firm (cross-firm), a member (not-member), cleared for its
@@ -54,6 +56,12 @@ export function isFirmAdminAction(action: string): action is FirmAdminAction {
   return FIRM_ADMIN_ACTION_SET.has(action)
 }
 
+/**
+ * Firm tools for staff (partner, associate, clerk, intern), never for a client (re-audit N-2):
+ * `normalise_case_number` is POST /api/g0/normalise. Accounts keep their register-only rule.
+ */
+export const STAFF_ONLY_ACTIONS: ReadonlySet<string> = new Set(["normalise_case_number"])
+
 const deny = (reason: string): PermissionDecision => ({ allow: false, reason })
 const allow = (reason: string): PermissionDecision => ({ allow: true, reason })
 
@@ -89,6 +97,7 @@ export function decide(
   }
 
   if (extra?.scope === "own_matters" || caller.role === "client") {
+    if (STAFF_ONLY_ACTIONS.has(action)) return deny("staff-only")
     if (action === "research" || action === "draft") return deny("client-channel-denied")
     if (action === "list_matters") return allow("client-own-matters")
   }

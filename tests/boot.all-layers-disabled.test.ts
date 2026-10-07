@@ -191,7 +191,7 @@ const page = { limit: "10", cursor: "0" }
 /** One call per core (route, method); bodies follow the /ops console's own calls. */
 const CORE_CALLS: CoreCall[] = [
   { route: "g0/monitor", method: "GET", init: () => ({}), expect: 200 },
-  { route: "g0/normalise", method: "POST", init: () => ({ body: { raw: "CP 1234", courtId: "SHC" } }), expect: 200 },
+  { route: "g0/normalise", method: "POST", init: () => ({ body: { actorId: "partner_a", raw: "CP 1234", courtId: "SHC" } }), expect: 200 },
   { route: "d1/matters", method: "GET", init: () => ({ query: { ...page } }), expect: 200 },
   {
     route: "d1/matters",

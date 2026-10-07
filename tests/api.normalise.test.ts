@@ -9,7 +9,8 @@ function post(body: unknown, key = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") {
         "Content-Type": "application/json",
         "Idempotency-Key": key,
       },
-      body: typeof body === "string" ? body : JSON.stringify(body),
+      // Re-audit N-2: the route authorises its actor (a staff tool); insecure-dev requests carry it.
+      body: typeof body === "string" ? body : JSON.stringify({ actorId: "associate_a", ...(body as object) }),
     })
   )
 }

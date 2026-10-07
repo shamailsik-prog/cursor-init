@@ -121,7 +121,7 @@ describe("Next idempotency: in-flight claim (F4)", () => {
   it("keys are scoped to the route: the same key on another route is not a reuse", async () => {
     const key = "b2b2b2b2-0000-4000-8000-000000000006"
     expect((await MATTERS(req("http://127.0.0.1/api/d1/matters", matterBody, key))).status).toBe(200)
-    const res = await NORMALISE(req("http://127.0.0.1/api/g0/normalise", { raw: "C.P. No. D-1234 of 2025", courtId: "SHC" }, key))
+    const res = await NORMALISE(req("http://127.0.0.1/api/g0/normalise", { actorId: "partner_a", raw: "C.P. No. D-1234 of 2025", courtId: "SHC" }, key))
     expect(res.status).toBe(200)
   })
 })
