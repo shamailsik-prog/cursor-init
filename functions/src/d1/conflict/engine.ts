@@ -1,8 +1,9 @@
-import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import type { DocumentData } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../../admin"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { logFailure } from "../../log"
+import { effectiveLinkState, isConfirmedState } from "../entity/linkState"
 import { nameForms, usesFallback } from "./normalise"
 import { screen, summarise, type Candidate, type Hit, type IdentityBasis, type Keys, type Outcome, type Subject } from "./match"
 
@@ -13,8 +14,8 @@ import { screen, summarise, type Candidate, type Hit, type IdentityBasis, type K
  * (only the link on the matched key counts), and runs the pure `screen`.
  */
 
-/** Entity link auto-confirm window (P2-5, L18 §7.1). */
-export const LINK_AUTO_CONFIRM_MS = 30 * 24 * 60 * 60 * 1000
+/** Entity link auto-confirm window (P2-5, L18 §7.1); defined with the link state model. */
+export { LINK_AUTO_CONFIRM_MS } from "../entity/linkState"
 
 const KEY_FIELDS = ["cnic", "ntn", "secp", "phone"] as const
 type KeyName = (typeof KEY_FIELDS)[number]
@@ -44,18 +45,12 @@ export function maxLabel(a: unknown, b: unknown): Classification {
   return rankOf(y) > rankOf(x) ? y : x
 }
 
-const millisOf = (value: unknown): number | null => (value instanceof Timestamp ? value.toMillis() : null)
-
 /**
  * L18 §7.1: confirmed = human-confirmed, or a candidate auto-confirmed 30 days after creation
- * without dispute. With L17_2_ENABLED off every key link counts as a candidate (P2-18).
+ * without dispute (effectiveLinkState). With L17_2_ENABLED off every key link counts as a candidate (P2-18).
  */
 export function linkConfirmed(row: DocumentData, nowMs: number, l17_2Enabled: boolean): boolean {
-  if (!l17_2Enabled) return false
-  if (row.state === "confirmed") return true
-  if (row.state !== "candidate" || row.disputed !== false) return false
-  const created = millisOf(row.createdAt)
-  return created !== null && created <= nowMs - LINK_AUTO_CONFIRM_MS
+  return isConfirmedState(effectiveLinkState(row, nowMs, l17_2Enabled))
 }
 
 /**
@@ -135,7 +130,10 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
   for (const d of linkSnap.docs) {
     const row = d.data()
     if (typeof row.leftId !== "string" || typeof row.rightId !== "string" || !isKeyName(row.key)) continue
-    links.push({ id: d.id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: linkConfirmed(row, nowMs, enabled) })
+    const state = effectiveLinkState(row, nowMs, enabled)
+    // P2-29: a rejected pair is neither relied on nor unresolved (with the flag off nothing reads as rejected).
+    if (state === "rejected") continue
+    links.push({ id: d.id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: isConfirmedState(state) })
   }
   const unresolvedByEntity = new Map<string, string[]>()
   for (const l of links) {
@@ -212,7 +210,9 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
       ...(entityId ? { entityId } : {}),
       matterId,
       matterNo: matter?.matterNo ?? null,
-      matterClassification: matter ? matter.classification : knownOrHighest(p.matterClassification ?? p.classification),
+      // O-27 (P2-37): the higher of the matter's and the party row's label, as client candidates are;
+      // an absent or unknown label reads as privileged-restricted (fail closed).
+      matterClassification: matter ? maxLabel(matter.classification, p.classification) : maxLabel(p.matterClassification, p.classification),
       matterStatus: matter ? matter.status : p.matterStatus === "closed" ? "closed" : matterId ? "live" : null,
       clientHasLiveMatter: false,
       linkState: "none",
