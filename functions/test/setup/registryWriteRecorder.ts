@@ -18,6 +18,20 @@
  * Every violation not taken by the test (`registryRecorder.take()`) fails it in `afterEach`. Writes
  * from test files are never product writes, so seeding fixtures is unaffected.
  *
+ * Known limits (spec P3-20 accepts that an unexercised path escapes):
+ * - A non-merge `set` counts only when its data names an in-scope field (the brief's rule, so that
+ *   onboardFirm's `firms` create is not flagged). A non-merge set of `{ stage }` on a `matters` row,
+ *   which would wipe its other fields, is therefore treated as exempt; no writer in functions/src does it.
+ * - BulkWriter and `recursiveDelete` are not patched; p2.registry-recorder-attribution.emu.test.ts fails
+ *   if functions/src uses either.
+ * - The read log (`readsDuring`) sees `Query.get` and `DocumentReference.get` only, not `getAll`,
+ *   `stream` or `onSnapshot`; a loadRegistry read through those would not be noticed.
+ * - Violations are attributed by global state, not by test id: a product write that lands after its
+ *   test's afterEach (an unawaited write, background work) is reported in whichever test is running
+ *   then, or lost if none is.
+ * - Real stack attribution is proven by p2.registry-recorder-attribution.emu.test.ts (a real writer
+ *   with its bump stubbed out), not by the gate test, which uses `attributeTo`.
+ *
  * Patches are installed once per process (Node's module cache shares the SDK across test files);
  * the recorder's state lives on `globalThis` for the same reason.
  */

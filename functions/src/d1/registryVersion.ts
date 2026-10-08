@@ -33,15 +33,17 @@ export type RegistryFieldScope = { all: true } | { except: readonly string[] } |
 /**
  * The collections `loadRegistry` reads, with the fields whose writes change the screen (spec P3-20).
  * `matters.stage` is outside it (advanceStage writes only `stage`); of the `firms` doc only
- * `featureFlags` is read (`featureFlags.L17_2_ENABLED`).
+ * `featureFlags` is read (`featureFlags.L17_2_ENABLED`). The recorder sees transaction, batch and
+ * document-reference writes only; `functions/test/p2.registry-recorder-attribution.emu.test.ts` fails
+ * if functions/src starts using a BulkWriter or recursiveDelete, which it cannot see. Deep-frozen.
  */
 export const REGISTRY_SCOPE: Readonly<Record<string, RegistryFieldScope>> = Object.freeze({
-  clients: { all: true },
-  matter_parties: { all: true },
-  entity_links: { all: true },
-  transliteration_map: { all: true },
-  matters: { except: ["stage"] },
-  firms: { only: ["featureFlags"] },
+  clients: Object.freeze({ all: true as const }),
+  matter_parties: Object.freeze({ all: true as const }),
+  entity_links: Object.freeze({ all: true as const }),
+  transliteration_map: Object.freeze({ all: true as const }),
+  matters: Object.freeze({ except: Object.freeze(["stage"]) }),
+  firms: Object.freeze({ only: Object.freeze(["featureFlags"]) }),
 })
 
 export const registryVersionRef = (firmId: string) => adminDb().collection("counters").doc(`${firmId}_registry`)
