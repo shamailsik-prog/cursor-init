@@ -53,7 +53,13 @@ afterAll(() => {
 })
 
 /** Non-endpoint exports of src/index.ts (deploy entries that are not identity reads). */
-const NOT_TENANT_ENDPOINTS: Record<string, string> = { health: "health probe, no tenant data", api: "HTTP router, probed route by route" }
+const NOT_TENANT_ENDPOINTS: Record<string, string> = {
+  health: "health probe, no tenant data",
+  api: "HTTP router, probed route by route",
+  onJobCreated: "Firestore trigger on jobs, no caller",
+  jobWorker: "Cloud Tasks queue function, OIDC-invoked by Cloud Tasks only; acts on the job id it is given",
+  jobSweeper: "scheduler, no caller",
+}
 
 /**
  * Every operation (HTTP route), how to aim it at firm A. `target`: the op names a user (the
@@ -103,7 +109,7 @@ function opFor(name: string): Operation | undefined {
   return undefined
 }
 
-/** Deployed exports other than the HTTP router and the health probe (must be none: U-1). */
+/** Deployed exports other than the HTTP router, the health probe and the job runtime (must be none: U-1). */
 const OTHER_EXPORTS = Object.keys(index)
   .filter((n) => !(n in NOT_TENANT_ENDPOINTS))
   .sort()
@@ -212,7 +218,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
     before = await snapshotFirmA(A)
   })
 
-  it("only the HTTP api and the health probe are deployed; every route has a cross-firm probe and runs its operation", () => {
+  it("only the HTTP api, the health probe and the job runtime functions are deployed; every route has a cross-firm probe and runs its operation", () => {
     expect(OTHER_EXPORTS).toEqual([])
     expect(ROUTES.map((route) => route.path.split("/").pop()!).sort()).toEqual(Object.keys(PROBES).sort())
     for (const route of ROUTES) {

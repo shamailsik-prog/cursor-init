@@ -42,8 +42,11 @@ describe("deploy config: proxy hops and ingress", () => {
   })
 
   it("api carries the configured ingress (default ALLOW_ALL)", async () => {
-    const index = (await import("../src/index")) as Record<string, { __endpoint?: { ingressSettings?: string } }>
-    for (const name of Object.keys(index).filter((n) => n !== "health")) {
+    const index = (await import("../src/index")) as Record<string, { __endpoint?: { ingressSettings?: string; httpsTrigger?: unknown } }>
+    // Ingress applies to HTTP functions; the job runtime's trigger, queue and schedule functions have none.
+    const http = Object.keys(index).filter((n) => n !== "health" && index[n].__endpoint?.httpsTrigger !== undefined)
+    expect(http).toContain("api")
+    for (const name of http) {
       expect([name, index[name].__endpoint?.ingressSettings]).toEqual([name, "ALLOW_ALL"])
     }
   })

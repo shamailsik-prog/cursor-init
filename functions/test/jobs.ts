@@ -14,6 +14,24 @@ import { uniq } from "./emu"
 /** The suites' fixed clock origin. */
 export const T0 = Date.parse("2026-10-08T09:00:00Z")
 
+const YEAR_MS = 365 * 86_400_000
+
+/**
+ * Clock origins for tests that run the sweeper. `sweep` reads every job in the emulator, and the
+ * rows other suites leave at `T0` would be due in its window and come first in its order (limit
+ * 100). Each call returns an origin one year earlier than the last, starting `yearsBack` years
+ * before `T0`, so no row an earlier test wrote is due in a later test's sweep. Give each file its
+ * own `yearsBack` (module state starts over per file).
+ */
+export function sweepOrigins(yearsBack: number): () => number {
+  let next = T0 - yearsBack * YEAR_MS
+  return () => {
+    const origin = next
+    next -= YEAR_MS
+    return origin
+  }
+}
+
 /** A `platform.diagnostic` spec: a fresh key, label internal, firm-level, created by the system. */
 export function diagSpec(firmId: string, payload: DiagnosticPayload, over: Partial<JobSpec> = {}): JobSpec {
   return {

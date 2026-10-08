@@ -1105,13 +1105,16 @@ describe.skipIf(!EMULATORS)("deactivateUser", () => {
 })
 
 describe("index exports", () => {
-  it("U-1: deploys only the HTTP api (and the health probe) in asia-south1 — no onCall callables", async () => {
+  it("U-1: deploys only the HTTP api (and the health probe) as HTTP functions, plus the job runtime's non-HTTP functions, in asia-south1 — no onCall callables", async () => {
     const mod = (await import("../src/index")) as Record<string, { __endpoint?: { region?: string[]; callableTrigger?: unknown; httpsTrigger?: unknown } }>
-    expect(Object.keys(mod).sort()).toEqual(["api", "health"])
+    expect(Object.keys(mod).sort()).toEqual(["api", "health", "jobSweeper", "jobWorker", "onJobCreated"])
     for (const name of Object.keys(mod)) {
       expect(mod[name]?.__endpoint?.callableTrigger, name).toBeUndefined()
-      expect(mod[name]?.__endpoint?.httpsTrigger, name).toBeDefined()
     }
+    // The HTTP entry points are exactly api and health; the job runtime (P3-5, P3-8) is a Firestore
+    // trigger, a Cloud Tasks queue and a schedule, none of them an HTTP endpoint.
+    expect(Object.keys(mod).filter((name) => mod[name]?.__endpoint?.httpsTrigger !== undefined).sort()).toEqual(["api", "health"])
     expect(mod.api?.__endpoint?.region).toEqual(["asia-south1"])
+    for (const name of ["onJobCreated", "jobWorker", "jobSweeper"]) expect([name, mod[name]?.__endpoint?.region]).toEqual([name, ["asia-south1"]])
   })
 })

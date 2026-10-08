@@ -191,8 +191,10 @@ describe("idempotency helpers", () => {
   it("the idempotency lease outlives the pinned function timeout; api pins it", async () => {
     expect(FUNCTION_TIMEOUT_SECONDS).toBe(120)
     expect(IDEMPOTENCY_LEASE_MS).toBeGreaterThan(FUNCTION_TIMEOUT_SECONDS * 1000)
-    const index = (await import("../src/index")) as Record<string, { __endpoint?: { timeoutSeconds?: number } }>
-    const names = Object.keys(index).filter((n) => n !== "health")
+    const index = (await import("../src/index")) as Record<string, { __endpoint?: { timeoutSeconds?: number; httpsTrigger?: unknown } }>
+    // The job runtime's trigger, queue and schedule functions are not HTTP and run under their own
+    // timeout (JOB_WORKER_TIMEOUT_SECONDS, pinned by p2.boot.test.ts).
+    const names = Object.keys(index).filter((n) => n !== "health" && index[n].__endpoint?.httpsTrigger !== undefined)
     // U-1: the HTTP api is the only entry point (no onCall callables are deployed)
     expect(names).toEqual(["api"])
     for (const name of names) expect([name, index[name].__endpoint?.timeoutSeconds]).toEqual([name, FUNCTION_TIMEOUT_SECONDS])
