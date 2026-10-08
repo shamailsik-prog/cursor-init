@@ -267,8 +267,8 @@ export type EngineResult = { hits: Hit[]; result: Outcome; identityBasis: Identi
 /** Conflict checks are confidential unless a hit touches a higher-classified matter (P2-13, monotonic). */
 export function checkClassification(hits: readonly Hit[]): Classification {
   let label: Classification = "confidential"
+  // Invariant: the label is >= matterClassification of EVERY stored hit (NONE too), since stored hits keep matter ids readable by partners cleared to it.
   for (const h of hits) {
-    if (h.outcome === "NONE") continue
     const c = knownOrHighest(h.matterClassification)
     if (rankOf(c) > rankOf(label)) label = c
   }

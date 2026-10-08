@@ -4,7 +4,7 @@ import { Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { discloseFor, type StoredCheck } from "../src/d1/conflict/disclosure"
 import { secondsToKarachiMidnight } from "../src/d1/dailyLimit"
-import { unseenHits } from "../src/d1/conflict/engine"
+import { checkClassification, unseenHits } from "../src/d1/conflict/engine"
 import { RateLimitedError } from "../src/http/errors"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
@@ -147,6 +147,17 @@ describe("discloseFor (no emulator needed)", () => {
     expect(discloseFor({ role: "partner", clearanceLevel: "privileged" }, waived, new Set()).waiver).toEqual(waiver)
     expect(discloseFor({ role: "partner", clearanceLevel: "confidential" }, waived, new Set())).not.toHaveProperty("waiver")
     expect(discloseFor({ role: "partner", clearanceLevel: "privileged" }, check, new Set()).waiver).toBeNull()
+  })
+})
+
+describe("checkClassification (no emulator needed)", () => {
+  it("the check's label covers every stored hit, NONE included, because stored hits keep matter ids readable by partners cleared to the check's label", () => {
+    const hit = (over: Partial<StoredCheck["hits"][number]>): StoredCheck["hits"][number] => ({
+      subjectIndex: 1, hitRole: "client", type: "direct_adverse", basis: "name", score: 1, identityBasis: "candidate_only",
+      outcome: "POSSIBLE_CANDIDATE_REVIEW", matchedName: "X", matterId: "m1", matterNo: "N", matterClassification: "internal",
+      reliedOnLinkIds: [], candidateId: "client:c1", ...over,
+    })
+    expect(checkClassification([hit({ outcome: "NONE", matterClassification: "privileged-restricted" }), hit({})])).toBe("privileged-restricted")
   })
 })
 
