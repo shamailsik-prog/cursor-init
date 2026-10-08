@@ -137,7 +137,12 @@ function parseQueueCursor(cursor: string | null): { createdAt: Timestamp; id: st
   if (!Number.isInteger(seconds) || !Number.isInteger(nanos) || nanos < 0 || nanos >= 1e9 || !isSafeDocId(id)) {
     throw new HttpError(400, "invalid_cursor")
   }
-  return { createdAt: new Timestamp(seconds, nanos), id }
+  try {
+    return { createdAt: new Timestamp(seconds, nanos), id }
+  } catch {
+    // Seconds outside the Timestamp range.
+    throw new HttpError(400, "invalid_cursor")
+  }
 }
 
 type Group = { pairId: string; leftId: string; rightId: string; ids: string[]; rows: DocumentData[] }
@@ -171,9 +176,15 @@ export const listReviewQueueOp: FirmOperation<Page<QueueItem>> = {
     const hidden = new Set<string>()
     const cache = new Map<string, { summary: EntitySummary; label: Classification } | null>()
     const items = new Map<string, Omit<QueueItem, "pairId" | "linkIds" | "keys" | "createdAt" | "autoConfirmAt" | "classification" | "dispute">>()
-    let lastConsumed: { createdAt: Timestamp; id: string } | null = null
+    // Rows of visible pairs, in scan order: the cursor is the last of them, so it never names a hidden pair.
+    let consumed: Array<{ pairId: string; createdAt: Timestamp; id: string }> = []
     let after: DocumentSnapshot | null = null
     let more = false
+    const hide = (pairId: string) => {
+      hidden.add(pairId)
+      if (groups.delete(pairId)) consumed = consumed.filter((c) => c.pairId !== pairId)
+      items.delete(pairId)
+    }
     for (;;) {
       let q: Query = links().where("firmId", "==", caller.firmId).where("state", "==", "candidate").where("disputed", "==", disputed)
       if (!disputed) q = q.where("createdAt", ">", Timestamp.fromMillis(nowMs - LINK_AUTO_CONFIRM_MS))
@@ -184,41 +195,41 @@ export const listReviewQueueOp: FirmOperation<Page<QueueItem>> = {
       for (const doc of snap.docs) {
         const row = doc.data()
         const pairId = pairIdOf(row)
-        const known = groups.has(pairId) || hidden.has(pairId)
-        // A new pair after `limit` pairs ends the page; rows of pairs already met are consumed.
-        if (!known && groups.size === limit) {
-          more = true
-          break
-        }
-        if (row.createdAt instanceof Timestamp) lastConsumed = { createdAt: row.createdAt, id: doc.id }
+        // Visibility first (as listClients): a hidden pair is skipped and never signals a next page.
         if (hidden.has(pairId)) continue
         if (!withinClearance(row.classification, caller.clearanceLevel) || !(row.createdAt instanceof Timestamp)) {
-          hidden.add(pairId)
-          groups.delete(pairId)
-          items.delete(pairId)
+          hide(pairId)
           continue
         }
         const group = groups.get(pairId)
         if (group) {
           group.ids.push(doc.id)
           group.rows.push(row)
+          consumed.push({ pairId, createdAt: row.createdAt, id: doc.id })
           continue
         }
         const leftId = String(row.leftId)
         const rightId = String(row.rightId)
         const [left, right] = [await summaryFor(caller, leftId, cache), await summaryFor(caller, rightId, cache)]
         if (!left || !right) {
-          hidden.add(pairId)
+          hide(pairId)
           continue
+        }
+        // A new visible pair after `limit` pairs ends the page; rows of pairs already met are consumed.
+        if (groups.size === limit) {
+          more = true
+          break
         }
         groups.set(pairId, { pairId, leftId, rightId, ids: [doc.id], rows: [row] })
         items.set(pairId, { effectiveState: disputed ? "disputed" : "candidate", left: left.summary, right: right.summary })
+        consumed.push({ pairId, createdAt: row.createdAt, id: doc.id })
       }
       if (more || snap.size < SCAN_BATCH) break
       after = snap.docs[snap.docs.length - 1]
     }
 
     await audit.allow()
+    const last = consumed[consumed.length - 1]
     const out: QueueItem[] = []
     for (const group of groups.values()) {
       const base = items.get(group.pairId)!
@@ -242,7 +253,7 @@ export const listReviewQueueOp: FirmOperation<Page<QueueItem>> = {
     }
     return {
       items: out,
-      nextCursor: more && lastConsumed ? encodeCursor(`${lastConsumed.createdAt.seconds}.${lastConsumed.createdAt.nanoseconds}`, lastConsumed.id) : null,
+      nextCursor: more && last ? encodeCursor(`${last.createdAt.seconds}.${last.createdAt.nanoseconds}`, last.id) : null,
     }
   },
 }

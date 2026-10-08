@@ -260,4 +260,11 @@ describe.skipIf(!EMULATORS)("listClients", () => {
     const ok = await listClients({ token: partner.token, data: { firmId, cursor: crafted("1700000000.999999999", "abc") } } as never)
     expect(ok.items).toEqual([])
   })
+
+  it("a cursor whose seconds are outside the Timestamp range → 400 invalid_cursor, not 500", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const cursor = Buffer.from(JSON.stringify({ sortKey: "99999999999999.0", id: "abc" }), "utf8").toString("base64url")
+    expectKind(await apiErrorOf(listClients({ token: partner.token, data: { firmId, cursor } } as never)), "invalid-argument", "invalid_cursor")
+  })
 })

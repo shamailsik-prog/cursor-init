@@ -185,6 +185,56 @@ describe.skipIf(!EMULATORS)("listReviewQueue (P2-31)", () => {
     expectKind(await apiErrorOf(listReviewQueue({ token: partner.token, data: { firmId, cursor: "!!" } } as never)), "invalid-argument", "invalid_cursor")
     const badNanos = Buffer.from(JSON.stringify({ sortKey: "1.2000000000", id: "x" })).toString("base64url")
     expectKind(await apiErrorOf(listReviewQueue({ token: partner.token, data: { firmId, cursor: badNanos } } as never)), "invalid-argument", "invalid_cursor")
+    const outOfRange = Buffer.from(JSON.stringify({ sortKey: "99999999999999.0", id: "x" })).toString("base64url")
+    expectKind(await apiErrorOf(listReviewQueue({ token: partner.token, data: { firmId, cursor: outOfRange } } as never)), "invalid-argument", "invalid_cursor")
+  })
+
+  it("limit=1, a visible pair then a younger confidential pair, internal associate → nextCursor null (a hidden pair never signals more)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const internal = await mintIdToken(claims(firmId, "associate", "internal"))
+    const [k1, k2] = [cnic(), cnic()]
+    const a = await register(partner.token, firmId, { cnic: k1 })
+    const b = await register(partner.token, firmId, { cnic: k1 })
+    const h1 = await register(partner.token, firmId, { cnic: k2, classification: "confidential" })
+    const h2 = await register(partner.token, firmId, { cnic: k2, classification: "confidential" })
+    await setPair(firmId, a.entityId, b.entityId, 3 * DAY)
+    await setPair(firmId, h1.entityId, h2.entityId, 2 * DAY)
+    const page = await listReviewQueue({ token: internal.token, data: { firmId, limit: "1" } } as never)
+    expect(page.items.map((i) => i.pairId)).toEqual([pairOf(a.entityId, b.entityId)])
+    expect(page.nextCursor).toBeNull()
+  })
+
+  it("hidden rows straddle a visible pair: the cursor never encodes a hidden pair's ids, and page 2 is the next visible pair", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const internal = await mintIdToken(claims(firmId, "associate", "internal"))
+    const [kv, kh, kw, kx, mh] = [cnic(), cnic(), cnic(), cnic(), mobile()]
+    const v1 = await register(partner.token, firmId, { cnic: kv })
+    const v2 = await register(partner.token, firmId, { cnic: kv })
+    const h1 = await register(partner.token, firmId, { cnic: kh, primaryMobile: mh, classification: "confidential" })
+    const h2 = await register(partner.token, firmId, { cnic: kh, primaryMobile: mh, classification: "confidential" })
+    const w1 = await register(partner.token, firmId, { cnic: kw })
+    const w2 = await register(partner.token, firmId, { cnic: kw })
+    const x1 = await register(partner.token, firmId, { cnic: kx })
+    const x2 = await register(partner.token, firmId, { cnic: kx })
+    await setPair(firmId, v1.entityId, v2.entityId, 4 * DAY)
+    // The hidden pair's CNIC row sorts before W and its phone row after W (just before X).
+    const hidden = await pairRows(firmId, h1.entityId, h2.entityId)
+    expect(hidden.map((d) => d.data().key).sort()).toEqual(["cnic", "phone"])
+    for (const d of hidden) await d.ref.update({ createdAt: Timestamp.fromMillis(NOW - (d.data().key === "cnic" ? 3 : 1.5) * DAY) })
+    await setPair(firmId, w1.entityId, w2.entityId, 2 * DAY)
+    await setPair(firmId, x1.entityId, x2.entityId, 1 * DAY)
+
+    const p1 = await listReviewQueue({ token: internal.token, data: { firmId, limit: "2" } } as never)
+    expect(p1.items.map((i) => i.pairId)).toEqual([pairOf(v1.entityId, v2.entityId), pairOf(w1.entityId, w2.entityId)])
+    expect(typeof p1.nextCursor).toBe("string")
+    const decoded = Buffer.from(p1.nextCursor!, "base64url").toString("utf8")
+    expect(decoded).not.toContain(h1.entityId)
+    expect(decoded).not.toContain(h2.entityId)
+    const p2 = await listReviewQueue({ token: internal.token, data: { firmId, limit: "2", cursor: p1.nextCursor } } as never)
+    expect(p2.items.map((i) => i.pairId)).toEqual([pairOf(x1.entityId, x2.entityId)])
+    expect(p2.nextCursor).toBeNull()
   })
 
   it("a confidential pair is omitted for an internal associate and listed for a confidential one (Review Focus 5)", async () => {
