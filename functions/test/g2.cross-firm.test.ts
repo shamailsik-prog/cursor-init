@@ -57,6 +57,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   health: "health probe, no tenant data",
   api: "HTTP router, probed route by route",
   onJobCreated: "Firestore trigger on jobs, no caller",
+  onEventCreated: "Firestore trigger on events, no caller",
   jobWorker: "Cloud Tasks queue function, OIDC-invoked by Cloud Tasks only; acts on the job id it is given",
   jobSweeper: "scheduler, no caller",
 }

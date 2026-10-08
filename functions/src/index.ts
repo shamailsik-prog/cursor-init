@@ -9,4 +9,4 @@ export { health } from "./health"
 export { api } from "./http/router"
 // P2 job runtime (spec P3-5, P3-8): the creation trigger, the Cloud Tasks worker and the sweeper.
 // None is a tenant entry point: they act on job ids from Firestore and Cloud Tasks, not on callers.
-export { onJobCreated, jobWorker, jobSweeper } from "./p2/functions"
+export { onJobCreated, onEventCreated, jobWorker, jobSweeper } from "./p2/functions"

@@ -1,6 +1,7 @@
 import type { Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { diagnosticHandler } from "./diagnostic"
+import type { Subscriber } from "./fanout"
 
 /**
  * The job handler contract and the production registry (spec P3-6, P3-17). A handler parses its
@@ -44,7 +45,7 @@ export const JOB_HANDLERS: ReadonlyMap<string, JobHandler> = new Map<string, Job
 ])
 
 /** Test-only registrations (e.g. a saga-flagged type). Never set in production code. */
-export const jobTestSeam: { handlers: Map<string, JobHandler> } = { handlers: new Map() }
+export const jobTestSeam: { handlers: Map<string, JobHandler>; subscribers: Subscriber[] } = { handlers: new Map(), subscribers: [] }
 
 /** The handler for `jobType`: the production registry first, then the test seam. */
 export function handlerFor(jobType: string): JobHandler | undefined {

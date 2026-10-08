@@ -8,6 +8,7 @@ import { logFailure } from "../log"
 import { isSafeDocId } from "../p5/common"
 import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS } from "./constants"
 import { runtimeDeps, type JobDeps, type JobTask } from "./dispatch"
+import { fanOutEvent } from "./fanout"
 import { sweep } from "./sweeper"
 import { runJobTask } from "./worker"
 
@@ -50,6 +51,14 @@ export function parseJobTask(data: unknown): JobTask | null {
 export const onJobCreated = onDocumentCreated({ document: "jobs/{jobId}", region: REGION }, (event) =>
   onJobCreatedCore(event.params.jobId, event.data?.data(), runtimeDeps())
 )
+
+/**
+ * A new event row → one job per registered subscriber (P3-15). A failure throws so the trigger's
+ * redelivery retries; the deterministic job ids make a retry safe.
+ */
+export const onEventCreated = onDocumentCreated({ document: "events/{eventId}", region: REGION }, async (event) => {
+  await fanOutEvent(event.params.eventId, event.data?.data(), runtimeDeps())
+})
 
 /**
  * The worker queue (P3-5). Every job-level outcome answers 2xx; `runJobTask` throws only when it

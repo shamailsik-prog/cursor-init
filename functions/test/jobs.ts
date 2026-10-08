@@ -183,12 +183,30 @@ export const fencedTestHandler: JobHandler<Record<string, unknown>> = {
   },
 }
 
+/** The fan-out target (P3-15): accepts exactly `{ eventId: string }`, reads that event and succeeds. */
+export const eventTestHandler: JobHandler<{ eventId: string }> = {
+  jobType: "test.event",
+  saga: false,
+  errorCodes: {},
+  parse: (payload) => {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new JobError("invalid_payload", { permanent: true })
+    const keys = Object.keys(payload)
+    const { eventId } = payload as Record<string, unknown>
+    if (keys.length !== 1 || typeof eventId !== "string" || eventId === "") throw new JobError("invalid_payload", { permanent: true })
+    return { eventId }
+  },
+  run: async (ctx) => {
+    await adminDb().collection("events").doc(ctx.payload.eventId).get()
+    return {}
+  },
+}
+
 export function installTestHandlers(): void {
-  for (const h of [sagaTestHandler, fencedTestHandler]) jobTestSeam.handlers.set(h.jobType, h as JobHandler)
+  for (const h of [sagaTestHandler, fencedTestHandler, eventTestHandler]) jobTestSeam.handlers.set(h.jobType, h as JobHandler)
 }
 
 export function removeTestHandlers(): void {
-  for (const h of [sagaTestHandler, fencedTestHandler]) jobTestSeam.handlers.delete(h.jobType)
+  for (const h of [sagaTestHandler, fencedTestHandler, eventTestHandler]) jobTestSeam.handlers.delete(h.jobType)
 }
 
 /** The diagnostic counter's `count` (0 when the doc is absent). */

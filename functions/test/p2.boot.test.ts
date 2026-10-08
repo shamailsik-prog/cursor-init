@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { SUBSCRIBERS } from "../src/p2/fanout"
 import { JOB_HANDLERS } from "../src/p2/registry"
 
 // The job runtime boots like the router (L18 §9.1 rule 4): every layer flag off, no network. The
@@ -33,11 +34,15 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "health", "jobSweeper", "jobWorker", "onJobCreated"])
-    for (const n of ["onJobCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
+    expect(Object.keys(index).sort()).toEqual(["api", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated"])
+    for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
       eventFilterPathPatterns: { document: "jobs/{jobId}" },
+    })
+    expect(index.onEventCreated.__endpoint.eventTrigger).toMatchObject({
+      eventType: "google.cloud.firestore.document.v1.created",
+      eventFilterPathPatterns: { document: "events/{eventId}" },
     })
     expect(index.jobWorker.__endpoint).toMatchObject({
       timeoutSeconds: 300,
@@ -50,9 +55,10 @@ describe("P2 boot (P3-5, P3-8)", () => {
     // The worker stays IAM-private (only Cloud Tasks, with OIDC, may invoke it): firebase-functions
     // does not verify the caller itself, so an invoker set here or globally (e.g. "public") must fail.
     expect(index.jobWorker.__endpoint.taskQueueTrigger).not.toHaveProperty("invoker")
-    for (const n of ["onJobCreated", "jobWorker", "jobSweeper"]) {
+    for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }
     expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic"])
+    expect(SUBSCRIBERS).toEqual([])
   })
 })

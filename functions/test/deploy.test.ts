@@ -65,7 +65,7 @@ describe("deploy config: proxy hops and ingress", () => {
       { cwd, encoding: "utf8" }
     )
     const regions = JSON.parse(out.trim().split("\n").pop() as string) as Record<string, string[] | null>
-    expect(Object.keys(regions)).toEqual(expect.arrayContaining(["api", "health", "onJobCreated", "jobWorker", "jobSweeper"]))
+    expect(Object.keys(regions)).toEqual(expect.arrayContaining(["api", "health", "onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]))
     for (const [name, region] of Object.entries(regions)) expect([name, region]).toEqual([name, ["asia-south1"]])
   }, 60_000)
 
