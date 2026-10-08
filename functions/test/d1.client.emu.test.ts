@@ -171,6 +171,39 @@ describe.skipIf(!EMULATORS)("registerClient", () => {
     expect((await adminDb().collection("entity_links").where("firmId", "==", firmId).get()).size).toBe(2)
   })
 
+  it("registering B with A's CNIC and phone writes exactly one entity.candidate event for the pair (not one per key); a client with no shared key writes none", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const shared = { cnic: "4210112345671", primaryMobile: "03001112233" }
+    const first = await registerClient({ token: partner.token, data: body(firmId, shared) } as never)
+    const lone = await registerClient({ token: partner.token, data: body(firmId) } as never)
+    const eventsOf = async () => (await adminDb().collection("events").where("firmId", "==", firmId).where("name", "==", "entity.candidate").get()).docs
+    expect(await eventsOf()).toHaveLength(0)
+    const second = await registerClient({ token: partner.token, data: body(firmId, shared) } as never)
+    const [a, b] = [first.entityId, second.entityId].sort()
+    const events = await eventsOf()
+    expect(events).toHaveLength(1)
+    expect(events[0].id).toBe(`${firmId}_${a}_${b}_candidate`)
+    expect(events[0].data()).toMatchObject({
+      name: "entity.candidate",
+      firmId,
+      payload: { entityIds: [a, b], mergeEventId: null, score: 0.99 },
+      classification: "internal",
+      idempotencyKey: `${firmId}_${a}_${b}:candidate`,
+    })
+    expect(events[0].data().occurredAt).toBeTruthy()
+    expect(lone.entityId).toBeTruthy()
+  })
+
+  it("the entity.candidate event carries the pair's link label (the higher of the two entities)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210177777771", classification: "privileged" }) } as never)
+    await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210177777771", classification: "internal" }) } as never)
+    const events = await adminDb().collection("events").where("firmId", "==", firmId).where("name", "==", "entity.candidate").get()
+    expect(events.docs.map((d) => d.data().classification)).toEqual(["privileged"])
+  })
+
   it("idempotent replay returns the same clientId and creates one client", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
