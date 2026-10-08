@@ -3,7 +3,7 @@
 #
 # 1. every /api/d1 route (20: 14 from 2a, 6 entity) is exercised by a viaApi test (check_route_coverage.py)
 # 2. disable-every-layer boot check (functions/test/d1.boot.test.ts; no emulator needed)
-# 3. the two "L17.2 invariant" tests of d1.entity-invariants.emu.test.ts under the Auth and
+# 3. the two "L17.2 invariant" tests of d1.entity-invariants.emu.test.ts, selected by exact name, under the Auth and
 #    Firestore emulators
 # 4. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -17,14 +17,24 @@ cd "$ROOT"
 if [ "${1:-}" = "--inner" ]; then
   cd "$ROOT/functions"
   # vitest exits 0 when -t matches nothing (renamed test) or the emulator suite is skipped, so the
-  # JSON result must show exactly two passed tests and none failed. G4B_FILTER exists only
-  # to prove this check can fail.
+  # JSON result must show exactly the two named tests passed and nothing failed. The tests are
+  # selected by their exact full names (anchored, escaped), and the JSON check repeats the names,
+  # so a renamed or swapped test fails the gate. G4B_FILTER exists only to prove this can fail.
   json="$2/invariants.json"
-  npx vitest run test/d1.entity-invariants.emu.test.ts -t "${G4B_FILTER:-L17.2 invariant}" --reporter=json --outputFile="$json" || true
-  node -e '
+  suite='L17.2 conflict invariants (P2-18, P2-30, P2-41)'
+  t1='L17.2 invariant: confirmMerge turns a key review into FLAG and a contradicted resolution into check_stale'
+  t2='L17.2 invariant: a rejected or disputed pair is never confirmed identity'
+  esc() { printf '%s' "$1" | sed 's/[][\\.*^$()+?{}|]/\\&/g'; }
+  filter="^$(esc "$suite $t1")\$|^$(esc "$suite $t2")\$"
+  npx vitest run test/d1.entity-invariants.emu.test.ts -t "${G4B_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
+  EXPECT_1="$suite $t1" EXPECT_2="$suite $t2" node -e '
     const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
     console.log(`L17.2 invariants: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)
-    process.exit(r.numPassedTests === 2 && r.numFailedTests === 0 ? 0 : 1)' "$json"
+    const passed = r.testResults.flatMap((f) => f.assertionResults).filter((a) => a.status === "passed").map((a) => a.fullName).sort()
+    const want = [process.env.EXPECT_1, process.env.EXPECT_2].sort()
+    const exact = passed.length === 2 && passed.every((n, i) => n === want[i])
+    if (!exact) console.log("passed tests are not exactly the two named invariants:", JSON.stringify(passed))
+    process.exit(r.numPassedTests === 2 && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
   exit $?
 fi
 
