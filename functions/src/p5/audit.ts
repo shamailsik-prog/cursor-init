@@ -5,6 +5,8 @@ import { adminDb } from "../admin"
 export type AuditRow = {
   firmId: string
   actorId: string
+  /** The user a system actor acts for (P3-18: a job's creator, a uid or "system"). */
+  onBehalfOf?: string
   action: string
   target: string
   classification: Classification
