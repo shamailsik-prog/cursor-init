@@ -116,7 +116,8 @@ function isJsonValue(value: unknown, ancestors: Set<object>): boolean {
   return false
 }
 
-function isSafeRef(ref: unknown): boolean {
+/** A document path `collection/id` with safe ids (inputRefs, outputRefs). */
+export function isSafeRef(ref: unknown): boolean {
   if (typeof ref !== "string") return false
   const parts = ref.split("/")
   return parts.length === 2 && isSafeDocId(parts[0]) && isSafeDocId(parts[1])

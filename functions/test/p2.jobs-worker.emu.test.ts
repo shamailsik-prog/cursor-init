@@ -1,0 +1,340 @@
+import { FieldValue, Timestamp } from "firebase-admin/firestore"
+import { logger } from "firebase-functions"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { DiagnosticPayload } from "../src/p2/diagnostic"
+import { jobsRef } from "../src/p2/enqueue"
+import { logDeadLetterAlert } from "../src/p2/jobEvents"
+import { jobWorkerTestSeam } from "../src/p2/worker"
+import { EMULATORS, uniq } from "./emu"
+import {
+  FakeClock,
+  T0,
+  diagCount,
+  diagSpec,
+  enqueueAt,
+  fencedCounterRef,
+  installTestHandlers,
+  jobAuditRows,
+  jobEvents,
+  newFirm,
+  readJob,
+  removeTestHandlers,
+  testDeps,
+} from "./jobs"
+
+/** The P2 worker (spec P3-3, P3-6, P3-7, P3-9, P3-18): claim, lease fence, run, retries, dead-letter. */
+
+type Deps = ReturnType<typeof testDeps>
+
+describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
+  let firmId: string
+  let uid: string
+  let d: Deps
+
+  const enqueue = async (payload: DiagnosticPayload | Record<string, never>, over: Parameters<typeof diagSpec>[2] = {}) =>
+    (await enqueueAt(diagSpec(firmId, payload as DiagnosticPayload, { createdBy: uid, ...over }), T0)).jobId
+
+  beforeEach(async () => {
+    firmId = await newFirm()
+    uid = uniq("uid")
+    d = testDeps(new FakeClock(T0))
+    installTestHandlers()
+  })
+
+  afterEach(() => {
+    removeTestHandlers()
+    vi.restoreAllMocks()
+  })
+
+  it("success: claim, run, commit; counter 1; audit job.start then job.done as system on behalf of the creator", async () => {
+    const jobId = await enqueue({ behaviour: "succeed" })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("done")
+    const row = await readJob(jobId)
+    expect(row).toMatchObject({ status: "done", attempts: 1, totalAttempts: 1, lease: null, nextAttemptAt: null, lastError: null })
+    expect(row.finishedAt?.toMillis()).toBe(T0)
+    expect(row.startedAt?.toMillis()).toBe(T0)
+    expect(await diagCount(firmId, jobId)).toBe(1)
+    expect((await jobAuditRows(jobId)).map((r) => [r.action, r.reason, r.actorId, r.onBehalfOf])).toEqual([
+      ["job.start", "ok", "system", uid],
+      ["job.done", "ok", "system", uid],
+    ])
+    expect(row.logs.map((l) => l.event)).toEqual(["enqueued", "claimed", "done"])
+    expect(await jobEvents(jobId)).toEqual({})
+  })
+
+  it("retry schedule: fail_times 2 fails at attempts 1 and 2 (1 s, then 5 s later) and succeeds at 3", async () => {
+    const jobId = await enqueue({ behaviour: "fail_times", failTimes: 2 })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    let row = await readJob(jobId)
+    expect(row).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      dispatchSeq: 1,
+      lease: null,
+      lastError: { code: "diag_failure", message: "Diagnostic failure (planned)." },
+    })
+    expect(row.nextAttemptAt?.toMillis()).toBe(T0 + 1000)
+    expect(row.dispatchedAt.toMillis()).toBe(T0)
+    expect(d.dispatcher.tasks.at(-1)).toEqual({ jobId, seq: 1, scheduleAt: T0 + 1000 })
+    const events = await jobEvents(jobId)
+    expect(events[`${jobId}_failed_1`]).toMatchObject({
+      name: "job.failed",
+      firmId,
+      classification: "internal",
+      idempotencyKey: `${jobId}_failed_1`,
+      payload: { jobId, jobType: "platform.diagnostic", attempts: 1, error: "diag_failure" },
+    })
+    expect((events[`${jobId}_failed_1`].occurredAt as Timestamp).toMillis()).toBe(T0)
+
+    expect(await d.dispatcher.deliver({ jobId, seq: 1 }, T0 + 1000)).toBe("failed")
+    row = await readJob(jobId)
+    expect(row).toMatchObject({ status: "failed", attempts: 2, dispatchSeq: 2 })
+    expect(row.nextAttemptAt?.toMillis()).toBe(T0 + 6000)
+    expect(d.dispatcher.tasks.at(-1)).toEqual({ jobId, seq: 2, scheduleAt: T0 + 6000 })
+
+    expect(await d.dispatcher.deliver({ jobId, seq: 2 }, T0 + 6000)).toBe("done")
+    expect(await diagCount(firmId, jobId)).toBe(1)
+    row = await readJob(jobId)
+    expect(row.totalAttempts).toBe(3)
+    expect(row.logs.map((l) => [l.event, l.attempt, l.code ?? null])).toEqual([
+      ["enqueued", 0, null],
+      ["claimed", 1, null],
+      ["failed", 1, "diag_failure"],
+      ["claimed", 2, null],
+      ["failed", 2, "diag_failure"],
+      ["claimed", 3, null],
+      ["done", 3, null],
+    ])
+    expect((await jobAuditRows(jobId)).map((r) => [r.action, r.reason])).toEqual([
+      ["job.start", "ok"],
+      ["job.fail", "diag_failure"],
+      ["job.start", "ok"],
+      ["job.fail", "diag_failure"],
+      ["job.start", "ok"],
+      ["job.done", "ok"],
+    ])
+    expect(Object.keys(await jobEvents(jobId)).sort()).toEqual([`${jobId}_failed_1`, `${jobId}_failed_2`])
+  })
+
+  it("permanent, invalid payload and unknown type dead-letter at attempt 1 with job.failed and job.deadLettered", async () => {
+    const cases: Array<{ code: string; jobType: string; setup: (jobId: string) => Promise<void> }> = [
+      { code: "diag_permanent", jobType: "platform.diagnostic", setup: async () => undefined },
+      {
+        code: "invalid_payload",
+        jobType: "platform.diagnostic",
+        setup: (jobId) => jobsRef().doc(jobId).update({ payload: { behaviour: "nope" } }).then(() => undefined),
+      },
+      { code: "unknown_job_type", jobType: "gone.type", setup: (jobId) => jobsRef().doc(jobId).update({ jobType: "gone.type" }).then(() => undefined) },
+    ]
+    for (const c of cases) {
+      d = testDeps(new FakeClock(T0))
+      const jobId = await enqueue({ behaviour: c.code === "diag_permanent" ? "permanent" : "succeed" })
+      await c.setup(jobId)
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("dead_lettered")
+      const row = await readJob(jobId)
+      expect(row).toMatchObject({ status: "dead_lettered", attempts: 1, nextAttemptAt: null, lease: null, lastError: { code: c.code } })
+      expect(row.finishedAt?.toMillis()).toBe(T0)
+      const events = await jobEvents(jobId)
+      expect(Object.keys(events).sort()).toEqual([`${jobId}_deadLettered_0`, `${jobId}_failed_1`])
+      expect(events[`${jobId}_deadLettered_0`]).toMatchObject({
+        name: "job.deadLettered",
+        firmId,
+        classification: "internal",
+        idempotencyKey: `${jobId}_deadLettered_0`,
+        payload: { jobId, jobType: c.jobType, attempts: 1, error: c.code },
+      })
+      expect(d.alerts).toEqual([{ jobId, jobType: c.jobType, firmId, attempts: 1, code: c.code }])
+      expect(d.dispatcher.tasks).toEqual([])
+      expect((await jobAuditRows(jobId)).map((r) => [r.action, r.reason])).toEqual([
+        ["job.start", "ok"],
+        ["job.dead_letter", c.code],
+      ])
+      expect(row.logs.map((l) => l.event)).toEqual(["enqueued", "claimed", "dead_lettered"])
+    }
+  })
+
+  it("hang overruns the handler budget: retryable handler_timeout", async () => {
+    d = testDeps(new FakeClock(T0), { handlerBudgetMs: 50 })
+    const jobId = await enqueue({ behaviour: "hang" })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    const row = await readJob(jobId)
+    expect(row).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      lastError: { code: "handler_timeout", message: "The job exceeded its time budget." },
+    })
+    expect(d.dispatcher.tasks).toEqual([{ jobId, seq: 1, scheduleAt: T0 + 1000 }])
+  })
+
+  it("a stale seq, a not-yet-due delivery (> 2 s early), a cancelled, done or non-engine row is dropped; 1.5 s early runs", async () => {
+    const unchanged = async (jobId: string, before: Awaited<ReturnType<typeof readJob>>, audits: number) => {
+      const after = await readJob(jobId)
+      expect(after.updateTime.isEqual(before.updateTime)).toBe(true)
+      expect(await jobAuditRows(jobId)).toHaveLength(audits)
+    }
+
+    // Stale seq: dispatchSeq is 0.
+    const jobId = await enqueue({ behaviour: "fail_times", failTimes: 2 })
+    let before = await readJob(jobId)
+    expect(await d.dispatcher.deliver({ jobId, seq: 1 }, T0)).toBe("dropped")
+    await unchanged(jobId, before, 0)
+
+    // After one failure (N = T0 + 1000): 2.5 s early is dropped, 1.5 s early runs.
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    const N = T0 + 1000
+    before = await readJob(jobId)
+    const tasks = d.dispatcher.tasks.length
+    expect(await d.dispatcher.deliver({ jobId, seq: 1 }, N - 2500)).toBe("dropped")
+    await unchanged(jobId, before, 2)
+    expect(d.dispatcher.tasks).toHaveLength(tasks)
+    expect(await d.dispatcher.deliver({ jobId, seq: 1 }, N - 1500)).toBe("failed")
+
+    // Cancelled.
+    const cancelled = await enqueue({ behaviour: "succeed" })
+    await jobsRef().doc(cancelled).update({ status: "cancelled" })
+    before = await readJob(cancelled)
+    expect(await d.dispatcher.deliver({ jobId: cancelled, seq: 0 }, T0)).toBe("dropped")
+    await unchanged(cancelled, before, 0)
+
+    // Done, delivered again.
+    const done = await enqueue({ behaviour: "succeed" })
+    expect(await d.dispatcher.deliver({ jobId: done, seq: 0 }, T0)).toBe("done")
+    before = await readJob(done)
+    expect(await d.dispatcher.deliver({ jobId: done, seq: 0 }, T0 + 10)).toBe("dropped")
+    await unchanged(done, before, 2)
+    expect(await diagCount(firmId, done)).toBe(1)
+
+    // A row without the engine marker (the transitional writer's rows, P3-14).
+    const legacy = await enqueue({ behaviour: "succeed" })
+    await jobsRef().doc(legacy).update({ engine: FieldValue.delete() })
+    before = await readJob(legacy)
+    expect(await d.dispatcher.deliver({ jobId: legacy, seq: 0 }, T0)).toBe("dropped")
+    await unchanged(legacy, before, 0)
+
+    // A missing row.
+    expect(await d.dispatcher.deliver({ jobId: "j-missing-" + uniq("x"), seq: 0 }, T0)).toBe("dropped")
+  })
+
+  it("a running row whose lease has not expired is dropped; an expired lease is reclaimed", async () => {
+    const jobId = await enqueue({ behaviour: "succeed" })
+    await jobsRef()
+      .doc(jobId)
+      .update({ status: "running", attempts: 1, totalAttempts: 1, lease: { owner: "w1", expiresAt: Timestamp.fromMillis(T0 + 600_000) } })
+    const before = await readJob(jobId)
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0 + 599_999)).toBe("dropped")
+    expect((await readJob(jobId)).updateTime.isEqual(before.updateTime)).toBe(true)
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0 + 600_000)).toBe("done")
+    const row = await readJob(jobId)
+    expect(row).toMatchObject({ status: "done", attempts: 2, totalAttempts: 2 })
+    expect(row.logs.map((l) => l.event)).toEqual(["enqueued", "reclaimed", "done"])
+    expect((await jobAuditRows(jobId)).map((r) => [r.action, r.reason])).toEqual([
+      ["job.start", "lease_expired_reclaim"],
+      ["job.done", "ok"],
+    ])
+  })
+
+  it("a reclaim at attempt 4 dead-letters with lease_expired and alerts", async () => {
+    const jobId = await enqueue({ behaviour: "succeed" })
+    await jobsRef()
+      .doc(jobId)
+      .update({ status: "running", attempts: 4, totalAttempts: 4, lease: { owner: "w1", expiresAt: Timestamp.fromMillis(T0) } })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("dead_lettered")
+    const row = await readJob(jobId)
+    expect(row).toMatchObject({
+      status: "dead_lettered",
+      attempts: 4,
+      totalAttempts: 4,
+      lease: null,
+      nextAttemptAt: null,
+      lastError: { code: "lease_expired", message: "The job's worker stopped before finishing." },
+    })
+    expect(await diagCount(firmId, jobId)).toBe(0)
+    expect(Object.keys(await jobEvents(jobId)).sort()).toEqual([`${jobId}_deadLettered_0`, `${jobId}_failed_4`])
+    expect(d.alerts).toEqual([{ jobId, jobType: "platform.diagnostic", firmId, attempts: 4, code: "lease_expired" }])
+    expect((await jobAuditRows(jobId)).map((r) => [r.action, r.reason])).toEqual([["job.dead_letter", "lease_expired"]])
+  })
+
+  it("runFenced after the fence is lost writes nothing and the commit is skipped", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    const jobId = await enqueue({}, { jobType: "test.fenced" })
+    jobWorkerTestSeam.afterClaim = async ({ jobId: id }) => {
+      await jobsRef().doc(id).update({ "lease.owner": "intruder" })
+    }
+    let outcome: string
+    try {
+      outcome = await d.dispatcher.deliver({ jobId, seq: 0 }, T0)
+    } finally {
+      delete jobWorkerTestSeam.afterClaim
+    }
+    expect(outcome).toBe("lease_lost")
+    expect((await fencedCounterRef(firmId, jobId).get()).exists).toBe(false)
+    const row = await readJob(jobId)
+    expect(row).toMatchObject({ status: "running", attempts: 1, lease: { owner: "intruder" } })
+    expect(warn).toHaveBeenCalledWith("job.lease_lost", { jobId, jobType: "test.fenced" })
+    expect((await jobAuditRows(jobId)).map((r) => r.action)).toEqual(["job.start"])
+  })
+
+  it("runFenced with the fence held commits its write and the job is done", async () => {
+    const jobId = await enqueue({}, { jobType: "test.fenced" })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("done")
+    expect((await fencedCounterRef(firmId, jobId).get()).get("count")).toBe(1)
+  })
+
+  it("a commit whose fence was lost after the handler writes nothing", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    const jobId = await enqueue({ behaviour: "succeed" })
+    jobWorkerTestSeam.afterHandler = async ({ jobId: id }) => {
+      await jobsRef().doc(id).update({ "lease.owner": "intruder" })
+    }
+    let outcome: string
+    try {
+      outcome = await d.dispatcher.deliver({ jobId, seq: 0 }, T0)
+    } finally {
+      delete jobWorkerTestSeam.afterHandler
+    }
+    expect(outcome).toBe("lease_lost")
+    expect(await diagCount(firmId, jobId)).toBe(0)
+    expect(await readJob(jobId)).toMatchObject({ status: "running", lease: { owner: "intruder" } })
+    expect(warn).toHaveBeenCalledWith("job.lease_lost", { jobId, jobType: "platform.diagnostic" })
+  })
+
+  it("logs keep the last 50 entries", async () => {
+    const jobId = await enqueue({ behaviour: "succeed" })
+    const seeded = Array.from({ length: 50 }, (_, i) => ({ at: Timestamp.fromMillis(T0 - 50 + i), event: "enqueued", attempt: 0 }))
+    await jobsRef().doc(jobId).update({ logs: seeded })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("done")
+    const row = await readJob(jobId)
+    expect(row.logs).toHaveLength(50)
+    expect(row.logs.at(-2)?.event).toBe("claimed")
+    expect(row.logs.at(-1)?.event).toBe("done")
+    expect(row.logs[0].at.toMillis()).toBe(T0 - 48)
+  })
+
+  it("the default alert logs job.deadLettered with codes only", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    await logDeadLetterAlert.deadLettered({ jobId: "j1", jobType: "t", firmId: "f", attempts: 4, code: "internal" })
+    expect(error).toHaveBeenCalledWith("job.deadLettered", { jobId: "j1", jobType: "t", firmId: "f", attempts: 4, code: "internal" })
+  })
+
+  it("a raw error is sanitised to internal and its text is stored nowhere", async () => {
+    const marker = uniq("poison")
+    const jobId = await enqueue({ behaviour: "throw_raw", marker })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    const row = await readJob(jobId)
+    expect(row.lastError).toEqual({ code: "internal", message: "The job failed with an internal error." })
+    expect(JSON.stringify({ ...row, payload: null })).not.toContain(marker)
+    expect(JSON.stringify(await jobEvents(jobId))).not.toContain(marker)
+    expect(JSON.stringify(await jobAuditRows(jobId))).not.toContain(marker)
+  })
+
+  it("a dispatch failure after a failed attempt is logged and swallowed", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const jobId = await enqueue({ behaviour: "fail_times", failTimes: 1 })
+    d.dispatcher.dispatch = async () => {
+      throw Object.assign(new Error("queue down"), { code: "unavailable" })
+    }
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    expect(error).toHaveBeenCalledWith("job dispatch failed", { code: "unavailable" })
+    expect(await readJob(jobId)).toMatchObject({ status: "failed", dispatchSeq: 1 })
+  })
+})

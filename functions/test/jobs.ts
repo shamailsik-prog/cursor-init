@@ -1,7 +1,11 @@
-import type { DocumentData, Timestamp } from "firebase-admin/firestore"
+import { FieldValue, type DocumentData, type DocumentReference, type Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
+import type { JobDeps, JobDispatcher, JobTask } from "../src/p2/dispatch"
 import type { DiagnosticPayload } from "../src/p2/diagnostic"
 import { enqueueJob, jobsRef, type EnqueueResult, type JobRow, type JobSpec } from "../src/p2/enqueue"
+import type { DeadLetterInfo } from "../src/p2/jobEvents"
+import { jobTestSeam, type JobHandler } from "../src/p2/registry"
+import { runJobTask, type TaskOutcome } from "../src/p2/worker"
 import { uniq } from "./emu"
 
 /** Shared helpers for the P2 job-engine emulator suites (spec §7). */
@@ -46,4 +50,135 @@ export async function newFirm(): Promise<string> {
   const firmId = uniq("firm")
   await adminDb().collection("firms").doc(firmId).set({ name: "Jobs Firm", plan: "internal" })
   return firmId
+}
+
+/** A settable clock for `JobDeps.clock` (spec §7: injected clocks, no sleeps). */
+export class FakeClock {
+  private ms: number
+
+  constructor(ms: number) {
+    this.ms = ms
+  }
+
+  now(): number {
+    return this.ms
+  }
+
+  set(ms: number): void {
+    this.ms = ms
+  }
+
+  advance(ms: number): void {
+    this.ms += ms
+  }
+}
+
+type RecordedTask = JobTask & { scheduleAt: number | null }
+
+/**
+ * Cloud Tasks stand-in (spec §7): records every dispatch, dedupes by task id `${jobId}-${seq}`
+ * as Cloud Tasks does, and delivers on demand by calling `runJobTask` with the test's deps.
+ */
+export class InProcessDispatcher implements JobDispatcher {
+  readonly tasks: RecordedTask[] = []
+  private readonly ids = new Set<string>()
+  private readonly delivered = new Set<string>()
+
+  constructor(
+    private readonly clock: FakeClock,
+    private readonly deps: () => JobDeps
+  ) {}
+
+  async dispatch(task: JobTask, opts: { scheduleAt?: number } = {}): Promise<void> {
+    const id = `${task.jobId}-${task.seq}`
+    if (this.ids.has(id)) return
+    this.ids.add(id)
+    this.tasks.push({ jobId: task.jobId, seq: task.seq, scheduleAt: opts.scheduleAt ?? null })
+  }
+
+  /** Delivers `task` now, or at `at` (the clock is set to `at` first). */
+  deliver(task: JobTask, at?: number): Promise<TaskOutcome> {
+    if (at !== undefined) this.clock.set(at)
+    this.delivered.add(`${task.jobId}-${task.seq}`)
+    return runJobTask({ jobId: task.jobId, seq: task.seq }, this.deps())
+  }
+
+  /** Delivers, one at a time and in order, every recorded task not yet delivered whose time has come. */
+  async drainDue(now: number): Promise<TaskOutcome[]> {
+    const outcomes: TaskOutcome[] = []
+    for (;;) {
+      const due = this.tasks.find((t) => !this.delivered.has(`${t.jobId}-${t.seq}`) && (t.scheduleAt ?? -Infinity) <= now)
+      if (!due) return outcomes
+      outcomes.push(await this.deliver(due, now))
+    }
+  }
+}
+
+/** Worker deps for a test: the in-process dispatcher, the fake clock and a capturing alert. */
+export function testDeps(
+  clock: FakeClock,
+  opts: { handlerBudgetMs?: number } = {}
+): JobDeps & { dispatcher: InProcessDispatcher; alerts: DeadLetterInfo[] } {
+  const alerts: DeadLetterInfo[] = []
+  const deps: JobDeps & { dispatcher: InProcessDispatcher; alerts: DeadLetterInfo[] } = {
+    dispatcher: new InProcessDispatcher(clock, () => deps),
+    clock: () => clock.now(),
+    alert: { deadLettered: (info) => void alerts.push(info) },
+    handlerBudgetMs: opts.handlerBudgetMs ?? 240_000,
+    alerts,
+  }
+  return deps
+}
+
+/** The `test.fenced` job's counter, written only through `runFenced`. */
+export function fencedCounterRef(firmId: string, jobId: string): DocumentReference {
+  return adminDb().collection("counters").doc(`${firmId}_jobfenced_${jobId}`)
+}
+
+const anyObject = (payload: unknown): Record<string, unknown> => {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new Error("invalid")
+  return payload as Record<string, unknown>
+}
+
+/** A saga-flagged test type that always succeeds (P3-12, P3-13 need one). */
+export const sagaTestHandler: JobHandler<Record<string, unknown>> = {
+  jobType: "test.saga",
+  saga: true,
+  errorCodes: {},
+  parse: anyObject,
+  run: async () => ({}),
+}
+
+/** A test type whose only effect is a fenced counter increment. */
+export const fencedTestHandler: JobHandler<Record<string, unknown>> = {
+  jobType: "test.fenced",
+  saga: false,
+  errorCodes: {},
+  parse: anyObject,
+  run: async (ctx) => {
+    await ctx.runFenced(async (tx) => {
+      tx.set(fencedCounterRef(ctx.job.firmId, ctx.job.id), { count: FieldValue.increment(1) }, { merge: true })
+    })
+    return {}
+  },
+}
+
+export function installTestHandlers(): void {
+  for (const h of [sagaTestHandler, fencedTestHandler]) jobTestSeam.handlers.set(h.jobType, h as JobHandler)
+}
+
+export function removeTestHandlers(): void {
+  for (const h of [sagaTestHandler, fencedTestHandler]) jobTestSeam.handlers.delete(h.jobType)
+}
+
+/** The diagnostic counter's `count` (0 when the doc is absent). */
+export async function diagCount(firmId: string, jobId: string): Promise<number> {
+  const snap = await adminDb().collection("counters").doc(`${firmId}_jobdiag_${jobId}`).get()
+  return snap.exists ? Number(snap.get("count")) : 0
+}
+
+/** The job's `events` docs, keyed by doc id. */
+export async function jobEvents(jobId: string): Promise<Record<string, DocumentData>> {
+  const snap = await adminDb().collection("events").where("payload.jobId", "==", jobId).get()
+  return Object.fromEntries(snap.docs.map((d) => [d.id, d.data()]))
 }
