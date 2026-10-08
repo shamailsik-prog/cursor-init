@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
+import { openMatterTestSeam } from "../src/d1/matter/ops"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
 
@@ -113,6 +114,33 @@ describe.skipIf(!EMULATORS)("L17.2 conflict invariants (P2-18, P2-30, P2-41)", (
     expect(crossing(fresh.hits)[0]).toMatchObject({ outcome: "FLAG", identityBasis: "confirmed_identity", reliedOnLinkIds: [s.cnicRowId] })
     expect(sameRole(fresh.hits).length).toBeGreaterThan(0)
     for (const h of sameRole(fresh.hits)) expect(h.outcome).toBe("NONE")
+  })
+
+  it("race (Bugbot PR #8): a confirmMerge that lands between openMatter's pre-screen and its transaction is seen; the next round answers 409 check_stale", async () => {
+    const s = await seed()
+    const first = await s.check()
+    expect(await resolveAll(s, first.checkId)).toMatchObject({ result: "CLEAR", decision: "cleared" })
+
+    const rounds: number[] = []
+    openMatterTestSeam.afterPreScreen = async (round) => {
+      rounds.push(round)
+      // Round 1 pre-screened the registry with the pair still a candidate; the merge commits before its transaction.
+      if (round === 1) expect((await confirmMerge(linkCall(s, s.associate.token))).state).toBe("confirmed")
+    }
+    let err: Awaited<ReturnType<typeof apiErrorOf>>
+    try {
+      err = await apiErrorOf(open(s, first.checkId))
+    } finally {
+      delete openMatterTestSeam.afterPreScreen
+    }
+    expectKind(err, "failed-precondition", "check_stale")
+    expect(rounds).toEqual([1, 2])
+    expect((await adminDb().collection("conflict_checks").doc(first.checkId).get()).data()).toMatchObject({ stale: true, boundMatterId: null })
+    expect((await adminDb().collection("matters").where("firmId", "==", s.firmId).where("conflictCheckId", "==", first.checkId).get()).size).toBe(0)
+    const rows = (await adminDb().collection("audit_log").where("actorId", "==", s.partner.uid).where("action", "==", "matter.open").get()).docs
+      .map((d) => d.data())
+      .filter((r) => String(r.target).startsWith("matters/"))
+    expect(rows.map((r) => [r.decision, r.reason])).toEqual([["deny", "check_stale"]])
   })
 
   it("L17.2 invariant: a rejected or disputed pair is never confirmed identity", async () => {

@@ -4,6 +4,7 @@ import { HttpError } from "../../http/errors"
 import type { Caller } from "../../p5/auth"
 import { isSafeDocId, type CallAudit, type Data, type FirmOperation } from "../../p5/common"
 import { knownOrHighest } from "../conflict/engine"
+import { bumpRegistryVersion } from "../registryVersion"
 import { DETERMINISTIC_KEY_SCORE, effectiveLinkState } from "./linkState"
 import { readPair, type Pair } from "./pair"
 import { gate } from "./read"
@@ -68,6 +69,8 @@ async function runDecision(
   const result = await adminDb().runTransaction(async (tx) => {
     const pair = await readPair(tx, caller, linkId)
     const out = decide(tx, pair, { by: caller.uid, role: caller.role, at, note })
+    // Every decision changes the pair's effective link state, which the conflict screen reads.
+    bumpRegistryVersion(tx, caller.firmId)
     await audit.stage(tx, "allow", "ok")
     return out
   })

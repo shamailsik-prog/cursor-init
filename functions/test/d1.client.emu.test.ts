@@ -73,6 +73,22 @@ describe.skipIf(!EMULATORS)("registerClient", () => {
     expect(opRows.map((r) => r.decision)).toEqual(["allow"])
   })
 
+  it("bumps the firm's registry version (counters/{firmId}_registry) once per registration; a refused call leaves it (Bugbot PR #8)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const intern = await mintIdToken(claims(firmId, "intern"))
+    const version = async () => (await adminDb().collection("counters").doc(`${firmId}_registry`).get()).data()?.version ?? 0
+    expect(await version()).toBe(0)
+    await registerClient({ token: partner.token, data: body(firmId) } as never)
+    expect(await version()).toBe(1)
+    expect((await adminDb().collection("counters").doc(`${firmId}_registry`).get()).data()).toMatchObject({ firmId, kind: "registry", classification: "internal" })
+    await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210112345671" }) } as never)
+    await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210112345671" }) } as never) // writes a candidate link too
+    expect(await version()).toBe(3)
+    await apiErrorOf(registerClient({ token: intern.token, data: body(firmId) } as never))
+    expect(await version()).toBe(3)
+  })
+
   it("client role → 403 client_denied; intern → 403 role_not_permitted; nothing written", async () => {
     const firmId = await newFirm()
     const client = await mintIdToken(claims(firmId, "client"))

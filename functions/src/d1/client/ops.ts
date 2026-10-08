@@ -9,6 +9,7 @@ import { normalisePhone } from "../conflict/normalise"
 import { allocateNumber, formatClientCode, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
 import { DETERMINISTIC_KEY_SCORE } from "../entity/linkState"
+import { bumpRegistryVersion } from "../registryVersion"
 import { parseKeys, parseName, type Keys } from "../validate"
 
 const clients = () => adminDb().collection("clients")
@@ -135,6 +136,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       const clientCode = formatClientCode(clientPrefix, karachiYear(now), n)
 
       await audit.stage(tx, "allow", "ok")
+      bumpRegistryVersion(tx, caller.firmId)
       tx.create(entityRef, {
         firmId: caller.firmId,
         canonicalName,

@@ -286,6 +286,31 @@ describe.skipIf(!EMULATORS)("rejectLink (P2-26, P2-27)", () => {
   })
 })
 
+describe.skipIf(!EMULATORS)("registry version (Bugbot PR #8: openMatter's re-screen guard)", () => {
+  const version = async (firmId: string) => (await adminDb().collection("counters").doc(`${firmId}_registry`).get()).data()?.version ?? 0
+
+  it("confirmMerge, disputeLink and rejectLink each bump the firm's registry version once; a refused decision leaves it", async () => {
+    const confirmed = await setup()
+    const before = await version(confirmed.firmId)
+    await confirmMerge(call(confirmed.associate.token, confirmed.firmId, confirmed.phoneRow))
+    expect(await version(confirmed.firmId)).toBe(before + 1)
+    await apiErrorOf(confirmMerge(call(confirmed.associate.token, confirmed.firmId, confirmed.cnicRow))) // 409 link_not_candidate
+    expect(await version(confirmed.firmId)).toBe(before + 1)
+
+    const disputed = await setup()
+    const beforeDispute = await version(disputed.firmId)
+    await disputeLink(call(disputed.associate.token, disputed.firmId, disputed.cnicRow))
+    expect(await version(disputed.firmId)).toBe(beforeDispute + 1)
+
+    const rejected = await setup()
+    const beforeReject = await version(rejected.firmId)
+    await apiErrorOf(rejectLink(call(rejected.associate.token, rejected.firmId, rejected.cnicRow))) // 403 role_not_permitted
+    expect(await version(rejected.firmId)).toBe(beforeReject)
+    await rejectLink(call(rejected.partner.token, rejected.firmId, rejected.cnicRow))
+    expect(await version(rejected.firmId)).toBe(beforeReject + 1)
+  })
+})
+
 describe.skipIf(!EMULATORS)("decision validation and gates (P2-31, P2-34, P2-35)", () => {
   it("note of 19 chars → 400 note_too_short; non-string note or linkId 'a/b' → 400 invalid_query; unknown and other-firm linkId → 404", async () => {
     const s = await setup()

@@ -160,5 +160,22 @@ Final-review rulings (8 October 2026, owner's standing autonomy instruction):
 - Pair label (minor 1): `getEntity` and `listAliases` use the same pair label as `readPair` and the queue, including the other
   entity's client; a pair whose other client is above the caller's clearance is hidden.
 
+- Re-screen race at `openMatter` (Cursor Bugbot on PR #8, 8 October 2026): the P2-6 re-screen ran before the transaction and
+  nothing in the transaction read what it depended on, so a `confirmMerge` (or a registration, a dispute or rejection, another
+  open, a close) committing in between was missed, and P2-30 relies on that re-screen as `confirmMerge`'s stale guard. Ruling:
+  a per-firm registry version, `counters/{firmId}_registry` (server-only: `counters` already denies every client read and
+  write, so no rules change), bumped in the same transaction by every writer of what `loadRegistry` reads and the screen
+  uses: registerClient, openMatter, closeMatter, confirmMerge, disputeLink, rejectLink (`functions/src/d1/registryVersion.ts`
+  lists them and the writers left out: advanceStage writes only `stage`; no function writes `featureFlags` or
+  `transliteration_map`). `openMatter` reads the version before the screen and again first in its transaction; a moved
+  version makes the round write nothing (no audit row) and the round is redone. After 10 moved rounds it answers **409
+  `registry_contended`**, audited as the call's one deny row. 409, not 503: the service is up and the refusal is a conflict
+  with concurrent writes to the same firm's registry, as `idempotency_in_progress`; nothing was written, so a retry is safe.
+  10 rounds, not the 3 first proposed: every open bumps the version and a round fails only when another registry write
+  commits inside it, so N concurrent opens in a firm finish within N rounds; 3 rounds failed the 10-parallel-opens test
+  (Review Focus 3) in 5 of 6 runs. Cost if wrong: under sustained registry writes an open is refused with a retryable 409
+  rather than bound on a stale screen (fail-safe). Pinned by the emulator tests in `d1.matter`, `d1.entity-invariants`,
+  `d1.entity-decisions` and `d1.client` (the test seam `openMatterTestSeam.afterPreScreen` makes the race deterministic).
+
 Phase 2b-A close is Gate G-4 (`npm run gate:g4:phase2b-a`): route coverage (20 routes), boot with every layer flag off,
 the two L17.2 invariant tests, and Gate G-2 over all routes.
