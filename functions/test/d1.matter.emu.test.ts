@@ -455,4 +455,11 @@ describe.skipIf(!EMULATORS)("getMatter and listMatters", () => {
     const clientUser = await mintIdToken(claims(firmId, "client", "internal"))
     expectKind(await apiErrorOf(listMatters({ token: clientUser.token, data: { firmId } } as never)), "permission-denied", "client_denied")
   })
+
+  it("a cursor whose seconds are outside the Timestamp range → 400 invalid_cursor, not 500 (as listClients)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const cursor = Buffer.from(JSON.stringify({ sortKey: "99999999999999.0", id: "abc" }), "utf8").toString("base64url")
+    expectKind(await apiErrorOf(listMatters({ token: partner.token, data: { firmId, cursor } } as never)), "invalid-argument", "invalid_cursor")
+  })
 })

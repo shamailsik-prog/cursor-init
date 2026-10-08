@@ -381,7 +381,12 @@ export const listMattersOp: FirmOperation<Page<Record<string, unknown>>> = {
       if (!Number.isInteger(seconds) || !Number.isInteger(nanos) || nanos < 0 || nanos >= 1e9 || !isSafeDocId(id)) {
         throw new HttpError(400, "invalid_cursor")
       }
-      after = { createdAt: new Timestamp(seconds, nanos), id }
+      try {
+        after = { createdAt: new Timestamp(seconds, nanos), id }
+      } catch {
+        // Seconds outside the Timestamp range.
+        throw new HttpError(400, "invalid_cursor")
+      }
     }
 
     const items: Array<{ memberId: string; memberCreatedAt: Timestamp; matterId: string; row: DocumentData }> = []
