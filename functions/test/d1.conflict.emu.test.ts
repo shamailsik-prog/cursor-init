@@ -169,6 +169,12 @@ describe("unseenHits: the re-screen comparison at open (no emulator needed)", ()
     expect(unseenHits([h({})], [h({ outcome: "NONE" })])).toHaveLength(1)
     expect(unseenHits([h({})], [h({ candidateId: undefined })])).toHaveLength(1)
   })
+  it("a fresh FLAG on the same candidate is unseen when the stored hit was review or resolved NONE", () => {
+    const review = { resolution: "different_person" as const, by: "u", note: "n", at: "t" }
+    expect(unseenHits([h({ outcome: "FLAG" })], [h({ outcome: "POSSIBLE_CANDIDATE_REVIEW" })])).toHaveLength(1)
+    expect(unseenHits([h({ outcome: "FLAG" })], [h({ outcome: "NONE", review })])).toHaveLength(1)
+    expect(unseenHits([h({ outcome: "FLAG" })], [h({ outcome: "FLAG" })])).toEqual([])
+  })
 })
 
 describe("secondsToKarachiMidnight (no emulator needed)", () => {
