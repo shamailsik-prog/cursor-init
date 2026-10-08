@@ -6,6 +6,7 @@ import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
+import { allPostActionsExcept, gateByFlag } from "@/platform/flags/routeGate"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import {
@@ -124,8 +125,12 @@ async function handleGet(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: MATTERS_SURFACE })
+  return withSession(request, handlePostGated, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: MATTERS_SURFACE })
 }
+
+// Phase 2a final review I3: the check-free `create` action is frozen behind LEGACY_D1_NEXT_WRITES
+// (default off; Erratum E-40). Every other action is unchanged.
+const handlePostGated = gateByFlag("LEGACY_D1_NEXT_WRITES", handlePost, allPostActionsExcept(["create"]))
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()

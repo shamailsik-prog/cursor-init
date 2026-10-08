@@ -143,7 +143,7 @@ describe("feature flag registry", () => {
   })
 
   it("documents every flag with owner, spec reference and default", () => {
-    expect(Object.keys(FLAG_REGISTRY).sort()).toEqual(["CORE_ENABLED", "LEGACY_GOVERNANCE_CHAINS"])
+    expect(Object.keys(FLAG_REGISTRY).sort()).toEqual(["CORE_ENABLED", "LEGACY_D1_NEXT_WRITES", "LEGACY_GOVERNANCE_CHAINS"])
     for (const entry of Object.values(FLAG_REGISTRY)) {
       expect(entry.owner).toMatch(/\S/)
       expect(entry.specRef).toMatch(/\S/)

@@ -36,6 +36,7 @@ export const FEATURE_FLAGS = [
   { flag: "WA_31_CUT", description: "Deferred WhatsApp commands beyond the 8-command grammar", defaultEnabled: false, layer: "D2_1" },
   { flag: "L18_TEMPLATE_EXAMPLE", description: "Amendment-layer template", defaultEnabled: false, layer: "L18_X" },
   { flag: "LEGACY_GOVERNANCE_CHAINS", description: "Frozen out-of-spec ops-reporting and filing-transport chains (Erratum E-24)", defaultEnabled: false, layer: "E_24" },
+  { flag: "LEGACY_D1_NEXT_WRITES", description: "Legacy Next.js D1 check-free matter create and conflict_check (Erratum E-40)", defaultEnabled: false, layer: "E_40" },
 ] as const
 
 export const OPEN_ITEMS = [

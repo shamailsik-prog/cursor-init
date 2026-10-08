@@ -20,18 +20,43 @@ export const LEGACY_CHAIN_TEST_FILES = [
   "tests/security.review-round2.test.ts",
 ] as const
 
-const FLAG_ENV = "SIKANDER_FLAG_LEGACY_GOVERNANCE_CHAINS"
-const MARKER_ENV = "SIKANDER_TEST_SETUP_SET_LEGACY_FLAG"
+// LEGACY_D1_NEXT_WRITES is off by default (Phase 2a final review I3, Erratum E-40): the
+// Next.js D1 check-free paths (matters `create`, clients `conflict_check`) are frozen. The
+// test files below exercise those two actions (directly or as setup), so they run with the
+// flag on and stay unchanged. tests/boot.all-layers-disabled.test.ts and
+// tests/feature-flags.legacy-d1-next-writes.test.ts see the production default.
+export const LEGACY_D1_NEXT_WRITES_TEST_FILES = [
+  "tests/api.clients.test.ts",
+  "tests/api.d1-validation.test.ts",
+  "tests/api.matters.member-validation.test.ts",
+  "tests/api.matters.test.ts",
+  "tests/api.reporting.test.ts",
+  "tests/audit.request-persistence.test.ts",
+  "tests/auth.body-limit.test.ts",
+  "tests/auth.session.test.ts",
+  "tests/g2.cross-firm.test.ts",
+  "tests/http.idempotency.test.ts",
+  "tests/persistence.runtime-mode.test.ts",
+  "tests/platform.surface.test.ts",
+  "tests/security.review-round2.test.ts",
+] as const
 
 const testPath = expect.getState().testPath
 const relative = testPath ? path.relative(path.resolve(__dirname, "../.."), testPath).split(path.sep).join("/") : ""
 
-if ((LEGACY_CHAIN_TEST_FILES as readonly string[]).includes(relative)) {
-  process.env[FLAG_ENV] = "true"
-  process.env[MARKER_ENV] = "1"
-} else if (process.env[MARKER_ENV]) {
-  // A worker reused from an opted-in file: drop the opt-in it left behind,
-  // but never an override set from outside the test run.
-  delete process.env[FLAG_ENV]
-  delete process.env[MARKER_ENV]
+/** Turns `flag` on for the listed files, and clears an opt-in a reused worker left behind. */
+function optIn(files: readonly string[], flag: string, marker: string): void {
+  const flagEnv = `SIKANDER_FLAG_${flag}`
+  if (files.includes(relative)) {
+    process.env[flagEnv] = "true"
+    process.env[marker] = "1"
+  } else if (process.env[marker]) {
+    // A worker reused from an opted-in file: drop the opt-in it left behind,
+    // but never an override set from outside the test run.
+    delete process.env[flagEnv]
+    delete process.env[marker]
+  }
 }
+
+optIn(LEGACY_CHAIN_TEST_FILES, "LEGACY_GOVERNANCE_CHAINS", "SIKANDER_TEST_SETUP_SET_LEGACY_FLAG")
+optIn(LEGACY_D1_NEXT_WRITES_TEST_FILES, "LEGACY_D1_NEXT_WRITES", "SIKANDER_TEST_SETUP_SET_LEGACY_D1_FLAG")
