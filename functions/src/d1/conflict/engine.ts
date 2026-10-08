@@ -1,4 +1,4 @@
-import type { DocumentData } from "firebase-admin/firestore"
+import type { DocumentData, QuerySnapshot } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../../admin"
 import { isKnownClassification, rankOf } from "../../p5/classification"
@@ -95,6 +95,35 @@ function partyKeys(raw: unknown): Keys {
 
 const isKeyName = (v: unknown): v is KeyName => typeof v === "string" && (KEY_FIELDS as readonly string[]).includes(v)
 
+/** `entity_links` rows for screening, resolved at `nowMs` (shared by loadRegistry and transactional re-reads). */
+export function linkRowsFromSnap(linkSnap: QuerySnapshot, nowMs: number, enabled: boolean): LinkRow[] {
+  const links: LinkRow[] = []
+  for (const d of linkSnap.docs) {
+    const row = d.data()
+    if (typeof row.leftId !== "string" || typeof row.rightId !== "string" || !isKeyName(row.key)) continue
+    const state = effectiveLinkState(row, nowMs, enabled)
+    // P2-29: a rejected pair is neither relied on nor unresolved (with the flag off nothing reads as rejected).
+    if (state === "rejected") continue
+    links.push({ id: d.id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: isConfirmedState(state) })
+  }
+  return links
+}
+
+/** Reattach fresh link rows to a registry loaded earlier (updates each candidate's unresolved links). */
+export function registryWithLinks(registry: Registry, links: LinkRow[]): Registry {
+  const unresolvedByEntity = new Map<string, string[]>()
+  for (const l of links) {
+    if (l.confirmed) continue
+    for (const e of [l.leftId, l.rightId]) unresolvedByEntity.set(e, [...(unresolvedByEntity.get(e) ?? []), l.id])
+  }
+  const unresolvedOf = (entityId: string | undefined) => (entityId ? [...new Set(unresolvedByEntity.get(entityId) ?? [])] : [])
+  return {
+    ...registry,
+    links,
+    candidates: registry.candidates.map((c) => ({ ...c, unresolvedLinkIds: unresolvedOf(c.entityId) })),
+  }
+}
+
 /** The firm's registry for screening, read at `now`. */
 export async function loadRegistry(firmId: string, now: Date): Promise<Registry> {
   const db = adminDb()
@@ -126,15 +155,7 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
     if (spellings.length > 0) firmMap.set(script, [...(firmMap.get(script) ?? []), ...spellings])
   }
 
-  const links: LinkRow[] = []
-  for (const d of linkSnap.docs) {
-    const row = d.data()
-    if (typeof row.leftId !== "string" || typeof row.rightId !== "string" || !isKeyName(row.key)) continue
-    const state = effectiveLinkState(row, nowMs, enabled)
-    // P2-29: a rejected pair is neither relied on nor unresolved (with the flag off nothing reads as rejected).
-    if (state === "rejected") continue
-    links.push({ id: d.id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: isConfirmedState(state) })
-  }
+  const links = linkRowsFromSnap(linkSnap, nowMs, enabled)
   const unresolvedByEntity = new Map<string, string[]>()
   for (const l of links) {
     if (l.confirmed) continue

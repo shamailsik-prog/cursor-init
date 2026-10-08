@@ -7,9 +7,9 @@ import type { Caller } from "../../p5/auth"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { checkPermission, requirePermission } from "../../p5/permission"
-import { loadRegistry, maxLabel, runEngine, unseenHits } from "../conflict/engine"
+import { linkRowsFromSnap, loadRegistry, maxLabel, registryWithLinks, runEngine, unseenHits } from "../conflict/engine"
 import { nameForms } from "../conflict/normalise"
-import type { Hit, Subject } from "../conflict/match"
+import type { Subject } from "../conflict/match"
 import { allocateNumber, formatMatterNo, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
 import { parseKeys, type Keys } from "../validate"
@@ -183,10 +183,8 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
     const checkRef = checks().doc(checkId)
     // Re-screen (spec P2-6, final review I5): the stored subjects against today's registry, through the
     // same engine as runConflictCheck, after the same gate the transaction applies again below.
-    const pre = gateOpen(caller, (await checkRef.get()).data(), now)
-    const preClient = clientOf(caller, (await db.collection("clients").doc(pre.clientId).get()).data())
+    gateOpen(caller, (await checkRef.get()).data(), now)
     const registry = await loadRegistry(caller.firmId, now)
-    const fresh: Hit[] = runEngine(registry, pre.subjects, pre.subjects.map((_, i) => (i === 0 ? preClient.entityId : undefined))).hits
 
     const matterRef = matters().doc()
     const matterId = matterRef.id
@@ -199,7 +197,13 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
         const { subjects, clientId } = gateOpen(caller, check, now)
         const client = clientOf(caller, (await tx.get(db.collection("clients").doc(clientId))).data())
         const entityId = client.entityId
-        if (unseenHits(fresh, Array.isArray(check?.hits) ? check.hits : []).length > 0) {
+        const linkSnap = await tx.get(db.collection("entity_links").where("firmId", "==", caller.firmId))
+        const screened = runEngine(
+          registryWithLinks(registry, linkRowsFromSnap(linkSnap, now.getTime(), registry.l17_2Enabled)),
+          subjects,
+          subjects.map((_, i) => (i === 0 ? entityId : undefined))
+        ).hits
+        if (unseenHits(screened, Array.isArray(check?.hits) ? check.hits : []).length > 0) {
           // A hit the check never saw: the check no longer describes the registry. Marked stale atomically with the deny row.
           await audit.stage(tx, "deny", "check_stale")
           tx.update(checkRef, { stale: true })
