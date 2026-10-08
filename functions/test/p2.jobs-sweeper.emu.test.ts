@@ -191,7 +191,7 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     expect(r.dispatched).not.toContain(due)
     expect(r.dispatched).toContain(leased)
     expect((await readJob(due)).dispatchSeq).toBe(0)
-    expect(error).toHaveBeenCalledWith("job sweep failed", { code: "unknown" })
+    expect(error).toHaveBeenCalledWith("job sweep failed", { code: "grpc_9" })
   })
 
   it("SWEEP_LIMIT bounds the rows one sweep dispatches; the oldest due rows go first", async () => {
