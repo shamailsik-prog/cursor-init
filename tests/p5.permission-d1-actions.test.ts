@@ -21,6 +21,10 @@ const MATRIX: Record<string, Role[]> = {
   "matter.read": STAFF,
   "matter.advance_stage": PA,
   "matter.close": P,
+  "entity.review": PA,
+  "entity.confirm": PA,
+  "entity.dispute": PA,
+  "entity.reject": P,
 }
 const MATTER_LEVEL = ["matter.read", "matter.advance_stage", "matter.close"]
 
@@ -32,7 +36,7 @@ const caller = (role: Role): DecisionCaller => ({
 const matter = { firmId: "f1", classification: "confidential" }
 
 describe("D1 permission actions", () => {
-  it("exports the 11 actions and a guard", () => {
+  it("exports the 15 actions and a guard", () => {
     expect([...D1_ACTIONS].sort()).toEqual(Object.keys(MATRIX).sort())
     expect(isD1Action("conflict.run")).toBe(true)
     expect(isD1Action("research")).toBe(false)
