@@ -13,6 +13,8 @@
  *     named matter must be in the caller's firm  -> deny accounts-register-only / cross-firm
  *   - a D1 action (D1_ACTIONS): client -> client-denied; matter-level ones need the matter
  *     (cross-firm / not-member / clearance); then the role table -> role-not-permitted
+ *   - a job action (JOB_ACTIONS): client or own_matters -> client-denied; job.read naming a
+ *     matter -> cross-firm / not-member / clearance; then the role table -> role-not-permitted
  *   - intern: no research / draft                -> deny intern-channel-denied
  *   - a staff-only action (STAFF_ONLY_ACTIONS) by a client or under an own_matters scope
  *                                                -> deny staff-only
@@ -114,6 +116,27 @@ const D1_ROLES: Record<D1Action, readonly string[]> = {
 }
 const D1_MATTER_LEVEL: ReadonlySet<string> = new Set(["matter.read", "matter.advance_stage", "matter.close"])
 
+/**
+ * P2 job engine (Phase 3a, P3-11): read a job (partner, associate, clerk; matter-level when a
+ * matter is named), read the firm queue (partner), requeue a dead-lettered job (partner,
+ * associate) and cancel one (partner). Staff only; a client or an own_matters scope is denied
+ * (client-denied) and accounts hit accounts-register-only before this table.
+ */
+export const JOB_ACTIONS = ["job.read", "job.queue", "job.retry", "job.cancel"] as const
+export type JobAction = (typeof JOB_ACTIONS)[number]
+const JOB_ACTION_SET: ReadonlySet<string> = new Set(JOB_ACTIONS)
+
+export function isJobAction(action: string): action is JobAction {
+  return JOB_ACTION_SET.has(action)
+}
+
+const JOB_ROLES: Record<JobAction, readonly string[]> = {
+  "job.read": ["partner", "associate", "clerk"],
+  "job.queue": ["partner"],
+  "job.retry": ["partner", "associate"],
+  "job.cancel": ["partner"],
+}
+
 const deny = (reason: string): PermissionDecision => ({ allow: false, reason })
 const allow = (reason: string): PermissionDecision => ({ allow: true, reason })
 
@@ -162,6 +185,16 @@ export function decide(
       if (refused) return refused
     }
     return D1_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
+  }
+
+  if (isJobAction(action)) {
+    if (caller.role === "client" || extra?.scope === "own_matters") return deny("client-denied")
+    // job.read naming a matter is matter-level: same firm, member, cleared (R-2: no role exempt).
+    if (action === "job.read" && matter !== undefined) {
+      const refused = matterGate(caller, matter, isMember)
+      if (refused) return refused
+    }
+    return JOB_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
   }
 
   if (caller.role === "intern" && (action === "research" || action === "draft")) {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { ROUTES, createRouter } from "../src/http/router"
 import { SUBSCRIBERS } from "../src/p2/fanout"
 import { JOB_HANDLERS } from "../src/p2/registry"
 
@@ -61,5 +62,18 @@ describe("P2 boot (P3-5, P3-8)", () => {
     }
     expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic"])
     expect(SUBSCRIBERS).toEqual([])
+  })
+
+  it("the router builds with every layer flag off and serves exactly the four /api/platform/jobs routes (P2 is CORE, L8456)", () => {
+    expect(() => createRouter(ROUTES)).not.toThrow()
+    const jobs = ROUTES.filter((r) => r.path.startsWith("/api/platform/jobs/")).map((r) => `${r.method} ${r.path} ${r.kind}`)
+    expect(jobs.sort()).toEqual(
+      [
+        "GET /api/platform/jobs/listJobs general",
+        "GET /api/platform/jobs/getJob general",
+        "POST /api/platform/jobs/retryFailedJob general",
+        "POST /api/platform/jobs/cancelJob general",
+      ].sort()
+    )
   })
 })

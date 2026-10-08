@@ -884,6 +884,11 @@ describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 
       await setDoc(doc(db, "jobs", "r2jobLegacy"), { ...legacy, id: "r2jobLegacy", classification: "internal" })
       await setDoc(doc(db, "jobs", "r2jobLoose"), { ...job, id: "r2jobLoose", matterId: null, classification: "confidential" })
       await setDoc(doc(db, "follow_ups", "r2fuLegacy"), { firmId: "firmA", courtId: "SHC", raw: "CP 2" })
+      // P3-14: P2 engine rows (engine: "p2") on the matter and firm-level, and a member partner.
+      const engineJob = { engine: "p2", firmId: "firmA", matterId: "r2m", classification: "internal", jobType: "platform.diagnostic" }
+      await setDoc(doc(db, "jobs", "r2jobEngine"), engineJob)
+      await setDoc(doc(db, "jobs", "r2jobEngineFirm"), { ...engineJob, matterId: null })
+      await setDoc(doc(db, "matter_members", "r2m_r2-partner-m"), { firmId: "firmA", matterId: "r2m", userId: "r2-partner-m" })
     })
   })
 
@@ -939,6 +944,14 @@ describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 
     await assertFails(getDoc(doc(await authed("r2-clerk-x", CLERK_NONMEMBER), "jobs", "r2job")))
     await assertSucceeds(getDoc(doc(await authed("r2-clerk", CLERK_MEMBER), "jobs", "r2job")))
     await assertFails(getDoc(doc(await authed("r2-clerk", CLERK_MEMBER), "jobs", "r2jobPriv")))
+  })
+
+  it("engine job rows (engine: \"p2\") are denied to every SDK reader (P3-14)", async () => {
+    await assertFails(getDoc(doc(await authed("r2-clerk", CLERK_MEMBER), "jobs", "r2jobEngine")))
+    await assertFails(getDoc(doc(await authed("r2-partner-m", { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted" }), "jobs", "r2jobEngine")))
+    await assertFails(getDoc(doc(await authed("r2-partner-c", { firmId: "firmA", role: "partner", clearanceLevel: "confidential" }), "jobs", "r2jobEngineFirm")))
+    // The transitional Next.js writer's row: unchanged.
+    await assertSucceeds(getDoc(doc(await authed("r2-clerk", CLERK_MEMBER), "jobs", "r2job")))
   })
 })
 

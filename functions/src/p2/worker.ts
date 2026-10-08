@@ -48,8 +48,8 @@ export const jobWorkerTestSeam: {
 
 const at = (ms: number) => Timestamp.fromMillis(ms)
 
-/** Appends a log entry, keeping the last `MAX_LOG_ENTRIES`. */
-function appendLog(row: Pick<JobRow, "logs">, event: JobLogEvent, attempt: number, now: number, code?: string): JobLogEntry[] {
+/** Appends a log entry, keeping the last `MAX_LOG_ENTRIES` (also used by the retry and cancel routes). */
+export function appendLog(row: Pick<JobRow, "logs">, event: JobLogEvent, attempt: number, now: number, code?: string): JobLogEntry[] {
   const entry: JobLogEntry = code === undefined ? { at: at(now), event, attempt } : { at: at(now), event, attempt, code }
   return [...(Array.isArray(row.logs) ? row.logs : []), entry].slice(-MAX_LOG_ENTRIES)
 }

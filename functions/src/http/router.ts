@@ -20,6 +20,7 @@ import { getConflictResultOp, getConflictTrailOp, recordPartnerWaiverOp, resolve
 import { advanceStageOp, closeMatterOp, getMatterOp, listMattersOp, openMatterOp } from "../d1/matter/ops"
 import { getEntityOp, listAliasesOp, listReviewQueueOp } from "../d1/entity/read"
 import { confirmMergeOp, disputeLinkOp, rejectLinkOp } from "../d1/entity/ops"
+import { cancelJobOp, getJobOp, listJobsOp, retryFailedJobOp } from "../p2/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -63,6 +64,8 @@ const D1_CLIENT = "/api/d1/client"
 const D1_CONFLICT = "/api/d1/conflict"
 const D1_MATTER = "/api/d1/matter"
 const D1_ENTITY = "/api/d1/entity"
+/** P2 job engine (P3-10): CORE, no layer flag. */
+const PLATFORM_JOBS = "/api/platform/jobs"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
@@ -108,6 +111,10 @@ export const ROUTES: readonly Route[] = [
   post(`${D1_ENTITY}/confirmMerge`, confirmMergeOp),
   post(`${D1_ENTITY}/disputeLink`, disputeLinkOp),
   post(`${D1_ENTITY}/rejectLink`, rejectLinkOp),
+  get(`${PLATFORM_JOBS}/listJobs`, listJobsOp),
+  get(`${PLATFORM_JOBS}/getJob`, getJobOp),
+  post(`${PLATFORM_JOBS}/retryFailedJob`, retryFailedJobOp),
+  post(`${PLATFORM_JOBS}/cancelJob`, cancelJobOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
