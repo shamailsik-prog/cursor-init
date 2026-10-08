@@ -39,6 +39,7 @@ jobs:
             package-lock.json
             functions/package-lock.json
       - run: npm ci
+      - run: npm --prefix functions ci
       - name: Typecheck
         run: npm run typecheck
       - name: Lint

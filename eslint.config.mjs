@@ -1,6 +1,16 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+import globals from "globals";
+
+// Next/React rules do not apply to the Cloud Functions package (P3-19).
+const NEXT_ONLY = /^(@next\/next|react|react-hooks|jsx-a11y)\//;
+const offForFunctions = Object.fromEntries(
+  [...nextVitals, ...nextTs]
+    .flatMap((c) => Object.keys(c.rules ?? {}))
+    .filter((k) => NEXT_ONLY.test(k))
+    .map((k) => [k, "off"]),
+);
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -20,6 +30,11 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  {
+    files: ["functions/**/*.{ts,mjs}"],
+    languageOptions: { globals: globals.node },
+    rules: offForFunctions,
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
@@ -27,7 +42,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    "functions/**",
+    "functions/lib/**",
+    "functions/node_modules/**",
+    "functions/.stryker-tmp/**",
     ".stryker-tmp/**",
     "reports/**",
   ]),
