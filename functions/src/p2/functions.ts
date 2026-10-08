@@ -44,6 +44,9 @@ export function parseJobTask(data: unknown): JobTask | null {
   return { jobId, seq }
 }
 
+// O-33: a Firestore trigger must run in the database's region. This assumes the default database
+// is in asia-south1; if it is not, deploy this trigger in the database's region or drop it, and
+// the sweeper's query A alone dispatches new jobs (within about 90 s).
 export const onJobCreated = onDocumentCreated({ document: "jobs/{jobId}", region: REGION }, (event) =>
   onJobCreatedCore(event.params.jobId, event.data?.data(), runtimeDeps())
 )

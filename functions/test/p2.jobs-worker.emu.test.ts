@@ -207,14 +207,14 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     expect(d.dispatcher.tasks).toEqual([{ jobId, seq: 1, scheduleAt: T0 + 1000 }])
   })
 
-  it("a stale seq, a not-yet-due delivery (> 2 s early), a cancelled, done or non-engine row is dropped; 1.5 s early runs", async () => {
+  it("a seq ahead of dispatchSeq, a not-yet-due delivery (> 2 s early), a cancelled, done or non-engine row is dropped; 1.5 s early runs", async () => {
     const unchanged = async (jobId: string, before: Awaited<ReturnType<typeof readJob>>, audits: number) => {
       const after = await readJob(jobId)
       expect(after.updateTime.isEqual(before.updateTime)).toBe(true)
       expect(await jobAuditRows(jobId)).toHaveLength(audits)
     }
 
-    // Stale seq: dispatchSeq is 0.
+    // A seq ahead of dispatchSeq (0): never dispatched for this row, dropped.
     const jobId = await enqueue({ behaviour: "fail_times", failTimes: 2 })
     let before = await readJob(jobId)
     expect(await d.dispatcher.deliver({ jobId, seq: 1 }, T0)).toBe("dropped")

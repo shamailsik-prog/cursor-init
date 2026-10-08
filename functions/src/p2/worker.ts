@@ -14,9 +14,15 @@ import { handlerFor, type JobHandler, type JobResult } from "./registry"
 /**
  * The P2 worker (spec P3-3, P3-6, P3-7, P3-9, P3-18). One delivery of task `{ jobId, seq }`:
  *
- * 1. Claim (one transaction): drop unless the row is an engine row, `seq == dispatchSeq` and the
+ * 1. Claim (one transaction): drop unless the row is an engine row, `seq <= dispatchSeq` and the
  *    row is due (`queued`/`failed` with `nextAttemptAt <= now + 2 s`) or its lease has expired.
  *    Otherwise take a fresh lease (600 s) and count the attempt; a reclaim at attempt 4 dead-letters.
+ *    The seq is not an exclusive ticket (Task 4 fix round, I-1): an older task that arrives after a
+ *    newer dispatch may still claim, so a backed-up queue cannot starve a job by superseding its
+ *    queued task. Single-runner safety comes from the claim transaction and the lease, not the seq:
+ *    whichever task claims first takes the lease, and every later task finds the row running with
+ *    a live lease (or finished) and is dropped. A task whose seq is ahead of `dispatchSeq` was
+ *    never dispatched by this row's history and is dropped.
  * 2. Run the handler, raced against the handler budget (`handler_timeout`, retryable).
  * 3. Commit (one transaction): re-read; if this claim's fence no longer holds, write nothing.
  *    Otherwise `done` with the handler's `apply`, or `failed` / `dead_lettered` (`stageFailure`).
@@ -121,7 +127,8 @@ type ClaimResult = { kind: "dropped" } | Claimed | Ended
 
 /** Whether this delivery may start an attempt (P3-6, P3-8 storm bound 2). */
 function claimable(row: JobRow | undefined, seq: number, now: number): row is JobRow {
-  if (!row || row.engine !== JOB_ENGINE || row.dispatchSeq !== seq) return false
+  // Any task this row has dispatched (seq <= dispatchSeq) may claim; the claim's lease makes it single-runner.
+  if (!row || row.engine !== JOB_ENGINE || !(seq <= row.dispatchSeq)) return false
   if (row.status === "queued" || row.status === "failed") {
     // The attempt cap is enforced here, the only place a handler starts (P3-8 storm bound 1).
     if (!(row.attempts < MAX_ATTEMPTS)) return false

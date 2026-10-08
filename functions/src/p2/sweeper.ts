@@ -1,4 +1,4 @@
-import { Timestamp, type DocumentReference, type Transaction } from "firebase-admin/firestore"
+import { Timestamp, type DocumentReference, type Query, type Transaction } from "firebase-admin/firestore"
 import { adminDb } from "../admin"
 import { logFailure } from "../log"
 import { DISPATCH_GRACE_MS, JOB_ENGINE, MAX_ATTEMPTS, MAX_CLOCK_SKEW_MS, SWEEP_LIMIT } from "./constants"
@@ -22,6 +22,14 @@ import { stageFailure } from "./worker"
  * `dispatchSeq`, so concurrent sweeps dispatch a job once; the dispatch happens after commit.
  * Query B applies the same rule to its re-dispatch (P3-8 storm bound 3; without it, a second
  * concurrent sweep would re-read the still-expired lease and dispatch again).
+ *
+ * A re-dispatch adds a task; it does not cancel the earlier ones. The worker lets any task with
+ * `seq <= dispatchSeq` claim a claimable row (Task 4 fix round, I-1), so in a backed-up queue the
+ * oldest task still runs the job when it arrives, and the newer ones then find it running or
+ * finished and are dropped. The claim's lease, not the seq, keeps the job single-runner.
+ *
+ * Each query runs on its own: a failed query is logged and the sweep goes on to the next one, so
+ * a query A fault (an index still building, a transient store error) never skips query B.
  */
 
 export type SweepResult = { dispatched: string[]; deadLettered: string[] }
@@ -113,23 +121,33 @@ async function settle(ref: DocumentReference, step: (ref: DocumentReference) => 
   }
 }
 
+/** Test hook before each query runs (spec §7), set in a test and deleted in `finally`. */
+export const sweepTestSeam: { beforeQuery?: (name: "A" | "B") => Promise<void> } = {}
+
+/** Runs one query and settles each row it returns. A failed query is logged and skipped. */
+async function sweepQuery(name: "A" | "B", query: Query, step: (ref: DocumentReference) => Promise<RowAction>, deps: JobDeps, out: SweepResult): Promise<void> {
+  let docs: DocumentReference[]
+  try {
+    await sweepTestSeam.beforeQuery?.(name)
+    docs = (await query.get()).docs.map((d) => d.ref)
+  } catch (err) {
+    logFailure("job sweep failed", err)
+    return
+  }
+  for (const ref of docs) await settle(ref, step, deps, out)
+}
+
 /** One sweep at `deps.clock()`: query A, then query B. Returns the job ids it re-dispatched and dead-lettered. */
 export async function sweep(deps: JobDeps): Promise<SweepResult> {
   const out: SweepResult = { dispatched: [], deadLettered: [] }
   const now = deps.clock()
-  const due = await jobsRef()
+  const lost = jobsRef()
     .where("status", "in", ["queued", "failed"])
     .where("nextAttemptAt", "<=", at(now - DISPATCH_GRACE_MS))
     .orderBy("nextAttemptAt")
     .limit(SWEEP_LIMIT)
-    .get()
-  for (const doc of due.docs) await settle(doc.ref, (ref) => sweepLostDispatch(ref, deps), deps, out)
-  const expired = await jobsRef()
-    .where("status", "==", "running")
-    .where("lease.expiresAt", "<=", at(now))
-    .orderBy("lease.expiresAt")
-    .limit(SWEEP_LIMIT)
-    .get()
-  for (const doc of expired.docs) await settle(doc.ref, (ref) => sweepExpiredLease(ref, deps), deps, out)
+  await sweepQuery("A", lost, (ref) => sweepLostDispatch(ref, deps), deps, out)
+  const expired = jobsRef().where("status", "==", "running").where("lease.expiresAt", "<=", at(now)).orderBy("lease.expiresAt").limit(SWEEP_LIMIT)
+  await sweepQuery("B", expired, (ref) => sweepExpiredLease(ref, deps), deps, out)
   return out
 }

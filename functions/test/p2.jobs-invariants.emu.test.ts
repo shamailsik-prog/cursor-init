@@ -178,16 +178,21 @@ describe.skipIf(!EMULATORS)("P2 job engine invariants (P3-4, P3-6..P3-8)", () =>
       const due = before.nextAttemptAt!.toMillis()
       const seq = before.dispatchSeq
       const tasks = d.dispatcher.tasks.length
-      // More than 2 s early: dropped, and the worker dispatches nothing.
+      // More than 2 s early: the current task and the oldest one (seq 0) are dropped, and the worker dispatches nothing.
       expect(await d.dispatcher.deliver({ jobId, seq }, due - 3000)).toBe("dropped")
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, due - 3000)).toBe("dropped")
       expect(d.dispatcher.tasks).toHaveLength(tasks)
-      expect(await attempts()).toBeLessThanOrEqual(4)
-      // 1.5 s early: inside the tolerance, it runs.
-      expect(await d.dispatcher.deliver({ jobId, seq }, due - 1500)).toBe(k < 4 ? "failed" : "dead_lettered")
+      expect(await attempts()).toBe(k - 1)
+      // 1.5 s early: inside the tolerance, and the oldest task, superseded by every later dispatch, still runs it (I-1).
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, due - 1500)).toBe(k < 4 ? "failed" : "dead_lettered")
       expect(await attempts()).toBe(k)
-      // The same seq again at due: stale, dropped.
-      expect(await d.dispatcher.deliver({ jobId, seq }, due)).toBe("dropped")
-      expect(await attempts()).toBeLessThanOrEqual(4)
+      if (k < 4) {
+        // Every task dispatched so far, delivered again before the next attempt is due: all dropped.
+        const nextDue = (await readJob(jobId)).nextAttemptAt!.toMillis()
+        for (const t of d.dispatcher.tasks.filter((x) => x.jobId === jobId)) expect(await d.dispatcher.deliver(t, nextDue - 3000)).toBe("dropped")
+        expect(await d.dispatcher.deliver({ jobId, seq: 0 }, nextDue - 3000)).toBe("dropped")
+        expect(await attempts()).toBe(k)
+      }
       if (k === 4) break
 
       const T = due - 1500

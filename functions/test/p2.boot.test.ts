@@ -11,6 +11,8 @@ type Endpoint = {
   eventTrigger?: Record<string, unknown>
   taskQueueTrigger?: Record<string, unknown>
   scheduleTrigger?: Record<string, unknown>
+  httpsTrigger?: unknown
+  callableTrigger?: unknown
 }
 
 describe("P2 boot (P3-5, P3-8)", () => {
@@ -45,6 +47,12 @@ describe("P2 boot (P3-5, P3-8)", () => {
       },
     })
     expect(index.jobSweeper.__endpoint.scheduleTrigger).toMatchObject({ schedule: "every 1 minutes" })
+    // The worker stays IAM-private (only Cloud Tasks, with OIDC, may invoke it): firebase-functions
+    // does not verify the caller itself, so an invoker set here or globally (e.g. "public") must fail.
+    expect(index.jobWorker.__endpoint.taskQueueTrigger).not.toHaveProperty("invoker")
+    for (const n of ["onJobCreated", "jobWorker", "jobSweeper"]) {
+      expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
+    }
     expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic"])
   })
 })
