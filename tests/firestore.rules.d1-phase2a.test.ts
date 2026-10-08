@@ -264,3 +264,43 @@ describe("matter_members create stamps createdAt (listMatters orders by it)", ()
     await assertSucceeds(updateDoc(doc(await as(PARTNER), "matter_members", `${MATTER}_${NEW.uid}`), { note: "lead" }))
   })
 })
+
+describe("clients: registerClient (Cloud Functions, Admin SDK) is the only writer (final review C1)", () => {
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "clients", "p2aClient"), {
+        firmId: FIRM, canonicalName: "Acme Traders", clientCode: "SKD-2026-0001", classification: "internal", createdAt: Timestamp.now(),
+      })
+    })
+  })
+  const fresh = (uid: string) => ({ firmId: FIRM, canonicalName: "Sdk Made", classification: "internal", createdBy: uid, createdAt: serverTimestamp() })
+  it.each([["clerk", CLERK], ["associate", ASSOC], ["partner", PARTNER]] as const)("a %s cannot create a client through the SDK", async (_label, caller) => {
+    await assertFails(setDoc(doc(await as(caller), "clients", `sdk-${caller.uid}`), fresh(caller.uid)))
+  })
+  it.each([["clerk", CLERK], ["associate", ASSOC], ["partner", PARTNER]] as const)("a %s cannot update a client through the SDK", async (_label, caller) => {
+    await assertFails(updateDoc(doc(await as(caller), "clients", "p2aClient"), { canonicalName: "Renamed" }))
+  })
+  it("reads stay as before: same-firm cleared staff read (control)", async () => {
+    await assertSucceeds(getDoc(doc(await as(CLERK), "clients", "p2aClient")))
+  })
+})
+
+describe("matters: lifecycle and identity fields are written only by the matter ops (final review I1)", () => {
+  const FROZEN: Array<[string, unknown]> = [
+    ["stage", "decided"],
+    ["status", "closed"],
+    ["clientId", "someone-else"],
+    ["conflictCheckId", "another-check"],
+    ["matterNo", "SA/2026/9999"],
+    ["closedBy", PARTNER.uid],
+    ["closedAt", Timestamp.now()],
+    ["createdBy", ASSOC.uid],
+    ["createdAt", Timestamp.now()],
+  ]
+  it.each(FROZEN)("a cleared member partner cannot set %s through the SDK", async (field, value) => {
+    await assertFails(updateDoc(doc(await as(PARTNER), "matters", MATTER), { [field]: value }))
+  })
+  it("an update of an unfrozen field (title) by a cleared member partner is still allowed (control)", async () => {
+    await assertSucceeds(updateDoc(doc(await as(PARTNER), "matters", MATTER), { title: "Phase 2a (renamed)" }))
+  })
+})

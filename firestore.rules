@@ -109,8 +109,9 @@ service cloud.firestore {
     }
     match /clients/{id} {
       allow read: if sameFirm() && isStaff() && (!('classification' in resource.data) || cleared(resource.data.classification));
-      allow create: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'];
-      allow update: if sameFirm() && firmIdUnchanged() && role() in ['partner', 'associate', 'clerk'];
+      // Phase 2a final review C1: registerClient (Cloud Functions, Admin SDK) is the only writer; it
+      // assigns the client code, the entity and its duplicate-key links atomically, which no SDK write can.
+      allow create, update: if false;
       allow delete: if false;
     }
     match /matters/{matterId} {
@@ -125,7 +126,10 @@ service cloud.firestore {
       // audited); they feed the citation gate's own-case exemption.
       allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate']
         && cleared(resource.data.classification) && clearedNew() && monotonic()
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['caseNumber', 'caseNumberStatus', 'courtId']);
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['caseNumber', 'caseNumberStatus', 'courtId',
+             // Phase 2a final review I1: lifecycle and identity fields move only through openMatter /
+             // advanceStage / closeMatter (audited, one transaction with their events).
+             'stage', 'status', 'clientId', 'matterNo', 'conflictCheckId', 'closedBy', 'closedAt', 'createdBy', 'createdAt']);
       allow delete: if false;
     }
     match /documents/{docId} {
