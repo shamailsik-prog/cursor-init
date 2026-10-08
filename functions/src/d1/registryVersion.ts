@@ -16,10 +16,33 @@ import { adminDb } from "../admin"
  * writers (prefixes, MFA policy, onboarding: fields the screen never reads; `featureFlags.L17_2_ENABLED`
  * has no writer in functions/src); `transliteration_map` (no writer in functions/src).
  *
+ * Enforced at test time (spec P3-20): `REGISTRY_SCOPE` below names what `loadRegistry` reads, and the
+ * vitest setup file `functions/test/setup/registryWriteRecorder.ts` fails any functions test in which
+ * code under functions/src writes an in-scope field of those collections in a transaction that stages
+ * no bump (or writes one outside a transaction). `p2.registry-discipline.emu.test.ts` proves the
+ * recorder reports a missing bump and that `loadRegistry` reads exactly these collections.
+ *
  * The doc lives with the other per-firm counters, `counters/{firmId}_registry` (server-only under
  * firestore.rules: `counters` denies every client read and write). The bump is a blind
  * `FieldValue.increment` write, so it needs no read and may sit anywhere among a transaction's writes.
  */
+
+/** A collection's registry scope: every field, every field but some, or only some (top-level names). */
+export type RegistryFieldScope = { all: true } | { except: readonly string[] } | { only: readonly string[] }
+
+/**
+ * The collections `loadRegistry` reads, with the fields whose writes change the screen (spec P3-20).
+ * `matters.stage` is outside it (advanceStage writes only `stage`); of the `firms` doc only
+ * `featureFlags` is read (`featureFlags.L17_2_ENABLED`).
+ */
+export const REGISTRY_SCOPE: Readonly<Record<string, RegistryFieldScope>> = Object.freeze({
+  clients: { all: true },
+  matter_parties: { all: true },
+  entity_links: { all: true },
+  transliteration_map: { all: true },
+  matters: { except: ["stage"] },
+  firms: { only: ["featureFlags"] },
+})
 
 export const registryVersionRef = (firmId: string) => adminDb().collection("counters").doc(`${firmId}_registry`)
 
