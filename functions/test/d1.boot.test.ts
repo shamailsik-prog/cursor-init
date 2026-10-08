@@ -22,6 +22,9 @@ const D1_PATHS = [
   "/api/d1/matter/listMatters",
   "/api/d1/matter/advanceStage",
   "/api/d1/matter/closeMatter",
+  "/api/d1/entity/listReviewQueue",
+  "/api/d1/entity/getEntity",
+  "/api/d1/entity/listAliases",
 ]
 
 describe("boot with every layer flag off (G-4)", () => {

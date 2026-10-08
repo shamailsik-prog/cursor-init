@@ -112,6 +112,9 @@ describe("route table", () => {
         "GET /api/d1/matter/listMatters general",
         "POST /api/d1/matter/advanceStage general",
         "POST /api/d1/matter/closeMatter general",
+        "GET /api/d1/entity/listReviewQueue general",
+        "GET /api/d1/entity/getEntity general",
+        "GET /api/d1/entity/listAliases general",
       ].sort()
     )
     expect(() => buildRouteTable(ROUTES)).not.toThrow()

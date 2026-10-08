@@ -19,6 +19,7 @@ import * as numbering from "../src/d1/client/numberingOp"
 import * as clientOps from "../src/d1/client/ops"
 import * as conflictOps from "../src/d1/conflict/ops"
 import * as matterOps from "../src/d1/matter/ops"
+import * as entityRead from "../src/d1/entity/read"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -84,9 +85,12 @@ const PROBES: Record<string, Probe> = {
   listMatters: { data: () => ({}), target: false },
   advanceStage: { data: () => ({ matterId: "g2-probe-matter", to: "filed" }), target: false },
   closeMatter: { data: () => ({ matterId: "g2-probe-matter", reason: "G2 probe closure reason, long enough" }), target: false },
+  listReviewQueue: { data: () => ({}), target: false },
+  getEntity: { data: (a) => ({ entityId: a.entityId }), target: true },
+  listAliases: { data: (a) => ({ entityId: a.entityId }), target: true },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
@@ -101,7 +105,7 @@ const OTHER_EXPORTS = Object.keys(index)
   .sort()
 
 type Member = { uid: string; token: string; email: string }
-type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string }
+type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string; entityId: string; linkId: string }
 type FirmB = { firmId: string; members: Record<Role, Member> }
 
 async function seedFirm(firmId: string, name: string): Promise<Record<Role, Member>> {
@@ -137,7 +141,7 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
 function firmATokens(a: FirmA): string[] {
-  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001"]
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
 }
 
 function leaked(body: unknown, tokens: string[]): string[] {
@@ -173,11 +177,23 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
     await adminDb().collection("matters").doc(matterId).set({ ...stamp, title: "G2 Alpha Matter", clientId, stage: "intake", status: "open" })
     await adminDb().collection("matter_members").doc(`${matterId}_${aMembers.partner.uid}`).set({ ...stamp, matterId, userId: aMembers.partner.uid })
     await adminDb().collection("conflict_checks").doc(checkId).set({ ...stamp, status: "CLEAR", subjects: [{ role: "client", name: "G2 Alpha Client" }] })
+    // L17.2 (Phase 2b-A): two firm-A entities and the candidate link between them, aimed at by the entity probes.
+    const entityId = uniq("g2entityA")
+    const entityId2 = uniq("g2entityB")
+    const linkId = `${firmA}_${entityId}_${entityId2}_cnic`
+    await adminDb().collection("entities").doc(entityId).set({ ...stamp, canonicalName: "G2 Alpha Entity", cnic: "4210199999991" })
+    await adminDb().collection("entities").doc(entityId2).set({ ...stamp, canonicalName: "G2 Alpha Entity Two", cnic: "4210199999991" })
+    await adminDb()
+      .collection("entity_links")
+      .doc(linkId)
+      .set({ firmId: firmA, leftId: entityId, rightId: entityId2, key: "cnic", state: "candidate", disputed: false, classification: "internal", createdAt: Timestamp.now() })
     A = {
       firmId: firmA,
       clientId,
       matterId,
       checkId,
+      entityId,
+      linkId,
       partner: aMembers.partner,
       victim: victim.uid,
       victimEmail: victim.email,

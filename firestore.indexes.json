@@ -50,6 +50,41 @@
       ]
     },
     {
+      "collectionGroup": "entity_links",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "disputed", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "entity_links",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "leftId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "entity_links",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "rightId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "entity_aliases",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "entityId", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "matter_members",
       "queryScope": "COLLECTION",
       "fields": [
