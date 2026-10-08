@@ -137,3 +137,19 @@ collections) and open item O-25 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`
 
 Phase 2a close is Gate G-4 (`npm run gate:g4:phase2a`): route coverage, boot with every layer flag off, forensic
 test 3, and Gate G-2 over all routes.
+
+## Phase 2b-A rulings
+
+The entity review queue and `confirmMerge` rulings are P2-23 to P2-41 in
+`docs/superpowers/specs/2026-10-08-phase2b-entity-review-design.md` (each with its reason and cost if wrong). They are
+recorded there and not repeated here. The architecture record is Erratum E-41 in
+`docs/architecture/ERRATUM_SET_2_PROPOSED.md`; it also withdraws the partner 'merge_events revert-only' rule.
+
+| # | Open item | Reason | Cost if wrong |
+| --- | --- | --- | --- |
+| O-27 | Opposing-party hit label: closed. The label is max(matter, party row) (P2-37). | The 2a engine under-labelled a hit when the matter existed. | None; fixed in code. |
+| O-28 | Auto-confirm materialisation: a P2 job writes the `merge_events` row at day 30 (actor `system`). Until then the 30-day auto-confirm is computed at read time and leaves no row. | Needs the P2 jobs (Phase 3) and un-merge (2b-B). | L17.2 #16 does not hold for auto-links until the job runs. |
+| O-29 | Responsible-associate assignment: review items go to any partner or associate cleared to the pair. | No per-entity or per-client responsible associate exists to route to. | Review items can sit unowned. |
+
+Phase 2b-A close is Gate G-4 (`npm run gate:g4:phase2b-a`): route coverage (20 routes), boot with every layer flag off,
+the two L17.2 invariant tests, and Gate G-2 over all routes.
