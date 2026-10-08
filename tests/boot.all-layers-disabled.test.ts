@@ -193,19 +193,12 @@ const CORE_CALLS: CoreCall[] = [
   { route: "g0/monitor", method: "GET", init: () => ({}), expect: 200 },
   { route: "g0/normalise", method: "POST", init: () => ({ body: { actorId: "partner_a", raw: "CP 1234", courtId: "SHC" } }), expect: 200 },
   { route: "d1/matters", method: "GET", init: () => ({ query: { ...page } }), expect: 200 },
+  // Matters `create` is frozen behind LEGACY_D1_NEXT_WRITES (final review I3; see FROZEN_CALLS):
+  // the live POST core is the membership path.
   {
     route: "d1/matters",
     method: "POST",
-    init: () => ({
-      body: {
-        action: "create",
-        firmId: "firmA",
-        clientId: "client_a",
-        title: "Boot-created matter",
-        courtId: "SHC",
-        classification: "internal",
-      },
-    }),
+    init: ({ matterId }) => ({ body: { action: "add_member", matterId, memberUserId: "clerk_a" } }),
     expect: 200,
   },
   { route: "d1/clients", method: "GET", init: () => ({ query: { ...page } }), expect: 200 },
@@ -339,7 +332,7 @@ const FILINGS = filingsLiterals()
 const FILINGS_CORE_ACTION_NAMES = ["create_package", "decide_package"]
 
 /** Every frozen view and action: all of ops-reporting, and filings except the core package path. */
-const FROZEN_CALLS: Array<{ route: string; method: "GET" | "POST"; init: CallInit }> = [
+const FROZEN_CALLS: Array<{ route: string; method: "GET" | "POST"; init: CallInit; flag?: FeatureFlag }> = [
   { route: "d2/ops-reporting", method: "GET", init: { query: { ...page } } },
   ...OPS_GET_VIEWS.map((view) => ({
     route: "d2/ops-reporting",
@@ -357,9 +350,19 @@ const FROZEN_CALLS: Array<{ route: string; method: "GET" | "POST"; init: CallIni
   ...FILINGS.actions
     .filter((action) => !FILINGS_CORE_ACTION_NAMES.includes(action))
     .map((action) => ({ route: "d4/filings", method: "POST" as const, init: { body: { action, packageId: "pkg_x" } } })),
+  // Phase 2a final review I3: the Next.js D1 check-free paths (Erratum E-40).
+  {
+    route: "d1/matters",
+    method: "POST",
+    init: {
+      body: { action: "create", firmId: "firmA", clientId: "client_a", title: "Boot-created matter", courtId: "SHC", classification: "internal" },
+    },
+    flag: "LEGACY_D1_NEXT_WRITES",
+  },
+  { route: "d1/clients", method: "POST", init: { body: { action: "conflict_check", firmId: "firmA", entityId: "ent_x" } }, flag: "LEGACY_D1_NEXT_WRITES" },
 ]
 
-const DISABLED = { error: "feature_disabled", flag: "LEGACY_GOVERNANCE_CHAINS" }
+const disabled = (flag: FeatureFlag = "LEGACY_GOVERNANCE_CHAINS") => ({ error: "feature_disabled", flag })
 
 describe("boot with every non-core layer disabled", () => {
   it("enumerates the frozen filings surface from the handler", () => {
@@ -438,7 +441,7 @@ describe("boot with every non-core layer disabled", () => {
       const res = await call(c.route, c.method, c.init)
       const label = `${c.method} /api/${c.route} ${JSON.stringify(c.init.query ?? c.init.body)}`
       expect(res.status, label).toBe(404)
-      expect(res.body, label).toEqual(DISABLED)
+      expect(res.body, label).toEqual(disabled(c.flag))
     }
   })
 

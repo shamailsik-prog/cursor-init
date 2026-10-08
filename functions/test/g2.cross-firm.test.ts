@@ -15,6 +15,10 @@ import * as index from "../src/index"
 import * as identity from "../src/p5/identity"
 import * as mfa from "../src/p5/mfa"
 import * as gates from "../src/p5/gates"
+import * as numbering from "../src/d1/client/numberingOp"
+import * as clientOps from "../src/d1/client/ops"
+import * as conflictOps from "../src/d1/conflict/ops"
+import * as matterOps from "../src/d1/matter/ops"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -66,9 +70,23 @@ const PROBES: Record<string, Probe> = {
   disableMfa: { data: (a) => ({ uid: a.victim, approvalId: a.approvalId, recoveryCode: "AAAA-BBBB-CCCC" }), target: true },
   generateRecoveryCodes: { data: () => ({}), target: false },
   syncMfaStatus: { data: () => ({}), target: false },
+  setFirmNumbering: { data: () => ({ clientPrefix: "XX", matterPrefix: "XX" }), target: false },
+  registerClient: { data: () => ({ name: "G2 Probe Client", type: "individual", primaryMobile: "03001234567", classification: "internal" }), target: false },
+  getClient: { data: (a) => ({ clientId: a.clientId }), target: true },
+  listClients: { data: () => ({}), target: false },
+  runConflictCheck: { data: () => ({ client: { name: "G2 Probe Client" }, opposingParties: [{ name: "G2 Probe Opponent" }] }), target: false },
+  getConflictResult: { data: (a) => ({ checkId: a.checkId }), target: true },
+  resolveReviewItem: { data: () => ({ checkId: "g2-probe-check", hitIndex: 0, resolution: "different_person", note: "G2 probe note of at least twenty characters" }), target: false },
+  recordPartnerWaiver: { data: () => ({ checkId: "g2-probe-check", note: "G2 probe waiver note that is comfortably longer than fifty characters", clientConsent: true, consentReference: "G2-REF" }), target: false },
+  getConflictTrail: { data: (a) => ({ checkId: a.checkId }), target: true },
+  openMatter: { data: () => ({ conflictCheckId: "g2-probe-check", title: "G2 probe matter", classification: "internal" }), target: false },
+  getMatter: { data: (a) => ({ matterId: a.matterId }), target: true },
+  listMatters: { data: () => ({}), target: false },
+  advanceStage: { data: () => ({ matterId: "g2-probe-matter", to: "filed" }), target: false },
+  closeMatter: { data: () => ({ matterId: "g2-probe-matter", reason: "G2 probe closure reason, long enough" }), target: false },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
@@ -83,7 +101,7 @@ const OTHER_EXPORTS = Object.keys(index)
   .sort()
 
 type Member = { uid: string; token: string; email: string }
-type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[] }
+type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string }
 type FirmB = { firmId: string; members: Record<Role, Member> }
 
 async function seedFirm(firmId: string, name: string): Promise<Record<Role, Member>> {
@@ -119,7 +137,7 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
 function firmATokens(a: FirmA): string[] {
-  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, "G2 Alpha Chambers"]
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001"]
 }
 
 function leaked(body: unknown, tokens: string[]): string[] {
@@ -146,8 +164,20 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       expiresAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
       used: false,
     })
+    // Real firm-A records, so the GET probes aim at data that exists (a same-firm read would find it).
+    const clientId = uniq("g2clientA")
+    const matterId = uniq("g2matterA")
+    const checkId = uniq("g2checkA")
+    const stamp = { firmId: firmA, classification: "internal", createdAt: Timestamp.now() }
+    await adminDb().collection("clients").doc(clientId).set({ ...stamp, name: "G2 Alpha Client", clientCode: "ALPHA-0001" })
+    await adminDb().collection("matters").doc(matterId).set({ ...stamp, title: "G2 Alpha Matter", clientId, stage: "intake", status: "open" })
+    await adminDb().collection("matter_members").doc(`${matterId}_${aMembers.partner.uid}`).set({ ...stamp, matterId, userId: aMembers.partner.uid })
+    await adminDb().collection("conflict_checks").doc(checkId).set({ ...stamp, status: "CLEAR", subjects: [{ role: "client", name: "G2 Alpha Client" }] })
     A = {
       firmId: firmA,
+      clientId,
+      matterId,
+      checkId,
       partner: aMembers.partner,
       victim: victim.uid,
       victimEmail: victim.email,
@@ -198,6 +228,8 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
                 "x-forwarded-for": `10.0.0.1, 10.62.${i}.${attempts}`,
               },
               body,
+              // GET data is the query string (router.ts queryData): without it a GET probe is a bare 400.
+              query: route.method === "GET" ? body : undefined,
               rawBody: Buffer.from(JSON.stringify(body)),
               ip: "127.0.0.1",
             } as never,
@@ -214,6 +246,32 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       rows.push({ suite: "functions", service: "P5", channel: "http", path: `${route.method} ${route.path}`, status: "tested", attempts, allowed })
     }
     expect(failures).toEqual([])
+  })
+
+  it("positive control: firm A's own partner reads each seeded record through the same GET routes (validates the seed shapes)", async () => {
+    const router = createRouter(ROUTES)
+    const reads: Array<[string, Record<string, string>, string]> = [
+      ["/api/d1/client/getClient", { clientId: A.clientId }, "G2 Alpha Client"],
+      ["/api/d1/conflict/getConflictResult", { checkId: A.checkId }, A.checkId],
+      ["/api/d1/conflict/getConflictTrail", { checkId: A.checkId }, "items"],
+      ["/api/d1/matter/getMatter", { matterId: A.matterId }, "G2 Alpha Matter"],
+    ]
+    for (const [i, [path, query, token]] of reads.entries()) {
+      const { res, out } = mockRes()
+      await router(
+        {
+          method: "GET",
+          path,
+          headers: { authorization: `Bearer ${A.partner.token}`, "x-firm-id": A.firmId, "x-forwarded-for": `10.9.0.${i + 1}` },
+          body: undefined,
+          query,
+          rawBody: Buffer.from(""),
+          ip: "127.0.0.1",
+        } as never,
+        res as never
+      )
+      expect([path, out.status, JSON.stringify(out.body).includes(token)]).toEqual([path, 200, true])
+    }
   })
 
   it("firm A is unchanged, and no firm-B actor holds an allow audit row on firm A", async () => {

@@ -25,6 +25,7 @@ export default defineConfig({
         ? []
         : [
             "tests/firestore.rules.test.ts",
+            "tests/firestore.rules.d1-phase2a.test.ts",
             "tests/persistence.repositories.test.ts",
             "tests/persistence.runtime-mode.test.ts",
           ]),

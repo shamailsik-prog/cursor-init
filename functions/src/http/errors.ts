@@ -11,10 +11,16 @@ export class HttpError extends Error {
   }
 }
 
-/** 429 rate_limited; `retryAfter` is the whole seconds until the limit window ends. */
+/**
+ * 429 with a Retry-After: `rate_limited` (per-user minute window) by default, or another
+ * limit's code (`daily_limit`, spec P2-17); `retryAfter` is the whole seconds until it resets.
+ */
 export class RateLimitedError extends HttpError {
-  constructor(readonly retryAfter: number) {
-    super(429, "rate_limited")
+  constructor(
+    readonly retryAfter: number,
+    code = "rate_limited"
+  ) {
+    super(429, code)
     this.name = "RateLimitedError"
   }
 }

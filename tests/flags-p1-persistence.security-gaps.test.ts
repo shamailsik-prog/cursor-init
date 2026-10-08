@@ -13,7 +13,8 @@ const runtime = vi.hoisted(() => ({
 vi.mock("@/platform/spine/runtimeStore", () => ({ getRuntimeStore: () => runtime.store }))
 
 import { FLAG_REGISTRY, isFeatureEnabled, type FeatureFlag } from "@/platform/flags/featureFlags"
-import { gateByFlag, isFilingsCoreRequest, resetRefusalAuditDedupeForTests } from "@/platform/flags/routeGate"
+import { gateByFlag, resetRefusalAuditDedupeForTests } from "@/platform/flags/routeGate"
+import { isFilingsCoreRequest } from "@/platform/flags/filingsCore"
 import type { HandlerSession } from "@/platform/http/withSession"
 import { classificationRank, type Classification } from "@/platform/p1/types"
 import { providerAllowedFor, setProviderConfigForTests, type ProviderId } from "@/platform/p1/providerPolicy"

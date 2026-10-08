@@ -1,5 +1,5 @@
 import type { Classification } from "@/platform/p1/types"
-import { decide, type FirmAdminAction, type PermissionDecision } from "@/platform/p5/permissionDecision"
+import { decide, type D1Action, type FirmAdminAction, type PermissionDecision } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
 import { appendAudit } from "./audit"
@@ -51,14 +51,18 @@ export async function checkPermission(
 }
 
 /**
- * Authorises a firm-administration action (identity and MFA administration: partner only)
+ * Authorises a firm-administration action (identity and MFA administration: partner only) or a D1 action (matter-level ones take the matterId)
  * through checkPermission, so it is decided by the shared table and audited like every other
  * decision. Deny → 403 partner_only (the operations' existing error code); an audit failure →
  * 503 audit_unavailable. The operations keep their own extra guards (self-change, clearance
  * cap, last partner).
  */
-export async function requirePermission(caller: Caller, action: FirmAdminAction): Promise<void> {
-  const decision = await checkPermission(caller, action)
+export async function requirePermission(
+  caller: Caller,
+  action: FirmAdminAction | D1Action,
+  matterId?: string
+): Promise<void> {
+  const decision = await checkPermission(caller, action, matterId)
   if (decision.allow) return
   if (decision.reason === "audit_unavailable") throw new HttpError(503, "audit_unavailable")
   throw new HttpError(403, decision.reason === "partner-only" ? "partner_only" : decision.reason.replaceAll("-", "_"))

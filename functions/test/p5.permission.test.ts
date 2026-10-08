@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { adminDb } from "../src/admin"
 import type { Caller } from "../src/p5/auth"
 import { appendAudit } from "../src/p5/audit"
-import { checkPermission } from "../src/p5/permission"
+import { checkPermission, requirePermission } from "../src/p5/permission"
 import { EMULATORS, uniq } from "./emu"
 
 // Pass-through spy so individual tests can make the audit write fail.
@@ -163,5 +163,31 @@ describe.skipIf(!EMULATORS)("checkPermission hardening (Firestore emulator)", ()
     expect(d).toEqual({ allow: false, reason: "store-unavailable" })
     const rows = await auditRowsFor(c.uid)
     expect(rows).toEqual([expect.objectContaining({ decision: "deny", reason: "store-unavailable" })])
+  })
+
+  it("D1 action: intern conflict.run → 403 role_not_permitted, partner conflict.waive allowed, both audited", async () => {
+    const intern = caller({ role: "intern" })
+    await expect(requirePermission(intern, "conflict.run")).rejects.toMatchObject({
+      status: 403,
+      code: "role_not_permitted",
+    })
+    expect((await auditRowsFor(intern.uid))[0]).toMatchObject({
+      action: "conflict.run",
+      decision: "deny",
+      reason: "role-not-permitted",
+    })
+    const partner = caller({ role: "partner" })
+    await expect(requirePermission(partner, "conflict.waive")).resolves.toBeUndefined()
+  })
+
+  it("D1 matter-level action: member partner passes matter.close with a matterId; non-member is denied", async () => {
+    const c = caller({ role: "partner" })
+    const matterId = await seedMatter(c.firmId, "confidential", [c.uid])
+    await expect(requirePermission(c, "matter.close", matterId)).resolves.toBeUndefined()
+    const other = caller({ role: "partner", firmId: c.firmId })
+    await expect(requirePermission(other, "matter.close", matterId)).rejects.toMatchObject({
+      status: 403,
+      code: "not_member",
+    })
   })
 })

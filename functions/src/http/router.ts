@@ -14,6 +14,10 @@ import {
 } from "../p5/mfa"
 import { createFirmUserOp, deactivateUserOp, onboardFirmOp, setUserClaimsOp } from "../p5/identity"
 import { recordGatePassOp } from "../p5/gates"
+import { setFirmNumberingOp } from "../d1/client/numberingOp"
+import { getClientOp, listClientsOp, registerClientOp } from "../d1/client/ops"
+import { getConflictResultOp, getConflictTrailOp, recordPartnerWaiverOp, resolveReviewItemOp, runConflictCheckOp } from "../d1/conflict/ops"
+import { advanceStageOp, closeMatterOp, getMatterOp, listMattersOp, openMatterOp } from "../d1/matter/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -34,7 +38,8 @@ import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKin
  * is not audited) → handler.
  *
  * Responses: 2xx → the operation's JSON result; errors → `{ error: { code } }`.
- * Pagination (§4.3) has no list GET yet (follow-up).
+ * GET data is the parsed query (string values only; 400 invalid_query otherwise); list GETs
+ * paginate with d1/pagination.ts (§4.3).
  */
 
 export type Method = "GET" | "POST" | "PUT"
@@ -52,6 +57,9 @@ export const MAX_BODY_BYTES = 1024 * 1024
 
 const IDENTITY = "/api/platform/identity"
 const GATES = "/api/platform/gates"
+const D1_CLIENT = "/api/d1/client"
+const D1_CONFLICT = "/api/d1/conflict"
+const D1_MATTER = "/api/d1/matter"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
@@ -61,6 +69,9 @@ const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay
   kind: handler.kind,
   ...extra,
 })
+
+/** A GET route; its data is the query string. */
+const get = (path: string, handler: Operation): Route => ({ method: "GET", path, handler, kind: handler.kind })
 
 export const ROUTES: readonly Route[] = [
   post(`${IDENTITY}/onboardFirm`, onboardFirmOp),
@@ -74,6 +85,20 @@ export const ROUTES: readonly Route[] = [
   post(`${IDENTITY}/syncMfaStatus`, syncMfaStatusOp),
   // firmless (platformAdmin): R-5 gate passes; no X-Firm-Id, like onboardFirm (E-26 exception)
   post(`${GATES}/recordGatePass`, recordGatePassOp),
+  post(`${D1_CLIENT}/setFirmNumbering`, setFirmNumberingOp),
+  post(`${D1_CLIENT}/registerClient`, registerClientOp),
+  get(`${D1_CLIENT}/getClient`, getClientOp),
+  get(`${D1_CLIENT}/listClients`, listClientsOp),
+  post(`${D1_CONFLICT}/runConflictCheck`, runConflictCheckOp),
+  get(`${D1_CONFLICT}/getConflictResult`, getConflictResultOp),
+  post(`${D1_CONFLICT}/resolveReviewItem`, resolveReviewItemOp),
+  post(`${D1_CONFLICT}/recordPartnerWaiver`, recordPartnerWaiverOp),
+  get(`${D1_CONFLICT}/getConflictTrail`, getConflictTrailOp),
+  post(`${D1_MATTER}/openMatter`, openMatterOp),
+  get(`${D1_MATTER}/getMatter`, getMatterOp),
+  get(`${D1_MATTER}/listMatters`, listMattersOp),
+  post(`${D1_MATTER}/advanceStage`, advanceStageOp),
+  post(`${D1_MATTER}/closeMatter`, closeMatterOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
@@ -90,7 +115,7 @@ export function buildRouteTable(routes: readonly Route[]): RouteTable {
   return table
 }
 
-type ApiRequest = Pick<Request, "method" | "path" | "headers" | "body" | "ip"> & { rawBody?: Buffer }
+type ApiRequest = Pick<Request, "method" | "path" | "headers" | "body" | "ip"> & { rawBody?: Buffer; query?: unknown }
 type Authenticated =
   | { kind: "firm"; session: Session; firm: Record<string, unknown> | undefined }
   | { kind: "firmless"; who: FirmlessIdentity }
@@ -99,7 +124,7 @@ const errorBody = (code: string) => ({ error: { code } })
 
 function send(res: Response, result: HttpResult, headers: Record<string, string> = {}): void {
   res.status(result.status)
-  for (const [name, value] of Object.entries(headers)) res.set(name, value)
+  for (const [name, value] of Object.entries({ ...result.headers, ...headers })) res.set(name, value)
   res.json(result.body)
 }
 
@@ -111,6 +136,18 @@ function normalisePath(path: string): string {
 
 function isJson(contentType: string | undefined): boolean {
   return /^application\/json\s*(;|$)/i.test(contentType ?? "")
+}
+
+/** GET data: the parsed query, string values only (a repeated or nested parameter is invalid_query). */
+function queryData(query: unknown): Data {
+  if (query === undefined || query === null) return {}
+  if (!isObject(query)) throw new HttpError(400, "invalid_query")
+  const data: Data = {}
+  for (const [name, value] of Object.entries(query)) {
+    if (typeof value !== "string") throw new HttpError(400, "invalid_query")
+    data[name] = value
+  }
+  return data
 }
 
 function isObject(value: unknown): value is Data {
@@ -175,17 +212,25 @@ async function auditRefusal(op: Operation, uid: string, firmId: string, err: unk
   throw err
 }
 
-/** Runs the operation with its one audit row; errors become their HTTP result. */
-async function execute(op: Operation, auth: Authenticated, body: Data): Promise<HttpResult> {
+/**
+ * Runs the operation with its one audit row; errors become their HTTP result. A firm operation
+ * gets the router's clock as `session.now`. An operation's RateLimitedError (e.g. 429
+ * daily_limit) keeps its Retry-After header; a 429 is never stored for idempotent replay
+ * (isStorableResult), so a same-key retry after the reset runs.
+ */
+async function execute(op: Operation, auth: Authenticated, body: Data, now: number): Promise<HttpResult> {
   const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
   const audit = new CallAudit(op.action, uid, op.target)
   try {
     const result = await runAudited(audit, () =>
-      op.auth === "firm" && auth.kind === "firm" ? op.run(auth.session, body, audit) : runFirmless(op, auth, body, audit)
+      op.auth === "firm" && auth.kind === "firm" ? op.run({ ...auth.session, now }, body, audit) : runFirmless(op, auth, body, audit)
     )
     return { status: 200, body: isObject(result) ? result : { result } }
   } catch (err) {
     // runAudited has already logged a non-HttpError.
+    if (err instanceof RateLimitedError) {
+      return { status: err.status, body: errorBody(err.code), headers: { "Retry-After": String(err.retryAfter) } }
+    }
     return err instanceof HttpError ? { status: err.status, body: errorBody(err.code) } : { status: 500, body: errorBody("internal") }
   }
 }
@@ -220,6 +265,8 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
         if (!isJson(header(headers, "content-type"))) return send(res, { status: 415, body: errorBody("unsupported_media_type") })
         if (!isObject(req.body)) return send(res, { status: 400, body: errorBody("invalid_body") })
         body = req.body
+      } else {
+        body = queryData(req.query)
       }
 
       const now = clock()
@@ -230,7 +277,7 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
       await rateLimit({ uid }, route.kind, { firm: auth.kind === "firm" ? auth.firm : undefined, now })
 
-      const run = () => execute(op, auth, body)
+      const run = () => execute(op, auth, body, now)
       const firmId = auth.kind === "firm" ? auth.session.caller.firmId : ""
       const result = hasBody
         ? await withIdempotency(
