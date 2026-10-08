@@ -19,6 +19,7 @@ import { getClientOp, listClientsOp, registerClientOp } from "../d1/client/ops"
 import { getConflictResultOp, getConflictTrailOp, recordPartnerWaiverOp, resolveReviewItemOp, runConflictCheckOp } from "../d1/conflict/ops"
 import { advanceStageOp, closeMatterOp, getMatterOp, listMattersOp, openMatterOp } from "../d1/matter/ops"
 import { getEntityOp, listAliasesOp, listReviewQueueOp } from "../d1/entity/read"
+import { confirmMergeOp, disputeLinkOp, rejectLinkOp } from "../d1/entity/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -104,6 +105,9 @@ export const ROUTES: readonly Route[] = [
   get(`${D1_ENTITY}/listReviewQueue`, listReviewQueueOp),
   get(`${D1_ENTITY}/getEntity`, getEntityOp),
   get(`${D1_ENTITY}/listAliases`, listAliasesOp),
+  post(`${D1_ENTITY}/confirmMerge`, confirmMergeOp),
+  post(`${D1_ENTITY}/disputeLink`, disputeLinkOp),
+  post(`${D1_ENTITY}/rejectLink`, rejectLinkOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>

@@ -58,7 +58,7 @@ const KEY_ORDER = ["cnic", "ntn", "secp", "phone"]
 const SCAN_BATCH = 100
 
 /** An unknown label counts as the highest rank (fail closed). */
-const withinClearance = (raw: unknown, clearance: Classification): boolean => rankOf(knownOrHighest(raw)) <= rankOf(clearance)
+export const withinClearance = (raw: unknown, clearance: Classification): boolean => rankOf(knownOrHighest(raw)) <= rankOf(clearance)
 
 const iso = (value: unknown): string | null => (value instanceof Timestamp ? value.toDate().toISOString() : null)
 
@@ -68,9 +68,9 @@ const sortKeys = (keys: Iterable<string>): string[] =>
     return i === j ? (x < y ? -1 : x > y ? 1 : 0) : (i === -1 ? KEY_ORDER.length : i) - (j === -1 ? KEY_ORDER.length : j)
   })
 
-/** The permission and layer gates every entity read starts with. */
-async function gate(caller: Caller): Promise<void> {
-  await requirePermission(caller, "entity.review")
+/** The permission and layer gates every entity route starts with (reads: `entity.review`). */
+export async function gate(caller: Caller, action: "entity.review" | "entity.confirm" | "entity.dispute" | "entity.reject" = "entity.review"): Promise<void> {
+  await requirePermission(caller, action)
   await requireL17_2(caller.firmId)
 }
 

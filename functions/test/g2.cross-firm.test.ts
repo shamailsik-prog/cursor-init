@@ -20,6 +20,7 @@ import * as clientOps from "../src/d1/client/ops"
 import * as conflictOps from "../src/d1/conflict/ops"
 import * as matterOps from "../src/d1/matter/ops"
 import * as entityRead from "../src/d1/entity/read"
+import * as entityOps from "../src/d1/entity/ops"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -88,9 +89,12 @@ const PROBES: Record<string, Probe> = {
   listReviewQueue: { data: () => ({}), target: false },
   getEntity: { data: (a) => ({ entityId: a.entityId }), target: true },
   listAliases: { data: (a) => ({ entityId: a.entityId }), target: true },
+  confirmMerge: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
+  disputeLink: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
+  rejectLink: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
