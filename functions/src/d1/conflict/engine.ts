@@ -227,9 +227,9 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
 /**
  * The candidates as seen from one subject. For each candidate, the keys equal to the subject's
  * decide which links count: a link on a matched key K between the candidate's entity and the
- * subject's entity (a subject without an entity: any K-link touching the candidate's entity,
- * i.e. an entity sharing that key value). linkState is "confirmed" iff one of those links is
- * confirmed, else "candidate" (an equal key without any link row is still a candidate identity);
+ * subject's entity. linkState is "confirmed" iff one of those links is confirmed (only when the
+ * subject has an entity id: a confirmed link between other entities does not confirm an unnamed
+ * opposing party), else "candidate" (an equal key without any link row is still a candidate identity);
  * "none" when no key is equal. Unresolved links of the subject's own entity whose other end is
  * the candidate's entity are attached to that candidate (P2-5, forensic test 3).
  */
@@ -244,15 +244,15 @@ export function tailor(registry: Registry, subject: Subject, subjectEntityId: st
       for (const l of subjectUnresolved) if (l.leftId === c.entityId || l.rightId === c.entityId) unresolved.add(l.id)
     }
     if (matched.length === 0) return { ...c, linkState: "none", linkIds: [], unresolvedLinkIds: [...unresolved] }
-    const relied = c.entityId
-      ? registry.links.filter((l) => {
-          if (!matched.includes(l.key)) return false
-          if (l.leftId !== c.entityId && l.rightId !== c.entityId) return false
-          if (!subjectEntityId) return true
-          const other = l.leftId === c.entityId ? l.rightId : l.leftId
-          return other === subjectEntityId
-        })
-      : []
+    const relied =
+      c.entityId && subjectEntityId
+        ? registry.links.filter((l) => {
+            if (!matched.includes(l.key)) return false
+            if (l.leftId !== c.entityId && l.rightId !== c.entityId) return false
+            const other = l.leftId === c.entityId ? l.rightId : l.leftId
+            return other === subjectEntityId
+          })
+        : []
     return {
       ...c,
       linkState: relied.some((l) => l.confirmed) ? "confirmed" : "candidate",
@@ -268,6 +268,7 @@ export type EngineResult = { hits: Hit[]; result: Outcome; identityBasis: Identi
 export function checkClassification(hits: readonly Hit[]): Classification {
   let label: Classification = "confidential"
   for (const h of hits) {
+    if (h.outcome === "NONE") continue
     const c = knownOrHighest(h.matterClassification)
     if (rankOf(c) > rankOf(label)) label = c
   }
@@ -300,7 +301,23 @@ const hitIdentity = (h: Hit): string => `${h.subjectIndex}|${h.type}|${h.candida
  * non-NONE fresh hits whose (subject, type, candidate) is not among the stored non-NONE or
  * review-resolved hits. A stored hit without a candidate id matches nothing (fails toward stale).
  */
+const OUTCOME_RANK: Record<Hit["outcome"], number> = { NONE: 0, POSSIBLE_CANDIDATE_REVIEW: 1, FLAG: 2 }
+
+/** How severely a stored hit already accounts for a candidate (resolved NONE still covers review-level matches). */
+const storedOutcomeRank = (h: Hit): number =>
+  h.outcome === "NONE" && h.review !== undefined ? OUTCOME_RANK.POSSIBLE_CANDIDATE_REVIEW : OUTCOME_RANK[h.outcome]
+
 export function unseenHits(fresh: readonly Hit[], stored: readonly Hit[]): Hit[] {
-  const known = new Set(stored.filter((h) => h.outcome !== "NONE" || h.review !== undefined).map(hitIdentity))
-  return fresh.filter((h) => h.outcome !== "NONE" && !known.has(hitIdentity(h)))
+  const storedRank = new Map<string, number>()
+  for (const h of stored) {
+    if (h.outcome === "NONE" && h.review === undefined) continue
+    const id = hitIdentity(h)
+    storedRank.set(id, Math.max(storedRank.get(id) ?? 0, storedOutcomeRank(h)))
+  }
+  return fresh.filter((h) => {
+    if (h.outcome === "NONE") return false
+    const id = hitIdentity(h)
+    const prev = storedRank.get(id)
+    return prev === undefined || OUTCOME_RANK[h.outcome] > prev
+  })
 }
