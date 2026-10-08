@@ -140,7 +140,10 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
   const firm = (await adminDb().collection("firms").doc(a.firmId).get()).data()
   const approval = (await adminDb().collection("mfa_disable_approvals").doc(a.approvalId).get()).data()
   const firmUsers = (await adminDb().collection("users").where("firmId", "==", a.firmId).count().get()).data().count
-  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers }
+  // L17.2: a cross-firm decision that wrote anything (link state, a dispute flag or note, a merge_events row) fails "unchanged".
+  const link = (await adminDb().collection("entity_links").doc(a.linkId).get()).data()
+  const mergeEvents = (await adminDb().collection("merge_events").where("firmId", "==", a.firmId).count().get()).data().count
+  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents }
 }
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
@@ -275,6 +278,9 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       ["/api/d1/conflict/getConflictResult", { checkId: A.checkId }, A.checkId],
       ["/api/d1/conflict/getConflictTrail", { checkId: A.checkId }, "items"],
       ["/api/d1/matter/getMatter", { matterId: A.matterId }, "G2 Alpha Matter"],
+      ["/api/d1/entity/listReviewQueue", {}, A.linkId],
+      ["/api/d1/entity/getEntity", { entityId: A.entityId }, "G2 Alpha Entity"],
+      ["/api/d1/entity/listAliases", { entityId: A.entityId }, "G2 Alpha Entity"],
     ]
     for (const [i, [path, query, token]] of reads.entries()) {
       const { res, out } = mockRes()
