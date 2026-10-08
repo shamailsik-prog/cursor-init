@@ -4,9 +4,9 @@ import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
 import { logFailure } from "../log"
 import { stageJobAudit, stageJobAuditSync } from "./audit"
-import { CLOCK_SKEW_TOLERANCE_MS, JOB_ENGINE, JOB_LEASE_MS, MAX_ATTEMPTS, MAX_LOG_ENTRIES, MAX_REFS, RETRY_DELAYS_MS } from "./constants"
+import { CLOCK_SKEW_TOLERANCE_MS, JOB_ENGINE, JOB_LEASE_MS, MAX_ATTEMPTS, MAX_FENCED_STEPS, MAX_LOG_ENTRIES, MAX_REFS, RETRY_DELAYS_MS } from "./constants"
 import type { JobDeps, JobTask } from "./dispatch"
-import { isSafeRef, jobsRef, type JobLogEntry, type JobLogEvent, type JobRow } from "./enqueue"
+import { isSafeRef, jobsRef, type FencedStepRecord, type JobLogEntry, type JobLogEvent, type JobRow } from "./enqueue"
 import { JobError, LeaseLostError, sanitizeError, type SanitizedError } from "./errors"
 import { stageJobDeadLetteredEvent, stageJobFailedEvent } from "./jobEvents"
 import { handlerFor, type JobHandler, type JobResult } from "./registry"
@@ -36,9 +36,12 @@ import { handlerFor, type JobHandler, type JobResult } from "./registry"
  *
  * The worker never re-dispatches a dropped task: recovery belongs to the sweeper (P3-8).
  *
+ * `runFenced(stepId, fn)` records each committed step on the row (`fencedSteps`), so a step that
+ * committed before a crash, a failure or a manual requeue is skipped on every later attempt.
+ *
  * A handler that overruns its budget is not cancelled: it keeps running until it settles, and
- * until the failure commit lands its fence still holds, so a late `runFenced` step can commit and
- * the retry repeats it. That is inside the at-least-once model (handlers are idempotent, L8148);
+ * until the failure commit lands its fence still holds, so a late `runFenced` step can commit (once:
+ * the retry finds it recorded and skips it). That is inside the at-least-once model (handlers are idempotent, L8148);
  * an AbortSignal on `ctx` is the later fix.
  */
 
@@ -187,14 +190,37 @@ async function claim(ref: DocumentReference, task: JobTask, deps: JobDeps): Prom
 
 const fenceHolds = (row: JobRow | undefined, owner: string): row is JobRow => row?.status === "running" && row.lease?.owner === owner
 
-/** Runs `fn` in a transaction that first re-reads the job and checks this claim's fence. */
-function runFencedFor(ref: DocumentReference, owner: string) {
-  return <T>(fn: (tx: Transaction) => Promise<T>): Promise<T> =>
-    adminDb().runTransaction(async (tx) => {
+const STEP_ID = /^[A-Za-z0-9_-]{1,100}$/
+const RESERVED_ID = /^__.*__$/
+
+/** A `runFenced` step id: 1 to 100 of `[A-Za-z0-9_-]` (a plain field-path segment), not reserved `__..__`. */
+export function isValidStepId(stepId: unknown): stepId is string {
+  return typeof stepId === "string" && STEP_ID.test(stepId) && !RESERVED_ID.test(stepId)
+}
+
+/**
+ * `runFenced(stepId, fn)` for this claim: one transaction that re-reads the job, checks the fence,
+ * then skips `fn` if `stepId` is already in `fencedSteps` (committed by an earlier attempt, before a
+ * crash or a failure), or runs `fn(tx)` and records `stepId` in the same commit. So a fenced effect
+ * commits exactly once per job (P3-6). The record is never cleared: not on reclaim, retry or a
+ * manual requeue (a saga resumes after its last committed step rather than repeating it).
+ */
+function runFencedFor(ref: DocumentReference, owner: string, attempt: number, now: () => number) {
+  return async <T>(stepId: string, fn: (tx: Transaction) => Promise<T>): Promise<T | undefined> => {
+    if (!isValidStepId(stepId)) throw new JobError("invalid_fenced_step", { permanent: true })
+    return adminDb().runTransaction(async (tx) => {
       const snap = await tx.get(ref)
-      if (!fenceHolds(snap.exists ? (snap.data() as JobRow) : undefined, owner)) throw new LeaseLostError()
-      return fn(tx)
+      const row = snap.exists ? (snap.data() as JobRow) : undefined
+      if (!fenceHolds(row, owner)) throw new LeaseLostError()
+      const steps: Record<string, FencedStepRecord> = row.fencedSteps && typeof row.fencedSteps === "object" ? row.fencedSteps : {}
+      if (Object.hasOwn(steps, stepId)) return undefined
+      if (Object.keys(steps).length >= MAX_FENCED_STEPS) throw new JobError("fenced_step_limit", { permanent: true })
+      const value = await fn(tx)
+      const record: FencedStepRecord = { at: at(now()), attempt }
+      tx.update(ref, { [`fencedSteps.${stepId}`]: record })
+      return value
     })
+  }
 }
 
 /** Races `work` against the budget; the timer is always cleared. */
@@ -238,7 +264,7 @@ async function runHandler(ref: DocumentReference, claimed: Claimed, deps: JobDep
         },
         payload,
         now: deps.clock,
-        runFenced: runFencedFor(ref, owner),
+        runFenced: runFencedFor(ref, owner, row.attempts, deps.clock),
       }),
       deps.handlerBudgetMs
     )

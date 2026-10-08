@@ -38,6 +38,8 @@ export const MAX_PAYLOAD_BYTES = 16_384
 export const MAX_LOG_ENTRIES = 50
 /** Input and output refs per job (P3-2). */
 export const MAX_REFS = 20
+/** Distinct `runFenced` step ids one job may record (P3-6 amendment); more is the permanent `fenced_step_limit`. */
+export const MAX_FENCED_STEPS = 50
 
 /**
  * The lease must outlive the worker timeout by at least 60 s (so a live attempt is never

@@ -330,6 +330,62 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     expect((await fencedCounterRef(firmId, jobId).get()).get("count")).toBe(1)
   })
 
+  it("a fenced step committed before a crash is not re-applied when another worker reclaims the job (P3-6 exactly once)", async () => {
+    const jobId = await enqueue({}, { jobType: "test.fenced" })
+    // Worker A commits its fenced step, then "crashes" before the done commit.
+    jobWorkerTestSeam.afterHandler = async () => {
+      throw new Error("worker A crashed")
+    }
+    try {
+      await expect(d.dispatcher.deliver({ jobId, seq: 0 }, T0)).rejects.toThrow("worker A crashed")
+    } finally {
+      delete jobWorkerTestSeam.afterHandler
+    }
+    expect((await fencedCounterRef(firmId, jobId).get()).get("count")).toBe(1)
+    expect(await readJob(jobId)).toMatchObject({ status: "running", attempts: 1 })
+    // Worker B reclaims after the lease; the step is already recorded, so it is skipped.
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0 + 600_000)).toBe("done")
+    expect((await fencedCounterRef(firmId, jobId).get()).get("count")).toBe(1)
+    const row = await readJob(jobId)
+    expect(row).toMatchObject({ status: "done", attempts: 2 })
+    expect(Object.keys((row as unknown as { fencedSteps: Record<string, unknown> }).fencedSteps)).toEqual(["increment"])
+  })
+
+  it("two distinct fenced step ids each apply once, across a crash and a reclaim", async () => {
+    const jobId = await enqueue({ steps: ["step-a", "step_b"] } as never, { jobType: "test.fenced" })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("done")
+    expect((await fencedCounterRef(firmId, jobId).get()).get("count")).toBe(2)
+
+    const crashed = await enqueue({ steps: ["step-a", "step_b"] } as never, { jobType: "test.fenced", idempotencyKey: uniq("k") })
+    jobWorkerTestSeam.afterHandler = async () => {
+      throw new Error("crash")
+    }
+    try {
+      await expect(d.dispatcher.deliver({ jobId: crashed, seq: 0 }, T0)).rejects.toThrow("crash")
+    } finally {
+      delete jobWorkerTestSeam.afterHandler
+    }
+    expect(await d.dispatcher.deliver({ jobId: crashed, seq: 0 }, T0 + 600_000)).toBe("done")
+    expect((await fencedCounterRef(firmId, crashed).get()).get("count")).toBe(2)
+  })
+
+  it("an invalid fenced step id, or more than 50 step ids in one job, fails permanently", async () => {
+    for (const [steps, code] of [
+      [["a.b"], "invalid_fenced_step"],
+      [[""], "invalid_fenced_step"],
+      [["x".repeat(101)], "invalid_fenced_step"],
+      [["__x__"], "invalid_fenced_step"],
+      [Array.from({ length: 51 }, (_, i) => `s${i}`), "fenced_step_limit"],
+    ] as const) {
+      d = testDeps(new FakeClock(T0))
+      const jobId = await enqueue({ steps } as never, { jobType: "test.fenced", idempotencyKey: uniq("k") })
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("dead_lettered")
+      expect(await readJob(jobId)).toMatchObject({ status: "dead_lettered", attempts: 1, lastError: { code } })
+      const count = (await fencedCounterRef(firmId, jobId).get()).get("count") ?? 0
+      expect(count).toBe(code === "fenced_step_limit" ? 50 : 0)
+    }
+  })
+
   it("a commit whose fence was lost after the handler writes nothing", async () => {
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
     const jobId = await enqueue({ behaviour: "succeed" })

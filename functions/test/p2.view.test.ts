@@ -42,6 +42,7 @@ function row(over: Record<string, unknown> = {}): Record<string, unknown> {
     createdBy: "system",
     requeues: [],
     cancellation: null,
+    fencedSteps: { "step-a": { at: at(T), attempt: 1 } },
     createdAt: at(T),
     updatedAt: at(T),
     startedAt: null,
@@ -123,8 +124,9 @@ describe("jobView (P3-11)", () => {
     expect(v.matterId).toBe("restricted")
     for (const key of ["inputRefs", "outputRefs", "logs", "payload", "payloadHash", "idempotencyKey", "lease"]) expect(v).not.toHaveProperty(key)
     const full = jobView("j1", row(), "full", { logs: true })
-    for (const key of ["payload", "payloadHash", "idempotencyKey", "lease", "dispatchSeq", "requeues", "cancellation"]) expect(full).not.toHaveProperty(key)
+    for (const key of ["payload", "payloadHash", "idempotencyKey", "lease", "dispatchSeq", "requeues", "cancellation", "fencedSteps"]) expect(full).not.toHaveProperty(key)
     expect(JSON.stringify([v, full])).not.toContain("secret-payload-value")
+    expect(JSON.stringify([v, full])).not.toContain("step-a")
     expect(JSON.stringify([v, full])).not.toContain("secret-key")
   })
 

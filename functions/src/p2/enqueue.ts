@@ -50,11 +50,15 @@ export type JobRow = {
   createdBy: string
   requeues: JobActorNote[]
   cancellation: JobActorNote | null
+  /** Fenced steps committed by this job (`runFenced`), keyed by step id; absent until the first. Never in a view. */
+  fencedSteps?: Record<string, FencedStepRecord>
   createdAt: Timestamp
   updatedAt: Timestamp
   startedAt: Timestamp | null
   finishedAt: Timestamp | null
 }
+
+export type FencedStepRecord = { at: Timestamp; attempt: number }
 
 export type JobSpec = {
   firmId: string

@@ -169,16 +169,22 @@ export const sagaTestHandler: JobHandler<Record<string, unknown>> = {
   run: async () => ({}),
 }
 
-/** A test type whose only effect is a fenced counter increment. */
+/**
+ * A test type whose only effects are fenced, non-idempotent counter increments: one per step id in
+ * `payload.steps` (default `["increment"]`), each through `runFenced(stepId, ...)`.
+ */
 export const fencedTestHandler: JobHandler<Record<string, unknown>> = {
   jobType: "test.fenced",
   saga: false,
   errorCodes: {},
   parse: anyObject,
   run: async (ctx) => {
-    await ctx.runFenced(async (tx) => {
-      tx.set(fencedCounterRef(ctx.job.firmId, ctx.job.id), { count: FieldValue.increment(1) }, { merge: true })
-    })
+    const steps = Array.isArray(ctx.payload.steps) ? (ctx.payload.steps as string[]) : ["increment"]
+    for (const step of steps) {
+      await ctx.runFenced(step, async (tx) => {
+        tx.set(fencedCounterRef(ctx.job.firmId, ctx.job.id), { count: FieldValue.increment(1) }, { merge: true })
+      })
+    }
     return {}
   },
 }

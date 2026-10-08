@@ -23,8 +23,15 @@ export type JobContext<P> = {
   }
   payload: P
   now(): number
-  /** Runs a transaction that first re-reads the job and checks the claim's fence (Task 3). */
-  runFenced<T>(fn: (tx: Transaction) => Promise<T>): Promise<T>
+  /**
+   * Runs `fn(tx)` in a transaction that first re-reads the job and checks the claim's fence
+   * (Task 3), then records `stepId` on the job in the same transaction, so a step commits at most
+   * once per job: across reclaims, automatic retries and manual requeues (P3-6 amendment). If
+   * `stepId` is already recorded, `fn` is skipped, nothing is written and the result is `undefined`.
+   * `stepId`: 1 to 100 characters of `[A-Za-z0-9_-]`, not `__..__` (else the permanent
+   * `invalid_fenced_step`); at most 50 distinct step ids per job (else the permanent `fenced_step_limit`).
+   */
+  runFenced<T>(stepId: string, fn: (tx: Transaction) => Promise<T>): Promise<T | undefined>
 }
 
 export type JobResult = { apply?: (tx: Transaction) => void; outputRefs?: string[] }

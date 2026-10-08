@@ -27,7 +27,16 @@ export class LeaseLostError extends Error {
   }
 }
 
-export const ENGINE_CODES = ["invalid_payload", "unknown_job_type", "handler_timeout", "lease_expired", "store_unavailable", "internal"] as const
+export const ENGINE_CODES = [
+  "invalid_payload",
+  "unknown_job_type",
+  "handler_timeout",
+  "lease_expired",
+  "store_unavailable",
+  "internal",
+  "invalid_fenced_step",
+  "fenced_step_limit",
+] as const
 export type EngineCode = (typeof ENGINE_CODES)[number]
 
 export const JOB_ERROR_MESSAGES: Readonly<Record<EngineCode, string>> = {
@@ -37,13 +46,15 @@ export const JOB_ERROR_MESSAGES: Readonly<Record<EngineCode, string>> = {
   lease_expired: "The job's worker stopped before finishing.",
   store_unavailable: "The data store was unavailable.",
   internal: "The job failed with an internal error.",
+  invalid_fenced_step: "The job used an invalid step id.",
+  fenced_step_limit: "The job exceeded its step limit.",
 }
 
 export type SanitizedError = { code: string; message: string; permanent: boolean }
 
 const CODE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/
 /** Engine codes that never benefit from an automatic retry. */
-const ALWAYS_PERMANENT: ReadonlySet<string> = new Set(["invalid_payload", "unknown_job_type"])
+const ALWAYS_PERMANENT: ReadonlySet<string> = new Set(["invalid_payload", "unknown_job_type", "invalid_fenced_step", "fenced_step_limit"])
 
 function isEngineCode(code: string): code is EngineCode {
   return (ENGINE_CODES as readonly string[]).includes(code)
@@ -54,7 +65,8 @@ const engine = (code: EngineCode, permanent: boolean): SanitizedError => ({ code
 /**
  * Maps any thrown value onto a declared code and its fixed message:
  * - a `JobError` whose code matches `^[a-z][a-z0-9_]{0,63}$` and is an engine code or one of the
- *   handler's `errorCodes` keeps it (`invalid_payload` / `unknown_job_type` always permanent,
+ *   handler's `errorCodes` keeps it (`invalid_payload`, `unknown_job_type`, `invalid_fenced_step`
+ *   and `fenced_step_limit` always permanent,
  *   others as the error says);
  * - an error with a numeric gRPC status `code` (1..16), i.e. a Firestore failure → `store_unavailable`, retryable;
  * - anything else → `internal`, retryable.

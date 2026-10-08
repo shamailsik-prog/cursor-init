@@ -372,6 +372,19 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     expect(await retry(f, f.P, { jobId: dead, note: NOTE })).toMatchObject({ status: "queued", manualRetries: 3, retryable: false })
   })
 
+  it("retryFailedJob keeps the job's committed fenced steps, so a requeue never repeats a committed step (P3-6 amendment)", async () => {
+    const f = await seedFirm()
+    const dead = await job(f)
+    await deadLetter(dead)
+    const steps = { "step-a": { at: Timestamp.fromMillis(T0), attempt: 2 } }
+    await setJob(dead, { fencedSteps: steps })
+    clock.set(T0 + 60_000)
+    const view = await retry(f, f.P, { jobId: dead, note: NOTE })
+    expect(view).toMatchObject({ status: "queued", manualRetries: 1 })
+    expect(view).not.toHaveProperty("fencedSteps")
+    expect((await readJob(dead)).fencedSteps).toEqual(steps)
+  })
+
   it("retryFailedJob: a saga job type needs a partner", async () => {
     const f = await seedFirm()
     const sagaDead = await job(f, { jobType: "test.saga" }, T0, {} as DiagnosticPayload)
