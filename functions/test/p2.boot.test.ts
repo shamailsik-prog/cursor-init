@@ -43,6 +43,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(index.onEventCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
       eventFilterPathPatterns: { document: "events/{eventId}" },
+      retry: true,
     })
     expect(index.jobWorker.__endpoint).toMatchObject({
       timeoutSeconds: 300,

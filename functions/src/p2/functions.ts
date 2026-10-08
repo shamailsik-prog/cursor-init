@@ -53,10 +53,12 @@ export const onJobCreated = onDocumentCreated({ document: "jobs/{jobId}", region
 )
 
 /**
- * A new event row → one job per registered subscriber (P3-15). A failure throws so the trigger's
- * redelivery retries; the deterministic job ids make a retry safe.
+ * A new event row → one job per registered subscriber (P3-15). `retry: true` makes the platform
+ * redeliver after a thrown (transient store) error, for up to 7 days; `fanOutEvent` never throws
+ * for a permanent cause, and the deterministic job ids make a redelivery safe. An event whose
+ * retries run out is not recovered (open item O-37).
  */
-export const onEventCreated = onDocumentCreated({ document: "events/{eventId}", region: REGION }, async (event) => {
+export const onEventCreated = onDocumentCreated({ document: "events/{eventId}", region: REGION, retry: true }, async (event) => {
   await fanOutEvent(event.params.eventId, event.data?.data(), runtimeDeps())
 })
 
