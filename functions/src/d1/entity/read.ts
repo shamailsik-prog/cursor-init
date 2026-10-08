@@ -288,6 +288,9 @@ async function pairsOf(caller: Caller, entityId: string, nowMs: number): Promise
     if (!isSafeDocId(otherEntityId)) continue
     const otherRow = await readableEntity(caller, otherEntityId)
     if (!otherRow) continue
+    // Same pair label as readPair and the queue: the other entity's client counts too.
+    const otherClient = await clientOfEntity(caller.firmId, otherEntityId)
+    if (otherClient && !withinClearance(otherClient.row.classification, caller.clearanceLevel)) continue
     const states = new Set(rows.map(({ row }) => effectiveLinkState(row, nowMs, true)))
     const effectiveState = PAIR_STATE_PRECEDENCE.find((s) => states.has(s)) ?? "candidate"
     const mergeEventId = rows

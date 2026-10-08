@@ -323,6 +323,30 @@ describe.skipIf(!EMULATORS)("getEntity (P2-32)", () => {
     expectKind(await apiErrorOf(listAliases({ token: otherPartner.token, data: { firmId: other, entityId: a.entityId } } as never)), "not-found", "not_found")
     expectKind(await apiErrorOf(listAliases({ token: associate.token, data: { firmId, entityId: secret.entityId } } as never)), "not-found", "not_found")
   })
+
+  it("a pair whose other entity's client is above clearance is hidden from getEntity and listAliases, as in the queue and readPair (final review minor 1)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const associate = await mintIdToken(claims(firmId, "associate", "internal"))
+    const key = cnic()
+    const a = await register(partner.token, firmId, { name: "Muhammad Ali", cnic: key })
+    const b = await register(partner.token, firmId, { name: "Mohammad Ali Khan", cnic: key })
+    await setPair(firmId, a.entityId, b.entityId, LINK_AUTO_CONFIRM_MS)
+    // Entity B and the link rows stay internal; only B's client is raised.
+    await adminDb().collection("clients").doc(b.clientId).update({ classification: "confidential" })
+
+    const queue = await listReviewQueue({ token: associate.token, data: { firmId } } as never)
+    expect(queue.items).toEqual([])
+    const hiddenView = await getEntity({ token: associate.token, data: { firmId, entityId: a.entityId } } as never)
+    expect(hiddenView.links).toEqual([])
+    const hiddenAliases = await listAliases({ token: associate.token, data: { firmId, entityId: a.entityId } } as never)
+    expect(hiddenAliases.items.map((i) => i.value)).not.toContain("Mohammad Ali Khan")
+
+    const fullView = await getEntity({ token: partner.token, data: { firmId, entityId: a.entityId } } as never)
+    expect(fullView.links.map((l) => l.otherEntityId)).toEqual([b.entityId])
+    const fullAliases = await listAliases({ token: partner.token, data: { firmId, entityId: a.entityId } } as never)
+    expect(fullAliases.items.map((i) => i.value)).toContain("Mohammad Ali Khan")
+  })
 })
 
 describe.skipIf(!EMULATORS)("listAliases (P2-32)", () => {
