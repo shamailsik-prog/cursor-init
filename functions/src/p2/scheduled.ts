@@ -2,7 +2,9 @@ import { FieldPath } from "firebase-admin/firestore"
 import { onSchedule, type ScheduleFunction } from "firebase-functions/v2/scheduler"
 import { adminDb } from "../admin"
 import { REGION } from "../health"
+import { logFailure } from "../log"
 import { enqueueJob } from "./enqueue"
+import { handlerFor } from "./registry"
 
 /**
  * The scheduled-job primitive (spec P3-16): one run per firm per period, keyed by jobType + period
@@ -21,6 +23,21 @@ const PKT_OFFSET_MS = 5 * 3_600_000
 const DAY_MS = 86_400_000
 const FIRM_PAGE_SIZE = 300
 export const MAX_BACKFILL_KEYS = 366
+
+/** A malformed or out-of-bounds period range (a caller error, not a store failure). */
+export class PeriodRangeError extends Error {}
+
+/** The job type has a schedule but no registered handler. */
+export class UnregisteredJobTypeError extends Error {}
+
+/** Some firms' runs could not be enqueued; the others were. Carries counts only. */
+export class ScheduledRunsFailedError extends Error {
+  readonly failed: number
+  constructor(failed: number) {
+    super(`scheduled runs failed for ${failed} firm run(s)`)
+    this.failed = failed
+  }
+}
 
 const pad = (n: number, w = 2): string => String(n).padStart(w, "0")
 
@@ -109,22 +126,23 @@ function nextStart(period: Period, ms: number): number {
 export function periodRange(period: Period, fromKey: string, toKey: string): string[] {
   const from = parseKey(period, fromKey)
   const to = parseKey(period, toKey)
-  if (from === null || to === null) throw new Error("invalid period key")
-  if (from > to) throw new Error("from after to")
+  if (from === null || to === null) throw new PeriodRangeError("invalid period key")
+  if (from > to) throw new PeriodRangeError("from after to")
   const keys: string[] = []
   for (let at = from; at <= to; at = nextStart(period, at)) {
-    if (keys.length >= MAX_BACKFILL_KEYS) throw new Error(`range spans at most ${MAX_BACKFILL_KEYS} periods`)
+    if (keys.length >= MAX_BACKFILL_KEYS) throw new PeriodRangeError(`range spans at most ${MAX_BACKFILL_KEYS} periods`)
     keys.push(formatShifted(period, at))
   }
   return keys
 }
 
-export type RunCounts = { firms: number; created: number; reused: number }
+export type RunCounts = { firms: number; created: number; reused: number; failed: number }
 
 /** Enqueues the run for `key` for every firm, one transaction per firm, paging firms by document id. */
 async function enqueueKey(spec: ScheduledJobSpec, key: string, nowMs: number, pageSize: number): Promise<RunCounts> {
+  if (handlerFor(spec.jobType) === undefined) throw new UnregisteredJobTypeError(`no handler registered for ${spec.jobType}`)
   const db = adminDb()
-  const counts: RunCounts = { firms: 0, created: 0, reused: 0 }
+  const counts: RunCounts = { firms: 0, created: 0, reused: 0, failed: 0 }
   const runKey = `${spec.jobType}:${key}`
   let last: string | undefined
   for (;;) {
@@ -132,25 +150,31 @@ async function enqueueKey(spec: ScheduledJobSpec, key: string, nowMs: number, pa
     if (last !== undefined) q = q.startAfter(last)
     const page = await q.get()
     for (const doc of page.docs) {
-      const result = await db.runTransaction((tx) =>
-        enqueueJob(
-          tx,
-          {
-            firmId: doc.id,
-            jobType: spec.jobType,
-            classification: "internal",
-            matterId: null,
-            payload: { period: key },
-            idempotencyKey: runKey,
-            runKey,
-            createdBy: "system",
-          },
-          { now: nowMs }
-        )
-      )
       counts.firms += 1
-      if (result.reused) counts.reused += 1
-      else counts.created += 1
+      try {
+        const result = await db.runTransaction((tx) =>
+          enqueueJob(
+            tx,
+            {
+              firmId: doc.id,
+              jobType: spec.jobType,
+              classification: "internal",
+              matterId: null,
+              payload: { period: key },
+              idempotencyKey: runKey,
+              runKey,
+              createdBy: "system",
+            },
+            { now: nowMs }
+          )
+        )
+        if (result.reused) counts.reused += 1
+        else counts.created += 1
+      } catch (err) {
+        // One firm's failure must not starve the firms after it; the caller throws once all are tried.
+        counts.failed += 1
+        logFailure(`scheduled run failed firm=${doc.id}`, err)
+      }
     }
     if (page.size < pageSize) return counts
     last = page.docs[page.size - 1].id
@@ -158,20 +182,24 @@ async function enqueueKey(spec: ScheduledJobSpec, key: string, nowMs: number, pa
 }
 
 /** The tick: the run for the period containing `nowMs`, for every firm. Idempotent per firm and period. */
-export function enqueueScheduledRuns(spec: ScheduledJobSpec, nowMs: number, opts: { pageSize?: number } = {}): Promise<RunCounts> {
-  return enqueueKey(spec, periodKey(spec.period, nowMs), nowMs, opts.pageSize ?? FIRM_PAGE_SIZE)
+export async function enqueueScheduledRuns(spec: ScheduledJobSpec, nowMs: number, opts: { pageSize?: number } = {}): Promise<RunCounts> {
+  const counts = await enqueueKey(spec, periodKey(spec.period, nowMs), nowMs, opts.pageSize ?? FIRM_PAGE_SIZE)
+  if (counts.failed > 0) throw new ScheduledRunsFailedError(counts.failed)
+  return counts
 }
 
 /** Enqueues every period of the inclusive range for every firm; re-running it creates nothing new. */
 export async function backfillScheduledRuns(spec: ScheduledJobSpec, fromKey: string, toKey: string, nowMs: number): Promise<RunCounts> {
   const keys = periodRange(spec.period, fromKey, toKey)
-  const total: RunCounts = { firms: 0, created: 0, reused: 0 }
+  const total: RunCounts = { firms: 0, created: 0, reused: 0, failed: 0 }
   for (const key of keys) {
     const c = await enqueueKey(spec, key, nowMs, FIRM_PAGE_SIZE)
     total.firms = Math.max(total.firms, c.firms)
     total.created += c.created
     total.reused += c.reused
+    total.failed += c.failed
   }
+  if (total.failed > 0) throw new ScheduledRunsFailedError(total.failed)
   return total
 }
 

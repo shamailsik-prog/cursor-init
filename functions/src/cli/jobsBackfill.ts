@@ -1,4 +1,4 @@
-import { backfillScheduledRuns, SCHEDULED_JOBS, type ScheduledJobSpec } from "../p2/scheduled"
+import { backfillScheduledRuns, PeriodRangeError, SCHEDULED_JOBS, ScheduledRunsFailedError, UnregisteredJobTypeError, type ScheduledJobSpec } from "../p2/scheduled"
 
 /**
  * `npm run jobs:backfill -- <jobType> <from> <to>`: enqueues the scheduled job's runs for every
@@ -24,10 +24,17 @@ export async function runBackfill(argv: string[], deps: BackfillDeps): Promise<n
     deps.out(`backfilled ${jobType} ${from}..${to}: ${r.created} created, ${r.reused} reused, ${r.firms} firms`)
     return 0
   } catch (err) {
-    const message = err instanceof Error ? err.message : "failed"
-    if (/invalid period key|from after to|at most/.test(message)) {
-      deps.out(message)
+    if (err instanceof PeriodRangeError) {
+      deps.out(err.message)
       return 2
+    }
+    if (err instanceof UnregisteredJobTypeError) {
+      deps.out(err.message)
+      return 1
+    }
+    if (err instanceof ScheduledRunsFailedError) {
+      deps.out(`backfill incomplete: ${err.failed} firm run(s) failed; re-run to retry them`)
+      return 1
     }
     deps.out("backfill failed")
     return 1
