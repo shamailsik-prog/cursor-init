@@ -54,6 +54,10 @@ export async function fanOutEvent(
   deps: Pick<JobDeps, "clock">
 ): Promise<{ created: string[]; reused: string[] }> {
   const none = { created: [], reused: [] }
+  if (!isSafeDocId(eventId)) {
+    logger.warn("event.fanout_ignored", { eventId })
+    return none
+  }
   const firmId: unknown = data?.firmId
   if (!isSafeDocId(firmId)) {
     logger.warn("event.fanout_ignored", { eventId })
@@ -85,6 +89,15 @@ export async function fanOutEvent(
       })
       continue
     }
+    const idempotencyKey = `${eventId}:${s.id}`
+    if (idempotencyKey.length > 512) {
+      logger.warn("event.fanout_subscriber_skipped", {
+        eventId,
+        subscriber: s.id,
+        code: "idempotency_key_too_long",
+      })
+      continue
+    }
     specs.push({
       firmId,
       jobType: s.jobType,
@@ -92,7 +105,7 @@ export async function fanOutEvent(
       matterId,
       payload: { eventId },
       inputRefs: [`events/${eventId}`],
-      idempotencyKey: `${eventId}:${s.id}`,
+      idempotencyKey,
       createdBy: "system",
     })
   }
