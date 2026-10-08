@@ -86,12 +86,6 @@ async function readableEntity(caller: Caller, entityId: string): Promise<Documen
   return row
 }
 
-/** The client of an entity if the caller is cleared to see it (a hidden client reads as none). */
-async function readableClient(caller: Caller, entityId: string): Promise<ClientRef | undefined> {
-  const client = await clientOfEntity(caller.firmId, entityId)
-  return client && withinClearance(client.row.classification, caller.clearanceLevel) ? client : undefined
-}
-
 /**
  * The summary of an entity for a list, or null when the entity or its client is missing from
  * the caller's view (unreadable, other firm or above clearance): the whole pair is then skipped.
@@ -311,11 +305,17 @@ async function pairsOf(caller: Caller, entityId: string, nowMs: number): Promise
   return out
 }
 
-/** The addressed entity in the caller's firm and clearance, else 404 not_found. */
-async function addressedEntity(caller: Caller, entityId: string): Promise<DocumentData> {
+/**
+ * The addressed entity and its client, both in the caller's firm and clearance, else 404
+ * not_found: a client above clearance hides its entity, as summaryFor does for a pair's side.
+ * The label is the higher of the entity's and the client's.
+ */
+async function addressedEntity(caller: Caller, entityId: string): Promise<{ row: DocumentData; client: ClientRef | undefined; label: Classification }> {
   const row = await readableEntity(caller, entityId)
   if (!row) throw new HttpError(404, "not_found")
-  return row
+  const client = await clientOfEntity(caller.firmId, entityId)
+  if (client && !withinClearance(client.row.classification, caller.clearanceLevel)) throw new HttpError(404, "not_found")
+  return { row, client, label: client ? maxLabel(row.classification, client.row.classification) : knownOrHighest(row.classification) }
 }
 
 /**
@@ -333,13 +333,12 @@ export const getEntityOp: FirmOperation<EntityView> = {
     await gate(caller)
     const entityId = parseEntityId(data.entityId)
     audit.target = `entities/${entityId}`
-    const row = await addressedEntity(caller, entityId)
-    const client = await readableClient(caller, entityId)
+    const { row, client, label } = await addressedEntity(caller, entityId)
     const pairs = await pairsOf(caller, entityId, clock ?? Date.now())
     await audit.allow()
     return {
       ...entitySummary(entityId, row, client),
-      classification: knownOrHighest(row.classification),
+      classification: label,
       createdAt: iso(row.createdAt),
       links: pairs.map(({ otherRow: _other, ...view }) => view),
     }
@@ -375,8 +374,7 @@ export const listAliasesOp: FirmOperation<{ items: Alias[]; nextCursor: null }> 
     await gate(caller)
     const entityId = parseEntityId(data.entityId)
     audit.target = `entities/${entityId}`
-    const row = await addressedEntity(caller, entityId)
-    const client = await readableClient(caller, entityId)
+    const { row, client } = await addressedEntity(caller, entityId)
     const aliasSnap = await adminDb().collection("entity_aliases").where("firmId", "==", caller.firmId).where("entityId", "==", entityId).get()
     const pairs = await pairsOf(caller, entityId, clock ?? Date.now())
 

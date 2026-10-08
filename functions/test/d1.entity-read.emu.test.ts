@@ -347,6 +347,23 @@ describe.skipIf(!EMULATORS)("getEntity (P2-32)", () => {
     const fullAliases = await listAliases({ token: partner.token, data: { firmId, entityId: a.entityId } } as never)
     expect(fullAliases.items.map((i) => i.value)).toContain("Mohammad Ali Khan")
   })
+
+  it("an entity whose own client is above clearance → 404 not_found from getEntity and listAliases (PR #8 review: the addressed client gates too)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const associate = await mintIdToken(claims(firmId, "associate", "internal"))
+    const a = await register(partner.token, firmId, { name: "Muhammad Ali", cnic: cnic() })
+    // The entity row stays internal; only its client is raised.
+    await adminDb().collection("clients").doc(a.clientId).update({ classification: "confidential" })
+
+    expectKind(await apiErrorOf(getEntity({ token: associate.token, data: { firmId, entityId: a.entityId } } as never)), "not-found", "not_found")
+    expectKind(await apiErrorOf(listAliases({ token: associate.token, data: { firmId, entityId: a.entityId } } as never)), "not-found", "not_found")
+
+    const full = await getEntity({ token: partner.token, data: { firmId, entityId: a.entityId } } as never)
+    expect(full.classification).toBe("confidential")
+    const aliases = await listAliases({ token: partner.token, data: { firmId, entityId: a.entityId } } as never)
+    expect(aliases.items.map((i) => i.value)).toContain("Muhammad Ali")
+  })
 })
 
 describe.skipIf(!EMULATORS)("listAliases (P2-32)", () => {
