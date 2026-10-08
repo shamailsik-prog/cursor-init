@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { OPEN_SCREEN_ROUNDS, openMatterTestSeam } from "../src/d1/matter/ops"
@@ -385,6 +385,44 @@ describe.skipIf(!EMULATORS)("openMatter re-screen vs the registry version", () =
     expect(rounds).toEqual([1, 2])
     expect((await openRows(partner.uid)).map((r) => [r.decision, r.reason])).toEqual([["allow", "ok"]])
     expect((await adminDb().collection("matters").where("firmId", "==", firmId).get()).size).toBe(1)
+  })
+
+  it("round 1's transaction fails with the emulator's closed-transaction INVALID_ARGUMENT: the next round opens, no 500; one allow row", async () => {
+    // PR #9 flake, captured under load: a transactional read waited out the emulator's 2s lock timeout
+    // (10 ABORTED: Transaction lock timeout.); gax's stream retry re-sent it on the transaction the abort
+    // had closed, and the SDK runner does not retry the INVALID_ARGUMENT that came back → 500 internal.
+    // The lock race is load-dependent, so round 1's transaction is made to reject with that exact error.
+    const { firmId, partner, checkId } = await setup()
+    const db = adminDb()
+    const real = db.runTransaction.bind(db)
+    let armed = false
+    const spy = vi.spyOn(db, "runTransaction").mockImplementation(((fn: never, opts: never) => {
+      if (!armed) return real(fn, opts)
+      armed = false // the seam is awaited just before the round's transaction: this call is round 1's
+      return Promise.reject(
+        Object.assign(new Error("3 INVALID_ARGUMENT: Transaction is invalid or closed."), {
+          code: 3,
+          details: "Transaction is invalid or closed.",
+          metadata: {},
+        })
+      )
+    }) as typeof db.runTransaction)
+    const rounds: number[] = []
+    try {
+      const out = await withSeam(
+        async (r) => {
+          rounds.push(r)
+          if (r === 1) armed = true
+        },
+        () => open(partner.token, firmId, checkId)
+      )
+      expect(out.matterNo).toBe(`NHS/${YEAR}/0001`)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(rounds).toEqual([1, 2])
+    expect((await openRows(partner.uid)).map((r) => [r.decision, r.reason])).toEqual([["allow", "ok"]])
+    expect((await db.collection("matters").where("firmId", "==", firmId).get()).size).toBe(1)
   })
 
   it(`a version that moves every round → 409 registry_contended after ${OPEN_SCREEN_ROUNDS} rounds; nothing written, one deny row`, async () => {
