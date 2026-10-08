@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ingressSettings, ingressWarning, trustedProxyHops } from "../src/deployConfig"
 import { header } from "../src/http/headers"
+import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 
@@ -50,6 +51,23 @@ describe("deploy config: proxy hops and ingress", () => {
       expect([name, index[name].__endpoint?.ingressSettings]).toEqual([name, "ALLOW_ALL"])
     }
   })
+
+  it("every deployed function runs in asia-south1 (L910), as the deploy tool reads the built bundle", () => {
+    // In the bundle, setGlobalOptions in index.ts runs after the imported function objects are built,
+    // so it never reaches them: a function without its own region deploys to the platform default.
+    // Vitest caches firebase-functions across imports and cannot see this, so the bundle is built and
+    // loaded in a fresh Node process, the way `firebase deploy` discovers the endpoints.
+    const cwd = path.resolve(__dirname, "..")
+    execFileSync(process.execPath, ["build.mjs"], { cwd, stdio: "ignore" })
+    const out = execFileSync(
+      process.execPath,
+      ["-e", "const m=require('./lib/index.js');const r={};for(const k of Object.keys(m)){const e=m[k]&&m[k].__endpoint;if(e)r[k]=e.region??null}console.log(JSON.stringify(r))"],
+      { cwd, encoding: "utf8" }
+    )
+    const regions = JSON.parse(out.trim().split("\n").pop() as string) as Record<string, string[] | null>
+    expect(Object.keys(regions)).toEqual(expect.arrayContaining(["api", "health", "onJobCreated", "jobWorker", "jobSweeper"]))
+    for (const [name, region] of Object.entries(regions)) expect([name, region]).toEqual([name, ["asia-south1"]])
+  }, 60_000)
 
   it("api picks up SIKANDER_INGRESS_SETTINGS at load", async () => {
     vi.stubEnv("SIKANDER_INGRESS_SETTINGS", "ALLOW_INTERNAL_AND_GCLB")
