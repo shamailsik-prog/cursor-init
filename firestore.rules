@@ -156,17 +156,19 @@ service cloud.firestore {
       allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
       allow create, update, delete: if false;
     }
+    // Phase 2b-A (P2-36, E-41(c)): server-only. No writer exists; reads by same-firm staff cleared
+    // to the row. Missing classification fails closed (rank() of an absent field errors -> deny).
     match /entity_aliases/{id} {
-      allow read: if sameFirm() && isStaff();
-      allow create, update: if sameFirmNew() && role() in ['partner', 'associate', 'clerk'] && (resource == null || firmIdUnchanged());
-      allow delete: if false;
+      allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
+      allow create, update, delete: if false;
     }
+    // Phase 2b-A (P2-36, E-41(c)): server-only and immutable. confirmMerge (Cloud Functions, Admin
+    // SDK) is the only writer; the Phase 0 partner revert-only SDK update (L9355) is withdrawn,
+    // because a revert outside the 2b-B saga is a half-state (L8414). Reads by same-firm partner or
+    // associate cleared to the row; missing classification fails closed.
     match /merge_events/{id} {
-      allow read: if sameFirm() && isStaff();
-      allow create: if sameFirmNew() && role() in ['partner', 'associate'];
-      allow update: if sameFirm() && isPartner() && firmIdUnchanged()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reverted', 'revertedBy', 'revertedAt']);
-      allow delete: if false;
+      allow read: if sameFirm() && role() in ['partner', 'associate'] && cleared(resource.data.classification);
+      allow create, update, delete: if false;
     }
     // Phase 2a (matter spine + Module 6 conflict engine, spec §5): every collection below is written
     // only by Cloud Functions (Admin SDK). Reads are scoped by firm, role and clearance on the row's

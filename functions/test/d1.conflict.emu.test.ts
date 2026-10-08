@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { Timestamp } from "firebase-admin/firestore"
+import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { discloseFor, type StoredCheck } from "../src/d1/conflict/disclosure"
 import { secondsToKarachiMidnight } from "../src/d1/dailyLimit"
-import { unseenHits } from "../src/d1/conflict/engine"
+import { checkClassification, unseenHits } from "../src/d1/conflict/engine"
 import { RateLimitedError } from "../src/http/errors"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
@@ -27,6 +27,7 @@ type CheckResponse = {
 
 const runCheck = viaApi<CheckResponse>("runConflictCheck")
 const getResult = viaApi<CheckResponse>("getConflictResult")
+const resolveReviewItem = viaApi<CheckResponse>("resolveReviewItem")
 const registerClient = viaApi<{ clientId: string; entityId: string }>("registerClient")
 
 const claims = (firmId: string, role: string, clearanceLevel = "privileged-restricted") => ({ firmId, role, clearanceLevel })
@@ -150,6 +151,17 @@ describe("discloseFor (no emulator needed)", () => {
   })
 })
 
+describe("checkClassification (no emulator needed)", () => {
+  it("the check's label covers every stored hit, NONE included, because stored hits keep matter ids readable by partners cleared to the check's label", () => {
+    const hit = (over: Partial<StoredCheck["hits"][number]>): StoredCheck["hits"][number] => ({
+      subjectIndex: 1, hitRole: "client", type: "direct_adverse", basis: "name", score: 1, identityBasis: "candidate_only",
+      outcome: "POSSIBLE_CANDIDATE_REVIEW", matchedName: "X", matterId: "m1", matterNo: "N", matterClassification: "internal",
+      reliedOnLinkIds: [], candidateId: "client:c1", ...over,
+    })
+    expect(checkClassification([hit({ outcome: "NONE", matterClassification: "privileged-restricted" }), hit({})])).toBe("privileged-restricted")
+  })
+})
+
 describe("unseenHits: the re-screen comparison at open (no emulator needed)", () => {
   const h = (over: Partial<StoredCheck["hits"][number]>): StoredCheck["hits"][number] => ({
     subjectIndex: 1, hitRole: "client", type: "direct_adverse", basis: "name", score: 1, identityBasis: "candidate_only",
@@ -168,6 +180,12 @@ describe("unseenHits: the re-screen comparison at open (no emulator needed)", ()
     expect(unseenHits([h({})], [h({ outcome: "NONE", review })])).toEqual([])
     expect(unseenHits([h({})], [h({ outcome: "NONE" })])).toHaveLength(1)
     expect(unseenHits([h({})], [h({ candidateId: undefined })])).toHaveLength(1)
+  })
+  it("a fresh FLAG on the same candidate is unseen when the stored hit was review or resolved NONE", () => {
+    const review = { resolution: "different_person" as const, by: "u", note: "n", at: "t" }
+    expect(unseenHits([h({ outcome: "FLAG" })], [h({ outcome: "POSSIBLE_CANDIDATE_REVIEW" })])).toHaveLength(1)
+    expect(unseenHits([h({ outcome: "FLAG" })], [h({ outcome: "NONE", review })])).toHaveLength(1)
+    expect(unseenHits([h({ outcome: "FLAG" })], [h({ outcome: "FLAG" })])).toEqual([])
   })
 })
 
@@ -229,24 +247,32 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
     expect(opRows.map((r) => r.decision)).toEqual(["allow"])
   })
 
-  it("opposing party = existing client with a live matter, same CNIC, link confirmed 31 days ago → FLAG direct_adverse confirmed_identity", async () => {
+  it("opposing party named by name+keys has no entity: an exact-CNIC match to a client, even with an old confirmed link between OTHER entities, is POSSIBLE_CANDIDATE_REVIEW candidate_only; a reviewer's same_person makes it FLAG confirmed_identity", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
     const a = await register(partner.token, firmId, { cnic: CNIC_X })
     await register(partner.token, firmId, { name: "Muhammad Ali Khan", cnic: CNIC_X })
     await seedMatter(firmId, a.clientId)
-    const linkIds = await ageLinks(firmId, 31)
+    await ageLinks(firmId, 31)
 
     const out = await runCheck({
       token: partner.token,
       data: { firmId, client: { name: "Bashir Ahmed" }, opposingParties: [opposing("M. Ali", { cnic: "42101-1234567-1" })] },
     } as never)
-    expect(out.result).toBe("FLAG")
-    expect(out.identityBasis).toBe("confirmed_identity")
+    expect(out.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+    expect(out.identityBasis).toBe("candidate_only")
     const direct = out.hits.find((h) => h.type === "direct_adverse")
-    expect(direct).toMatchObject({ outcome: "FLAG", identityBasis: "confirmed_identity", basis: "key", matterNo: "NHS/2026/0001", reliedOnLinkIds: linkIds })
+    expect(direct).toMatchObject({ outcome: "POSSIBLE_CANDIDATE_REVIEW", identityBasis: "candidate_only", basis: "key", matterNo: "NHS/2026/0001", reliedOnLinkIds: [] })
     const stored = (await adminDb().collection("conflict_checks").doc(out.checkId).get()).data()
     expect(stored?.decision).toBe("pending")
+
+    const hitIndex = out.hits.findIndex((h) => h.type === "direct_adverse")
+    const resolved = await resolveReviewItem({
+      token: partner.token,
+      data: { firmId, checkId: out.checkId, hitIndex, resolution: "same_person", note: "Same CNIC, same person: confirmed on the file." },
+    } as never)
+    expect(resolved.hits[hitIndex]).toMatchObject({ outcome: "FLAG", identityBasis: "confirmed_identity" })
+    expect(resolved.result).toBe("FLAG")
   })
 
   it("the same with the link 2 days old → POSSIBLE_CANDIDATE_REVIEW candidate_only", async () => {
@@ -265,37 +291,124 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
     expect(out.hits.every((h) => h.outcome !== "FLAG")).toBe(true)
   })
 
-  it("a disputed 31-day-old candidate link is not auto-confirmed; a human-confirmed 1-day-old link is", async () => {
+  it("a client subject (has an entity): a disputed 31-day-old link to the matched client is not relied on; a human-confirmed 1-day-old link is", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
     const a = await register(partner.token, firmId, { cnic: CNIC_X })
-    await register(partner.token, firmId, { name: "Muhammad Ali Khan", cnic: CNIC_X })
-    await seedMatter(firmId, a.clientId)
-    const data = { firmId, client: { name: "Bashir Ahmed" }, opposingParties: [opposing("M. Ali", { cnic: CNIC_X })] }
-    await ageLinks(firmId, 31, { disputed: true })
-    expect((await runCheck({ token: partner.token, data } as never)).result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+    const b = await register(partner.token, firmId, { name: "Muhammad Ali Khan", cnic: CNIC_X })
+    await seedMatter(firmId, b.clientId)
+    const data = { firmId, client: { clientId: a.clientId }, opposingParties: [opposing("Zzz Qqq")] }
+    const keyHit = (o: CheckResponse) => o.hits.find((h) => h.basis === "key" && h.matterNo === "NHS/2026/0001")!
+    const linkIds = await ageLinks(firmId, 31, { disputed: true })
+    expect(linkIds).toHaveLength(1)
+    const disputed = keyHit(await runCheck({ token: partner.token, data } as never))
+    expect(disputed).toMatchObject({ identityBasis: "candidate_only", reliedOnLinkIds: linkIds })
     await ageLinks(firmId, 1, { state: "confirmed", disputed: false })
-    expect((await runCheck({ token: partner.token, data } as never)).result).toBe("FLAG")
+    const confirmed = keyHit(await runCheck({ token: partner.token, data } as never))
+    expect(confirmed).toMatchObject({ identityBasis: "confirmed_identity", reliedOnLinkIds: linkIds })
   })
 
-  it("only the link on the matched key counts: a confirmed phone link does not confirm a CNIC match", async () => {
+  it("only the link on the matched key counts: for a client subject, a confirmed phone link does not confirm a CNIC match", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
     const a = await register(partner.token, firmId, { cnic: CNIC_X, primaryMobile: "0300 5555555" })
-    await register(partner.token, firmId, { name: "Muhammad Ali Khan", cnic: CNIC_X, primaryMobile: "0300 5555555" })
-    await seedMatter(firmId, a.clientId)
+    const b = await register(partner.token, firmId, { name: "Muhammad Ali Khan", cnic: CNIC_X, primaryMobile: "0300 5555555" })
+    await seedMatter(firmId, b.clientId)
     const links = await adminDb().collection("entity_links").where("firmId", "==", firmId).get()
     expect(links.docs.map((d) => d.data().key).sort()).toEqual(["cnic", "phone"])
     for (const d of links.docs) {
       await d.ref.update({ createdAt: Timestamp.fromMillis(Date.now() - (d.data().key === "phone" ? 31 : 2) * DAY_MS) })
     }
-    const check = (keys: Record<string, string>) =>
-      runCheck({ token: partner.token, data: { firmId, client: { name: "Bashir Ahmed" }, opposingParties: [opposing("Zzz Qqq", keys)] } } as never)
-    expect((await check({ cnic: CNIC_X })).result).toBe("POSSIBLE_CANDIDATE_REVIEW")
-    const byPhone = await check({ phone: "03005555555" })
-    expect(byPhone.result).toBe("FLAG")
+    // Same two entities, one match key at a time: the subject client's stored keys decide which key matches.
     const phoneLink = links.docs.find((d) => d.data().key === "phone")!.id
-    expect(byPhone.hits.find((h) => h.type === "direct_adverse")).toMatchObject({ reliedOnLinkIds: [phoneLink] })
+    const cnicLink = links.docs.find((d) => d.data().key === "cnic")!.id
+    const matchOn = async (keep: "cnic" | "primaryMobile") => {
+      const drop = keep === "cnic" ? "primaryMobile" : "cnic"
+      const ref = adminDb().collection("clients").doc(a.clientId)
+      const original = (await ref.get()).data()?.[drop]
+      await ref.update({ [drop]: FieldValue.delete() })
+      const out = await runCheck({ token: partner.token, data: { firmId, client: { clientId: a.clientId }, opposingParties: [opposing("Zzz Qqq")] } } as never)
+      await ref.update({ [drop]: original })
+      return out.hits.find((h) => h.basis === "key" && h.matterNo === "NHS/2026/0001")!
+    }
+    // CNIC matches: only the 2-day-old CNIC link counts; the 31-day-old (confirmed) phone link is not on the matched key.
+    expect(await matchOn("cnic")).toMatchObject({ identityBasis: "candidate_only", reliedOnLinkIds: [cnicLink] })
+    // Phone matches: the phone link is the only one relied on (the identity stays a candidate while the CNIC link between the pair is unresolved).
+    expect(await matchOn("primaryMobile")).toMatchObject({ reliedOnLinkIds: [phoneLink] })
+  })
+
+  describe("linked path (spec P2-41): subject client A by clientId, candidate an opposing matter_parties row carrying entity B", () => {
+    /** Clients A and B share CNIC_X (one candidate cnic link); an opposing party row on a seeded matter carries entity B. */
+    async function linkedPair(partyKeys: Record<string, string>, extraA: Record<string, unknown> = {}, extraB: Record<string, unknown> = {}) {
+      const firmId = await newFirm()
+      const partner = await mintIdToken(claims(firmId, "partner"))
+      const a = await register(partner.token, firmId, { cnic: CNIC_X, ...extraA })
+      const b = await register(partner.token, firmId, { name: "Muhammad Ali Khan", cnic: CNIC_X, ...extraB })
+      const matterId = await seedMatter(firmId, "someone-else", { matterNo: "NHS/2026/0009" })
+      await adminDb().collection("matter_parties").add({
+        firmId, matterId, role: "opposing", name: "Zarnab Traders", names: ["zarnab traders"], keys: partyKeys, entityId: b.entityId,
+        matterClassification: "confidential", matterStatus: "live", classification: "confidential",
+      })
+      const named = async () => {
+        const out = await runCheck({ token: partner.token, data: { firmId, client: { clientId: a.clientId }, opposingParties: [opposing("Zzz Qqq")] } } as never)
+        return { out, party: out.hits.find((h) => h.hitRole === "opposing" && h.matterNo === "NHS/2026/0009")! }
+      }
+      // The original cases' subject: an unnamed opposing party with the shared CNIC (no entity, so no link counts).
+      const unnamed = () =>
+        runCheck({ token: partner.token, data: { firmId, client: { name: "Bashir Ahmed" }, opposingParties: [opposing("M. Ali", { cnic: CNIC_X })] } } as never)
+      return { firmId, a, b, named, unnamed }
+    }
+
+    it("(a) a 31-day-old undisputed CNIC link → FLAG adverse_history confirmed_identity relying on it; 2 days old → POSSIBLE_CANDIDATE_REVIEW; the unnamed subject stays review", async () => {
+      const p = await linkedPair({ cnic: CNIC_X })
+      const linkIds = await ageLinks(p.firmId, 31)
+      expect(linkIds).toHaveLength(1)
+      const old = await p.named()
+      expect(old.out.result).toBe("FLAG")
+      expect(old.party).toMatchObject({ type: "adverse_history", basis: "key", outcome: "FLAG", identityBasis: "confirmed_identity", reliedOnLinkIds: linkIds })
+      expect((await p.unnamed()).result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+
+      await ageLinks(p.firmId, 2)
+      const young = await p.named()
+      expect(young.out.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+      expect(young.party).toMatchObject({ type: "adverse_history", outcome: "POSSIBLE_CANDIDATE_REVIEW", identityBasis: "candidate_only", reliedOnLinkIds: linkIds })
+      expect((await p.unnamed()).result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+    })
+
+    it("(b) a disputed 31-day-old link → POSSIBLE_CANDIDATE_REVIEW; a human-confirmed 1-day-old link → FLAG; the unnamed subject stays review", async () => {
+      const p = await linkedPair({ cnic: CNIC_X })
+      const linkIds = await ageLinks(p.firmId, 31, { disputed: true })
+      const disputed = await p.named()
+      expect(disputed.out.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+      expect(disputed.party).toMatchObject({ outcome: "POSSIBLE_CANDIDATE_REVIEW", identityBasis: "candidate_only", reliedOnLinkIds: linkIds })
+      expect((await p.unnamed()).result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+
+      await ageLinks(p.firmId, 1, { state: "confirmed" })
+      const confirmed = await p.named()
+      expect(confirmed.out.result).toBe("FLAG")
+      expect(confirmed.party).toMatchObject({ type: "adverse_history", outcome: "FLAG", identityBasis: "confirmed_identity", reliedOnLinkIds: linkIds })
+      expect((await p.unnamed()).result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+    })
+
+    it("(c) only the matched key's link counts: phone link 31 d, CNIC link 2 d; party keys { phone } → FLAG on the phone link, { cnic } → POSSIBLE_CANDIDATE_REVIEW", async () => {
+      const phoneOnly = await linkedPair({ phone: "+923005555555" }, { primaryMobile: "0300 5555555" }, { primaryMobile: "0300 5555555" })
+      const age = async (firmId: string) => {
+        const links = await adminDb().collection("entity_links").where("firmId", "==", firmId).get()
+        expect(links.docs.map((d) => d.data().key).sort()).toEqual(["cnic", "phone"])
+        for (const d of links.docs) await d.ref.update({ createdAt: Timestamp.fromMillis(Date.now() - (d.data().key === "phone" ? 31 : 2) * DAY_MS) })
+        return { phone: links.docs.find((d) => d.data().key === "phone")!.id, cnic: links.docs.find((d) => d.data().key === "cnic")!.id }
+      }
+      const ids = await age(phoneOnly.firmId)
+      expect((await phoneOnly.named()).party).toMatchObject({ outcome: "FLAG", identityBasis: "confirmed_identity", reliedOnLinkIds: [ids.phone] })
+      expect((await phoneOnly.unnamed()).result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+
+      const cnicOnly = await linkedPair({ cnic: CNIC_X }, { primaryMobile: "0300 5555555" }, { primaryMobile: "0300 5555555" })
+      const ids2 = await age(cnicOnly.firmId)
+      const cnicHit = await cnicOnly.named()
+      expect(cnicHit.out.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+      expect(cnicHit.party).toMatchObject({ outcome: "POSSIBLE_CANDIDATE_REVIEW", identityBasis: "candidate_only", reliedOnLinkIds: [ids2.cnic] })
+      expect((await cnicOnly.unnamed()).result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+    })
   })
 
   it("a client subject named by clientId whose own entity sits on an earlier matter as the opposing party → FLAG adverse_history", async () => {
@@ -367,6 +480,90 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
     } as never)
     expect(asOpposing.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
     expect(asOpposing.identityBasis).toBe("candidate_only")
+  })
+
+  describe("rejected links (spec P2-29)", () => {
+    /** Forensic shape: two "Muhammad Ali" clients, same CNIC, different phones; their one cnic link set to rejected. */
+    async function rejectedPair(firmExtra: Record<string, unknown> = {}) {
+      const firmId = await newFirm(firmExtra)
+      const partner = await mintIdToken(claims(firmId, "partner"))
+      const one = await register(partner.token, firmId, { cnic: "42101-1234567-1", primaryMobile: "0300 1111111" })
+      const two = await register(partner.token, firmId, { cnic: CNIC_X, primaryMobile: "0300 2222222" })
+      const linkIds = await ageLinks(firmId, 2, { state: "rejected" })
+      expect(linkIds).toHaveLength(1)
+      const check = () =>
+        runCheck({ token: partner.token, data: { firmId, client: { clientId: one.clientId }, opposingParties: [opposing("Kamran Akmal")] } } as never)
+      return { firmId, one, two, linkIds, check }
+    }
+
+    it("a check naming one client → CLEAR: the same-role hit is informational NONE with no unresolvedLinkIds", async () => {
+      const p = await rejectedPair()
+      const out = await p.check()
+      expect(out.result).toBe("CLEAR")
+      const stored = (await adminDb().collection("conflict_checks").doc(out.checkId).get()).data()
+      for (const h of stored?.hits ?? []) {
+        expect(h).toMatchObject({ outcome: "NONE", type: "informational" })
+        expect(h.unresolvedLinkIds).toBeUndefined()
+      }
+      expect(JSON.stringify(stored)).not.toContain(p.linkIds[0])
+    })
+
+    it("an opposing party row carrying the other entity and the CNIC → POSSIBLE_CANDIDATE_REVIEW, never CLEAR", async () => {
+      const p = await rejectedPair()
+      const matterId = await seedMatter(p.firmId, "someone-else", { matterNo: "NHS/2026/0009" })
+      await adminDb().collection("matter_parties").add({
+        firmId: p.firmId, matterId, role: "opposing", name: "Zarnab Traders", names: ["zarnab traders"], keys: { cnic: CNIC_X }, entityId: p.two.entityId,
+        matterClassification: "confidential", matterStatus: "live", classification: "confidential",
+      })
+      const out = await p.check()
+      expect(out.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+      expect(out.hits.find((h) => h.hitRole === "opposing")).toMatchObject({
+        type: "adverse_history", basis: "key", outcome: "POSSIBLE_CANDIDATE_REVIEW", identityBasis: "candidate_only", reliedOnLinkIds: [],
+      })
+    })
+
+    it("with SIKANDER_FLAG_L17_2_ENABLED=false the rejected pair is an unresolved candidate again → POSSIBLE_CANDIDATE_REVIEW (P2-18)", async () => {
+      const p = await rejectedPair()
+      const prev = process.env.SIKANDER_FLAG_L17_2_ENABLED
+      process.env.SIKANDER_FLAG_L17_2_ENABLED = "false"
+      try {
+        const out = await p.check()
+        expect(out.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
+        expect(out.hits.find((h) => h.outcome === "POSSIBLE_CANDIDATE_REVIEW")).toMatchObject({ unresolvedLinkIds: p.linkIds })
+      } finally {
+        if (prev === undefined) delete process.env.SIKANDER_FLAG_L17_2_ENABLED
+        else process.env.SIKANDER_FLAG_L17_2_ENABLED = prev
+      }
+    })
+  })
+
+  describe("O-27: an opposing party's hit label is max(matter label, party row label) (spec P2-37)", () => {
+    async function partyHit(matterId: string | null, firmId: string, token: string) {
+      await adminDb().collection("matter_parties").add({
+        firmId, matterId, role: "opposing", name: "Kamran Akmal", names: ["kamran akmal"], keys: {},
+        matterClassification: "confidential", matterStatus: "live", classification: "privileged",
+      })
+      const out = await runCheck({ token, data: { firmId, client: { name: "Kamran Akmal" }, opposingParties: [opposing("Zzz Qqq")] } } as never)
+      expect(out.hits).toEqual([expect.objectContaining({ hitRole: "opposing", type: "adverse_history", outcome: "POSSIBLE_CANDIDATE_REVIEW" })])
+      return (await adminDb().collection("conflict_checks").doc(out.checkId).get()).data()
+    }
+
+    it("a privileged party row on a confidential matter → hit and check privileged", async () => {
+      const firmId = await newFirm()
+      const partner = await mintIdToken(claims(firmId, "partner"))
+      const matterId = await seedMatter(firmId, "some-client", { matterNo: "NHS/2026/0007", classification: "confidential" })
+      const stored = await partyHit(matterId, firmId, partner.token)
+      expect(stored?.hits[0].matterClassification).toBe("privileged")
+      expect(stored?.classification).toBe("privileged")
+    })
+
+    it("a standalone privileged party row (matterId null, matterClassification confidential) → privileged", async () => {
+      const firmId = await newFirm()
+      const partner = await mintIdToken(claims(firmId, "partner"))
+      const stored = await partyHit(null, firmId, partner.token)
+      expect(stored?.hits[0].matterClassification).toBe("privileged")
+      expect(stored?.classification).toBe("privileged")
+    })
   })
 
   it("Urdu-script opposing party محمد علی against client 'Muhammad Ali' → POSSIBLE_CANDIDATE_REVIEW (Review Focus 1)", async () => {

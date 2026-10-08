@@ -173,6 +173,9 @@ jobs:
       - name: Gate G-4 Phase 2a close (routes, boot, forensic test 3)
         if: ${{ !cancelled() }}
         run: npm run gate:g4:phase2a
+      - name: Gate G-4 Phase 2b-A close (routes, boot, L17.2 invariants, G-2)
+        if: ${{ !cancelled() }}
+        run: npm run gate:g4:phase2b-a
 
   next-build:
     name: Next.js build

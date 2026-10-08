@@ -73,6 +73,22 @@ describe.skipIf(!EMULATORS)("registerClient", () => {
     expect(opRows.map((r) => r.decision)).toEqual(["allow"])
   })
 
+  it("bumps the firm's registry version (counters/{firmId}_registry) once per registration; a refused call leaves it (Bugbot PR #8)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const intern = await mintIdToken(claims(firmId, "intern"))
+    const version = async () => (await adminDb().collection("counters").doc(`${firmId}_registry`).get()).data()?.version ?? 0
+    expect(await version()).toBe(0)
+    await registerClient({ token: partner.token, data: body(firmId) } as never)
+    expect(await version()).toBe(1)
+    expect((await adminDb().collection("counters").doc(`${firmId}_registry`).get()).data()).toMatchObject({ firmId, kind: "registry", classification: "internal" })
+    await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210112345671" }) } as never)
+    await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210112345671" }) } as never) // writes a candidate link too
+    expect(await version()).toBe(3)
+    await apiErrorOf(registerClient({ token: intern.token, data: body(firmId) } as never))
+    expect(await version()).toBe(3)
+  })
+
   it("client role → 403 client_denied; intern → 403 role_not_permitted; nothing written", async () => {
     const firmId = await newFirm()
     const client = await mintIdToken(claims(firmId, "client"))
@@ -171,6 +187,39 @@ describe.skipIf(!EMULATORS)("registerClient", () => {
     expect((await adminDb().collection("entity_links").where("firmId", "==", firmId).get()).size).toBe(2)
   })
 
+  it("registering B with A's CNIC and phone writes exactly one entity.candidate event for the pair (not one per key); a client with no shared key writes none", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const shared = { cnic: "4210112345671", primaryMobile: "03001112233" }
+    const first = await registerClient({ token: partner.token, data: body(firmId, shared) } as never)
+    const lone = await registerClient({ token: partner.token, data: body(firmId) } as never)
+    const eventsOf = async () => (await adminDb().collection("events").where("firmId", "==", firmId).where("name", "==", "entity.candidate").get()).docs
+    expect(await eventsOf()).toHaveLength(0)
+    const second = await registerClient({ token: partner.token, data: body(firmId, shared) } as never)
+    const [a, b] = [first.entityId, second.entityId].sort()
+    const events = await eventsOf()
+    expect(events).toHaveLength(1)
+    expect(events[0].id).toBe(`${firmId}_${a}_${b}_candidate`)
+    expect(events[0].data()).toMatchObject({
+      name: "entity.candidate",
+      firmId,
+      payload: { entityIds: [a, b], mergeEventId: null, score: 0.99 },
+      classification: "internal",
+      idempotencyKey: `${firmId}_${a}_${b}:candidate`,
+    })
+    expect(events[0].data().occurredAt).toBeTruthy()
+    expect(lone.entityId).toBeTruthy()
+  })
+
+  it("the entity.candidate event carries the pair's link label (the higher of the two entities)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210177777771", classification: "privileged" }) } as never)
+    await registerClient({ token: partner.token, data: body(firmId, { cnic: "4210177777771", classification: "internal" }) } as never)
+    const events = await adminDb().collection("events").where("firmId", "==", firmId).where("name", "==", "entity.candidate").get()
+    expect(events.docs.map((d) => d.data().classification)).toEqual(["privileged"])
+  })
+
   it("idempotent replay returns the same clientId and creates one client", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
@@ -259,5 +308,12 @@ describe.skipIf(!EMULATORS)("listClients", () => {
     }
     const ok = await listClients({ token: partner.token, data: { firmId, cursor: crafted("1700000000.999999999", "abc") } } as never)
     expect(ok.items).toEqual([])
+  })
+
+  it("a cursor whose seconds are outside the Timestamp range → 400 invalid_cursor, not 500", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const cursor = Buffer.from(JSON.stringify({ sortKey: "99999999999999.0", id: "abc" }), "utf8").toString("base64url")
+    expectKind(await apiErrorOf(listClients({ token: partner.token, data: { firmId, cursor } } as never)), "invalid-argument", "invalid_cursor")
   })
 })

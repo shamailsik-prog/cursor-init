@@ -1,8 +1,9 @@
-import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import type { DocumentData, QuerySnapshot } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../../admin"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { logFailure } from "../../log"
+import { effectiveLinkState, isConfirmedState } from "../entity/linkState"
 import { nameForms, usesFallback } from "./normalise"
 import { screen, summarise, type Candidate, type Hit, type IdentityBasis, type Keys, type Outcome, type Subject } from "./match"
 
@@ -13,8 +14,8 @@ import { screen, summarise, type Candidate, type Hit, type IdentityBasis, type K
  * (only the link on the matched key counts), and runs the pure `screen`.
  */
 
-/** Entity link auto-confirm window (P2-5, L18 §7.1). */
-export const LINK_AUTO_CONFIRM_MS = 30 * 24 * 60 * 60 * 1000
+/** Entity link auto-confirm window (P2-5, L18 §7.1); defined with the link state model. */
+export { LINK_AUTO_CONFIRM_MS } from "../entity/linkState"
 
 const KEY_FIELDS = ["cnic", "ntn", "secp", "phone"] as const
 type KeyName = (typeof KEY_FIELDS)[number]
@@ -44,18 +45,12 @@ export function maxLabel(a: unknown, b: unknown): Classification {
   return rankOf(y) > rankOf(x) ? y : x
 }
 
-const millisOf = (value: unknown): number | null => (value instanceof Timestamp ? value.toMillis() : null)
-
 /**
  * L18 §7.1: confirmed = human-confirmed, or a candidate auto-confirmed 30 days after creation
- * without dispute. With L17_2_ENABLED off every key link counts as a candidate (P2-18).
+ * without dispute (effectiveLinkState). With L17_2_ENABLED off every key link counts as a candidate (P2-18).
  */
 export function linkConfirmed(row: DocumentData, nowMs: number, l17_2Enabled: boolean): boolean {
-  if (!l17_2Enabled) return false
-  if (row.state === "confirmed") return true
-  if (row.state !== "candidate" || row.disputed !== false) return false
-  const created = millisOf(row.createdAt)
-  return created !== null && created <= nowMs - LINK_AUTO_CONFIRM_MS
+  return isConfirmedState(effectiveLinkState(row, nowMs, l17_2Enabled))
 }
 
 /**
@@ -100,6 +95,20 @@ function partyKeys(raw: unknown): Keys {
 
 const isKeyName = (v: unknown): v is KeyName => typeof v === "string" && (KEY_FIELDS as readonly string[]).includes(v)
 
+/** `entity_links` rows for screening, resolved at `nowMs` (shared by loadRegistry and transactional re-reads). */
+export function linkRowsFromSnap(linkSnap: QuerySnapshot, nowMs: number, enabled: boolean): LinkRow[] {
+  const links: LinkRow[] = []
+  for (const d of linkSnap.docs) {
+    const row = d.data()
+    if (typeof row.leftId !== "string" || typeof row.rightId !== "string" || !isKeyName(row.key)) continue
+    const state = effectiveLinkState(row, nowMs, enabled)
+    // P2-29: a rejected pair is neither relied on nor unresolved (with the flag off nothing reads as rejected).
+    if (state === "rejected") continue
+    links.push({ id: d.id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: isConfirmedState(state) })
+  }
+  return links
+}
+
 /** The firm's registry for screening, read at `now`. */
 export async function loadRegistry(firmId: string, now: Date): Promise<Registry> {
   const db = adminDb()
@@ -131,12 +140,7 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
     if (spellings.length > 0) firmMap.set(script, [...(firmMap.get(script) ?? []), ...spellings])
   }
 
-  const links: LinkRow[] = []
-  for (const d of linkSnap.docs) {
-    const row = d.data()
-    if (typeof row.leftId !== "string" || typeof row.rightId !== "string" || !isKeyName(row.key)) continue
-    links.push({ id: d.id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: linkConfirmed(row, nowMs, enabled) })
-  }
+  const links = linkRowsFromSnap(linkSnap, nowMs, enabled)
   const unresolvedByEntity = new Map<string, string[]>()
   for (const l of links) {
     if (l.confirmed) continue
@@ -212,7 +216,9 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
       ...(entityId ? { entityId } : {}),
       matterId,
       matterNo: matter?.matterNo ?? null,
-      matterClassification: matter ? matter.classification : knownOrHighest(p.matterClassification ?? p.classification),
+      // O-27 (P2-37): the higher of the matter's and the party row's label, as client candidates are;
+      // an absent or unknown label reads as privileged-restricted (fail closed).
+      matterClassification: matter ? maxLabel(matter.classification, p.classification) : maxLabel(p.matterClassification, p.classification),
       matterStatus: matter ? matter.status : p.matterStatus === "closed" ? "closed" : matterId ? "live" : null,
       clientHasLiveMatter: false,
       linkState: "none",
@@ -227,9 +233,9 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
 /**
  * The candidates as seen from one subject. For each candidate, the keys equal to the subject's
  * decide which links count: a link on a matched key K between the candidate's entity and the
- * subject's entity (a subject without an entity: any K-link touching the candidate's entity,
- * i.e. an entity sharing that key value). linkState is "confirmed" iff one of those links is
- * confirmed, else "candidate" (an equal key without any link row is still a candidate identity);
+ * subject's entity. linkState is "confirmed" iff one of those links is confirmed (only when the
+ * subject has an entity id: a confirmed link between other entities does not confirm an unnamed
+ * opposing party), else "candidate" (an equal key without any link row is still a candidate identity);
  * "none" when no key is equal. Unresolved links of the subject's own entity whose other end is
  * the candidate's entity are attached to that candidate (P2-5, forensic test 3).
  */
@@ -244,15 +250,15 @@ export function tailor(registry: Registry, subject: Subject, subjectEntityId: st
       for (const l of subjectUnresolved) if (l.leftId === c.entityId || l.rightId === c.entityId) unresolved.add(l.id)
     }
     if (matched.length === 0) return { ...c, linkState: "none", linkIds: [], unresolvedLinkIds: [...unresolved] }
-    const relied = c.entityId
-      ? registry.links.filter((l) => {
-          if (!matched.includes(l.key)) return false
-          if (l.leftId !== c.entityId && l.rightId !== c.entityId) return false
-          if (!subjectEntityId) return true
-          const other = l.leftId === c.entityId ? l.rightId : l.leftId
-          return other === subjectEntityId
-        })
-      : []
+    const relied =
+      c.entityId && subjectEntityId
+        ? registry.links.filter((l) => {
+            if (!matched.includes(l.key)) return false
+            if (l.leftId !== c.entityId && l.rightId !== c.entityId) return false
+            const other = l.leftId === c.entityId ? l.rightId : l.leftId
+            return other === subjectEntityId
+          })
+        : []
     return {
       ...c,
       linkState: relied.some((l) => l.confirmed) ? "confirmed" : "candidate",
@@ -267,6 +273,7 @@ export type EngineResult = { hits: Hit[]; result: Outcome; identityBasis: Identi
 /** Conflict checks are confidential unless a hit touches a higher-classified matter (P2-13, monotonic). */
 export function checkClassification(hits: readonly Hit[]): Classification {
   let label: Classification = "confidential"
+  // Invariant: the label is >= matterClassification of EVERY stored hit (NONE too), since stored hits keep matter ids readable by partners cleared to it.
   for (const h of hits) {
     const c = knownOrHighest(h.matterClassification)
     if (rankOf(c) > rankOf(label)) label = c
@@ -300,7 +307,23 @@ const hitIdentity = (h: Hit): string => `${h.subjectIndex}|${h.type}|${h.candida
  * non-NONE fresh hits whose (subject, type, candidate) is not among the stored non-NONE or
  * review-resolved hits. A stored hit without a candidate id matches nothing (fails toward stale).
  */
+const OUTCOME_RANK: Record<Hit["outcome"], number> = { NONE: 0, POSSIBLE_CANDIDATE_REVIEW: 1, FLAG: 2 }
+
+/** How severely a stored hit already accounts for a candidate (resolved NONE still covers review-level matches). */
+const storedOutcomeRank = (h: Hit): number =>
+  h.outcome === "NONE" && h.review !== undefined ? OUTCOME_RANK.POSSIBLE_CANDIDATE_REVIEW : OUTCOME_RANK[h.outcome]
+
 export function unseenHits(fresh: readonly Hit[], stored: readonly Hit[]): Hit[] {
-  const known = new Set(stored.filter((h) => h.outcome !== "NONE" || h.review !== undefined).map(hitIdentity))
-  return fresh.filter((h) => h.outcome !== "NONE" && !known.has(hitIdentity(h)))
+  const storedRank = new Map<string, number>()
+  for (const h of stored) {
+    if (h.outcome === "NONE" && h.review === undefined) continue
+    const id = hitIdentity(h)
+    storedRank.set(id, Math.max(storedRank.get(id) ?? 0, storedOutcomeRank(h)))
+  }
+  return fresh.filter((h) => {
+    if (h.outcome === "NONE") return false
+    const id = hitIdentity(h)
+    const prev = storedRank.get(id)
+    return prev === undefined || OUTCOME_RANK[h.outcome] > prev
+  })
 }

@@ -12,6 +12,7 @@ import { nameForms } from "../conflict/normalise"
 import type { Hit, Subject } from "../conflict/match"
 import { allocateNumber, formatMatterNo, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
+import { bumpRegistryVersion, readRegistryVersion, readRegistryVersionTx } from "../registryVersion"
 import { parseKeys, type Keys } from "../validate"
 
 /**
@@ -36,6 +37,23 @@ export const MAX_MEMBERS = 20
 export const MIN_CLOSE_REASON = 20
 /** Counter contention under parallel opens: more retries than the SDK default of 5. */
 const OPEN_TX_ATTEMPTS = 10
+
+/**
+ * Re-screen rounds of one openMatter (Bugbot PR #8): a round whose registry version moved between its
+ * pre-screen and its transaction writes nothing and is redone; after this many, 409 registry_contended.
+ * Every open bumps the version, and a round fails only when another registry write commits inside it, so
+ * N concurrent opens in one firm all finish within N rounds: 10, as OPEN_TX_ATTEMPTS (3 failed Review Focus 3).
+ */
+export const OPEN_SCREEN_ROUNDS = 10
+
+/**
+ * Test seam only (the emulator suites set it; production code never does): awaited after each round's
+ * pre-screen and before its transaction, so a concurrent registry write can land there deterministically.
+ */
+export const openMatterTestSeam: { afterPreScreen?: (round: number) => Promise<void> } = {}
+
+/** A round's transaction saw a registry version other than its pre-screen's: nothing written, redo. */
+const REGISTRY_MOVED = Symbol("registry_moved")
 
 const STAFF_ROLES: ReadonlySet<string> = new Set(["partner", "associate", "clerk", "intern"])
 
@@ -156,10 +174,17 @@ function clientOf(caller: Caller, client: DocumentData | undefined): { entityId:
  * Before the transaction the stored subjects are re-screened against the current registry (the
  * runConflictCheck engine, no daily-limit spend, no check written); a non-NONE hit the check does not
  * already hold (or hold resolved) marks the check stale in the transaction and answers 409 check_stale.
+ * The screen is tied to the transaction by the firm's registry version (`counters/{firmId}_registry`,
+ * registryVersion.ts; Bugbot PR #8): read before the screen and again first in the transaction. A
+ * moved version (a registry write committed in between) makes the round write nothing, no audit row
+ * either, and the screen and transaction are redone; after OPEN_SCREEN_ROUNDS (10) moved rounds, 409
+ * registry_contended (nothing written; a retry is safe), audited as the call's one deny row. A
+ * writer committing after the transaction's version read either aborts it (it retries and sees the
+ * move) or commits after the matter opened, which is the correct order.
  * Then it allocates `{matterPrefix}/{YYYY}/{NNNN}` and writes the matter, the members (caller and
  * listed), one `matter_parties` row per check subject (classified at the highest of the matter, the
  * client record and the check), the `opened` event, the binding (raising the check's classification
- * to the matter's when higher) with its `bound` trail row, `matter.created` and the call's audit row.
+ * to the matter's when higher) with its `bound` trail row, `matter.created`, the registry version bump and the call's audit row.
  */
 export const openMatterOp: FirmOperation<Record<string, unknown>> = {
   auth: "firm",
@@ -181,118 +206,130 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
 
     const db = adminDb()
     const checkRef = checks().doc(checkId)
-    // Re-screen (spec P2-6, final review I5): the stored subjects against today's registry, through the
-    // same engine as runConflictCheck, after the same gate the transaction applies again below.
-    const pre = gateOpen(caller, (await checkRef.get()).data(), now)
-    const preClient = clientOf(caller, (await db.collection("clients").doc(pre.clientId).get()).data())
-    const registry = await loadRegistry(caller.firmId, now)
-    const fresh: Hit[] = runEngine(registry, pre.subjects, pre.subjects.map((_, i) => (i === 0 ? preClient.entityId : undefined))).hits
-
     const matterRef = matters().doc()
     const matterId = matterRef.id
     audit.target = `matters/${matterId}`
 
-    const row = await db.runTransaction(
-      async (tx) => {
-        // Reads first: the check, its client, the listed members, the prefixes, then the counter.
-        const check = (await tx.get(checkRef)).data()
-        const { subjects, clientId } = gateOpen(caller, check, now)
-        const client = clientOf(caller, (await tx.get(db.collection("clients").doc(clientId))).data())
-        const entityId = client.entityId
-        if (unseenHits(fresh, Array.isArray(check?.hits) ? check.hits : []).length > 0) {
-          // A hit the check never saw: the check no longer describes the registry. Marked stale atomically with the deny row.
-          await audit.stage(tx, "deny", "check_stale")
-          tx.update(checkRef, { stale: true })
-          return null
-        }
+    for (let round = 1; round <= OPEN_SCREEN_ROUNDS; round++) {
+      // Re-screen (spec P2-6, final review I5): the stored subjects against today's registry, through the
+      // same engine as runConflictCheck, after the same gate the transaction applies again below. The
+      // registry version is read first: a registry write the screen missed has bumped it by the transaction.
+      const version = await readRegistryVersion(caller.firmId)
+      const pre = gateOpen(caller, (await checkRef.get()).data(), now)
+      const preClient = clientOf(caller, (await db.collection("clients").doc(pre.clientId).get()).data())
+      const registry = await loadRegistry(caller.firmId, now)
+      const fresh: Hit[] = runEngine(registry, pre.subjects, pre.subjects.map((_, i) => (i === 0 ? preClient.entityId : undefined))).hits
+      await openMatterTestSeam.afterPreScreen?.(round)
 
-        const users = memberIds.length > 0 ? await tx.getAll(...memberIds.map((uid) => db.collection("users").doc(uid))) : []
-        for (const u of users) {
-          const d = u.data()
-          if (!d || d.firmId !== caller.firmId || d.active !== true || !STAFF_ROLES.has(d.role)) throw new HttpError(400, "invalid_member")
-        }
+      const row = await db.runTransaction(
+        async (tx) => {
+          // Reads first: the registry version, the check, its client, the listed members, the prefixes, then the counter.
+          // A moved version means the screen above may be out of date: write nothing (no audit row) and redo the round.
+          if ((await readRegistryVersionTx(tx, caller.firmId)) !== version) return REGISTRY_MOVED
+          const check = (await tx.get(checkRef)).data()
+          const { subjects, clientId } = gateOpen(caller, check, now)
+          const client = clientOf(caller, (await tx.get(db.collection("clients").doc(clientId))).data())
+          const entityId = client.entityId
+          if (unseenHits(fresh, Array.isArray(check?.hits) ? check.hits : []).length > 0) {
+            // A hit the check never saw: the check no longer describes the registry. Marked stale atomically with the deny row.
+            await audit.stage(tx, "deny", "check_stale")
+            tx.update(checkRef, { stale: true })
+            return null
+          }
 
-        const { matterPrefix } = await readPrefixes(tx, caller.firmId)
-        const n = await allocateNumber(tx, caller.firmId, "matter", now)
-        const matterNo = formatMatterNo(matterPrefix, karachiYear(now), n)
-        const checkClass: Classification = check?.classification
-        // L17.3 #20 (monotonic): the bound check rises to the matter's label; party rows carry the highest of all three.
-        const boundClass = maxLabel(checkClass, classification)
-        const partyClass = maxLabel(boundClass, client.classification)
+          const users = memberIds.length > 0 ? await tx.getAll(...memberIds.map((uid) => db.collection("users").doc(uid))) : []
+          for (const u of users) {
+            const d = u.data()
+            if (!d || d.firmId !== caller.firmId || d.active !== true || !STAFF_ROLES.has(d.role)) throw new HttpError(400, "invalid_member")
+          }
 
-        const matter = {
-          firmId: caller.firmId,
-          matterNo,
-          stage: "pre_filing" as Stage,
-          status: "engagement_unconfirmed",
-          clientId,
-          conflictCheckId: checkId,
-          title,
-          ...(courtId !== undefined ? { courtId } : {}),
-          classification,
-          createdBy: caller.uid,
-        }
-        await audit.stage(tx, "allow", "ok")
-        tx.create(matterRef, { ...matter, createdAt: FieldValue.serverTimestamp() })
-        for (const uid of [caller.uid, ...memberIds]) {
-          tx.create(members().doc(`${matterId}_${uid}`), {
+          const { matterPrefix } = await readPrefixes(tx, caller.firmId)
+          const n = await allocateNumber(tx, caller.firmId, "matter", now)
+          const matterNo = formatMatterNo(matterPrefix, karachiYear(now), n)
+          const checkClass: Classification = check?.classification
+          // L17.3 #20 (monotonic): the bound check rises to the matter's label; party rows carry the highest of all three.
+          const boundClass = maxLabel(checkClass, classification)
+          const partyClass = maxLabel(boundClass, client.classification)
+
+          const matter = {
+            firmId: caller.firmId,
+            matterNo,
+            stage: "pre_filing" as Stage,
+            status: "engagement_unconfirmed",
+            clientId,
+            conflictCheckId: checkId,
+            title,
+            ...(courtId !== undefined ? { courtId } : {}),
+            classification,
+            createdBy: caller.uid,
+          }
+          await audit.stage(tx, "allow", "ok")
+          // The new matter and its parties change the registry: a concurrent open re-screens against them.
+          bumpRegistryVersion(tx, caller.firmId)
+          tx.create(matterRef, { ...matter, createdAt: FieldValue.serverTimestamp() })
+          for (const uid of [caller.uid, ...memberIds]) {
+            tx.create(members().doc(`${matterId}_${uid}`), {
+              firmId: caller.firmId,
+              matterId,
+              userId: uid,
+              addedBy: caller.uid,
+              classification,
+              createdAt: FieldValue.serverTimestamp(),
+            })
+          }
+          for (const s of subjects) {
+            tx.create(parties().doc(), {
+              firmId: caller.firmId,
+              matterId,
+              role: s.role,
+              name: s.name,
+              names: nameForms(s.name, registry.firmMap).map((tokens) => tokens.join(" ")),
+              keys: s.keys,
+              ...(s.role === "client" ? { clientId, ...(entityId ? { entityId } : {}) } : {}),
+              matterClassification: classification,
+              matterStatus: "live",
+              classification: partyClass,
+              createdAt: FieldValue.serverTimestamp(),
+            })
+          }
+          tx.create(db.collection("matter_events").doc(), {
             firmId: caller.firmId,
             matterId,
-            userId: uid,
-            addedBy: caller.uid,
+            kind: "opened",
+            to: "pre_filing",
+            actorId: caller.uid,
             classification,
             createdAt: FieldValue.serverTimestamp(),
           })
-        }
-        for (const s of subjects) {
-          tx.create(parties().doc(), {
+          tx.update(checkRef, { boundMatterId: matterId, classification: boundClass })
+          tx.create(db.collection("conflict_events").doc(), {
             firmId: caller.firmId,
-            matterId,
-            role: s.role,
-            name: s.name,
-            names: nameForms(s.name, registry.firmMap).map((tokens) => tokens.join(" ")),
-            keys: s.keys,
-            ...(s.role === "client" ? { clientId, ...(entityId ? { entityId } : {}) } : {}),
-            matterClassification: classification,
-            matterStatus: "live",
-            classification: partyClass,
+            checkId,
+            kind: "bound",
+            actorId: caller.uid,
+            detail: { matterId },
+            classification: boundClass,
             createdAt: FieldValue.serverTimestamp(),
           })
-        }
-        tx.create(db.collection("matter_events").doc(), {
-          firmId: caller.firmId,
-          matterId,
-          kind: "opened",
-          to: "pre_filing",
-          actorId: caller.uid,
-          classification,
-          createdAt: FieldValue.serverTimestamp(),
-        })
-        tx.update(checkRef, { boundMatterId: matterId, classification: boundClass })
-        tx.create(db.collection("conflict_events").doc(), {
-          firmId: caller.firmId,
-          checkId,
-          kind: "bound",
-          actorId: caller.uid,
-          detail: { matterId },
-          classification: boundClass,
-          createdAt: FieldValue.serverTimestamp(),
-        })
-        tx.create(db.collection("events").doc(`${matterId}_created`), {
-          name: "matter.created",
-          firmId: caller.firmId,
-          payload: { matterId, clientId, ...(courtId !== undefined ? { courtId } : {}), caseNumber: null, relevant_law_dates: [] },
-          classification,
-          occurredAt: FieldValue.serverTimestamp(),
-          idempotencyKey: `${matterId}:created`,
-        })
-        return matter
-      },
-      { maxAttempts: OPEN_TX_ATTEMPTS }
-    )
-    audit.committed()
-    if (row === null) throw new HttpError(409, "check_stale")
-    return present(matterId, { ...row, createdAt: Timestamp.fromDate(now) })
+          tx.create(db.collection("events").doc(`${matterId}_created`), {
+            name: "matter.created",
+            firmId: caller.firmId,
+            payload: { matterId, clientId, ...(courtId !== undefined ? { courtId } : {}), caseNumber: null, relevant_law_dates: [] },
+            classification,
+            occurredAt: FieldValue.serverTimestamp(),
+            idempotencyKey: `${matterId}:created`,
+          })
+          return matter
+        },
+        { maxAttempts: OPEN_TX_ATTEMPTS }
+      )
+      if (row === REGISTRY_MOVED) continue
+      audit.committed()
+      if (row === null) throw new HttpError(409, "check_stale")
+      return present(matterId, { ...row, createdAt: Timestamp.fromDate(now) })
+    }
+    // Every round's registry moved under it: nothing was written and a retry is safe. runAudited writes the one deny row.
+    throw new HttpError(409, "registry_contended")
   },
 }
 
@@ -381,7 +418,12 @@ export const listMattersOp: FirmOperation<Page<Record<string, unknown>>> = {
       if (!Number.isInteger(seconds) || !Number.isInteger(nanos) || nanos < 0 || nanos >= 1e9 || !isSafeDocId(id)) {
         throw new HttpError(400, "invalid_cursor")
       }
-      after = { createdAt: new Timestamp(seconds, nanos), id }
+      try {
+        after = { createdAt: new Timestamp(seconds, nanos), id }
+      } catch {
+        // Seconds outside the Timestamp range.
+        throw new HttpError(400, "invalid_cursor")
+      }
     }
 
     const items: Array<{ memberId: string; memberCreatedAt: Timestamp; matterId: string; row: DocumentData }> = []
@@ -501,6 +543,8 @@ export const closeMatterOp: FirmOperation<Record<string, unknown>> = {
       const partySnap = await tx.get(parties().where("firmId", "==", caller.firmId).where("matterId", "==", matterId))
 
       await audit.stage(tx, "allow", "ok")
+      // A closed matter turns its client and parties into former ones in the conflict screen.
+      bumpRegistryVersion(tx, caller.firmId)
       tx.update(ref, { status: "closed", closedBy: caller.uid, closedAt: FieldValue.serverTimestamp() })
       for (const p of partySnap.docs) tx.update(p.ref, { matterStatus: "closed" })
       tx.create(db.collection("matter_events").doc(), {

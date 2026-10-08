@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { Timestamp } from "firebase-admin/firestore"
+import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
+import { OPEN_SCREEN_ROUNDS, openMatterTestSeam } from "../src/d1/matter/ops"
 import { karachiYear } from "../src/d1/numbering"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
@@ -289,7 +290,7 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
     const q = await register(partner.token, firmId, { name: "Kamran Akmal" })
     await open(partner.token, firmId, await clearCheck(partner.token, firmId, q.clientId, { name: "Babar Azam" }))
 
-    const counters = async () => (await adminDb().collection("counters").where("firmId", "==", firmId).get()).docs.map((d) => [d.id, d.data().count ?? d.data().next])
+    const counters = async () => (await adminDb().collection("counters").where("firmId", "==", firmId).get()).docs.map((d) => [d.id, d.data().count ?? d.data().next ?? d.data().version])
     const checksBefore = (await adminDb().collection("conflict_checks").where("firmId", "==", firmId).get()).size
     const countersBefore = await counters()
 
@@ -324,6 +325,85 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
     const { firmId, partner, checkId } = await setup()
     expectKind(await apiErrorOf(open(partner.token, firmId, checkId, { title: "   " })), "invalid-argument", "invalid_query")
     expectKind(await apiErrorOf(open(partner.token, firmId, checkId, { title: "t".repeat(301) })), "invalid-argument", "invalid_query")
+  })
+})
+
+/**
+ * Bugbot PR #8: openMatter's re-screen runs before its transaction, so it is made consistent with
+ * the transaction by the firm's registry version (`counters/{firmId}_registry`), which every
+ * registry writer bumps in its own transaction. `openMatterTestSeam.afterPreScreen` runs between a
+ * round's pre-screen and its transaction, so a concurrent write lands there deterministically.
+ */
+describe.skipIf(!EMULATORS)("openMatter re-screen vs the registry version", () => {
+  const versionRef = (firmId: string) => adminDb().collection("counters").doc(`${firmId}_registry`)
+  const version = async (firmId: string) => (await versionRef(firmId).get()).data()?.version ?? 0
+  const openRows = async (uid: string) =>
+    (await adminDb().collection("audit_log").where("actorId", "==", uid).where("action", "==", "matter.open").get()).docs
+      .map((d) => d.data())
+      .filter((r) => String(r.target).startsWith("matters/"))
+
+  async function withSeam<T>(hook: (round: number) => Promise<void>, body: () => Promise<T>): Promise<T> {
+    openMatterTestSeam.afterPreScreen = hook
+    try {
+      return await body()
+    } finally {
+      delete openMatterTestSeam.afterPreScreen
+    }
+  }
+
+  it("openMatter and closeMatter bump the version once each; advanceStage (stage only, not read by the screen) leaves it", async () => {
+    const { firmId, partner, checkId } = await setup()
+    const before = await version(firmId)
+    const { matterId } = await open(partner.token, firmId, checkId)
+    expect(await version(firmId)).toBe(before + 1)
+    await advanceStage({ token: partner.token, data: { firmId, matterId, to: "filed" } } as never)
+    expect(await version(firmId)).toBe(before + 1)
+    await closeMatter({ token: partner.token, data: { firmId, matterId, reason: REASON20 } } as never)
+    expect(await version(firmId)).toBe(before + 2)
+  })
+
+  it("an unchanged version: the matter opens in one round", async () => {
+    const { firmId, partner, checkId } = await setup()
+    const rounds: number[] = []
+    const out = await withSeam(async (r) => void rounds.push(r), () => open(partner.token, firmId, checkId))
+    expect(out.conflictCheckId).toBe(checkId)
+    expect(rounds).toEqual([1])
+    expect((await openRows(partner.uid)).map((r) => [r.decision, r.reason])).toEqual([["allow", "ok"]])
+  })
+
+  it("a registry write between pre-screen and transaction: the round writes nothing, the next round re-screens and opens; one allow row", async () => {
+    const { firmId, partner, checkId } = await setup()
+    const rounds: number[] = []
+    const out = await withSeam(
+      async (r) => {
+        rounds.push(r)
+        if (r === 1) await register(partner.token, firmId, { name: "Unrelated Person" })
+      },
+      () => open(partner.token, firmId, checkId)
+    )
+    expect(out.matterNo).toBe(`NHS/${YEAR}/0001`)
+    expect(rounds).toEqual([1, 2])
+    expect((await openRows(partner.uid)).map((r) => [r.decision, r.reason])).toEqual([["allow", "ok"]])
+    expect((await adminDb().collection("matters").where("firmId", "==", firmId).get()).size).toBe(1)
+  })
+
+  it(`a version that moves every round → 409 registry_contended after ${OPEN_SCREEN_ROUNDS} rounds; nothing written, one deny row`, async () => {
+    const { firmId, partner, checkId } = await setup()
+    const rounds: number[] = []
+    const err = await withSeam(
+      async (r) => {
+        rounds.push(r)
+        await versionRef(firmId).set({ firmId, version: FieldValue.increment(1) }, { merge: true })
+      },
+      () => apiErrorOf(open(partner.token, firmId, checkId))
+    )
+    expectKind(err, "failed-precondition", "registry_contended")
+    expect(rounds).toEqual(Array.from({ length: OPEN_SCREEN_ROUNDS }, (_, i) => i + 1))
+    expect((await checkRef(checkId).get()).data()).toMatchObject({ boundMatterId: null })
+    expect((await checkRef(checkId).get()).data()?.stale).not.toBe(true)
+    expect((await adminDb().collection("matters").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect((await adminDb().collection("counters").doc(`${firmId}_matter_${YEAR}`).get()).exists).toBe(false)
+    expect((await openRows(partner.uid)).map((r) => [r.decision, r.reason])).toEqual([["deny", "registry_contended"]])
   })
 })
 
@@ -454,5 +534,12 @@ describe.skipIf(!EMULATORS)("getMatter and listMatters", () => {
     expect(await listMatters({ token: outsider.token, data: { firmId } } as never)).toEqual({ items: [], nextCursor: null })
     const clientUser = await mintIdToken(claims(firmId, "client", "internal"))
     expectKind(await apiErrorOf(listMatters({ token: clientUser.token, data: { firmId } } as never)), "permission-denied", "client_denied")
+  })
+
+  it("a cursor whose seconds are outside the Timestamp range → 400 invalid_cursor, not 500 (as listClients)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const cursor = Buffer.from(JSON.stringify({ sortKey: "99999999999999.0", id: "abc" }), "utf8").toString("base64url")
+    expectKind(await apiErrorOf(listMatters({ token: partner.token, data: { firmId, cursor } } as never)), "invalid-argument", "invalid_cursor")
   })
 })

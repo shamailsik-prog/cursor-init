@@ -8,6 +8,8 @@ import { requirePermission } from "../../p5/permission"
 import { normalisePhone } from "../conflict/normalise"
 import { allocateNumber, formatClientCode, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
+import { DETERMINISTIC_KEY_SCORE } from "../entity/linkState"
+import { bumpRegistryVersion } from "../registryVersion"
 import { parseKeys, parseName, type Keys } from "../validate"
 
 const clients = () => adminDb().collection("clients")
@@ -134,6 +136,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       const clientCode = formatClientCode(clientPrefix, karachiYear(now), n)
 
       await audit.stage(tx, "allow", "ok")
+      bumpRegistryVersion(tx, caller.firmId)
       tx.create(entityRef, {
         firmId: caller.firmId,
         canonicalName,
@@ -163,6 +166,15 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
         const [a, b] = [entityRef.id, otherId].sort()
         const existing = matchedClass.get(otherId) ?? "privileged-restricted"
         const linkClassification = rankOf(existing) > rankOf(classification) ? existing : classification
+        // One candidate event per pair, not per key (L18 §7.1); the pair's link label is its classification.
+        tx.create(db.collection("events").doc(`${caller.firmId}_${a}_${b}_candidate`), {
+          name: "entity.candidate",
+          firmId: caller.firmId,
+          payload: { entityIds: [a, b], mergeEventId: null, score: DETERMINISTIC_KEY_SCORE },
+          classification: linkClassification,
+          occurredAt: FieldValue.serverTimestamp(),
+          idempotencyKey: `${caller.firmId}_${a}_${b}:candidate`,
+        })
         for (const key of matchedKeys) {
           tx.create(db.collection("entity_links").doc(`${caller.firmId}_${a}_${b}_${key}`), {
             firmId: caller.firmId,
@@ -229,7 +241,12 @@ export const listClientsOp: FirmOperation<Page<Record<string, unknown>>> = {
       if (!Number.isInteger(seconds) || !Number.isInteger(nanos) || nanos < 0 || nanos >= 1e9 || !isSafeDocId(id)) {
         throw new HttpError(400, "invalid_cursor")
       }
-      after = { createdAt: new Timestamp(seconds, nanos), id }
+      try {
+        after = { createdAt: new Timestamp(seconds, nanos), id }
+      } catch {
+        // Seconds outside the Timestamp range.
+        throw new HttpError(400, "invalid_cursor")
+      }
     }
 
     const items: Array<{ id: string; row: DocumentData }> = []

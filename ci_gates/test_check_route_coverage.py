@@ -61,3 +61,19 @@ def test_all_covered_via_viaApi_passes(tmp_path):
 
 def test_non_d1_routes_ignored_and_no_routes_is_an_error(tmp_path):
     assert run(tmp_path, "nothing here", {}).returncode == 1
+
+
+ENTITY_ROUTER = """
+const D1_ENTITY = "/api/d1/entity"
+export const ROUTES = [
+  get(`${D1_ENTITY}/listReviewQueue`, listReviewQueueOp),
+  get(`${D1_ENTITY}/getEntity`, getEntityOp),
+]
+"""
+
+
+def test_entity_prefix_constant_is_resolved_and_uncovered_route_named(tmp_path):
+    res = run(tmp_path, ENTITY_ROUTER, {"a.test.ts": 'viaApi("listReviewQueue")'})
+    assert res.returncode == 1
+    assert "/api/d1/entity/getEntity" in res.stdout
+    assert "/api/d1/entity/listReviewQueue" not in res.stdout.split("MISSING")[-1]
