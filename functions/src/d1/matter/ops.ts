@@ -55,6 +55,16 @@ export const openMatterTestSeam: { afterPreScreen?: (round: number) => Promise<v
 /** A round's transaction saw a registry version other than its pre-screen's: nothing written, redo. */
 const REGISTRY_MOVED = Symbol("registry_moved")
 
+/**
+ * A Firestore transaction that gave up under lock contention (gRPC ABORTED, code 10) after its
+ * maxAttempts. In openMatter it wrote nothing, so it is a moved round, not a 500 (PR #9 CI).
+ */
+export function isContentionAbort(err: unknown): boolean {
+  if (!(err instanceof Error) || err instanceof HttpError) return false
+  const code = (err as { code?: unknown }).code
+  return code === 10 || (typeof code === "string" && code.toLowerCase() === "aborted")
+}
+
 const STAFF_ROLES: ReadonlySet<string> = new Set(["partner", "associate", "clerk", "intern"])
 
 const badQuery = () => new HttpError(400, "invalid_query")
@@ -221,7 +231,8 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
       const fresh: Hit[] = runEngine(registry, pre.subjects, pre.subjects.map((_, i) => (i === 0 ? preClient.entityId : undefined))).hits
       await openMatterTestSeam.afterPreScreen?.(round)
 
-      const row = await db.runTransaction(
+      const runRound = () =>
+        db.runTransaction(
         async (tx) => {
           // Reads first: the registry version, the check, its client, the listed members, the prefixes, then the counter.
           // A moved version means the screen above may be out of date: write nothing (no audit row) and redo the round.
@@ -322,7 +333,15 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
           return matter
         },
         { maxAttempts: OPEN_TX_ATTEMPTS }
-      )
+        )
+      let row: Awaited<ReturnType<typeof runRound>>
+      try {
+        row = await runRound()
+      } catch (err) {
+        // Contention exhausted the round's transaction attempts: nothing was written, so redo the round.
+        if (isContentionAbort(err)) continue
+        throw err
+      }
       if (row === REGISTRY_MOVED) continue
       audit.committed()
       if (row === null) throw new HttpError(409, "check_stale")
