@@ -151,5 +151,14 @@ recorded there and not repeated here. The architecture record is Erratum E-41 in
 | O-28 | Auto-confirm materialisation: a P2 job writes the `merge_events` row at day 30 (actor `system`). Until then the 30-day auto-confirm is computed at read time and leaves no row. | Needs the P2 jobs (Phase 3) and un-merge (2b-B). | L17.2 #16 does not hold for auto-links until the job runs. |
 | O-29 | Responsible-associate assignment: review items go to any partner or associate cleared to the pair. | No per-entity or per-client responsible associate exists to route to. | Review items can sit unowned. |
 
+Final-review rulings (8 October 2026, owner's standing autonomy instruction):
+
+- Late dispute and staleness (final review minor 2): the code stays, the spec text was wrong. A dispute of a pair aged 30 days or
+  more (auto-confirmed) makes a check cleared before it 409 `check_stale` at `openMatter`, because the reopened link turns the
+  stored informational same-role hit into a fresh review. This is fail-safe. P2-30 and Review Focus 4 are amended; the
+  emulator test "a late dispute of an auto-confirmed pair" in `d1.entity-invariants.emu.test.ts` pins it.
+- Pair label (minor 1): `getEntity` and `listAliases` use the same pair label as `readPair` and the queue, including the other
+  entity's client; a pair whose other client is above the caller's clearance is hidden.
+
 Phase 2b-A close is Gate G-4 (`npm run gate:g4:phase2b-a`): route coverage (20 routes), boot with every layer flag off,
 the two L17.2 invariant tests, and Gate G-2 over all routes.

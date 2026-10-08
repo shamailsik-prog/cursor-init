@@ -150,4 +150,22 @@ describe.skipIf(!EMULATORS)("L17.2 conflict invariants (P2-18, P2-30, P2-41)", (
     expect(offCheck.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
     expect(offCheck.hits.some((h) => h.outcome === "FLAG")).toBe(false)
   })
+
+  it("a late dispute of an auto-confirmed pair (over 30 d) reopens it, so a check cleared before is refused at openMatter with check_stale (P2-30)", async () => {
+    const s = await seed()
+    // No opposing party: the only hits are the informational same-role hits on the pair.
+    const parties = await adminDb().collection("matter_parties").where("firmId", "==", s.firmId).get()
+    for (const doc of parties.docs) await doc.ref.delete()
+    const link = adminDb().collection("entity_links").doc(s.cnicRowId)
+    await link.update({ createdAt: Timestamp.fromMillis(Date.now() - 31 * 24 * 60 * 60 * 1000) })
+
+    const before = await s.check()
+    expect(before).toMatchObject({ result: "CLEAR", decision: "cleared" })
+    for (const h of sameRole(before.hits)) expect(h.outcome).toBe("NONE")
+
+    expect((await disputeLink(linkCall(s, s.partner.token))).disputed).toBe(true)
+    // The dispute returns the pair to an unresolved link: the fresh same-role hit is a review the stored check never saw.
+    expectKind(await apiErrorOf(open(s, before.checkId)), "failed-precondition", "check_stale")
+    expect((await adminDb().collection("conflict_checks").doc(before.checkId).get()).data()).toMatchObject({ stale: true, boundMatterId: null })
+  })
 })

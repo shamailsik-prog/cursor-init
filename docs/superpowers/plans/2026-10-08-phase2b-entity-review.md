@@ -70,7 +70,7 @@ type DecisionResult = { pairId: string; linkIds: string[]; state: "confirmed" | 
 1. Two parallel `confirmMerge` calls on the same pair (different `linkId`s of it): exactly one 200 and one 409 `link_not_candidate`; exactly one `merge_events` row and one `entity.confirmed` event. Pinned in Task 4.
 2. A link created exactly 30 days ago (to the millisecond) is `auto_confirmed` and absent from the `pending` queue; at 30 days minus 1 ms it is `candidate` and present with `autoConfirmAt` = createdAt + 30 d. Pinned in Task 1 and Task 3.
 3. An associate's `confirmMerge` on a disputed pair → 403 `role_not_permitted` and the pair unchanged; a partner's succeeds with `priorState: "disputed"`. Pinned in Task 4.
-4. Confirming a pair turns a stored `different_person` resolution on that pair's role-crossing hit into 409 `check_stale` at `openMatter`; disputing or rejecting never makes a cleared check stale. Pinned in Task 5.
+4. Confirming a pair turns a stored `different_person` resolution on that pair's role-crossing hit into 409 `check_stale` at `openMatter`; disputing or rejecting a pair that was a candidate when the check ran never makes a cleared check stale. A late dispute of a pair aged 30 days or more (auto-confirmed) does: the reopened same-role hit is a fresh review, so `openMatter` answers 409 `check_stale` (final review ruling, minor 2). Pinned in Task 5 and in the final-review fix test.
 5. An `internal`-cleared associate never sees, confirms or learns the existence of a pair whose label is `confidential` (queue omits it; getEntity omits the link; decisions → 404 `not_found`). Pinned in Task 3 and Task 4.
 
 ---
