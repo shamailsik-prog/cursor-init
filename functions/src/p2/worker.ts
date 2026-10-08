@@ -26,6 +26,12 @@ import { handlerFor, type JobHandler, type JobResult } from "./registry"
  * 2. Run the handler, raced against the handler budget (`handler_timeout`, retryable).
  * 3. Commit (one transaction): re-read; if this claim's fence no longer holds, write nothing.
  *    Otherwise `done` with the handler's `apply`, or `failed` / `dead_lettered` (`stageFailure`).
+ *    An `apply` that throws while staging, or whose staged writes Firestore rejects only when the
+ *    transaction commits (a non-transient gRPC code such as ALREADY_EXISTS from `tx.create` on an
+ *    existing doc, `isRejectedWrite`), is recorded as the retryable `internal` failure by a second,
+ *    fenced commit that writes nothing of the handler's result (Codex P1 / O-42). A transient commit
+ *    error (ABORTED, UNAVAILABLE, DEADLINE_EXCEEDED, ...) is logged by code and rethrown: the row
+ *    stays `running` and lease recovery (the sweeper's query B) re-runs the attempt.
  * 4. After commit: dispatch the retry at `nextAttemptAt`, or raise the dead-letter alert.
  *
  * The worker never re-dispatches a dropped task: recovery belongs to the sweeper (P3-8).
@@ -44,6 +50,11 @@ type SeamContext = { jobId: string; owner: string }
 export const jobWorkerTestSeam: {
   afterClaim?: (c: SeamContext) => Promise<void>
   afterHandler?: (c: SeamContext) => Promise<void>
+  /**
+   * Before each finish-commit transaction: `fallback` is false for the first commit and true for
+   * the failure commit after a rejected write. A throw here stands in for that transaction rejecting.
+   */
+  beforeCommit?: (c: SeamContext & { fallback: boolean }) => Promise<void>
 } = {}
 
 const at = (ms: number) => Timestamp.fromMillis(ms)
@@ -280,18 +291,85 @@ async function commit(ref: DocumentReference, owner: string, outcome: HandlerOut
   })
 }
 
-/** Commits the outcome; an `apply` that throws is committed as that error instead (nothing it staged). */
+/** gRPC status names, for logging a store error by code only (never its message, which names doc paths). */
+const GRPC_NAMES: Readonly<Record<number, string>> = {
+  1: "cancelled",
+  2: "unknown",
+  3: "invalid_argument",
+  4: "deadline_exceeded",
+  5: "not_found",
+  6: "already_exists",
+  7: "permission_denied",
+  8: "resource_exhausted",
+  9: "failed_precondition",
+  10: "aborted",
+  11: "out_of_range",
+  12: "unimplemented",
+  13: "internal",
+  14: "unavailable",
+  15: "data_loss",
+  16: "unauthenticated",
+}
+
+/** Transient gRPC codes: retrying the same writes may succeed, so the attempt is left to lease recovery. */
+const TRANSIENT_GRPC: ReadonlySet<number> = new Set([1, 2, 4, 8, 10, 13, 14])
+
+function grpcStatus(err: unknown): number | undefined {
+  if (err instanceof JobError) return undefined
+  const code = (err as { code?: unknown } | null)?.code
+  return typeof code === "number" && Number.isInteger(code) && code >= 1 && code <= 16 ? code : undefined
+}
+
+/**
+ * Whether the finish transaction failed because Firestore rejected a staged write for good
+ * (ALREADY_EXISTS, FAILED_PRECONDITION, INVALID_ARGUMENT, NOT_FOUND, PERMISSION_DENIED,
+ * OUT_OF_RANGE, ...): committing the same writes again cannot succeed.
+ */
+function isRejectedWrite(err: unknown): boolean {
+  const status = grpcStatus(err)
+  return status !== undefined && !TRANSIENT_GRPC.has(status)
+}
+
+/** Logs a commit failure by code only: the gRPC status name for a store error, else `errorCode`. */
+function logCommitFailure(message: string, err: unknown, jobId?: string): void {
+  const status = grpcStatus(err)
+  if (status === undefined) return logFailure(message, err)
+  logger.error(message, jobId === undefined ? { code: GRPC_NAMES[status] } : { jobId, code: GRPC_NAMES[status] })
+}
+
+/**
+ * Commits the outcome. If the handler's result cannot be committed, a second commit (which
+ * re-checks the fence) records a failure instead and writes nothing the handler staged:
+ * - `apply` throws while staging → that error, sanitised;
+ * - Firestore rejects a staged write at commit with a non-transient code → the retryable
+ *   `internal`, exactly as an `apply` that throws a plain error (spec P3-7 amendment, O-42).
+ * Any other failure (a transient store error, or the failure commit itself failing) is logged by
+ * code and rethrown; the row stays `running` and the lease and sweeper query B recover it.
+ */
 async function commitOutcome(ref: DocumentReference, owner: string, outcome: HandlerOutcome, deps: JobDeps): Promise<CommitResult> {
+  const seam = { jobId: ref.id, owner }
+  const fallback = async (err: unknown): Promise<CommitResult> => {
+    await jobWorkerTestSeam.beforeCommit?.({ ...seam, fallback: true })
+    return commit(ref, owner, { ok: false, err, handler: outcome.handler }, deps)
+  }
   try {
+    let first: unknown
     try {
+      await jobWorkerTestSeam.beforeCommit?.({ ...seam, fallback: false })
       return await commit(ref, owner, outcome, deps)
     } catch (err) {
-      if (!(err instanceof ApplyFailed)) throw err
-      return await commit(ref, owner, { ok: false, err: err.original, handler: outcome.handler }, deps)
+      first = err
     }
+    if (first instanceof ApplyFailed) return await fallback(first.original)
+    // Only the handler's result can carry a rejected write; a failure commit that is rejected is not retried.
+    if (outcome.ok && isRejectedWrite(first)) {
+      logCommitFailure("job commit rejected", first, ref.id)
+      return await fallback(new JobError("internal"))
+    }
+    throw first
   } catch (err) {
     // The row stays `running`: a redelivery is dropped, and the lease and sweeper query B recover it.
-    logFailure("job commit failed", err)
+    logCommitFailure("job commit failed", err)
     throw err
   }
 }

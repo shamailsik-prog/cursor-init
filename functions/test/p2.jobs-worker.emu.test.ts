@@ -29,9 +29,11 @@ import {
 
 type Deps = ReturnType<typeof testDeps>
 
-type MisbehaveMode = "rawParse" | "throwApply" | "badRefs" | "refs" | "leaseLost"
+type MisbehaveMode = "rawParse" | "throwApply" | "badRefs" | "refs" | "leaseLost" | "createExisting"
 
 const misbehaveMarkerRef = (jobId: string) => adminDb().collection("counters").doc(`misbehave_${jobId}`)
+/** A doc the `createExisting` test pre-creates, so the handler's `tx.create` fails only at commit (ALREADY_EXISTS). */
+const misbehaveExistingRef = (jobId: string) => adminDb().collection("counters").doc(`misbehave_existing_${jobId}`)
 
 /** A test-only handler that breaks the handler contract on purpose, to pin the worker's guards. */
 const misbehavingHandler: JobHandler<{ mode: MisbehaveMode }> = {
@@ -57,6 +59,13 @@ const misbehavingHandler: JobHandler<{ mode: MisbehaveMode }> = {
         return { apply: (tx) => void tx.set(marker, { count: 1 }), outputRefs: ["not a ref"] }
       case "leaseLost":
         throw new LeaseLostError()
+      case "createExisting":
+        return {
+          apply: (tx) => {
+            tx.set(marker, { count: 1 })
+            tx.create(misbehaveExistingRef(ctx.job.id), { by: "handler" })
+          },
+        }
       default:
         return { apply: (tx) => void tx.set(marker, { count: 1 }), outputRefs: ["matters/m1", "documents/d2"] }
     }
@@ -399,6 +408,115 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
       ["job.fail", "internal"],
     ])
     expect(d.dispatcher.tasks).toEqual([{ jobId, seq: 1, scheduleAt: T0 + 1000 }])
+  })
+
+  it("an apply whose write Firestore rejects at commit (ALREADY_EXISTS) records a retryable internal failure and applies nothing", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const jobId = await enqueue({ mode: "createExisting" } as never, { jobType: "test.misbehave" })
+    await misbehaveExistingRef(jobId).set({ by: "test" })
+    const existingBefore = await misbehaveExistingRef(jobId).get()
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    // Nothing of the handler's result is written; the pre-existing doc is untouched.
+    expect((await misbehaveMarkerRef(jobId).get()).exists).toBe(false)
+    const existingAfter = await misbehaveExistingRef(jobId).get()
+    expect(existingAfter.data()).toEqual({ by: "test" })
+    expect(existingAfter.updateTime?.isEqual(existingBefore.updateTime!)).toBe(true)
+    const row = await readJob(jobId)
+    expect(row).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      dispatchSeq: 1,
+      lease: null,
+      lastError: { code: "internal", message: "The job failed with an internal error." },
+      outputRefs: [],
+    })
+    expect(row.logs.map((l) => [l.event, l.code ?? null])).toEqual([
+      ["enqueued", null],
+      ["claimed", null],
+      ["failed", "internal"],
+    ])
+    expect((await jobAuditRows(jobId)).map((r) => [r.action, r.reason])).toEqual([
+      ["job.start", "ok"],
+      ["job.fail", "internal"],
+    ])
+    expect(Object.keys(await jobEvents(jobId))).toEqual([`${jobId}_failed_1`])
+    expect(d.dispatcher.tasks).toEqual([{ jobId, seq: 1, scheduleAt: T0 + 1000 }])
+    // The rejection is logged by its gRPC code only.
+    expect(error).toHaveBeenCalledWith("job commit rejected", { jobId, code: "already_exists" })
+    expect(JSON.stringify(error.mock.calls)).not.toContain("misbehave_existing")
+  })
+
+  it("a rejected apply at the attempt cap dead-letters with the sanitised code and alerts", async () => {
+    vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const jobId = await enqueue({ mode: "createExisting" } as never, { jobType: "test.misbehave" })
+    await jobsRef().doc(jobId).update({ attempts: 3, totalAttempts: 3 })
+    await misbehaveExistingRef(jobId).set({ by: "test" })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("dead_lettered")
+    expect((await misbehaveMarkerRef(jobId).get()).exists).toBe(false)
+    expect((await misbehaveExistingRef(jobId).get()).data()).toEqual({ by: "test" })
+    expect(await readJob(jobId)).toMatchObject({ status: "dead_lettered", attempts: 4, lease: null, nextAttemptAt: null, lastError: { code: "internal" } })
+    expect(Object.keys(await jobEvents(jobId)).sort()).toEqual([`${jobId}_deadLettered_0`, `${jobId}_failed_4`])
+    expect((await jobAuditRows(jobId)).map((r) => [r.action, r.reason])).toEqual([
+      ["job.start", "ok"],
+      ["job.dead_letter", "internal"],
+    ])
+    expect(d.alerts).toEqual([{ jobId, jobType: "test.misbehave", firmId, attempts: 4, code: "internal" }])
+    expect(d.dispatcher.tasks).toEqual([])
+  })
+
+  it("a rejected apply whose fence is lost before the failure commit writes nothing", async () => {
+    vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    const jobId = await enqueue({ mode: "createExisting" } as never, { jobType: "test.misbehave" })
+    await misbehaveExistingRef(jobId).set({ by: "test" })
+    jobWorkerTestSeam.beforeCommit = async ({ jobId: id, fallback }) => {
+      if (fallback) await jobsRef().doc(id).update({ "lease.owner": "intruder" })
+    }
+    let outcome: string
+    try {
+      outcome = await d.dispatcher.deliver({ jobId, seq: 0 }, T0)
+    } finally {
+      delete jobWorkerTestSeam.beforeCommit
+    }
+    expect(outcome).toBe("lease_lost")
+    expect((await misbehaveMarkerRef(jobId).get()).exists).toBe(false)
+    expect(await readJob(jobId)).toMatchObject({ status: "running", attempts: 1, dispatchSeq: 0, lastError: null, lease: { owner: "intruder" } })
+    expect((await jobAuditRows(jobId)).map((r) => r.action)).toEqual(["job.start"])
+    expect(await jobEvents(jobId)).toEqual({})
+    expect(d.dispatcher.tasks).toEqual([])
+    expect(warn).toHaveBeenCalledWith("job.lease_lost", { jobId, jobType: "test.misbehave" })
+  })
+
+  it("a transient commit error leaves the job running for lease recovery and logs the code only", async () => {
+    for (const [grpc, name] of [
+      [10, "aborted"],
+      [14, "unavailable"],
+      [4, "deadline_exceeded"],
+    ] as const) {
+      vi.restoreAllMocks()
+      const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      d = testDeps(new FakeClock(T0))
+      const jobId = await enqueue({ behaviour: "succeed" })
+      const marker = uniq("transient")
+      let calls = 0
+      jobWorkerTestSeam.beforeCommit = async () => {
+        calls++
+        throw Object.assign(new Error(`store hiccup ${marker}`), { code: grpc })
+      }
+      try {
+        await expect(d.dispatcher.deliver({ jobId, seq: 0 }, T0)).rejects.toMatchObject({ code: grpc })
+      } finally {
+        delete jobWorkerTestSeam.beforeCommit
+      }
+      expect(calls).toBe(1)
+      expect(await diagCount(firmId, jobId)).toBe(0)
+      expect(await readJob(jobId)).toMatchObject({ status: "running", attempts: 1, dispatchSeq: 0, lastError: null })
+      expect((await jobAuditRows(jobId)).map((r) => r.action)).toEqual(["job.start"])
+      expect(await jobEvents(jobId)).toEqual({})
+      expect(d.dispatcher.tasks).toEqual([])
+      expect(error).toHaveBeenCalledWith("job commit failed", { code: name })
+      expect(JSON.stringify(error.mock.calls)).not.toContain(marker)
+    }
   })
 
   it("invalid outputRefs apply nothing and record a retryable internal failure; valid ones are stored", async () => {
