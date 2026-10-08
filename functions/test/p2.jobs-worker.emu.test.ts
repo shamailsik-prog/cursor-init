@@ -3,7 +3,10 @@ import { logger } from "firebase-functions"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { DiagnosticPayload } from "../src/p2/diagnostic"
 import { jobsRef } from "../src/p2/enqueue"
+import { adminDb } from "../src/admin"
+import { LeaseLostError } from "../src/p2/errors"
 import { logDeadLetterAlert } from "../src/p2/jobEvents"
+import { jobTestSeam, type JobHandler } from "../src/p2/registry"
 import { jobWorkerTestSeam } from "../src/p2/worker"
 import { EMULATORS, uniq } from "./emu"
 import {
@@ -26,6 +29,40 @@ import {
 
 type Deps = ReturnType<typeof testDeps>
 
+type MisbehaveMode = "rawParse" | "throwApply" | "badRefs" | "refs" | "leaseLost"
+
+const misbehaveMarkerRef = (jobId: string) => adminDb().collection("counters").doc(`misbehave_${jobId}`)
+
+/** A test-only handler that breaks the handler contract on purpose, to pin the worker's guards. */
+const misbehavingHandler: JobHandler<{ mode: MisbehaveMode }> = {
+  jobType: "test.misbehave",
+  saga: false,
+  errorCodes: {},
+  parse: (payload) => {
+    const mode = (payload as { mode?: MisbehaveMode }).mode
+    if (mode === "rawParse") throw new Error("raw parse failure quoting the payload")
+    return { mode: mode ?? "refs" }
+  },
+  run: async (ctx) => {
+    const marker = misbehaveMarkerRef(ctx.job.id)
+    switch (ctx.payload.mode) {
+      case "throwApply":
+        return {
+          apply: (tx) => {
+            tx.set(marker, { count: 1 })
+            throw new Error("apply failure")
+          },
+        }
+      case "badRefs":
+        return { apply: (tx) => void tx.set(marker, { count: 1 }), outputRefs: ["not a ref"] }
+      case "leaseLost":
+        throw new LeaseLostError()
+      default:
+        return { apply: (tx) => void tx.set(marker, { count: 1 }), outputRefs: ["matters/m1", "documents/d2"] }
+    }
+  },
+}
+
 describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
   let firmId: string
   let uid: string
@@ -39,10 +76,12 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     uid = uniq("uid")
     d = testDeps(new FakeClock(T0))
     installTestHandlers()
+    jobTestSeam.handlers.set(misbehavingHandler.jobType, misbehavingHandler as JobHandler)
   })
 
   afterEach(() => {
     removeTestHandlers()
+    jobTestSeam.handlers.delete(misbehavingHandler.jobType)
     vi.restoreAllMocks()
   })
 
@@ -96,6 +135,8 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     expect(await diagCount(firmId, jobId)).toBe(1)
     row = await readJob(jobId)
     expect(row.totalAttempts).toBe(3)
+    // A successful attempt clears the previous attempt's error.
+    expect(row.lastError).toBeNull()
     expect(row.logs.map((l) => [l.event, l.attempt, l.code ?? null])).toEqual([
       ["enqueued", 0, null],
       ["claimed", 1, null],
@@ -308,6 +349,87 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     expect(row.logs.at(-2)?.event).toBe("claimed")
     expect(row.logs.at(-1)?.event).toBe("done")
     expect(row.logs[0].at.toMillis()).toBe(T0 - 48)
+  })
+
+  it("a failure whose audit row cannot be staged aborts its transaction and leaves the job unchanged", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const jobId = await enqueue({ behaviour: "fail_times", failTimes: 1 })
+    // After the claim, the stored row loses createdBy, so the job.fail audit row cannot be built.
+    jobWorkerTestSeam.afterClaim = async ({ jobId: id }) => {
+      await jobsRef().doc(id).update({ createdBy: FieldValue.delete() })
+    }
+    let before: Awaited<ReturnType<typeof readJob>>
+    try {
+      jobWorkerTestSeam.afterHandler = async ({ jobId: id }) => {
+        before = await readJob(id)
+      }
+      await expect(d.dispatcher.deliver({ jobId, seq: 0 }, T0)).rejects.toThrow("job audit: invalid subject")
+    } finally {
+      delete jobWorkerTestSeam.afterClaim
+      delete jobWorkerTestSeam.afterHandler
+    }
+    const row = await readJob(jobId)
+    expect(row.updateTime.isEqual(before!.updateTime)).toBe(true)
+    expect(row).toMatchObject({ status: "running", attempts: 1, dispatchSeq: 0, lastError: null })
+    expect(await jobEvents(jobId)).toEqual({})
+    expect((await jobAuditRows(jobId)).map((r) => r.action)).toEqual(["job.start"])
+    expect(d.dispatcher.tasks).toEqual([])
+    expect(error).toHaveBeenCalledWith("job commit failed", { code: "unknown" })
+  })
+
+  it("a queued or failed row already at the attempt cap is never claimed", async () => {
+    for (const status of ["queued", "failed"] as const) {
+      const jobId = await enqueue({ behaviour: "succeed" })
+      await jobsRef().doc(jobId).update({ status, attempts: 4, totalAttempts: 4 })
+      const before = await readJob(jobId)
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("dropped")
+      expect((await readJob(jobId)).updateTime.isEqual(before.updateTime)).toBe(true)
+      expect(await diagCount(firmId, jobId)).toBe(0)
+    }
+  })
+
+  it("an apply that throws commits nothing it staged and records a retryable internal failure", async () => {
+    const jobId = await enqueue({ mode: "throwApply" } as never, { jobType: "test.misbehave" })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    expect((await misbehaveMarkerRef(jobId).get()).exists).toBe(false)
+    const row = await readJob(jobId)
+    expect(row).toMatchObject({ status: "failed", attempts: 1, dispatchSeq: 1, lastError: { code: "internal" }, outputRefs: [] })
+    expect((await jobAuditRows(jobId)).map((r) => [r.action, r.reason])).toEqual([
+      ["job.start", "ok"],
+      ["job.fail", "internal"],
+    ])
+    expect(d.dispatcher.tasks).toEqual([{ jobId, seq: 1, scheduleAt: T0 + 1000 }])
+  })
+
+  it("invalid outputRefs apply nothing and record a retryable internal failure; valid ones are stored", async () => {
+    const bad = await enqueue({ mode: "badRefs" } as never, { jobType: "test.misbehave" })
+    expect(await d.dispatcher.deliver({ jobId: bad, seq: 0 }, T0)).toBe("failed")
+    expect((await misbehaveMarkerRef(bad).get()).exists).toBe(false)
+    expect(await readJob(bad)).toMatchObject({ status: "failed", lastError: { code: "internal" }, outputRefs: [] })
+
+    const good = await enqueue({ mode: "refs" } as never, { jobType: "test.misbehave" })
+    expect(await d.dispatcher.deliver({ jobId: good, seq: 0 }, T0)).toBe("done")
+    expect((await misbehaveMarkerRef(good).get()).get("count")).toBe(1)
+    expect(await readJob(good)).toMatchObject({ status: "done", outputRefs: ["matters/m1", "documents/d2"] })
+  })
+
+  it("a parse that throws a plain Error is the permanent invalid_payload", async () => {
+    const jobId = await enqueue({ mode: "rawParse" } as never, { jobType: "test.misbehave" })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("dead_lettered")
+    expect(await readJob(jobId)).toMatchObject({
+      status: "dead_lettered",
+      attempts: 1,
+      lastError: { code: "invalid_payload", message: "The job's payload is invalid." },
+    })
+    expect(d.alerts).toEqual([{ jobId, jobType: "test.misbehave", firmId, attempts: 1, code: "invalid_payload" }])
+  })
+
+  it("a LeaseLostError thrown while the fence still holds is recorded as a failure, not trusted", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    const jobId = await enqueue({ mode: "leaseLost" } as never, { jobType: "test.misbehave" })
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    expect(await readJob(jobId)).toMatchObject({ status: "failed", lease: null, lastError: { code: "internal" } })
+    expect(warn).not.toHaveBeenCalledWith("job.lease_lost", expect.anything())
   })
 
   it("the default alert logs job.deadLettered with codes only", async () => {

@@ -3,6 +3,7 @@ import { adminDb } from "../src/admin"
 import type { JobDeps, JobDispatcher, JobTask } from "../src/p2/dispatch"
 import type { DiagnosticPayload } from "../src/p2/diagnostic"
 import { enqueueJob, jobsRef, type EnqueueResult, type JobRow, type JobSpec } from "../src/p2/enqueue"
+import { JobError } from "../src/p2/errors"
 import type { DeadLetterInfo } from "../src/p2/jobEvents"
 import { jobTestSeam, type JobHandler } from "../src/p2/registry"
 import { runJobTask, type TaskOutcome } from "../src/p2/worker"
@@ -135,8 +136,9 @@ export function fencedCounterRef(firmId: string, jobId: string): DocumentReferen
   return adminDb().collection("counters").doc(`${firmId}_jobfenced_${jobId}`)
 }
 
+/** Accepts any plain object; anything else is the permanent invalid_payload (the P3-6 parse contract). */
 const anyObject = (payload: unknown): Record<string, unknown> => {
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new Error("invalid")
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new JobError("invalid_payload", { permanent: true })
   return payload as Record<string, unknown>
 }
 

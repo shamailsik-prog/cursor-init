@@ -3,7 +3,7 @@ import { Timestamp, type DocumentReference, type Transaction } from "firebase-ad
 import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
 import { logFailure } from "../log"
-import { stageJobAudit } from "./audit"
+import { stageJobAudit, stageJobAuditSync } from "./audit"
 import { CLOCK_SKEW_TOLERANCE_MS, JOB_ENGINE, JOB_LEASE_MS, MAX_ATTEMPTS, MAX_LOG_ENTRIES, MAX_REFS, RETRY_DELAYS_MS } from "./constants"
 import type { JobDeps, JobTask } from "./dispatch"
 import { isSafeRef, jobsRef, type JobLogEntry, type JobLogEvent, type JobRow } from "./enqueue"
@@ -23,6 +23,11 @@ import { handlerFor, type JobHandler, type JobResult } from "./registry"
  * 4. After commit: dispatch the retry at `nextAttemptAt`, or raise the dead-letter alert.
  *
  * The worker never re-dispatches a dropped task: recovery belongs to the sweeper (P3-8).
+ *
+ * A handler that overruns its budget is not cancelled: it keeps running until it settles, and
+ * until the failure commit lands its fence still holds, so a late `runFenced` step can commit and
+ * the retry repeats it. That is inside the at-least-once model (handlers are idempotent, L8148);
+ * an AbortSignal on `ctx` is the later fix.
  */
 
 export type TaskOutcome = "dropped" | "done" | "failed" | "dead_lettered" | "lease_lost"
@@ -98,11 +103,9 @@ function stageFailureRow(tx: Transaction, ref: DocumentReference, row: JobRow, e
   })
   stageJobFailedEvent(tx, ref.id, next, err.code, now)
   if (!retry) stageJobDeadLetteredEvent(tx, ref.id, next, err.code, now)
-  // appendAudit stages its tx.create synchronously, before its first await, so the row is in this
-  // transaction when stageJobAudit returns; the promise only reports a (programming) error.
-  stageJobAudit(tx, auditSubject(ref.id, row), retry ? "job.fail" : "job.dead_letter", err.code).catch((e: unknown) =>
-    logFailure("job audit staging failed", e)
-  )
+  // Synchronous and unguarded: a staging failure throws and aborts the caller's transaction, so a
+  // transition never commits without its audit row (P3-18).
+  stageJobAuditSync(tx, auditSubject(ref.id, row), retry ? "job.fail" : "job.dead_letter", err.code)
   return next
 }
 
@@ -120,6 +123,8 @@ type ClaimResult = { kind: "dropped" } | Claimed | Ended
 function claimable(row: JobRow | undefined, seq: number, now: number): row is JobRow {
   if (!row || row.engine !== JOB_ENGINE || row.dispatchSeq !== seq) return false
   if (row.status === "queued" || row.status === "failed") {
+    // The attempt cap is enforced here, the only place a handler starts (P3-8 storm bound 1).
+    if (!(row.attempts < MAX_ATTEMPTS)) return false
     return row.nextAttemptAt instanceof Timestamp && row.nextAttemptAt.toMillis() <= now + CLOCK_SKEW_TOLERANCE_MS
   }
   if (row.status === "running") return row.lease !== null && row.lease.expiresAt instanceof Timestamp && row.lease.expiresAt.toMillis() <= now
@@ -194,7 +199,13 @@ async function runHandler(ref: DocumentReference, claimed: Claimed, deps: JobDep
   const handler = handlerFor(row.jobType)
   try {
     if (!handler) throw new JobError("unknown_job_type", { permanent: true })
-    const payload = handler.parse(row.payload)
+    let payload: unknown
+    try {
+      payload = handler.parse(row.payload)
+    } catch {
+      // The parse contract (P3-6): any rejection of the payload is the permanent invalid_payload.
+      throw new JobError("invalid_payload", { permanent: true })
+    }
     const result = await withinBudget(
       handler.run({
         job: {
@@ -249,6 +260,7 @@ async function commit(ref: DocumentReference, owner: string, outcome: HandlerOut
     }
     tx.update(ref, {
       status: "done",
+      lastError: null,
       outputRefs: [...outputRefs],
       lease: null,
       nextAttemptAt: null,
@@ -316,7 +328,8 @@ export async function runJobTask(task: JobTask, deps: JobDeps): Promise<TaskOutc
   await jobWorkerTestSeam.afterClaim?.(seam)
   const outcome = await runHandler(ref, claimed, deps)
   await jobWorkerTestSeam.afterHandler?.(seam)
-  if (!outcome.ok && outcome.err instanceof LeaseLostError) return leaseLost(ref.id, claimed.row.jobType)
+  // A LeaseLostError from the handler is not trusted on its own: the commit re-checks the fence, and
+  // if it still holds the error is recorded (sanitised to internal) like any other failure.
   const result = await commitOutcome(ref, claimed.owner, outcome, deps)
   if (result.kind === "lease_lost") return leaseLost(ref.id, claimed.row.jobType)
   if (result.kind === "done") return "done"
