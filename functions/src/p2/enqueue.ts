@@ -95,21 +95,35 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null
 }
 
-/** A plain JSON value: string, finite number, boolean, null, array or plain object, recursively (no cycles). */
-function isJsonValue(value: unknown, ancestors: Set<object>): boolean {
+/** Firestore refuses a document nested deeper than this (the payload object itself is level 1; probed in the emulator). */
+const MAX_PAYLOAD_DEPTH = 20
+
+/** A field name Firestore refuses: empty, or of the form `__x__`. */
+function isRefusedKey(key: string): boolean {
+  return key === "" || (key.length >= 4 && key.startsWith("__") && key.endsWith("__"))
+}
+
+/**
+ * A plain JSON value that Firestore accepts as a stored field: string, finite number, boolean,
+ * null, array or plain object, recursively (no cycles). It refuses the shapes Firestore itself
+ * rejects at commit, so they fail as `enqueue: invalid payload` rather than an SDK error: an
+ * empty-string key, a `__x__` key, an array directly inside an array, and nesting deeper than 20.
+ */
+function isJsonValue(value: unknown, ancestors: Set<object>, depth = 0, parentIsArray = false): boolean {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true
   if (typeof value === "number") return Number.isFinite(value)
   if (Array.isArray(value)) {
+    if (parentIsArray || depth + 1 > MAX_PAYLOAD_DEPTH) return false
     if (Object.getPrototypeOf(value) !== Array.prototype || ancestors.has(value)) return false
     ancestors.add(value)
-    const ok = value.every((v) => isJsonValue(v, ancestors))
+    const ok = value.every((v) => isJsonValue(v, ancestors, depth + 1, true))
     ancestors.delete(value)
     return ok
   }
   if (isPlainObject(value)) {
-    if (ancestors.has(value)) return false
+    if (depth + 1 > MAX_PAYLOAD_DEPTH || ancestors.has(value)) return false
     ancestors.add(value)
-    const ok = Object.values(value).every((v) => isJsonValue(v, ancestors))
+    const ok = Object.entries(value).every(([k, v]) => !isRefusedKey(k) && isJsonValue(v, ancestors, depth + 1, false))
     ancestors.delete(value)
     return ok
   }
@@ -200,7 +214,12 @@ function newRow(v: Validated, now: number): JobRow {
 /**
  * Enqueues `specs` in the caller's transaction `tx`, timed from `opts.now`. Call it after the
  * transaction's last read: it reads every target, then creates the missing rows (and, for a
- * system-created job, its `job.enqueue` audit row). A row with the same key and the same
+ * system-created job, its `job.enqueue` audit row). Call it once per transaction, with every
+ * spec in one array: the Firestore SDK refuses a read after a write, so a second call that
+ * follows a call that created a row fails with the SDK's read-after-write error and the
+ * transaction writes nothing. The module cannot raise its own error for this, because
+ * `runTransaction` re-runs its callback with the same `Transaction` object on a retry, so a
+ * per-transaction "already called" mark would reject the retry of a correct caller. A row with the same key and the same
  * payload, label and matter is reused with no write; any difference is 409 `job_key_conflict`.
  */
 export async function enqueueJobs(tx: Transaction, specs: readonly JobSpec[], opts: { now: number }): Promise<EnqueueResult[]> {

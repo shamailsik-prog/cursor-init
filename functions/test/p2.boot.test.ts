@@ -53,6 +53,8 @@ describe("P2 boot (P3-5, P3-8)", () => {
       },
     })
     expect(index.jobSweeper.__endpoint.scheduleTrigger).toMatchObject({ schedule: "every 1 minutes" })
+    // Pinned below the one-minute schedule, not left to the platform default.
+    expect(index.jobSweeper.__endpoint.timeoutSeconds).toBe(45)
     // The worker stays IAM-private (only Cloud Tasks, with OIDC, may invoke it): firebase-functions
     // does not verify the caller itself, so an invoker set here or globally (e.g. "public") must fail.
     expect(index.jobWorker.__endpoint.taskQueueTrigger).not.toHaveProperty("invoker")

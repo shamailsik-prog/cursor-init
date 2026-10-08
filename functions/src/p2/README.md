@@ -14,6 +14,16 @@ To add one: register its handler in `registry.ts`, add a `ScheduledJobSpec` to `
 
 The sweeper (`jobSweeper`, every minute) is the engine's heartbeat, not a P2 job: it re-dispatches lost dispatches and expired leases and is not in `SCHEDULED_JOBS`.
 
+## Deploy prerequisites
+
+Derived from what the code calls (`dispatch.ts` enqueues on the `jobWorker` task queue through the Admin SDK; `functions.ts` declares `jobWorker` as a task-queue function with no `invoker`). Confirm them at the first deploy; none can be proved without one.
+
+- **Cloud Tasks API** (`cloudtasks.googleapis.com`) enabled on the project. `CloudTasksDispatcher` enqueues through `getFunctions(adminApp()).taskQueue("locations/asia-south1/functions/jobWorker")`, and Cloud Tasks hosts that queue.
+- **Cloud Tasks Enqueuer** (`roles/cloudtasks.enqueuer`) for the runtime service account of the functions that call `dispatch` (`api` for `retryFailedJob`, `onJobCreated`, `jobWorker` for retries and `jobSweeper`). By default that is the project's default compute service account. If the dispatch also needs to act as the queue's OIDC service account, that runtime account needs Service Account User (`roles/iam.serviceAccountUser`) on it.
+- **Cloud Run Invoker** (`roles/run.invoker`) on `jobWorker` for the service account Cloud Tasks uses to call it with an OIDC token. `jobWorker` is IAM-private by design (no `invoker` is set, and `p2.boot.test.ts` pins that), so without this binding every delivery is rejected with 403 and jobs stay `queued`.
+
+Until these are in place a dispatch fails silently from the job's point of view: the row stays `queued`, each sweep re-stamps it and logs `job dispatch failed`, and nothing dead-letters, so the `job.deadLettered` alert never fires. Open item O-41 tracks an alert on repeated `job dispatch failed`.
+
 ## Dead-letter runbook
 
 A job that exhausts its attempts becomes `dead_lettered` and the engine writes one structured log line:
@@ -27,4 +37,4 @@ carrying codes only, never payload values. Create the log-based alert policy at 
     npm --prefix functions run build
     npm --prefix functions run jobs:backfill -- <jobType> <from> <to>
 
-`<from>` and `<to>` are inclusive period keys for the job's period (for example `2026-10-01 2026-10-07` for a daily job). At most 366 periods per call. It runs against the project in the ambient Admin credentials (`GOOGLE_APPLICATION_CREDENTIALS` / `GCLOUD_PROJECT`, or `FIRESTORE_EMULATOR_HOST` for the emulator). Re-running it is safe: runs that exist are reused. Exit codes: 0 done, 2 unknown job type or bad range, 64 wrong arguments, 1 store failure.
+`<from>` and `<to>` are inclusive period keys for the job's period (for example `2026-10-01 2026-10-07` for a daily job). At most 366 periods per call. It runs against the project in the ambient Admin credentials (`GOOGLE_APPLICATION_CREDENTIALS` / `GCLOUD_PROJECT`, or `FIRESTORE_EMULATOR_HOST` for the emulator). Re-running it is safe: runs that exist are reused. Exit codes: 0 done, 2 unknown job type or bad range, 64 wrong arguments, 1 store failure or a scheduled type whose handler is not registered.

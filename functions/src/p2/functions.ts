@@ -86,7 +86,15 @@ export const jobWorker = onTaskDispatched(
   }
 )
 
+/**
+ * The sweeper's timeout, pinned (the platform default is 60 s). It stays below the one-minute
+ * schedule so a slow sweep is cut off before the next one starts rather than overlapping it. A
+ * sweep killed between a commit and its dispatch loses nothing: the row is due again and the
+ * next sweep re-dispatches it after the 30 s grace.
+ */
+const SWEEPER_TIMEOUT_SECONDS = 45
+
 /** The safety net (P3-8): re-dispatches lost dispatches and expired leases every minute. */
-export const jobSweeper = onSchedule({ schedule: "every 1 minutes", region: REGION }, async () => {
+export const jobSweeper = onSchedule({ schedule: "every 1 minutes", region: REGION, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS }, async () => {
   await sweep(runtimeDeps())
 })

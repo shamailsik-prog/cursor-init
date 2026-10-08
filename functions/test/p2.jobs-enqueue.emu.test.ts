@@ -12,6 +12,13 @@ import { T0, diagSpec, enqueueAt, jobAuditRows, newFirm, readJob } from "./jobs"
 
 const claims = (firmId: string, role: string) => ({ firmId, role, clearanceLevel: "privileged-restricted" })
 
+/** A payload object nested `levels` deep (the payload itself is level 1). */
+function nested(levels: number): Record<string, unknown> {
+  let v: Record<string, unknown> = { leaf: 1 }
+  for (let i = 1; i < levels; i++) v = { a: v }
+  return v
+}
+
 const enqueueAll = (specs: JobSpec[], now = T0) => adminDb().runTransaction((tx) => enqueueJobs(tx, specs, { now }))
 
 describe.skipIf(!EMULATORS)("P2 enqueue (P3-2, P3-4)", () => {
@@ -100,6 +107,12 @@ describe.skipIf(!EMULATORS)("P2 enqueue (P3-2, P3-4)", () => {
       ["payload", { payload: { n: Number.NaN } }],
       ["payload", { payload: { u: undefined } }],
       ["payload", { payload: [] }],
+      ["payload", { payload: { "": 1 } }],
+      ["payload", { payload: { nested: { "": 1 } } }],
+      ["payload", { payload: { __x__: 1 } }],
+      ["payload", { payload: { list: [{ __proto_key__: 1 }] } }],
+      ["payload", { payload: { a: [[1]] } }],
+      ["payload", { payload: nested(21) }],
       ["inputRefs", { inputRefs: tooMany }],
       ["inputRefs", { inputRefs: ["a/b/c"] }],
       ["inputRefs", { inputRefs: ["../x"] }],
@@ -116,6 +129,9 @@ describe.skipIf(!EMULATORS)("P2 enqueue (P3-2, P3-4)", () => {
         expect((await jobsRef().doc(jobIdFor(firm, String(spec.jobType), spec.idempotencyKey)).get()).exists, field).toBe(false)
       }
     }
+    // Whatever a case's key was (including the invalid keys, which the per-key check skips), the
+    // firm has no job row at all: nothing was written by any rejected spec.
+    expect((await jobsRef().where("firmId", "==", firm).get()).size).toBe(0)
     // A bad spec anywhere in a batch rejects the whole call before any write.
     const good = base()
     await expect(enqueueAll([good, { ...base(), jobType: "nope.type" }])).rejects.toThrow("enqueue: invalid jobType")
@@ -124,12 +140,37 @@ describe.skipIf(!EMULATORS)("P2 enqueue (P3-2, P3-4)", () => {
     const secret = "42101-1234567-1"
     const err = (await enqueueAt({ ...base(), createdBy: `${secret}/x` }, T0).catch((e: unknown) => e)) as Error
     expect(err.message).not.toContain(secret)
+    // Nesting of exactly 20 levels (the payload object is level 1) and an ordinary list of maps are accepted.
+    const deep = await enqueueAt({ ...base(), idempotencyKey: uniq("deep"), payload: nested(20) }, T0)
+    expect((await readJob(deep.jobId)).payload).toEqual(nested(20))
+    const listed = await enqueueAt({ ...base(), idempotencyKey: uniq("list"), payload: { list: [{ a: 1 }, 2, "x"], _single: 1, "a__": 2 } }, T0)
+    expect(listed.reused).toBe(false)
     // A payload whose canonical JSON is exactly 16 384 bytes is accepted.
     const exact = { s: "x".repeat(16_384 - '{"s":""}'.length) }
     expect(Buffer.byteLength(JSON.stringify(exact))).toBe(16_384)
     const ok = await enqueueAt({ ...base(), payload: exact }, T0)
     expect(ok.reused).toBe(false)
     expect((await readJob(ok.jobId)).payload).toEqual(exact)
+  })
+
+  it("one enqueueJobs per transaction: a second call after a write fails (the SDK refuses the read) and nothing is written", async () => {
+    // The module cannot throw its own error: runTransaction re-runs the callback with the same
+    // Transaction object on a retry, so a per-transaction mark would reject a correct retry.
+    const firm = await newFirm()
+    const first = diagSpec(firm, { behaviour: "succeed" })
+    const second = diagSpec(firm, { behaviour: "succeed" })
+    const err = await adminDb()
+      .runTransaction(async (tx) => {
+        await enqueueJobs(tx, [first], { now: T0 })
+        await enqueueJobs(tx, [second], { now: T0 })
+      })
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/all reads|before all writes|read.*after.*write/i)
+    expect((await jobsRef().where("firmId", "==", firm).get()).size).toBe(0)
+    // The supported form, both specs in one call, commits both.
+    const both = await enqueueAll([first, second])
+    expect(both.map((r) => r.reused)).toEqual([false, false])
   })
 
   it("one call with the same key twice: identical → one row (second reused); different → 409", async () => {

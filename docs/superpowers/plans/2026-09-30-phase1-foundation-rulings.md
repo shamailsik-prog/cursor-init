@@ -184,7 +184,7 @@ the two L17.2 invariant tests, and Gate G-2 over all routes.
 
 The P2 job engine core rulings are P3-1 to P3-23 in `docs/superpowers/specs/2026-10-08-phase3a-job-engine-design.md`
 (each with its reason and cost if wrong). They are recorded there and not repeated in full here. The architecture record
-is Erratum E-42 and open items O-30 to O-40 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`. The deciding value of each:
+is Erratum E-42 and open items O-30 to O-44 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`. The deciding value of each:
 
 - P3-1 scope: 3a is the engine core, one internal job type `platform.diagnostic`, no real scheduled job, no production subscriber; 3b un-merge saga, 3c O-28.
 - P3-2 data model: top-level `jobs/{jobId}` with `engine: "p2"`, `jobType`, firmId and classification on every row (not v6's nested `firms/{firmId}/jobs`).
@@ -208,7 +208,7 @@ is Erratum E-42 and open items O-30 to O-40 in `docs/architecture/ERRATUM_SET_2_
 - P3-20 registry-version discipline: a runtime write recorder over every emulator suite, scoped by `REGISTRY_SCOPE`.
 - P3-21 gates: `ci_gates/gate_g4_phase3a.sh` in five steps and the CI step after 2b-A; G-2 gains four probes.
 - P3-22 indexes: eight for `listJobs`, two for the sweeper.
-- P3-23 errata: E-42 and O-30 to O-35 (execution adds O-36 to O-40).
+- P3-23 errata: E-42 and O-30 to O-35 (execution adds O-36 to O-40, and the final review O-41 to O-44).
 
 Execution rulings (8 October 2026, owner's standing autonomy instruction; each is also an "Amended in execution" note on
 its spec ruling and in E-42 (k) to (r)):
