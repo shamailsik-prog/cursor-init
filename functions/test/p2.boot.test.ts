@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { ROUTES, createRouter } from "../src/http/router"
 import { SUBSCRIBERS } from "../src/p2/fanout"
 import { JOB_HANDLERS } from "../src/p2/registry"
 
@@ -64,7 +63,10 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(SUBSCRIBERS).toEqual([])
   })
 
-  it("the router builds with every layer flag off and serves exactly the four /api/platform/jobs routes (P2 is CORE, L8456)", () => {
+  it("the router builds with every layer flag off and serves exactly the four /api/platform/jobs routes (P2 is CORE, L8456)", async () => {
+    // Loaded after the flags are off, so a flag read at module load or route building would show here.
+    vi.resetModules()
+    const { ROUTES, createRouter } = await import("../src/http/router")
     expect(() => createRouter(ROUTES)).not.toThrow()
     const jobs = ROUTES.filter((r) => r.path.startsWith("/api/platform/jobs/")).map((r) => `${r.method} ${r.path} ${r.kind}`)
     expect(jobs.sort()).toEqual(

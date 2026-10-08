@@ -3,11 +3,15 @@ import { Timestamp } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { adminDb } from "../src/admin"
+import { DISPATCH_GRACE_MS } from "../src/p2/constants"
 import { jobRuntime } from "../src/p2/dispatch"
+import { listJobsTestSeam } from "../src/p2/ops"
+import { sweep } from "../src/p2/sweeper"
+import { jobWorkerTestSeam } from "../src/p2/worker"
 import type { DiagnosticPayload } from "../src/p2/diagnostic"
 import { jobsRef, type JobSpec } from "../src/p2/enqueue"
 import type { JobView } from "../src/p2/view"
-import { ApiError, apiErrorOf, expectKind, viaApi } from "./api"
+import { apiErrorOf, expectKind, viaApi, type ApiError } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import {
   FakeClock,
@@ -20,6 +24,7 @@ import {
   jobEvents,
   readJob,
   removeTestHandlers,
+  sweepOrigins,
   testDeps,
 } from "./jobs"
 
@@ -114,6 +119,12 @@ async function deadLetter(jobId: string): Promise<void> {
 
 const ids = (page: List) => page.items.map((v) => v.jobId)
 
+/** The decoded cursor (base64url JSON `{ sortKey, id }`), as any caller can decode it. */
+const cursorOf = (c: string | null) => (c === null ? null : (JSON.parse(Buffer.from(c, "base64url").toString("utf8")) as { sortKey: string; id: string }))
+
+/** Sweep origins far before any other suite's (the sweeper reads the whole collection, Task 4). */
+const nextOrigin = sweepOrigins(300)
+
 describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
   let d: ReturnType<typeof testDeps>
 
@@ -194,6 +205,11 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     const lowAssociate = await member(f.firmId, "associate", "internal")
     await join(f.M, f.firmId, lowAssociate.uid)
     expectKind(await apiErrorOf(getJob(f, lowAssociate, { jobId: priv })), "not-found", "not_found")
+    // The same gate on the write paths: retry by the member associate below the label is 404, and the row is unchanged.
+    await deadLetter(priv)
+    const privBefore = await readJob(priv)
+    expectKind(await apiErrorOf(retry(f, lowAssociate, { jobId: priv, note: NOTE })), "not-found", "not_found")
+    expect((await readJob(priv)).updateTime.isEqual(privBefore.updateTime)).toBe(true)
     expectKind(await apiErrorOf(getJob(f, f.P2, { jobId: priv })), "not-found", "not_found")
     expect((await getJob(f, f.A, { jobId: priv })).classification).toBe("privileged")
     // The same member associate reads an internal job on M.
@@ -205,17 +221,16 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     const j: string[] = []
     for (let i = 0; i < 5; i++) j.push(await job(f, i === 3 ? { classification: "privileged" } : {}, T0 + i))
 
-    // The firm queue as a confidential non-member partner: restricted rows, the privileged one omitted
-    // (a scan of `limit` rows per page, so a page may be short).
+    // The firm queue as a confidential non-member partner: restricted rows, the privileged one skipped.
+    // The cursor names the last visible row only: the hidden j3 is never encoded in it (P3-11, I-1).
     const page1 = await list(f, f.P2, { limit: "2" })
-    expect(ids(page1)).toEqual([j[4]])
-    expect(page1.nextCursor).not.toBeNull()
+    expect(ids(page1)).toEqual([j[4], j[2]])
+    expect(cursorOf(page1.nextCursor)?.id).toBe(j[2])
+    expect(Buffer.from(page1.nextCursor ?? "", "base64url").toString("utf8")).not.toContain(j[3])
     const page2 = await list(f, f.P2, { limit: "2", cursor: page1.nextCursor })
-    expect(ids(page2)).toEqual([j[2], j[1]])
-    const page3 = await list(f, f.P2, { limit: "2", cursor: page2.nextCursor })
-    expect(ids(page3)).toEqual([j[0]])
-    expect(page3.nextCursor).toBeNull()
-    for (const v of [...page1.items, ...page2.items, ...page3.items]) {
+    expect(ids(page2)).toEqual([j[1], j[0]])
+    expect(page2.nextCursor).toBeNull()
+    for (const v of [...page1.items, ...page2.items]) {
       expect(v.matterId).toBe("restricted")
       for (const key of ["logs", "inputRefs", "outputRefs", "payload", "idempotencyKey", "lease"]) expect(v).not.toHaveProperty(key)
     }
@@ -263,6 +278,45 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     expectKind(await apiErrorOf(list(f, f.P, { cursor: badKey })), "invalid-argument", "invalid_cursor")
   })
 
+  it("listJobs: a hidden row last in a scan batch is skipped, never named by a cursor, and never signals another page", async () => {
+    const f = await seedFirm()
+    // Newest first: k4 visible, k3 hidden, k2 visible, k1 visible, k0 hidden (to P2, cleared confidential).
+    const hidden = new Set([0, 3])
+    const k: string[] = []
+    for (let i = 0; i < 5; i++) k.push(await job(f, hidden.has(i) ? { classification: "privileged" } : {}, T0 + i))
+    listJobsTestSeam.scanBatch = 2
+    try {
+      // Batches [k4, k3] [k2, k1] [k0]: k3 ends the first batch and k2 follows it.
+      const page1 = await list(f, f.P2, { limit: "2" })
+      expect(ids(page1)).toEqual([k[4], k[2]])
+      expect(cursorOf(page1.nextCursor)?.id).toBe(k[2])
+      const page2 = await list(f, f.P2, { limit: "2", cursor: page1.nextCursor })
+      // Only the hidden k0 follows k1: no further page.
+      expect(ids(page2)).toEqual([k[1]])
+      expect(page2.nextCursor).toBeNull()
+      const all = await list(f, f.P2, { limit: "3" })
+      expect(ids(all)).toEqual([k[4], k[2], k[1]])
+      expect(all.nextCursor).toBeNull()
+      // Every page of every size: the cursors name visible rows only, and no visible row is skipped.
+      for (const limit of ["1", "2", "3"]) {
+        const seen: string[] = []
+        let cursor: string | null = null
+        do {
+          const page: List = await list(f, f.P2, cursor === null ? { limit } : { limit, cursor })
+          seen.push(...ids(page))
+          if (page.nextCursor !== null) expect([k[4], k[2], k[1]]).toContain(cursorOf(page.nextCursor)?.id)
+          cursor = page.nextCursor
+        } while (cursor !== null)
+        expect([limit, seen]).toEqual([limit, [k[4], k[2], k[1]]])
+      }
+    } finally {
+      delete listJobsTestSeam.scanBatch
+    }
+    // An out-of-range cursor is refused.
+    const outOfRange = Buffer.from(JSON.stringify({ sortKey: "99999999999999.0", id: k[1] })).toString("base64url")
+    expectKind(await apiErrorOf(list(f, f.P2, { cursor: outOfRange })), "invalid-argument", "invalid_cursor")
+  })
+
   it("retryFailedJob requeues a dead-lettered job, keeps lastError, dispatches, and stops after 3", async () => {
     const f = await seedFirm()
     const dead = await job(f)
@@ -290,6 +344,19 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     expect(await d.dispatcher.deliver({ jobId: dead, seq: prevSeq + 1 }, T0 + 60_000)).toBe("done")
     expect(await diagCount(f.firmId, dead)).toBe(1)
     expectKind(await apiErrorOf(retry(f, f.P, { jobId: dead, note: NOTE })), "failed-precondition", "job_not_dead_lettered")
+    // Only dead_lettered is requeued: a failed job already has its automatic retry due (P3-12).
+    const states: Array<[string, Record<string, unknown>]> = [
+      ["queued", {}],
+      ["failed", { status: "failed", attempts: 1, totalAttempts: 1 }],
+      ["running", { status: "running", attempts: 1, lease: { owner: "w1", expiresAt: Timestamp.fromMillis(T0 + 600_000) } }],
+      ["cancelled", { status: "cancelled" }],
+    ]
+    for (const [label, fields] of states) {
+      const id = await job(f)
+      if (Object.keys(fields).length > 0) await setJob(id, fields)
+      const err = await apiErrorOf(retry(f, f.P, { jobId: id, note: NOTE }))
+      expect([label, err.status, err.code]).toEqual([label, 409, "job_not_dead_lettered"])
+    }
 
     await setJob(dead, { status: "dead_lettered", manualRetries: 3 })
     expectKind(await apiErrorOf(retry(f, f.P, { jobId: dead, note: NOTE })), "failed-precondition", "retry_limit_reached")
@@ -298,6 +365,8 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     expectKind(await apiErrorOf(retry(f, f.A, { jobId: dead, note: `   ${"y".repeat(19)}   ` })), "invalid-argument", "note_too_short")
     expectKind(await apiErrorOf(retry(f, f.A, { jobId: "a/b", note: NOTE })), "invalid-argument", "invalid_query")
     expectKind(await apiErrorOf(retry(f, f.A, { jobId: dead, note: 5 })), "invalid-argument", "invalid_query")
+    expectKind(await apiErrorOf(retry(f, f.A, { jobId: dead, note: "z".repeat(2001) })), "invalid-argument", "note_too_long")
+    expect((await readJob(dead)).manualRetries).toBe(2)
     expectKind(await apiErrorOf(retry(f, f.C, { jobId: dead, note: NOTE })), "permission-denied", "role_not_permitted")
     expectKind(await apiErrorOf(retry(f, f.intern, { jobId: dead, note: NOTE })), "permission-denied", "role_not_permitted")
     expect(await retry(f, f.P, { jobId: dead, note: NOTE })).toMatchObject({ status: "queued", manualRetries: 3, retryable: false })
@@ -377,18 +446,72 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     expect((await readJob(other)).status).toBe("queued")
   })
 
-  it("a parallel cancel and claim: exactly one wins", async () => {
+  it("cancel and claim serialise on the job doc: a cancel after the claim is 409 job_running and the job runs once", async () => {
     const f = await seedFirm()
     const jobId = await job(f)
-    const [c, w] = await Promise.allSettled([cancel(f, f.P, { jobId, note: CANCEL_NOTE }), d.dispatcher.deliver({ jobId, seq: 0 }, T0)])
+    let refused: ApiError | undefined
+    // Between the claim's commit and the handler: the row is running.
+    jobWorkerTestSeam.afterClaim = async () => {
+      refused = await apiErrorOf(cancel(f, f.P, { jobId, note: CANCEL_NOTE }))
+    }
+    try {
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("done")
+    } finally {
+      delete jobWorkerTestSeam.afterClaim
+    }
+    expect(refused).toBeDefined()
+    expectKind(refused!, "failed-precondition", "job_running")
     const row = await readJob(jobId)
-    const count = await diagCount(f.firmId, jobId)
-    const cancelled = c.status === "fulfilled"
-    expect(
-      cancelled
-        ? [row.status, (w as PromiseFulfilledResult<string>).value, count]
-        : [row.status, ((c as PromiseRejectedResult).reason as ApiError).status, count]
-    ).toEqual(cancelled ? ["cancelled", "dropped", 0] : ["done", 409, 1])
+    expect([row.status, row.cancellation, await diagCount(f.firmId, jobId)]).toEqual(["done", null, 1])
+  })
+
+  it("cancel and claim serialise on the job doc: a claim after the cancel is dropped and the job never runs", async () => {
+    const f = await seedFirm()
+    const jobId = await job(f)
+    expect((await cancel(f, f.P, { jobId, note: CANCEL_NOTE })).status).toBe("cancelled")
+    let claimed = false
+    jobWorkerTestSeam.afterClaim = async () => {
+      claimed = true
+    }
+    try {
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("dropped")
+    } finally {
+      delete jobWorkerTestSeam.afterClaim
+    }
+    const row = await readJob(jobId)
+    expect([claimed, row.status, row.attempts, await diagCount(f.firmId, jobId)]).toEqual([false, "cancelled", 0, 0])
+    expectKind(await apiErrorOf(cancel(f, f.P, { jobId, note: CANCEL_NOTE })), "failed-precondition", "job_finished")
+  })
+
+  it("retryFailedJob: a dispatch failure after commit still answers 200, is logged by code only, and the sweeper recovers the job", async () => {
+    const f = await seedFirm()
+    const origin = nextOrigin()
+    const marker = `retry-${randomUUID()}`
+    const jobId = await job(f, {}, origin, { behaviour: "succeed", marker })
+    await deadLetter(jobId)
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    clock.set(origin + 1_000)
+    Object.assign(d.dispatcher, {
+      dispatch: async () => {
+        throw Object.assign(new Error(`queue down ${marker}`), { code: "unavailable" })
+      },
+    })
+    expect(await retry(f, f.P, { jobId, note: NOTE })).toMatchObject({ status: "queued", manualRetries: 1 })
+    expect(error).toHaveBeenCalledWith("job dispatch failed", { code: "unavailable" })
+    expect(JSON.stringify([error.mock.calls, warn.mock.calls])).not.toContain(marker)
+    expect(await readJob(jobId)).toMatchObject({ status: "queued", dispatchSeq: 1 })
+    expect(d.dispatcher.tasks.filter((t) => t.jobId === jobId)).toEqual([])
+    delete (d.dispatcher as unknown as Record<string, unknown>).dispatch
+
+    // Before the grace the sweeper leaves the row; after it, query A re-dispatches it once.
+    expect((await sweep({ ...d, clock: () => origin + 1_000 + DISPATCH_GRACE_MS - 1 })).dispatched).not.toContain(jobId)
+    const now = origin + 1_000 + DISPATCH_GRACE_MS
+    expect((await sweep({ ...d, clock: () => now })).dispatched).toContain(jobId)
+    const task = d.dispatcher.tasks.filter((t) => t.jobId === jobId)
+    expect(task).toEqual([{ jobId, seq: 2, scheduleAt: null }])
+    expect(await d.dispatcher.deliver(task[0], now)).toBe("done")
+    expect([(await readJob(jobId)).status, await diagCount(f.firmId, jobId)]).toEqual(["done", 1])
   })
 
   it("cross-firm: getJob, retryFailedJob and cancelJob on another firm's jobId answer 404 and change nothing; one idempotency key in two firms makes two jobs", async () => {

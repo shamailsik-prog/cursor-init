@@ -27,8 +27,13 @@ const notFound = () => new HttpError(404, "not_found")
 
 /** The shortest requeue or cancel note after trimming (as P2-35's decision notes). */
 const MIN_NOTE = 20
-/** The longest note: three requeues and a cancel stay far below the 1 MiB document limit. */
+/** The longest note (400 note_too_long): three requeues and a cancel stay far below the 1 MiB document limit. */
 const MAX_NOTE = 2000
+/** Rows read per listJobs scan; a page keeps scanning until it holds `limit` visible rows. */
+const SCAN_BATCH = 100
+
+/** Test seam: a smaller listJobs scan batch, set in a test and deleted after. */
+export const listJobsTestSeam: { scanBatch?: number } = {}
 
 const nowOf = (session: Session): number => session.now ?? Date.now()
 const memberRef = (matterId: string, uid: string) => adminDb().collection("matter_members").doc(`${matterId}_${uid}`)
@@ -43,12 +48,12 @@ function parseJobId(value: unknown): string {
   return value
 }
 
-/** The POST body of retryFailedJob and cancelJob: a safe `jobId` and a note of 20 to 2000 characters after trimming. */
+/** The POST body of retryFailedJob and cancelJob: a safe `jobId` and a string note of 20 to 2000 characters after trimming. */
 function parseBody(data: Data): { jobId: string; note: string } {
   const jobId = parseJobId(data.jobId)
   if (typeof data.note !== "string") throw badQuery()
   const note = data.note.trim()
-  if (note.length > MAX_NOTE) throw badQuery()
+  if (note.length > MAX_NOTE) throw new HttpError(400, "note_too_long")
   if (note.length < MIN_NOTE) throw new HttpError(400, "note_too_short")
   return { jobId, note }
 }
@@ -106,9 +111,11 @@ function parseAfter(cursor: string | null): { createdAt: Timestamp; id: string }
  * listJobs(?matterId&status&jobType&limit&cursor) → { items, nextCursor }, newest first
  * (`createdAt` desc, then id desc). With `matterId`: `job.read` on that matter (403 cross_firm /
  * not_member / clearance), its `full` rows only. Without: the firm queue (`job.queue`, partner),
- * `full` and `restricted` rows. One page scans `limit` rows; rows the caller may not see (and
- * rows that are not engine rows) are omitted, so a page may be short, and `nextCursor` (the last
- * scanned row) is set whenever the scan was full.
+ * `full` and `restricted` rows. Rows the caller may not see (and rows that are not engine rows)
+ * are skipped: the scan continues in batches until the page holds `limit` visible rows, as
+ * listClients does. `nextCursor` names the last *visible* row, and only when a further visible
+ * row exists, so a hidden row is never encoded in a cursor and never signals another page (no
+ * existence oracle, P3-11).
  */
 export const listJobsOp: FirmOperation<Page<JobView>> = {
   auth: "firm",
@@ -120,7 +127,7 @@ export const listJobsOp: FirmOperation<Page<JobView>> = {
     audit.target = `firms/${caller.firmId}`
     const filters = parseListQuery(data)
     const { limit, cursor } = parsePage(data)
-    const after = parseAfter(cursor)
+    let after = parseAfter(cursor)
     if (filters.matterId !== undefined) {
       audit.target = `matters/${filters.matterId}`
       await requirePermission(caller, "job.read", filters.matterId)
@@ -128,47 +135,58 @@ export const listJobsOp: FirmOperation<Page<JobView>> = {
       await requirePermission(caller, "job.queue")
     }
 
-    let q: Query = jobsRef().where("firmId", "==", caller.firmId)
-    if (filters.matterId !== undefined) q = q.where("matterId", "==", filters.matterId)
-    if (filters.status !== undefined) q = q.where("status", "==", filters.status)
-    if (filters.jobType !== undefined) q = q.where("jobType", "==", filters.jobType)
-    q = q.orderBy("createdAt", "desc").orderBy(FieldPath.documentId(), "desc")
-    if (after) q = q.startAfter(after.createdAt, after.id)
-    const snap = await q.limit(limit).get()
-
-    // Membership of each matter on the page (the firm queue only; a matter list is already gated on it).
-    const members = new Set<string>()
-    if (filters.matterId !== undefined) {
-      members.add(filters.matterId)
-    } else {
-      const matterIds = [...new Set(snap.docs.map((d) => matterOf(caller, d.data())).filter((m): m is string => m !== null))]
-      if (matterIds.length > 0) {
-        const rows = await adminDb().getAll(...matterIds.map((m) => memberRef(m, caller.uid)))
-        rows.forEach((r, i) => {
-          if (r.exists) members.add(matterIds[i])
-        })
-      }
-    }
+    let base: Query = jobsRef().where("firmId", "==", caller.firmId)
+    if (filters.matterId !== undefined) base = base.where("matterId", "==", filters.matterId)
+    if (filters.status !== undefined) base = base.where("status", "==", filters.status)
+    if (filters.jobType !== undefined) base = base.where("jobType", "==", filters.jobType)
+    base = base.orderBy("createdAt", "desc").orderBy(FieldPath.documentId(), "desc")
     const shown: ReadonlySet<Visibility> = new Set(filters.matterId !== undefined ? ["full"] : ["full", "restricted"])
+    const batch = listJobsTestSeam.scanBatch ?? SCAN_BATCH
 
-    const items: JobView[] = []
-    for (const d of snap.docs) {
-      const job = d.data()
-      const matterId = matterOf(caller, job)
-      const visibility = visibilityOf(caller, job, matterId !== null && members.has(matterId))
-      if (visibility === "none" || !shown.has(visibility)) continue
-      items.push(jobView(d.id, job, visibility, { logs: false }))
+    const items: Array<{ id: string; createdAt: Timestamp; view: JobView }> = []
+    let more = false
+    for (;;) {
+      const snap = await (after ? base.startAfter(after.createdAt, after.id) : base).limit(batch).get()
+      const members = await membershipsOf(caller, filters.matterId, snap.docs.map((d) => d.data()))
+      for (const d of snap.docs) {
+        const job = d.data()
+        const matterId = matterOf(caller, job)
+        const visibility = visibilityOf(caller, job, matterId !== null && members.has(matterId))
+        if (visibility === "none" || !shown.has(visibility) || !(job.createdAt instanceof Timestamp)) continue
+        if (items.length === limit) {
+          more = true
+          break
+        }
+        items.push({ id: d.id, createdAt: job.createdAt, view: jobView(d.id, job, visibility, { logs: false }) })
+      }
+      if (more || snap.size < batch) break
+      const last = snap.docs[snap.docs.length - 1]
+      const lastAt: unknown = last.get("createdAt")
+      // Only Timestamp-ordered rows can carry a page on; anything after them is not an engine row.
+      if (!(lastAt instanceof Timestamp)) break
+      after = { createdAt: lastAt, id: last.id }
     }
 
     await audit.allow()
-    const last = snap.docs[snap.docs.length - 1]
-    const lastAt: unknown = last?.get("createdAt")
+    const last = items[items.length - 1]
     return {
-      items,
-      nextCursor:
-        snap.docs.length === limit && lastAt instanceof Timestamp ? encodeCursor(`${lastAt.seconds}.${lastAt.nanoseconds}`, last.id) : null,
+      items: items.map((i) => i.view),
+      nextCursor: more && last ? encodeCursor(`${last.createdAt.seconds}.${last.createdAt.nanoseconds}`, last.id) : null,
     }
   },
+}
+
+/** The matters (of `rows`) the caller is a member of. A matter list is already gated on membership of its matter. */
+async function membershipsOf(caller: Caller, listedMatter: string | undefined, rows: DocumentData[]): Promise<Set<string>> {
+  if (listedMatter !== undefined) return new Set([listedMatter])
+  const matterIds = [...new Set(rows.map((r) => matterOf(caller, r)).filter((m): m is string => m !== null))]
+  const members = new Set<string>()
+  if (matterIds.length === 0) return members
+  const snaps = await adminDb().getAll(...matterIds.map((m) => memberRef(m, caller.uid)))
+  snaps.forEach((snap, i) => {
+    if (snap.exists) members.add(matterIds[i])
+  })
+  return members
 }
 
 /** getJob(?jobId) → the job's view with its logs (`job.read`); a row the caller may not see is 404 not_found. */

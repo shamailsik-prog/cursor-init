@@ -160,7 +160,16 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
   const jobs = await Promise.all(
     [a.deadJobId, a.queuedJobId].map(async (id) => {
       const j = (await adminDb().collection("jobs").doc(id).get()).data() ?? {}
-      return { id, status: j.status, manualRetries: j.manualRetries, dispatchSeq: j.dispatchSeq, cancellation: j.cancellation }
+      return {
+        id,
+        status: j.status,
+        manualRetries: j.manualRetries,
+        dispatchSeq: j.dispatchSeq,
+        cancellation: j.cancellation,
+        updatedAt: j.updatedAt?.toMillis?.(),
+        logs: j.logs,
+        requeues: j.requeues,
+      }
     })
   )
   return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs }
