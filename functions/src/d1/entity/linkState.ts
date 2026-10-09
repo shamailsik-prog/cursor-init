@@ -11,7 +11,7 @@ export const LINK_AUTO_CONFIRM_MS = 30 * 24 * 60 * 60 * 1000
 /** The score of a deterministic key match (CNIC, NTN, SECP, phone), recorded on merge events and `entity.*` events. */
 export const DETERMINISTIC_KEY_SCORE = 0.99
 
-export type EffectiveLinkState = "candidate" | "auto_confirmed" | "disputed" | "confirmed" | "rejected"
+export type EffectiveLinkState = "candidate" | "auto_confirmed" | "disputed" | "confirmed" | "rejected" | "unmerging"
 
 const millisOf = (value: unknown): number | null => (value instanceof Timestamp ? value.toMillis() : null)
 
@@ -24,6 +24,8 @@ const millisOf = (value: unknown): number | null => (value instanceof Timestamp 
  */
 export function effectiveLinkState(row: DocumentData, nowMs: number, l17_2Enabled: boolean): EffectiveLinkState {
   if (!l17_2Enabled) return "candidate"
+  // P3-26: while the un-merge saga runs the pair is unresolved identity, whatever the stored state.
+  if (isUnmergeInProgress(row)) return "unmerging"
   if (row.state === "confirmed") return "confirmed"
   if (row.state === "rejected") return "rejected"
   if (row.state !== "candidate") return "candidate"
@@ -31,6 +33,12 @@ export function effectiveLinkState(row: DocumentData, nowMs: number, l17_2Enable
   if (row.disputed !== false) return "candidate"
   const created = millisOf(row.createdAt)
   return created !== null && created <= nowMs - LINK_AUTO_CONFIRM_MS ? "auto_confirmed" : "candidate"
+}
+
+/** True while an un-merge saga holds the row (`unmerge.status === "in_progress"`, spec P3-26). */
+export function isUnmergeInProgress(row: DocumentData): boolean {
+  const unmerge: unknown = row.unmerge
+  return typeof unmerge === "object" && unmerge !== null && (unmerge as { status?: unknown }).status === "in_progress"
 }
 
 /** Only confirmed and auto-confirmed links are evidence of identity (L17.2 #15). */

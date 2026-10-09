@@ -10,7 +10,8 @@ import { adminDb } from "../admin"
  * - registerClient: `clients` (+ `entities`) and candidate `entity_links`;
  * - openMatter: `matters` and `matter_parties`;
  * - closeMatter: `matters.status` and `matter_parties.matterStatus`;
- * - confirmMerge, disputeLink, rejectLink: `entity_links` state.
+ * - confirmMerge, disputeLink, rejectLink: `entity_links` state;
+ * - unmergeEntity and the un-merge saga jobs (`d1.unmerge.links`, `d1.unmerge.checks`): `entity_links` state.
  *
  * Not bumped: advanceStage (writes `matters.stage`, which the screen never reads); the `firms` doc
  * writers (prefixes, MFA policy, onboarding: fields the screen never reads; `featureFlags.L17_2_ENABLED`

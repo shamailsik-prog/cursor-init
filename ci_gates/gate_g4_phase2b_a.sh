@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Gate G-4 (Phase 2b-A close) — entity review queue and confirmMerge (L17.2). `npm run gate:g4:phase2b-a`.
 #
-# 1. every /api/d1 route (20: 14 from 2a, 6 entity) is exercised by a viaApi test (check_route_coverage.py)
+# 1. every /api/d1 route (21 since 3b: 14 from 2a, 6 entity, unmergeEntity) is exercised by a viaApi test (check_route_coverage.py)
 # 2. disable-every-layer boot check (functions/test/d1.boot.test.ts; no emulator needed)
 # 3. the two "L17.2 invariant" tests of d1.entity-invariants.emu.test.ts, selected by exact name, under the Auth and
 #    Firestore emulators
@@ -45,7 +45,7 @@ trap 'rm -rf "$out"' EXIT
 routes_out="$out/routes.txt"
 echo "--- [1] every D1 route is exercised by a test"
 python3 ci_gates/check_route_coverage.py functions/src/http/router.ts functions/test | tee "$routes_out"
-grep -q "d1 routes found: 20; d1 entries in the route table: 20" "$routes_out" || { echo "expected 20 d1 routes (14 + 6 entity)"; exit 1; }
+grep -q "d1 routes found: 21; d1 entries in the route table: 21" "$routes_out" || { echo "expected 21 d1 routes (14 + 6 entity + unmergeEntity from 3b)"; exit 1; }
 
 export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
 export no_proxy="$NO_PROXY"

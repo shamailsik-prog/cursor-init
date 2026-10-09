@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Gate G-4 (Phase 3a close) — P2 job engine core. `npm run gate:g4:phase3a`.
 #
-# 1. route coverage by domain (check_route_coverage.py): 20 /api/d1 routes and 4 /api/platform/jobs routes,
+# 1. route coverage by domain (check_route_coverage.py): 21 /api/d1 routes and 4 /api/platform/jobs routes,
 #    each exercised by a viaApi test
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed)
 # 3. the five "P2 invariant" tests of p2.jobs-invariants.emu.test.ts and the two registry-discipline tests of
@@ -62,7 +62,7 @@ trap 'rm -rf "$out"' EXIT
 routes_out="$out/routes.txt"
 echo "--- [1] every D1 and platform/jobs route is exercised by a test"
 python3 ci_gates/check_route_coverage.py functions/src/http/router.ts functions/test | tee "$routes_out"
-grep -q "d1 routes found: 20; d1 entries in the route table: 20" "$routes_out" || { echo "expected 20 d1 routes"; exit 1; }
+grep -q "d1 routes found: 21; d1 entries in the route table: 21" "$routes_out" || { echo "expected 21 d1 routes (20 + unmergeEntity from 3b)"; exit 1; }
 python3 ci_gates/check_route_coverage.py --domain platform/jobs functions/src/http/router.ts functions/test | tee "$routes_out"
 grep -q "platform/jobs routes found: 4; platform/jobs entries in the route table: 4" "$routes_out" || { echo "expected 4 platform/jobs routes"; exit 1; }
 

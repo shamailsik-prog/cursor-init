@@ -5,7 +5,7 @@ import type { Caller } from "../../p5/auth"
 import { isSafeDocId, type CallAudit, type Data, type FirmOperation } from "../../p5/common"
 import { knownOrHighest } from "../conflict/engine"
 import { bumpRegistryVersion } from "../registryVersion"
-import { DETERMINISTIC_KEY_SCORE, effectiveLinkState } from "./linkState"
+import { DETERMINISTIC_KEY_SCORE, effectiveLinkState, isUnmergeInProgress } from "./linkState"
 import { readPair, type Pair } from "./pair"
 import { gate } from "./read"
 import { entityKeys, type EntityKeys } from "./summary"
@@ -34,7 +34,7 @@ export type DecisionResult = {
 type Body = { linkId: string; note: string }
 
 /** `{ linkId, note }`: linkId a safe doc id and note a string (400 invalid_query); note ≥ 20 chars after trim (400 note_too_short). */
-function parseBody(data: Data): Body {
+export function parseBody(data: Data): Body {
   const { linkId, note } = data
   if (!isSafeDocId(linkId) || typeof note !== "string") throw new HttpError(400, "invalid_query")
   const trimmed = note.trim()
@@ -68,6 +68,8 @@ async function runDecision(
   const at = Timestamp.fromMillis(clock ?? Date.now())
   const result = await adminDb().runTransaction(async (tx) => {
     const pair = await readPair(tx, caller, linkId)
+    // P3-26: no decision on a pair whose un-merge saga is running.
+    if (pair.rows.some((r) => isUnmergeInProgress(r.data))) throw new HttpError(409, "unmerge_in_progress")
     const out = decide(tx, pair, { by: caller.uid, role: caller.role, at, note })
     // Every decision changes the pair's effective link state, which the conflict screen reads.
     bumpRegistryVersion(tx, caller.firmId)

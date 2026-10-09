@@ -20,6 +20,7 @@ import { getConflictResultOp, getConflictTrailOp, recordPartnerWaiverOp, resolve
 import { advanceStageOp, closeMatterOp, getMatterOp, listMattersOp, openMatterOp } from "../d1/matter/ops"
 import { getEntityOp, listAliasesOp, listReviewQueueOp } from "../d1/entity/read"
 import { confirmMergeOp, disputeLinkOp, rejectLinkOp } from "../d1/entity/ops"
+import { unmergeEntityOp } from "../d1/entity/unmerge"
 import { cancelJobOp, getJobOp, listJobsOp, retryFailedJobOp } from "../p2/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
@@ -111,6 +112,7 @@ export const ROUTES: readonly Route[] = [
   post(`${D1_ENTITY}/confirmMerge`, confirmMergeOp),
   post(`${D1_ENTITY}/disputeLink`, disputeLinkOp),
   post(`${D1_ENTITY}/rejectLink`, rejectLinkOp),
+  post(`${D1_ENTITY}/unmergeEntity`, unmergeEntityOp),
   get(`${PLATFORM_JOBS}/listJobs`, listJobsOp),
   get(`${PLATFORM_JOBS}/getJob`, getJobOp),
   post(`${PLATFORM_JOBS}/retryFailedJob`, retryFailedJobOp),
