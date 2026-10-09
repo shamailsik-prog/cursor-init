@@ -26,3 +26,11 @@ Guardrails that still apply (these protect the owner's work, not slow it down):
 - Never force-push or rewrite history on `main`; never delete branches, data, or records you did not create.
 - Never expose secrets or credentials, and never publish client or matter data outside the repo.
 - Never mark failing tests as passing, and never skip or disable tests to get green.
+
+## Behaviour skill (owner's working standards)
+
+Load the `behaviour` skill (`.claude/skills/behaviour/SKILL.md`) before any substantive
+task. It sets the owner's standards for analysis depth, adversarial testing, verification
+of legal authority (never invent citations; mark doubtful ones **[REQUIRES VERIFICATION]**),
+court-ready drafting format, and the mid-chat trigger words (`GODMODE`, `OODA`, `STEELMAN`,
+`DEVIL`, `CRITIQUE`, and the rest).
