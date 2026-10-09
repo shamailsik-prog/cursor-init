@@ -112,8 +112,10 @@ export async function runAudited<T>(audit: CallAudit, body: () => Promise<T>): P
 /**
  * A firm-bound, authenticated session: the Caller, whether the token has a second factor, and
  * the router's clock for this request (`now`, epoch ms; absent outside the router → Date.now()).
+ * `idempotencyKey` is the request's Idempotency-Key on POST/PUT (absent on GET), for keys of
+ * jobs the call causes (P3-4, `jobKey`).
  */
-export type Session = { caller: Caller; secondFactor: boolean; now?: number }
+export type Session = { caller: Caller; secondFactor: boolean; now?: number; idempotencyKey?: string }
 
 export type { FirmlessIdentity }
 

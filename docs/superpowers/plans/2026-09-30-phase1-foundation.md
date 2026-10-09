@@ -169,4 +169,4 @@
 
 ## Later plans (same build order, v6 §21 / L18 §3)
 
-Phase 1b Flutter shell (login with MFA, firm/matter list, role-based dashboard shell; L9.5, D2-3) · Phase 2 matter spine (D1-1 client, D1-2 matter numbering/stages, D1-4 conflict with partner waiver, D1-6 ingestion to R2) · Phase 3 AI layer (P1 cost log, 70/90% alerts, kill switch, Opik self-hosted; P2 Cloud Tasks jobs with DLQ) · Phase 4 drafting + citation gate (D4-1, D4-2) · Phase 5 WhatsApp channel (D2-1 eight-command grammar, D1-3 intake) · MVP gate G-1 on five real matters.
+Phase 1b Flutter shell (login with MFA, firm/matter list, role-based dashboard shell; L9.5, D2-3) · Phase 2 matter spine (D1-1 client, D1-2 matter numbering/stages, D1-4 conflict with partner waiver, D1-6 ingestion to R2) · Phase 3a P2 job engine core · 3b un-merge saga · 3c O-28 auto-confirm job · then the AI layer (P1 cost log, 70/90% alerts, kill switch, Opik self-hosted) · Phase 4 drafting + citation gate (D4-1, D4-2) · Phase 5 WhatsApp channel (D2-1 eight-command grammar, D1-3 intake) · MVP gate G-1 on five real matters.

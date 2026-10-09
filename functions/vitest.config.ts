@@ -5,6 +5,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts"],
+    // Spec P3-20: fails any test in which functions/src writes a registry collection without bumping the registry version.
+    setupFiles: ["test/setup/registryWriteRecorder.ts"],
     // The Gate G-2 suite runs once, inside `npm run gate:g2` (ci_gates/gate_g2.sh sets G2_GATE=1), not again in test:emu.
     exclude: process.env.G2_GATE === "1" ? [] : ["test/g2.cross-firm.test.ts"],
     // firebase-tools' and the client SDK's punycode import warns on every worker start (DEP0040); nothing here uses it.

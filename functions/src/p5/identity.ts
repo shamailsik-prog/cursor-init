@@ -378,7 +378,6 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
     if (clearanceLevel !== undefined) requireWithinOwnClearance(caller, clearanceLevel)
     await requireUserInFirm(uid, caller.firmId)
 
-    const userRef = usersRef().doc(uid)
     const change = await adminDb().runTransaction(async (tx) => {
       // Read in the order a commit takes its write locks (by path: claims_sync before users), so
       // a concurrent setUserClaims commit can never hold one of our reads while waiting on the

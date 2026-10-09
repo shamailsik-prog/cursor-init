@@ -179,3 +179,63 @@ Final-review rulings (8 October 2026, owner's standing autonomy instruction):
 
 Phase 2b-A close is Gate G-4 (`npm run gate:g4:phase2b-a`): route coverage (20 routes), boot with every layer flag off,
 the two L17.2 invariant tests, and Gate G-2 over all routes.
+
+## Phase 3a rulings
+
+The P2 job engine core rulings are P3-1 to P3-23 in `docs/superpowers/specs/2026-10-08-phase3a-job-engine-design.md`
+(each with its reason and cost if wrong). They are recorded there and not repeated in full here. The architecture record
+is Erratum E-42 and open items O-30 to O-44 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`. The deciding value of each:
+
+- P3-1 scope: 3a is the engine core, one internal job type `platform.diagnostic`, no real scheduled job, no production subscriber; 3b un-merge saga, 3c O-28.
+- P3-2 data model: top-level `jobs/{jobId}` with `engine: "p2"`, `jobType`, firmId and classification on every row (not v6's nested `firms/{firmId}/jobs`).
+- P3-3 states: `queued`, `running`, `failed`, `done`, `dead_lettered`, `cancelled`.
+- P3-4 enqueue: a transactional outbox inside the causing transaction; no `createJob` route; doc id from (firmId, jobType, idempotencyKey).
+- P3-5 delivery: Firestore trigger, then Cloud Tasks (asia-south1), then the worker; task bodies are `{ jobId, seq }` only.
+- P3-6 worker: transactional claim, 600 s lease, lease-fenced commits; delivery at least once, effects exactly once.
+- P3-7 retries: 1 attempt and 3 retries at 1 s / 5 s / 25 s, `MAX_ATTEMPTS = 4`, then `dead_lettered`; `MAX_MANUAL_RETRIES = 3`.
+- P3-8 sweeper: every minute, re-dispatch after a 30 s grace, reclaim expired leases, clock-skew bounds (2 s, 300 s), `SWEEP_LIMIT = 100`.
+- P3-9 errors: only `sanitizeError` output (code and fixed message) leaves the job row; payload values never.
+- P3-10 routes: HTTP `/api/platform/jobs/{listJobs,getJob,retryFailedJob,cancelJob}`, rate kind `general`, one CallAudit row per call.
+- P3-11 actions: `job.read`, `job.queue`, `job.retry`, `job.cancel`; row visibility full / restricted / none; a view never carries the payload.
+- P3-12 retryFailedJob: dead-lettered only, note of at least 20 characters, at most 3 manual retries, partner only for saga types.
+- P3-13 cancelJob: partner; queued, failed or dead-lettered non-saga jobs only; running is 409 `job_running` (O-31).
+- P3-14 rules: engine rows are denied to the client SDK; the API is the only read path.
+- P3-15 events fan-out: `onEventCreated`, one job per subscriber with key `eventId:subscriberId`; no subscriber may subscribe to `job.*`.
+- P3-16 scheduled primitive: `ScheduledJobSpec`, PKT periods, run key `jobType:period`, backfill command; no real scheduled job.
+- P3-17 diagnostic job type `platform.diagnostic`: behaviours succeed, fail_times, throw_raw, permanent, hang; the only registered production handler.
+- P3-18 system audit: actor `system`, `onBehalfOf` the creator, written in the transition's own transaction.
+- P3-19 lint: `functions/` is linted (Next.js-only rules off), zero warnings in the gate.
+- P3-20 registry-version discipline: a runtime write recorder over every emulator suite, scoped by `REGISTRY_SCOPE`.
+- P3-21 gates: `ci_gates/gate_g4_phase3a.sh` in five steps and the CI step after 2b-A; G-2 gains four probes.
+- P3-22 indexes: eight for `listJobs`, two for the sweeper.
+- P3-23 errata: E-42 and O-30 to O-35 (execution adds O-36 to O-40, and the final review O-41 to O-44).
+
+Execution rulings (8 October 2026, owner's standing autonomy instruction; each is also an "Amended in execution" note on
+its spec ruling and in E-42 (k) to (r)):
+
+- Job notes are capped at 2000 characters: 400 `note_too_long` (P3-11).
+- `listJobs` `nextCursor` comes from the last visible row, so pages are full unless the scan reaches the end; this replaces "a page may be short" (P3-11).
+- The worker accepts any dispatched `seq` <= `dispatchSeq` while the row is claimable; the lease serialises the runners; this replaces the exclusive-seq rule (P3-6 to P3-8).
+- `onEventCreated` runs with `retry: true`; permanent causes are logged and skipped, only store errors propagate (P3-15).
+- Scheduled ticks and backfill are isolated per firm (P3-16).
+- `health` declares asia-south1 itself; `setGlobalOptions` runs after the function objects are built and `deploy.test` checks the built bundle.
+- `openMatter` treats a contention-aborted round transaction as a moved round: 409 `registry_contended`, not 500 (extends the 2b-A re-screen ruling).
+- The Next.js build self-hosts its fonts.
+
+| # | Open item | Reason | Cost if wrong |
+| --- | --- | --- | --- |
+| O-30 | Alert channel for dead-lettered jobs: an L4.10 "attention required" item and a P4 notification to the right person (L3639, L3645, L8413). Until built, a dead letter is a structured `job.deadLettered` error log line; a log-based alert policy on it is a deploy step | Phase 3a spec Appendix A. | Owner: Engineering, with L4.10 and P4. |
+| O-31 | Cooperative cancel of a running job: a `cancelRequested` flag that `runFenced` honours, so a long job stops at its next fenced step (E-42(d)) | Phase 3a spec Appendix A. | Owner: Engineering, when a job type runs long enough to need it. |
+| O-32 | L3.7 Cloud Personal Agent jobs (agentic, confirmation-held: `awaiting_confirmation`, `agentTasks`, the user's own permissions, L3103-3135, L7993) on the P2 engine | Phase 3a spec Appendix A. | Owner: Partner (L3.7 is OPTIONAL, L5951-5956), then engineering. |
+| O-33 | Firestore database location. Firestore triggers run in the database's region; confirm at first deploy that the database is in asia-south1. If not, the two triggers deploy in the database's region or are dropped, and the sweeper alone dispatches (latency ≤ 90 s) | Phase 3a spec Appendix A. | Owner: Engineering, at first deploy. |
+| O-34 | Retention of `jobs` rows and their `job.*` events. Nothing is deleted in Phase 3; any purge needs a partner decision and its own erratum (C-12, W-13) | Phase 3a spec Appendix A. | Owner: Partner, then engineering. |
+| O-35 | Per-job cost (`costUSD`, L1961) and the Opik trace (`opikTraceId`, L8142): `traceId` becomes the Opik trace id, and cost is recorded from P1, when P1 and self-hosted Opik run in Cloud Functions | Phase 3a spec Appendix A. | Owner: Engineering, with P1. |
+| O-36 | Sweeper re-dispatch backoff, and head-of-line blocking when more than `SWEEP_LIMIT` (100) rows are due: query A is ordered by `nextAttemptAt`, so a backlog of long-running rows can starve later ones, and a row still running is re-dispatched every 30 s grace. Resolve both, with a load test using long handlers, before 3b ships long-running jobs | Recorded in Erratum E-42 (Phase 3a spec Appendix A or execution). | Owner: Engineering, before 3b. |
+| O-37 | Event fan-out reconciliation: an `events` row whose fan-out failed beyond the 7-day trigger retry window has no subscriber jobs and nothing detects it. Scan `events` for rows lacking their subscriber jobs and enqueue the missing ones | Recorded in Erratum E-42 (Phase 3a spec Appendix A or execution). | Owner: Engineering, before the first production subscriber. |
+| O-38 | Scan cap for clearance-filtered lists (`listJobs`, `listClients`): many rows hidden by the caller's clearance can make one page scan much of a firm's collection | Recorded in Erratum E-42 (Phase 3a spec Appendix A or execution). | Owner: Engineering. |
+| O-39 | A job's own label versus its matter's later, higher label (Task 7 finding M-4): `getJob` and `listJobs` apply the job's own classification (P3-11), so a matter raised after the job was enqueued is not re-checked. Re-check the matter's current label on single-job reads | Recorded in Erratum E-42 (Phase 3a spec Appendix A or execution). | Owner: Engineering. |
+| O-40 | Cancelling a handler that overruns its budget: after `handler_timeout` the handler keeps running and a late `runFenced` step can commit until the failure commit lands (at-least-once model, documented in the worker module). Pass an `AbortSignal` on `ctx`. Distinct from O-31, which cancels a healthy running job on request | Recorded in Erratum E-42 (Phase 3a spec Appendix A or execution). | Owner: Engineering, with O-31. |
+
+Phase 3a close is Gate G-4 (`npm run gate:g4:phase3a`): route coverage (20 d1 routes, 4 platform/jobs routes), boot with
+every layer flag off, the five job-engine invariants and two registry-discipline tests by exact name, functions lint at
+zero warnings, and Gate G-2 over all routes.

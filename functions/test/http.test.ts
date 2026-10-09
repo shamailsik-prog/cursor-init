@@ -82,7 +82,7 @@ describe("route table", () => {
     expect(() => buildRouteTable([route("/api/x/y/z", op), route("/api/x/y/z", op, "general", "PUT")])).not.toThrow()
   })
 
-  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, setFirmNumbering, registerClient (POST), getClient and listClients (GET) under /api/d1/client, kind general; runConflictCheck (POST, kind p1), getConflictResult (GET), resolveReviewItem and recordPartnerWaiver (POST) and getConflictTrail (GET) under /api/d1/conflict; openMatter, advanceStage and closeMatter (POST), getMatter and listMatters (GET) under /api/d1/matter", () => {
+  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, setFirmNumbering, registerClient (POST), getClient and listClients (GET) under /api/d1/client, kind general; runConflictCheck (POST, kind p1), getConflictResult (GET), resolveReviewItem and recordPartnerWaiver (POST) and getConflictTrail (GET) under /api/d1/conflict; openMatter, advanceStage and closeMatter (POST), getMatter and listMatters (GET) under /api/d1/matter; listJobs and getJob (GET), retryFailedJob and cancelJob (POST) under /api/platform/jobs", () => {
     const fns = [
       "onboardFirm",
       "createFirmUser",
@@ -118,6 +118,10 @@ describe("route table", () => {
         "POST /api/d1/entity/confirmMerge general",
         "POST /api/d1/entity/disputeLink general",
         "POST /api/d1/entity/rejectLink general",
+        "GET /api/platform/jobs/listJobs general",
+        "GET /api/platform/jobs/getJob general",
+        "POST /api/platform/jobs/retryFailedJob general",
+        "POST /api/platform/jobs/cancelJob general",
       ].sort()
     )
     expect(() => buildRouteTable(ROUTES)).not.toThrow()
@@ -191,8 +195,10 @@ describe("idempotency helpers", () => {
   it("the idempotency lease outlives the pinned function timeout; api pins it", async () => {
     expect(FUNCTION_TIMEOUT_SECONDS).toBe(120)
     expect(IDEMPOTENCY_LEASE_MS).toBeGreaterThan(FUNCTION_TIMEOUT_SECONDS * 1000)
-    const index = (await import("../src/index")) as Record<string, { __endpoint?: { timeoutSeconds?: number } }>
-    const names = Object.keys(index).filter((n) => n !== "health")
+    const index = (await import("../src/index")) as Record<string, { __endpoint?: { timeoutSeconds?: number; httpsTrigger?: unknown } }>
+    // The job runtime's trigger, queue and schedule functions are not HTTP and run under their own
+    // timeout (JOB_WORKER_TIMEOUT_SECONDS, pinned by p2.boot.test.ts).
+    const names = Object.keys(index).filter((n) => n !== "health" && index[n].__endpoint?.httpsTrigger !== undefined)
     // U-1: the HTTP api is the only entry point (no onCall callables are deployed)
     expect(names).toEqual(["api"])
     for (const name of names) expect([name, index[name].__endpoint?.timeoutSeconds]).toEqual([name, FUNCTION_TIMEOUT_SECONDS])

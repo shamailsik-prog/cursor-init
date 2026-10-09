@@ -1,9 +1,14 @@
 import { logger } from "firebase-functions"
 
-/** A loggable error code: the SDK's `code` string if any, never the message (which may carry an email). */
+/**
+ * A loggable error code: the SDK's `code` string, or a gRPC numeric code as `grpc_<n>` (Firestore's
+ * Admin SDK raises those, e.g. `grpc_3` for INVALID_ARGUMENT), never the message (which may carry an email).
+ */
 export function errorCode(err: unknown): string {
   const code = (err as { code?: unknown } | null)?.code
-  return typeof code === "string" ? code : "unknown"
+  if (typeof code === "string") return code
+  if (typeof code === "number" && Number.isInteger(code) && code >= 0 && code <= 16) return `grpc_${code}`
+  return "unknown"
 }
 
 /** Logs a failure with a generic message, its code and (optionally) a uid; no raw error text. */

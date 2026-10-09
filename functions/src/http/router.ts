@@ -20,6 +20,7 @@ import { getConflictResultOp, getConflictTrailOp, recordPartnerWaiverOp, resolve
 import { advanceStageOp, closeMatterOp, getMatterOp, listMattersOp, openMatterOp } from "../d1/matter/ops"
 import { getEntityOp, listAliasesOp, listReviewQueueOp } from "../d1/entity/read"
 import { confirmMergeOp, disputeLinkOp, rejectLinkOp } from "../d1/entity/ops"
+import { cancelJobOp, getJobOp, listJobsOp, retryFailedJobOp } from "../p2/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -63,6 +64,8 @@ const D1_CLIENT = "/api/d1/client"
 const D1_CONFLICT = "/api/d1/conflict"
 const D1_MATTER = "/api/d1/matter"
 const D1_ENTITY = "/api/d1/entity"
+/** P2 job engine (P3-10): CORE, no layer flag. */
+const PLATFORM_JOBS = "/api/platform/jobs"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
@@ -108,6 +111,10 @@ export const ROUTES: readonly Route[] = [
   post(`${D1_ENTITY}/confirmMerge`, confirmMergeOp),
   post(`${D1_ENTITY}/disputeLink`, disputeLinkOp),
   post(`${D1_ENTITY}/rejectLink`, rejectLinkOp),
+  get(`${PLATFORM_JOBS}/listJobs`, listJobsOp),
+  get(`${PLATFORM_JOBS}/getJob`, getJobOp),
+  post(`${PLATFORM_JOBS}/retryFailedJob`, retryFailedJobOp),
+  post(`${PLATFORM_JOBS}/cancelJob`, cancelJobOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
@@ -223,16 +230,18 @@ async function auditRefusal(op: Operation, uid: string, firmId: string, err: unk
 
 /**
  * Runs the operation with its one audit row; errors become their HTTP result. A firm operation
- * gets the router's clock as `session.now`. An operation's RateLimitedError (e.g. 429
+ * gets the router's clock as `session.now` and, on POST/PUT, the request's Idempotency-Key as
+ * `session.idempotencyKey` (so a job it enqueues carries that key, P3-4; a GET gets none). An operation's RateLimitedError (e.g. 429
  * daily_limit) keeps its Retry-After header; a 429 is never stored for idempotent replay
  * (isStorableResult), so a same-key retry after the reset runs.
  */
-async function execute(op: Operation, auth: Authenticated, body: Data, now: number): Promise<HttpResult> {
+async function execute(op: Operation, auth: Authenticated, body: Data, now: number, idempotencyKey?: string): Promise<HttpResult> {
   const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
   const audit = new CallAudit(op.action, uid, op.target)
+  const session = (s: Session): Session => (idempotencyKey === undefined ? { ...s, now } : { ...s, now, idempotencyKey })
   try {
     const result = await runAudited(audit, () =>
-      op.auth === "firm" && auth.kind === "firm" ? op.run({ ...auth.session, now }, body, audit) : runFirmless(op, auth, body, audit)
+      op.auth === "firm" && auth.kind === "firm" ? op.run(session(auth.session), body, audit) : runFirmless(op, auth, body, audit)
     )
     return { status: 200, body: isObject(result) ? result : { result } }
   } catch (err) {
@@ -286,11 +295,12 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
       await rateLimit({ uid }, route.kind, { firm: auth.kind === "firm" ? auth.firm : undefined, now })
 
-      const run = () => execute(op, auth, body, now)
+      const idempotencyKey = hasBody ? header(headers, "idempotency-key") : undefined
+      const run = () => execute(op, auth, body, now, idempotencyKey)
       const firmId = auth.kind === "firm" ? auth.session.caller.firmId : ""
       const result = hasBody
         ? await withIdempotency(
-            { firmId, uid, route: `${route.method} ${route.path}`, key: header(headers, "idempotency-key"), body, now, redact: route.redactReplay },
+            { firmId, uid, route: `${route.method} ${route.path}`, key: idempotencyKey, body, now, redact: route.redactReplay },
             run
           ).catch((err: unknown) => auditRefusal(op, uid, firmId, err))
         : await run()

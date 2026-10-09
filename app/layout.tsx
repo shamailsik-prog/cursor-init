@@ -1,17 +1,24 @@
 import type { Metadata } from "next"
-import { IBM_Plex_Sans, Source_Serif_4 } from "next/font/google"
+import localFont from "next/font/local"
 import "./globals.css"
 
-const sans = IBM_Plex_Sans({
+// Self-hosted (SIL OFL 1.1, licences in app/fonts/): the build never fetches from Google Fonts,
+// whose download failing on CI runners broke `next build` (PR #8, PR #9).
+const sans = localFont({
   variable: "--font-sans",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  src: [
+    { path: "./fonts/ibm-plex-sans-latin-400-normal.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/ibm-plex-sans-latin-500-normal.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/ibm-plex-sans-latin-600-normal.woff2", weight: "600", style: "normal" },
+  ],
 })
 
-const serif = Source_Serif_4({
+const serif = localFont({
   variable: "--font-serif",
-  subsets: ["latin"],
-  weight: ["500", "600"],
+  src: [
+    { path: "./fonts/source-serif-4-latin-500-normal.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/source-serif-4-latin-600-normal.woff2", weight: "600", style: "normal" },
+  ],
 })
 
 export const metadata: Metadata = {

@@ -21,6 +21,8 @@ import * as conflictOps from "../src/d1/conflict/ops"
 import * as matterOps from "../src/d1/matter/ops"
 import * as entityRead from "../src/d1/entity/read"
 import * as entityOps from "../src/d1/entity/ops"
+import * as jobOps from "../src/p2/ops"
+import { enqueueJob } from "../src/p2/enqueue"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -53,7 +55,14 @@ afterAll(() => {
 })
 
 /** Non-endpoint exports of src/index.ts (deploy entries that are not identity reads). */
-const NOT_TENANT_ENDPOINTS: Record<string, string> = { health: "health probe, no tenant data", api: "HTTP router, probed route by route" }
+const NOT_TENANT_ENDPOINTS: Record<string, string> = {
+  health: "health probe, no tenant data",
+  api: "HTTP router, probed route by route",
+  onJobCreated: "Firestore trigger on jobs, no caller",
+  onEventCreated: "Firestore trigger on events, no caller",
+  jobWorker: "Cloud Tasks queue function, OIDC-invoked by Cloud Tasks only; acts on the job id it is given",
+  jobSweeper: "scheduler, no caller",
+}
 
 /**
  * Every operation (HTTP route), how to aim it at firm A. `target`: the op names a user (the
@@ -92,9 +101,13 @@ const PROBES: Record<string, Probe> = {
   confirmMerge: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
   disputeLink: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
   rejectLink: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
+  listJobs: { data: (a) => ({ matterId: a.matterId }), target: true },
+  getJob: { data: (a) => ({ jobId: a.deadJobId }), target: true },
+  retryFailedJob: { data: (a) => ({ jobId: a.deadJobId, note: "G2 probe requeue note, long enough" }), target: true },
+  cancelJob: { data: (a) => ({ jobId: a.queuedJobId, note: "G2 probe cancel note, long enough" }), target: true },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, jobOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
@@ -103,13 +116,13 @@ function opFor(name: string): Operation | undefined {
   return undefined
 }
 
-/** Deployed exports other than the HTTP router and the health probe (must be none: U-1). */
+/** Deployed exports other than the HTTP router, the health probe and the job runtime (must be none: U-1). */
 const OTHER_EXPORTS = Object.keys(index)
   .filter((n) => !(n in NOT_TENANT_ENDPOINTS))
   .sort()
 
 type Member = { uid: string; token: string; email: string }
-type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string; entityId: string; linkId: string }
+type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string; entityId: string; linkId: string; deadJobId: string; queuedJobId: string }
 type FirmB = { firmId: string; members: Record<Role, Member> }
 
 async function seedFirm(firmId: string, name: string): Promise<Record<Role, Member>> {
@@ -143,12 +156,28 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
   // L17.2: a cross-firm decision that wrote anything (link state, a dispute flag or note, a merge_events row) fails "unchanged".
   const link = (await adminDb().collection("entity_links").doc(a.linkId).get()).data()
   const mergeEvents = (await adminDb().collection("merge_events").where("firmId", "==", a.firmId).count().get()).data().count
-  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents }
+  // P3-12, P3-13: a cross-firm requeue or cancel that wrote anything fails "unchanged".
+  const jobs = await Promise.all(
+    [a.deadJobId, a.queuedJobId].map(async (id) => {
+      const j = (await adminDb().collection("jobs").doc(id).get()).data() ?? {}
+      return {
+        id,
+        status: j.status,
+        manualRetries: j.manualRetries,
+        dispatchSeq: j.dispatchSeq,
+        cancellation: j.cancellation,
+        updatedAt: j.updatedAt?.toMillis?.(),
+        logs: j.logs,
+        requeues: j.requeues,
+      }
+    })
+  )
+  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs }
 }
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
 function firmATokens(a: FirmA): string[] {
-  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
 }
 
 function leaked(body: unknown, tokens: string[]): string[] {
@@ -194,6 +223,12 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       .collection("entity_links")
       .doc(linkId)
       .set({ firmId: firmA, leftId: entityId, rightId: entityId2, key: "cnic", state: "candidate", disputed: false, classification: "internal", createdAt: Timestamp.now() })
+    // P3-10..P3-13: two firm-A diagnostic jobs on the matter, the first dead-lettered (retry probe), the second queued (cancel probe).
+    const jobSpec = { firmId: firmA, jobType: "platform.diagnostic", classification: "internal" as const, matterId, payload: { behaviour: "succeed" }, createdBy: aMembers.partner.uid }
+    const enqueueOne = () => adminDb().runTransaction((tx) => enqueueJob(tx, { ...jobSpec, idempotencyKey: uniq("g2job") }, { now: Date.now() }))
+    const deadJobId = (await enqueueOne()).jobId
+    const queuedJobId = (await enqueueOne()).jobId
+    await adminDb().collection("jobs").doc(deadJobId).update({ status: "dead_lettered", lastError: { code: "diag_failure", message: "Diagnostic failure (planned)." }, nextAttemptAt: null })
     A = {
       firmId: firmA,
       clientId,
@@ -201,6 +236,8 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       checkId,
       entityId,
       linkId,
+      deadJobId,
+      queuedJobId,
       partner: aMembers.partner,
       victim: victim.uid,
       victimEmail: victim.email,
@@ -212,7 +249,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
     before = await snapshotFirmA(A)
   })
 
-  it("only the HTTP api and the health probe are deployed; every route has a cross-firm probe and runs its operation", () => {
+  it("only the HTTP api, the health probe and the job runtime functions are deployed; every route has a cross-firm probe and runs its operation", () => {
     expect(OTHER_EXPORTS).toEqual([])
     expect(ROUTES.map((route) => route.path.split("/").pop()!).sort()).toEqual(Object.keys(PROBES).sort())
     for (const route of ROUTES) {
@@ -281,6 +318,8 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       ["/api/d1/entity/listReviewQueue", {}, A.linkId],
       ["/api/d1/entity/getEntity", { entityId: A.entityId }, "G2 Alpha Entity"],
       ["/api/d1/entity/listAliases", { entityId: A.entityId }, "G2 Alpha Entity"],
+      ["/api/platform/jobs/getJob", { jobId: A.deadJobId }, A.deadJobId],
+      ["/api/platform/jobs/listJobs", { matterId: A.matterId }, A.deadJobId],
     ]
     for (const [i, [path, query, token]] of reads.entries()) {
       const { res, out } = mockRes()

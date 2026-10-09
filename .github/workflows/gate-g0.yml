@@ -39,6 +39,7 @@ jobs:
             package-lock.json
             functions/package-lock.json
       - run: npm ci
+      - run: npm --prefix functions ci
       - name: Typecheck
         run: npm run typecheck
       - name: Lint
@@ -176,6 +177,9 @@ jobs:
       - name: Gate G-4 Phase 2b-A close (routes, boot, L17.2 invariants, G-2)
         if: ${{ !cancelled() }}
         run: npm run gate:g4:phase2b-a
+      - name: Gate G-4 Phase 3a close (routes, boot, job invariants, registry discipline, functions lint, G-2)
+        if: ${{ !cancelled() }}
+        run: npm run gate:g4:phase3a
 
   next-build:
     name: Next.js build

@@ -34,3 +34,17 @@ await build({
   alias: { "@": repoRoot },
   logLevel: "info",
 })
+
+// Operator CLI (not a deployed export): `npm run jobs:backfill`.
+await build({
+  entryPoints: [path.join(here, "src/cli/jobsBackfill.ts")],
+  outfile: path.join(here, "lib/cli/jobsBackfill.js"),
+  bundle: true,
+  platform: "node",
+  target: "node22",
+  format: "cjs",
+  sourcemap: true,
+  external: ["firebase-admin", "firebase-functions"],
+  alias: { "@": repoRoot },
+  logLevel: "info",
+})
