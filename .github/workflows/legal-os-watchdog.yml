@@ -1,0 +1,82 @@
+name: Legal OS autopilot - idle watchdog
+
+# Every 6 hours: if no PR from a claude/* branch is open AND main has had no commit for 12 hours,
+# the build has stalled. The watchdog then (1) opens or comments on a "Legal OS stalled" issue so
+# Shamail and Claude Code see it, and (2) dispatches legal-os-continue.yml to start the next phase.
+# If no Claude secret is set, step (1) still happens and the issue says which secret to add.
+# See docs/AUTOPILOT.md.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # 00:17, 06:17, 12:17, 18:17 UTC (05:17, 11:17, 17:17, 23:17 PKT)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+  actions: write   # gh workflow run (workflow_dispatch is allowed with GITHUB_TOKEN)
+
+concurrency:
+  group: legal-os-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check for a stall and nudge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          STALL_HOURS: "12"
+          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          run_url="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+
+          open_claude=$(gh pr list -R "$REPO" --state open --limit 100 \
+            --json number,headRefName --jq '[.[] | select(.headRefName | startswith("claude/"))] | map("#\(.number)") | join(", ")')
+          last_commit=$(gh api "repos/$REPO/commits/main" --jq '.commit.committer.date')
+          age_h=$(( ( $(date -u +%s) - $(date -u -d "$last_commit" +%s) ) / 3600 ))
+          echo "Open claude/* PRs: ${open_claude:-none}. Last main commit: $last_commit (${age_h}h ago)."
+
+          if [ -n "$open_claude" ]; then
+            echo "A claude/* PR is open (${open_claude}); work is in flight or awaiting review. No action."
+            exit 0
+          fi
+          if [ "$age_h" -lt "$STALL_HOURS" ]; then
+            echo "main moved within ${STALL_HOURS}h. No action."
+            exit 0
+          fi
+
+          if [ "$HAS_API_KEY" = "true" ] || [ "$HAS_OAUTH" = "true" ]; then
+            secret_note="A Claude secret is configured; the watchdog is dispatching legal-os-continue.yml now."
+          else
+            secret_note="**No Claude secret is configured, so the autopilot cannot start Claude.** Add \`ANTHROPIC_API_KEY\` (or \`CLAUDE_CODE_OAUTH_TOKEN\`) in Settings → Secrets and variables → Actions, and install https://github.com/apps/claude. Until then, start the next phase from a Claude Code session."
+          fi
+
+          title="Legal OS stalled — start next phase"
+          body="Legal OS stalled — start next phase.
+
+          - Open claude/* PRs: none
+          - Last commit on main: ${last_commit} (${age_h}h ago, threshold ${STALL_HOURS}h)
+          - ${secret_note}
+
+          Claude Code: read docs/AUTOPILOT.md and start the next single phase/slice from the build order.
+
+          Watchdog run: ${run_url}"
+
+          existing=$(gh issue list -R "$REPO" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" -R "$REPO" --body "$body"
+          else
+            gh issue create -R "$REPO" --title "$title" --body "$body"
+          fi
+
+          if [ "$HAS_API_KEY" = "true" ] || [ "$HAS_OAUTH" = "true" ]; then
+            gh workflow run legal-os-continue.yml -R "$REPO" --ref main -f reason=watchdog \
+              || echo "::warning::Dispatch of legal-os-continue.yml failed; the issue above still flags the stall."
+          fi
