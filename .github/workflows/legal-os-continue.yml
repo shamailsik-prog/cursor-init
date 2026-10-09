@@ -1,0 +1,217 @@
+name: Legal OS autopilot - continue build
+
+# Starts the NEXT single phase/slice of the Legal OS build with Claude Code
+# (anthropics/claude-code-action) whenever main moves (i.e. after a PR merge), or when the
+# idle watchdog (legal-os-watchdog.yml) dispatches it. Claude opens a PR from a claude/*
+# branch; it never merges and never pushes to main. Shamail (or a reviewer) merges, which
+# pushes to main and triggers the next phase. See docs/AUTOPILOT.md.
+#
+# Required secret (one of): ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.
+# Required app: the Claude GitHub App (https://github.com/apps/claude) installed on this repo,
+# so Claude's PRs run CI (PRs opened with the default GITHUB_TOKEN do not trigger workflows).
+# Third-party actions are pinned to commit SHAs (tag in the trailing comment).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this run was started (e.g. watchdog, manual)"
+        required: false
+        default: manual
+      max_turns:
+        description: "Max Claude turns for this run (usage cap)"
+        required: false
+        default: "200"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One autopilot build at a time; a newer trigger waits instead of starting a parallel phase.
+  group: legal-os-autopilot
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  JAVA_VERSION: "21"
+
+jobs:
+  preflight:
+    name: Preflight (secret, one-builder guard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    outputs:
+      should_run: ${{ steps.guard.outputs.should_run }}
+    steps:
+      - name: Guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          should_run=true
+
+          # Opt-out: a merge whose message contains [autopilot skip] does not start a phase.
+          if printf '%s' "${HEAD_MSG:-}" | grep -qiF '[autopilot skip]'; then
+            echo "Head commit asks for [autopilot skip]."; should_run=false
+          fi
+
+          # One builder only: if any open PR comes from a claude/* branch, that phase/slice
+          # is still in flight. Do not start a parallel phase.
+          open_claude=$(gh pr list -R "$REPO" --state open --limit 100 \
+            --json number,headRefName --jq '[.[] | select(.headRefName | startswith("claude/"))] | map("#\(.number) (\(.headRefName))") | join(", ")')
+          if [ -n "$open_claude" ]; then
+            echo "Open claude/* PR(s): $open_claude -- not starting a new phase."
+            echo "### Autopilot skipped: claude/* PR still open: $open_claude" >> "$GITHUB_STEP_SUMMARY"
+            should_run=false
+          fi
+
+          # No secret -> Claude cannot run. Leave a clear issue instead of failing silently.
+          if [ "$HAS_API_KEY" != "true" ] && [ "$HAS_OAUTH" != "true" ]; then
+            echo "No ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN secret configured."
+            if [ "$should_run" = "true" ]; then
+              title="Legal OS autopilot needs a Claude secret"
+              existing=$(gh issue list -R "$REPO" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+              body="The autopilot workflow (legal-os-continue.yml) wanted to start the next Legal OS phase but no Claude credential is configured.
+
+          Add **one** of these in GitHub → repo **Settings → Secrets and variables → Actions → New repository secret**:
+          - \`ANTHROPIC_API_KEY\` (from console.anthropic.com), or
+          - \`CLAUDE_CODE_OAUTH_TOKEN\` (run \`claude setup-token\` locally).
+
+          Also install the Claude GitHub App on this repo: https://github.com/apps/claude
+
+          Then re-run: Actions → \"Legal OS autopilot - continue build\" → Run workflow. See docs/AUTOPILOT.md.
+
+          Run: ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+              if [ -n "$existing" ]; then
+                gh issue comment "$existing" -R "$REPO" --body "Still missing the Claude secret. Run: ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+              else
+                gh issue create -R "$REPO" --title "$title" --body "$body"
+              fi
+            fi
+            should_run=false
+          fi
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Claude Code - next phase/slice
+    needs: preflight
+    if: needs.preflight.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write   # Claude GitHub App token exchange (so Claude's PRs trigger CI)
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Install (so Claude can run the suites and gates)
+        run: npm ci && npm --prefix functions ci
+
+      - name: Claude Code - continue the architecture build
+        id: claude
+        uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The watchdog dispatches this workflow with GITHUB_TOKEN (actor github-actions[bot]).
+          allowed_bots: "github-actions[bot]"
+          plugins: |
+            superpowers@claude-plugins-official
+          plugin_marketplaces: |
+            https://github.com/anthropics/claude-plugins-official.git
+          claude_args: >-
+            --model sonnet
+            --max-turns ${{ github.event.inputs.max_turns || '200' }}
+            --allowedTools "Bash,Read,Edit,Write,MultiEdit,Glob,Grep,TodoWrite,Task,Skill,WebFetch"
+          prompt: |
+            You are the Legal OS autopilot for repo ${{ github.repository }}. Trigger: ${{ github.event_name }} (${{ github.event.inputs.reason || 'merge to main' }}), main at ${{ github.sha }}.
+
+            GitHub ${{ github.repository }} is the MASTER copy (owner ruling). Never touch, push to, or
+            mention syncing with Origin. Never push to main. Never merge any PR. Never revive the old
+            "lattice" / workflow-SLO ops chain (docs/audits/phase-pr*.md); it is retired.
+
+            STEP 1 - Orient (read, do not skim): CLAUDE.md; docs/architecture/README.md;
+            docs/architecture/ERRATUM_SET_2_PROPOSED.md (signed rulings E-23..E-39 plus later PROPOSED
+            entries and open items O-*); docs/superpowers/plans/2026-09-30-phase1-foundation-rulings.md;
+            every plan in docs/superpowers/plans/ and spec in docs/superpowers/specs/; and the build
+            order in docs/architecture/SIKANDER_AI_Architecture_Set_v19.txt (search it, it is large).
+            Check `git log --oneline -40` and merged PRs to see which phases/slices have landed.
+
+            STEP 2 - Pick exactly ONE next slice. It is the earliest incomplete phase/slice in the build
+            order as split by the existing plans (e.g. Phase 3a's PR said Phase 3 is 3a job engine,
+            3b un-merge saga (2b-B), 3c O-28 auto-confirm job). If 3a is on main, the next is 3b unless
+            the docs say otherwise. If the next slice is blocked on an open item that needs Shamail
+            (e.g. O-2 storage, O-21 AI provider DPA), pick the next unblocked slice and say why.
+            Re-check: if any open PR from a claude/* branch exists, STOP and do nothing.
+
+            STEP 3 - Build it the same way previous phases were built (Superpowers workflow): a spec in
+            docs/superpowers/specs/, a task plan in docs/superpowers/plans/, rulings recorded in the
+            rulings file, any architecture deviation as a PROPOSED erratum entry. TDD; real backend
+            code behind the existing API/gate patterns; update the G-4 gate for the slice and wire it
+            into .github/workflows/gate-g0.yml like the Phase 2a/2b-A/3a gates.
+
+            STEP 4 - Verify before claiming anything: run typecheck, lint, unit, functions emulator
+            tests, rules tests, G-0/G-1/G-2 and the new G-4 gate. Report only numbers you saw.
+
+            STEP 5 - Commit to a new branch named claude/autopilot-<phase-slug>, push it, and open ONE PR
+            against main with `gh pr create`. The PR body MUST contain the phase claim flags table
+            exactly in this form, with truthful values:
+            | flag | value |
+            | --- | --- |
+            | backend_real | true/false |
+            | frontend_real | true/false |
+            | transport_stub | true/false |
+            and the line "Not a COMPLETE / product-done claim." Never write that the product, a phase or
+            anything is complete or done. Do not edit docs/LEGAL_OS_PHASE_VERIFICATION.md or
+            docs/audits/*audit.md in the same PR as app/, platform/ or tests/ changes.
+
+            Conserve usage: one slice only, no exploratory rewrites, no dependency upgrades, no
+            unrelated refactors, no re-running green suites without a reason. If you cannot finish the
+            slice within this run, push what is verified, open the PR as a draft, and list the remaining
+            plan tasks in the body.
+
+      - name: Ensure the pushed branch has a PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.claude.outputs.github_token || github.token }}
+          REPO: ${{ github.repository }}
+          SINCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin '+refs/heads/claude/autopilot-*:refs/remotes/origin/claude/autopilot-*' || true
+          for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/claude/autopilot-*'); do
+            branch="${ref#origin/}"
+            if [ "$(git rev-list --count "$SINCE_SHA..$ref" 2>/dev/null || echo 0)" = "0" ]; then continue; fi
+            if [ -n "$(gh pr list -R "$REPO" --state all --head "$branch" --json number --jq '.[0].number // empty')" ]; then continue; fi
+            echo "Branch $branch has commits but no PR; opening a draft PR."
+            gh pr create -R "$REPO" --draft --base main --head "$branch" \
+              --title "Autopilot: $branch (draft, needs review)" \
+              --body "$(printf 'Opened by the autopilot workflow because Claude pushed %s without opening a PR.\n\n| flag | value |\n| --- | --- |\n| backend_real | false |\n| frontend_real | false |\n| transport_stub | true |\n\nFlags are placeholders until the branch is reviewed. Not a COMPLETE / product-done claim.\n\nRun: %s/%s/actions/runs/%s' "$branch" "$GITHUB_SERVER_URL" "$REPO" "$GITHUB_RUN_ID")"
+          done
