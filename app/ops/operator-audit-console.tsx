@@ -7143,133 +7143,167 @@ export function OperatorAuditConsole() {
               are additive and keep transport-stub behavior visible.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter created", seedMatter)}>
-              1) Create matter fixture
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter engagement confirmed", confirmMatterEngagementAction)}>
-              2) Confirm engagement (/api/d1/matters)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter case-number action recorded", recordMatterCaseNumberAction)}>
-              3) Record case number (/api/d1/matters)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Tenancy memberships read", readTenancyMemberships)}>
-              4) Read tenancy memberships (/api/p5/tenancy)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Tenancy audit read", readTenancyAudit)}>
-              5) Read tenancy audit (/api/p5/tenancy)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Clients registry read", readClientsRegistry)}>
-              6) Read clients list (/api/d1/clients)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter reporting read", readMatterReporting)}>
-              7) Read reporting index (/api/d1/reporting)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Ops reporting read", readOpsReporting)}>
-              8) Read ops reporting (/api/d2/ops-reporting)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Committee output persisted", postCommitteeBrainOutput)}>
-              9) Persist committee output (/api/p1/committee-brain)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Committee output list hydrated", readCommitteeBrainOutputs)}>
-              10) Hydrate committee output list (/api/p1/committee-brain)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Document ingested", ingestDocument)}>
-              11) Ingest document
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Workflow transitioned", transitionWorkflow)}>
-              12) Transition workflow
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Workflow queue read", readWorkflowQueue)}>
-              13) Read workflow queue
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Draft composed", composeDraft)}>
-              14) Compose draft
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Draft list read", readDrafts)}>
-              15) Read drafts view
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Court ops queue read", readCourtOpsQueue)}>
-              16) Read court ops queue
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Court ops command sent", runCourtOpsCommand)}>
-              17) Post court ops command
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Filing package created", createFilingPackage)}>
-              18) Create filing package
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Filing package approved", approveFilingPackage)}>
-              19) Approve filing package
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Dispatch queue updated", updateDispatchQueue)}>
-              20) Dispatch update
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Dispatch view read", readFilingsDispatchView)}>
-              21) Read filings dispatch view
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Closure compliance view read", readClosureComplianceView)}>
-              22) Read filings closure compliance view
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Phase #70-#73 adjudication context seeded", seedPhase7073AdjudicationContext)}>
-              23) Seed #70-#73 adjudication context
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F #60-#69 governance lattice executed", runBatch6069GovernanceLattice)}>
-              15) Run Batch F #60-#69 governance lattice
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Debt burndown target action sent", setClosureAdjudicationDebtBurndownTarget)}>
-              24) Action: set_closure_adjudication_debt_burndown_target
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown rebaseline action sent", rebaselineClosureAdjudicationBurndownForecast)}>
-              25) Action: rebaseline_closure_adjudication_burndown_forecast
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement drift action sent", acknowledgeClosureBurndownSettlementDrift)}>
-              26) Action: acknowledge_closure_burndown_settlement_drift
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement post-resolution action sent", checkpointClosureSettlementPostResolutionVerification)}>
-              27) Action: checkpoint_closure_settlement_post_resolution_verification
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Debt burndown view read", readClosureAdjudicationDebtBurndownView)}>
-              28) View: closure_adjudication_debt_burndown
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown recalibration view read", readClosureBurndownRecalibrationView)}>
-              29) View: closure_burndown_recalibration
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown settlement view read", readClosureBurndownSettlementView)}>
-              30) View: closure_burndown_settlement
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement attestation view read", readClosureSettlementAttestationView)}>
-              31) View: closure_settlement_attestation
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch E action lattice executed", runBatchEActionLattice)}>
-              23) Batch E actions (#48-#59 filing/escalation lattice)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch E governance views read", readBatchEGovernanceViews)}>
-              24) Batch E views (#48-#59 governance reads)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F governance action lattice executed", runBatchFGovernanceLattice)}>
-              25) Batch F actions (#60-#69 governance lattice)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F governance views read", readBatchFGovernanceViews)}>
-              26) Batch F views (#60-#69 closure governance reads)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch D API actions executed", runBatchDActions)}>
-              27) Batch D actions (/p5 tenancy + /d1 clients + source actions + committee write)
-            </Button>
-            <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch D API views read", readBatchDViews)}>
-              28) Batch D views (/p5 tenancy + /d1 reporting + /d2 ops-reporting + committee list)
-            </Button>
-            <Button
-              className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]"
-              disabled={busy}
-              onClick={() =>
-                runStep(
-                  "PR #202 TB seal verification transport boundary receipt reconciliation lattice",
-                  readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice
-                )
-              }
-            >
-              29) PR #202 ack-recon TB seal verification transport boundary receipt reconciliation
-            </Button>
+          <CardContent className="space-y-6">
+            <section aria-labelledby="ops-steps-matter-fixture" className="space-y-2">
+              <h2 id="ops-steps-matter-fixture" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Matter fixture
+              </h2>
+              <p className="text-muted-foreground text-xs">Create the matter the later steps act on.</p>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter created", seedMatter)}>
+                1) Create matter fixture
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter engagement confirmed", confirmMatterEngagementAction)}>
+                2) Confirm engagement (/api/d1/matters)
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter case-number action recorded", recordMatterCaseNumberAction)}>
+                3) Record case number (/api/d1/matters)
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-tenancy-clients-reporting-and-committee" className="space-y-2">
+              <h2 id="ops-steps-tenancy-clients-reporting-and-committee" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Tenancy, clients, reporting and committee
+              </h2>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Tenancy memberships read", readTenancyMemberships)}>
+                4) Read tenancy memberships (/api/p5/tenancy)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Tenancy audit read", readTenancyAudit)}>
+                5) Read tenancy audit (/api/p5/tenancy)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Clients registry read", readClientsRegistry)}>
+                6) Read clients list (/api/d1/clients)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter reporting read", readMatterReporting)}>
+                7) Read reporting index (/api/d1/reporting)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Ops reporting read", readOpsReporting)}>
+                8) Read ops reporting (/api/d2/ops-reporting)
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Committee output persisted", postCommitteeBrainOutput)}>
+                9) Persist committee output (/api/p1/committee-brain)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Committee output list hydrated", readCommitteeBrainOutputs)}>
+                10) Hydrate committee output list (/api/p1/committee-brain)
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-documents-drafts-and-court-ops" className="space-y-2">
+              <h2 id="ops-steps-documents-drafts-and-court-ops" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Documents, drafts and court ops
+              </h2>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Document ingested", ingestDocument)}>
+                11) Ingest document
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Workflow transitioned", transitionWorkflow)}>
+                12) Transition workflow
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Workflow queue read", readWorkflowQueue)}>
+                13) Read workflow queue
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Draft composed", composeDraft)}>
+                14) Compose draft
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Draft list read", readDrafts)}>
+                15) Read drafts view
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Court ops queue read", readCourtOpsQueue)}>
+                16) Read court ops queue
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Court ops command sent", runCourtOpsCommand)}>
+                17) Post court ops command
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-filings" className="space-y-2">
+              <h2 id="ops-steps-filings" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Filings
+              </h2>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Filing package created", createFilingPackage)}>
+                18) Create filing package
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Filing package approved", approveFilingPackage)}>
+                19) Approve filing package
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Dispatch queue updated", updateDispatchQueue)}>
+                20) Dispatch update
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Dispatch view read", readFilingsDispatchView)}>
+                21) Read filings dispatch view
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Closure compliance view read", readClosureComplianceView)}>
+                22) Read filings closure compliance view
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-closure-adjudication-60-73" className="space-y-2">
+              <h2 id="ops-steps-closure-adjudication-60-73" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Closure adjudication (#60-#73)
+              </h2>
+              <p className="text-muted-foreground text-xs">Seed the adjudication context and run the Batch F lattice before the actions and views.</p>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Phase #70-#73 adjudication context seeded", seedPhase7073AdjudicationContext)}>
+                23) Seed #70-#73 adjudication context
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F #60-#69 governance lattice executed", runBatch6069GovernanceLattice)}>
+                24) Run Batch F #60-#69 governance lattice
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Debt burndown target action sent", setClosureAdjudicationDebtBurndownTarget)}>
+                25) Action: set_closure_adjudication_debt_burndown_target
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown rebaseline action sent", rebaselineClosureAdjudicationBurndownForecast)}>
+                26) Action: rebaseline_closure_adjudication_burndown_forecast
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement drift action sent", acknowledgeClosureBurndownSettlementDrift)}>
+                27) Action: acknowledge_closure_burndown_settlement_drift
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement post-resolution action sent", checkpointClosureSettlementPostResolutionVerification)}>
+                28) Action: checkpoint_closure_settlement_post_resolution_verification
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Debt burndown view read", readClosureAdjudicationDebtBurndownView)}>
+                29) View: closure_adjudication_debt_burndown
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown recalibration view read", readClosureBurndownRecalibrationView)}>
+                30) View: closure_burndown_recalibration
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown settlement view read", readClosureBurndownSettlementView)}>
+                31) View: closure_burndown_settlement
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement attestation view read", readClosureSettlementAttestationView)}>
+                32) View: closure_settlement_attestation
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-batch-lattice-probes" className="space-y-2">
+              <h2 id="ops-steps-batch-lattice-probes" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Batch lattice probes
+              </h2>
+              <p className="text-muted-foreground text-xs">Each probe runs a whole batch of actions or views in one press.</p>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch E action lattice executed", runBatchEActionLattice)}>
+                33) Batch E actions (#48-#59 filing/escalation lattice)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch E governance views read", readBatchEGovernanceViews)}>
+                34) Batch E views (#48-#59 governance reads)
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F governance action lattice executed", runBatchFGovernanceLattice)}>
+                35) Batch F actions (#60-#69 governance lattice)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F governance views read", readBatchFGovernanceViews)}>
+                36) Batch F views (#60-#69 closure governance reads)
+              </Button>
+              <Button className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch D API actions executed", runBatchDActions)}>
+                37) Batch D actions (/p5 tenancy + /d1 clients + source actions + committee write)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch D API views read", readBatchDViews)}>
+                38) Batch D views (/p5 tenancy + /d1 reporting + /d2 ops-reporting + committee list)
+              </Button>
+              <Button
+                variant="secondary"
+                className="h-auto min-h-9 w-full justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]"
+                disabled={busy}
+                onClick={() =>
+                  runStep(
+                    "PR #202 TB seal verification transport boundary receipt reconciliation lattice",
+                    readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice
+                  )
+                }
+              >
+                39) PR #202 ack-recon TB seal verification transport boundary receipt reconciliation
+              </Button>
+            </section>
           </CardContent>
         </Card>
 

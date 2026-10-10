@@ -24,7 +24,7 @@ describe("/ops design review: labels, landmark, readable actions", () => {
   })
 
   it("every audited action button wraps instead of clipping its label", () => {
-    const actionButtons = source.match(/<Button\s+className="[^"]*"\s+disabled=\{busy\}/g) ?? []
+    const actionButtons = source.match(/<Button\s+(?:variant="secondary"\s+)?className="[^"]*"\s+disabled=\{busy\}/g) ?? []
     expect(actionButtons.length).toBe(39)
     for (const button of actionButtons) {
       expect(button).toContain("whitespace-normal")
@@ -36,5 +36,20 @@ describe("/ops design review: labels, landmark, readable actions", () => {
   it("the eyebrow uses the AA-contrast brass token and the call log stays in view", () => {
     expect(source).toContain("text-[color:var(--brass-ink)] uppercase\">Legal OS")
     expect(source).toContain('className="rounded-none lg:sticky lg:top-4 lg:self-start"')
+  })
+
+  it("audited steps run 1-39 in order with no repeated or out-of-order number", () => {
+    const flow = source.slice(source.indexOf("<CardTitle>Audited flow actions</CardTitle>"), source.indexOf("<CardTitle>API call logs</CardTitle>"))
+    const numbers = [...flow.matchAll(/^\s+(\d+)\) /gm)].map((m) => Number(m[1]))
+    expect(numbers).toEqual(Array.from({ length: 39 }, (_, i) => i + 1))
+  })
+
+  it("steps are grouped under section headings, and read-only steps use the secondary variant", () => {
+    const headings = source.match(/<h2 id="ops-steps-[a-z0-9-]+"/g) ?? []
+    expect(headings.length).toBe(6)
+    const sections = source.match(/<section aria-labelledby="ops-steps-[a-z0-9-]+"/g) ?? []
+    expect(sections.length).toBe(6)
+    const secondary = source.match(/<Button\s+variant="secondary"/g) ?? []
+    expect(secondary.length).toBe(19)
   })
 })

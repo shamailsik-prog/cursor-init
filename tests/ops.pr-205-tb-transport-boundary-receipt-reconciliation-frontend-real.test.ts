@@ -24,7 +24,7 @@ function latticeSourceSlice(source: string): string {
 describe("PR #205 TB transport-boundary receipt reconciliation frontend_real /ops call sites", () => {
   const source = readFileSync("app/ops/operator-audit-console.tsx", "utf8")
 
-  it("chains the lattice read from Batch D views and exposes button 29", () => {
+  it("chains the lattice read from Batch D views and exposes button 39", () => {
     const batchDStart = source.indexOf("async function readBatchDViews()")
     const batchDEnd = source.indexOf(`async function ${LATTICE_FN}()`)
     expect(batchDStart).toBeGreaterThan(-1)
@@ -33,10 +33,12 @@ describe("PR #205 TB transport-boundary receipt reconciliation frontend_real /op
     expect(batchDSource).toContain(`await ${LATTICE_FN}()`)
 
     expect(source).toContain(
-      "29) PR #202 ack-recon TB seal verification transport boundary receipt reconciliation"
+      "39) PR #202 ack-recon TB seal verification transport boundary receipt reconciliation"
     )
-    expect(source).toContain(
-      `runStep(\n                  "PR #202 TB seal verification transport boundary receipt reconciliation lattice",\n                  ${LATTICE_FN}`
+    expect(source).toMatch(
+      new RegExp(
+        `runStep\\(\\s*"PR #202 TB seal verification transport boundary receipt reconciliation lattice",\\s*${LATTICE_FN}\\b`
+      )
     )
   })
 
