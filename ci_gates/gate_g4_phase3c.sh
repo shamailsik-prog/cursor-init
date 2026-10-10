@@ -5,11 +5,13 @@
 # 1. route coverage by domain (check_route_coverage.py): 21 /api/d1 routes and 4 /api/platform/jobs routes,
 #    each exercised by a viaApi test
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed)
-# 3. twenty tests selected by exact full name, under the Auth and Firestore emulators: the four saga
+# 3. twenty-nine tests selected by exact full name, under the Auth and Firestore emulators: the four saga
 #    invariants and the two O-46 openMatter refusals of d1.entity-unmerge.emu.test.ts, the five "P2 invariant"
 #    tests of p2.jobs-invariants.emu.test.ts, the two registry-discipline tests of p2.registry-discipline.emu.test.ts,
 #    the back-off and head-of-line sweeper tests of p2.jobs-sweeper.emu.test.ts (O-36) and the long-handler load
-#    test of p2.jobs-load.emu.test.ts (P3-37), and the four auto-confirm tests of d1.entity-autoconfirm.emu.test.ts (P3-42..P3-50)
+#    test of p2.jobs-load.emu.test.ts (P3-37), and the thirteen auto-confirm tests of d1.entity-autoconfirm.emu.test.ts
+#    (P3-42..P3-50: four; P3-51..P3-56: nine, among them the four cases of the in-transaction re-check, the retry that
+#    never reaches fenced_step_limit, the audit row, the deterministic event id and the two flag tests)
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -40,6 +42,15 @@ AUTO_TESTS=(
   'leaves alone a pair younger than 30 days, a disputed pair, a rejected pair, and every pair when the L17.2 layer is off'
   'an auto-confirmed pair is un-mergeable (a late dispute is no longer possible); the saga reopens it as disputed and no later run confirms it again'
   'more pairs than one step holds are all materialised, each once'
+  'P3-56(a): an aged row with a young sibling for another key is admitted by the scan and rejected in the transaction; nothing is written'
+  'P3-56(b): a confirmed row plus an aged candidate row is admitted by the scan and rejected in the transaction; nothing is written'
+  'P3-56(c): a dispute that lands between the scan and the step is rejected in the transaction; nothing is written'
+  'P3-56(d): a row with an un-merge in progress is admitted by the scan and rejected in the transaction; nothing is written'
+  'P3-51: a retry after three committed steps with more than 480 pairs waiting never reaches fenced_step_limit, and every pair gets exactly one merge event across both attempts and the next day'
+  'P3-52: each materialised pair writes one system entity.confirm audit row that targets its merge event'
+  'P3-55: the merge event id is derived from firm, pair and sorted link ids, and a pair whose event already exists is left alone'
+  'P3-54: L17.2 switched off between two steps stops every later step from writing'
+  'P3-54: a failed flag read fails the attempt with the retryable flag_read_failed, and the retry materialises the pair'
 )
 LOAD_SUITE='P2 long-handler load test (P3-37, O-36)'
 LOAD_TESTS=(
@@ -62,7 +73,7 @@ REG_TESTS=(
 if [ "${1:-}" = "--inner" ]; then
   cd "$ROOT/functions"
   # vitest exits 0 when -t matches nothing (renamed test) or the emulator suites are skipped, so the
-  # JSON result must show exactly the twenty named tests passed and nothing failed. The tests are
+  # JSON result must show exactly the twenty-nine named tests passed and nothing failed. The tests are
   # selected by their exact full names (anchored, escaped), and the JSON check repeats the names,
   # so a renamed or swapped test fails the gate. G4C_FILTER exists only to prove this can fail.
   json="$2/invariants.json"
@@ -83,8 +94,8 @@ if [ "${1:-}" = "--inner" ]; then
     const passed = r.testResults.flatMap((f) => f.assertionResults).filter((a) => a.status === "passed").map((a) => a.fullName).sort()
     const want = process.env.EXPECTED.split("\n").sort()
     const exact = passed.length === want.length && passed.every((n, i) => n === want[i])
-    if (!exact) console.log("passed tests are not exactly the twenty named tests:", JSON.stringify(passed))
-    process.exit(r.numPassedTests === 20 && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
+    if (!exact) console.log("passed tests are not exactly the twenty-nine named tests:", JSON.stringify(passed))
+    process.exit(r.numPassedTests === 29 && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
   exit $?
 fi
 

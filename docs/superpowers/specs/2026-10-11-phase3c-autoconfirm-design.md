@@ -1,6 +1,8 @@
 # Phase 3c: auto-confirm materialisation (O-28)
 
-Date: 2026-10-11. Status: rulings made under the owner's standing autonomy instruction (7 October 2026); pending the partner's signature with Erratum Set No. 2.
+Date: 2026-10-10 (dated 11 October in #17; merged 10 October). Status: rulings made under the owner's standing autonomy instruction (7 October 2026); pending the partner's signature with Erratum Set No. 2.
+
+**Amended by the Phase 3c close-out (2026-10-10).** The rulings below stand except where `docs/superpowers/specs/2026-10-10-phase3c-closeout-design.md` (P3-51..P3-57, Erratum E-46) changes them: fenced step ids are positional, `autoconfirm-<n>`, not taken from the chunk's pair ids (P3-48, P3-51); the merge event's `priorState` is `auto_confirmed`, not `candidate` (P3-45, P3-53); each pair also writes one `audit_log` row (P3-52); each step re-reads the L17.2 flag, and a failed read at the start of a run is a retryable `flag_read_failed` (P3-44, P3-54); and the merge event id is deterministic (P3-55). The `gate:g4:phase3c` CI step (P3-50's follow-up) is added, and the gate now selects twenty-nine tests (P3-57). The file keeps its `2026-10-11` name.
 
 ## Why this slice
 

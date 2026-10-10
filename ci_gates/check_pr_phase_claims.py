@@ -16,6 +16,8 @@ Rules:
 6) If PR touches `/ops`, require focused ops tests and at least one concrete
    `/api/...` fetch-path evidence entry in PR metadata.
 7) Reject self-certifying DONE/COMPLETE statements directed to Shamail.
+8) Fail when `transport_stub` is declared false while filing transport
+   TODO/stub markers remain in the tree (the flag must say what the code is).
 """
 
 from __future__ import annotations
@@ -137,14 +139,20 @@ def focused_ops_test_changed(paths: list[str]) -> bool:
     return any(path.startswith(OPS_TEST_PREFIX) and path.endswith(".test.ts") for path in paths)
 
 
-def transport_stub_present() -> bool:
+def transport_stub_files() -> list[str]:
+    """The filing transport files that still carry a TODO/stub marker."""
+    found: list[str] = []
     for path in TRANSPORT_STUB_LOCATIONS:
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
         if any(marker in text for marker in TRANSPORT_STUB_PATTERNS):
-            return True
-    return False
+            found.append(path.as_posix())
+    return found
+
+
+def transport_stub_present() -> bool:
+    return bool(transport_stub_files())
 
 
 def parse_flags(claim_text: str) -> dict[str, bool]:
@@ -241,6 +249,16 @@ def main() -> int:
             )
 
     complete_claim_detected = has_complete_claim(claim_text)
+
+    # A false transport_stub flag is a claim that the filing transport is real. While the markers
+    # remain it is not, whether or not the PR also claims COMPLETE.
+    if flags.get("transport_stub") is False:
+        remaining = transport_stub_files()
+        if remaining:
+            failures.append(
+                "transport_stub=false but filing transport stub markers remain: "
+                f"{', '.join(remaining)}."
+            )
 
     if complete_claim_detected and transport_stub_present():
         failures.append(

@@ -400,6 +400,80 @@ describe("PR phase claim gate hardening", () => {
     expect(result.stdout).toContain("no focused tests under tests/ops*.test.ts were changed")
   }, 30000)
 
+  describe("transport_stub claim against the filing transport stub markers (P3-57)", () => {
+    // The gate reads the stub markers from the working tree it runs in, so each case builds a
+    // repository that does, or does not, still carry them.
+    const STUBBED = {
+      "README.md": "base\n",
+      "platform/persistence/filingDispatchQueue.ts": 'export const state = "blocked_todo_firm"\n',
+      "app/api/d4/filings/route.ts": "// TODO(firm): external court submission transport\n",
+    }
+    const CLEAN = { "README.md": "base\n", "platform/persistence/filingDispatchQueue.ts": "export const state = 1\n" }
+
+    it("fails transport_stub=false while the filing transport stub markers remain, naming the files", () => {
+      const repo = makeRepo(STUBBED, { ...STUBBED, "README.md": "head\n" })
+      const result = runGate(repo.root, {
+        PR_TITLE: "Auto-confirm close-out",
+        PR_BODY: ["backend_real=true", "frontend_real=false", "transport_stub=false"].join("\n"),
+        BASE_SHA: repo.baseSha,
+        HEAD_SHA: repo.headSha,
+      })
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain("transport_stub=false but filing transport stub markers remain")
+      expect(result.stdout).toContain("platform/persistence/filingDispatchQueue.ts")
+      expect(result.stdout).toContain("app/api/d4/filings/route.ts")
+    })
+
+    it("fails transport_stub false in a markdown release-label table while the markers remain", () => {
+      const repo = makeRepo(STUBBED, { ...STUBBED, "README.md": "head\n" })
+      const result = runGate(repo.root, {
+        PR_TITLE: "Backend slice",
+        PR_BODY: ["| backend_real | true |", "| frontend_real | false |", "| `transport_stub` | **false** |"].join("\n"),
+        BASE_SHA: repo.baseSha,
+        HEAD_SHA: repo.headSha,
+      })
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain("transport_stub=false but filing transport stub markers remain")
+    })
+
+    it("passes transport_stub=true while the markers remain", () => {
+      const repo = makeRepo(STUBBED, { ...STUBBED, "README.md": "head\n" })
+      const result = runGate(repo.root, {
+        PR_TITLE: "Auto-confirm close-out",
+        PR_BODY: ["backend_real=true", "frontend_real=false", "transport_stub=true"].join("\n"),
+        BASE_SHA: repo.baseSha,
+        HEAD_SHA: repo.headSha,
+      })
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+    })
+
+    it("passes transport_stub=false once no stub marker remains", () => {
+      const repo = makeRepo(CLEAN, { ...CLEAN, "README.md": "head\n" })
+      const result = runGate(repo.root, {
+        PR_TITLE: "Real transport",
+        PR_BODY: ["backend_real=true", "frontend_real=false", "transport_stub=false"].join("\n"),
+        BASE_SHA: repo.baseSha,
+        HEAD_SHA: repo.headSha,
+      })
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+    })
+
+    it("reports both failures for a COMPLETE claim with transport_stub=false while the markers remain", () => {
+      const repo = makeRepo(STUBBED, { ...STUBBED, "README.md": "head\n" })
+      const result = runGate(repo.root, {
+        PR_TITLE: "Phase complete",
+        PR_BODY: ["backend_real=true", "frontend_real=true", "transport_stub=false"].join("\n"),
+        BASE_SHA: repo.baseSha,
+        HEAD_SHA: repo.headSha,
+      })
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain("transport_stub=false but filing transport stub markers remain")
+      expect(result.stdout).toContain("PR claims COMPLETE/product-done while filing transport TODO/stub markers still exist.")
+    })
+  })
+
   it("passes with required flags and evidence for ops changes", () => {
     const repo = makeRepo(
       {

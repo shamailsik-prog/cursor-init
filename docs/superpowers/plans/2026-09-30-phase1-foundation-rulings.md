@@ -295,3 +295,17 @@ The auto-confirm materialisation rulings are P3-42 to P3-50 in `docs/superpowers
 - P3-50 gate `npm run gate:g4:phase3c` (twenty named tests, 21 d1 routes), its CI step is a follow-up (workflow edits need a token with `workflows` permission).
 
 Open items: O-28 closed. O-43 now applies to a shipped schedule (bounded to one day).
+
+## Phase 3c close-out rulings
+
+PR #17 shipped the auto-confirm job with a retry that could dead-letter, no audit row, a `priorState` that meant two things, a flag read once per run and untested re-check branches. The close-out rulings are P3-51 to P3-57 in `docs/superpowers/specs/2026-10-10-phase3c-closeout-design.md` (each with its reason and cost if wrong); the architecture record is Erratum E-46 (E-45 amended), and O-50 and O-51 are opened. The deciding value of each:
+
+- P3-51 fenced step ids are positional, `autoconfirm-<n>` for chunk n of the attempt, at most 48 (`AUTO_CONFIRM_MAX_STEPS = MAX_FENCED_STEPS - 2`); a retry reuses the ids and never reaches `fenced_step_limit`; pairs that shift into a committed position wait a day.
+- P3-52 one `audit_log` row per materialised pair, in the pair's transaction: actor and `onBehalfOf` `system`, action `entity.confirm`, target `merge_events/<id>`, decision `allow`, reason `auto_confirm`, classification the pair's label.
+- P3-53 `priorState: "auto_confirmed"`, the pair's prior effective state, as `confirmMerge` records it; supersedes `"candidate"` in O-28 and E-45(a).
+- P3-54 each step's transaction reads `firms/{firmId}` and writes nothing when L17.2 is off; a failed flag read at the start of a run is the retryable `flag_read_failed`, not a run that ends as done.
+- P3-55 merge event id `auto_` + the first 32 hex characters of SHA-256 (`firmId`, NUL, `pairId`, NUL, sorted link ids joined by commas), written with `create`; an existing event means the pair is already done.
+- P3-56 the in-transaction re-check has four tests in which the scan admits the pair and the transaction must reject it (young sibling for another key, a confirmed row plus an aged candidate, a dispute between scan and step, an un-merge in progress), plus a retry test; all are in the Phase 3c gate.
+- P3-57 `gate:g4:phase3c` is a CI step after Phase 3b and selects twenty-nine tests by exact name; E-45 and the 3c dates are corrected (10 October 2026, merged that day); the stale late-dispute comment in `ops.ts` is fixed; `check_pr_phase_claims.py` fails `transport_stub` false while the filing transport stub markers remain.
+
+Open items opened: O-50 (mixed pairs), O-51 (the unused `period` payload field). O-43, O-47, O-48 and O-49 stay open.
