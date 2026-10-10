@@ -70,11 +70,14 @@ const millis = (t: unknown): number | null => (t instanceof Timestamp ? t.toMill
 /** The row's sweeper re-dispatch count; a row written before P3-35 has none and counts 0. */
 const redispatchesOf = (row: JobRow): number => (typeof row.redispatches === "number" ? row.redispatches : 0)
 
+/** The re-dispatch backoff (P3-35): `redispatchBackoffMs`, unless a test has set `sweepTestSeam.backoffMs`. */
+const backoffMs = (redispatches: number): number => sweepTestSeam.backoffMs?.(redispatches) ?? redispatchBackoffMs(redispatches)
+
 /** Whether the row's last dispatch is old enough (its backoff, P3-35), or untrustworthy enough, to dispatch again. */
 function redispatchable(row: JobRow, now: number): boolean {
   const last = millis(row.dispatchedAt)
   if (last === null) return true
-  return last <= now - redispatchBackoffMs(redispatchesOf(row)) || last > now + MAX_CLOCK_SKEW_MS
+  return last <= now - backoffMs(redispatchesOf(row)) || last > now + MAX_CLOCK_SKEW_MS
 }
 
 /** Query A's re-read: still an engine row, queued or failed, due past the grace, and re-dispatchable. */
@@ -97,7 +100,7 @@ type RowAction = { kind: "none" } | { kind: "dispatch"; seq: number } | { kind: 
 function stageRedispatch(tx: Transaction, ref: DocumentReference, row: JobRow, now: number): RowAction {
   const seq = row.dispatchSeq + 1
   const redispatches = redispatchesOf(row) + 1
-  stageJobUpdate(tx, ref, { dispatchSeq: seq, dispatchedAt: at(now), redispatches, sweepAt: at(now + redispatchBackoffMs(redispatches)), updatedAt: at(now) })
+  stageJobUpdate(tx, ref, { dispatchSeq: seq, dispatchedAt: at(now), redispatches, sweepAt: at(now + backoffMs(redispatches)), updatedAt: at(now) })
   return { kind: "dispatch", seq }
 }
 
@@ -158,8 +161,12 @@ async function settle(ref: DocumentReference, step: (ref: DocumentReference) => 
 /** The sweep's queries: A (lost dispatch), A' as "skew" (a lost dispatch stamped by a clock running ahead), B (expired lease). */
 export type SweepQueryName = "A" | "skew" | "B"
 
-/** Test hook before each query page runs (spec §7), set in a test and deleted in `finally`. */
-export const sweepTestSeam: { beforeQuery?: (name: SweepQueryName) => Promise<void> } = {}
+/**
+ * Test hooks (spec §7), set in a test and deleted in `finally`: `beforeQuery` runs before each query
+ * page; `backoffMs` replaces `redispatchBackoffMs` (the P3-37 load test's control run forces the
+ * fixed grace with it). Unset in production.
+ */
+export const sweepTestSeam: { beforeQuery?: (name: SweepQueryName) => Promise<void>; backoffMs?: (redispatches: number) => number } = {}
 
 const actedOn = (out: SweepResult): number => out.dispatched.length + out.deadLettered.length
 
