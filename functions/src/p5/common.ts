@@ -166,6 +166,19 @@ export function isSafeDocId(value: unknown): value is string {
   )
 }
 
+/** Firestore's own document-id rule: non-empty, no `/`, not `.` or `..`, not `__.*__`, at most 1500 bytes UTF-8. */
+export function isFirestoreDocId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    !value.includes("/") &&
+    value !== "." &&
+    value !== ".." &&
+    !/^__.*__$/.test(value) &&
+    Buffer.byteLength(value, "utf8") <= 1500
+  )
+}
+
 /** A user id that is also a safe single Firestore document id. */
 export function parseUid(value: unknown): string {
   if (!isSafeDocId(value)) throw new HttpError(400, "invalid_uid")

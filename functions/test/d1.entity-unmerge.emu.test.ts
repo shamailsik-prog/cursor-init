@@ -90,6 +90,9 @@ const open = (s: Seed, conflictCheckId: string) =>
   openMatter({ token: s.partner.token, data: { firmId: s.firmId, conflictCheckId, title: "Recovery suit", classification: "confidential" } } as never)
 const checkDoc = async (id: string) => (await adminDb().collection("conflict_checks").doc(id).get()).data()!
 const firmRows = async (s: Seed, collection: string) => (await adminDb().collection(collection).where("firmId", "==", s.firmId).get()).docs.map((d) => [d.id, d.data()])
+/** Every firm row an open could write: compared before and after a refusal ("writes nothing", P3-40). */
+const written = (s: Seed) =>
+  Promise.all(["matters", "matter_parties", "matter_members", "conflict_checks", "conflict_events", "counters", "events"].map((c) => firmRows(s, c)))
 /** The calls' own audit rows (target `matters/{id}`; the permission check's row targets the firm). */
 const openAudit = async (s: Seed) =>
   (await adminDb().collection("audit_log").where("actorId", "==", s.partner.uid).where("action", "==", "matter.open").get()).docs
@@ -269,11 +272,10 @@ describe.skipIf(!EMULATORS)("unmergeEntity and the un-merge saga (P3-24..P3-33)"
     await unmergeEntity(link(s, s.partner.token))
 
     // Before the checks job: the check is not stale yet, but its clearance rested on the identity being reversed.
-    const written = () => Promise.all(["matters", "matter_parties", "matter_members", "conflict_checks", "conflict_events", "counters", "events"].map((c) => firmRows(s, c)))
-    const before = await written()
+    const before = await written(s)
     expect(await checkDoc(check.checkId)).toMatchObject({ stale: false, decision: "cleared", boundMatterId: null })
     expectKind(await apiErrorOf(open(s, check.checkId)), "failed-precondition", "unmerge_in_progress")
-    expect(await written()).toEqual(before)
+    expect(await written(s)).toEqual(before)
     expect(await openAudit(s)).toEqual(["deny:unmerge_in_progress"])
 
     // The checks job marks it stale while the links job is still pending: check_stale applies (P3-40).
@@ -304,11 +306,33 @@ describe.skipIf(!EMULATORS)("unmergeEntity and the un-merge saga (P3-24..P3-33)"
     await unmergeEntity(link(s, s.partner.token))
 
     // The re-screen reads the pair as unresolved, which the stored (resolved) hits already cover: only P3-40 refuses.
+    const before = await written(s)
     expectKind(await apiErrorOf(open(s, check.checkId)), "failed-precondition", "unmerge_in_progress")
+    expect(await written(s)).toEqual(before)
+    expect(await openAudit(s)).toEqual(["deny:unmerge_in_progress"])
     expect(await checkDoc(check.checkId)).toMatchObject({ stale: false, boundMatterId: null })
     expect((await firmRows(s, "matters")).length).toBe(1)
     expect(await runJob(s, "conflict_checks", merged.mergeEventId!)).toBe("done")
     expectKind(await apiErrorOf(open(s, check.checkId)), "failed-precondition", "check_stale")
+  })
+
+  it("openMatter: once the un-merge has completed, a fresh check relying on the reopened link opens a matter (P3-40)", async () => {
+    const s = await seed()
+    const { mergeEventId } = await confirmed(s)
+    await unmergeEntity(link(s, s.partner.token))
+    expect(await runJob(s, "conflict_checks", mergeEventId)).toBe("done")
+    expect(await runJob(s, "entity_links", mergeEventId)).toBe("done")
+    expect(await linkRow(s)).toMatchObject({ state: "candidate", disputed: true, unmerge: { status: "completed", mergeEventId } })
+
+    let check = await s.check()
+    expect(crossing(check)[0]).toMatchObject({ outcome: "POSSIBLE_CANDIDATE_REVIEW", reliedOnLinkIds: [s.linkId] })
+    for (let i = 0; i < check.hits.length; i++) {
+      if (check.hits[i].outcome !== "POSSIBLE_CANDIDATE_REVIEW") continue
+      check = await resolveReviewItem({ token: s.partner.token, data: { firmId: s.firmId, checkId: check.checkId, hitIndex: i, resolution: "different_person", note: REVIEW_NOTE } } as never)
+    }
+    expect(check).toMatchObject({ result: "CLEAR", decision: "cleared" })
+    expect(await open(s, check.checkId)).toMatchObject({ conflictCheckId: check.checkId })
+    expect(await openAudit(s)).toEqual(["allow:ok"])
   })
 
   it("openMatter: a check whose hits relied only on confirmed or disputed links is unaffected (P3-40)", async () => {

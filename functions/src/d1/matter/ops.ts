@@ -6,13 +6,12 @@ import { HttpError } from "../../http/errors"
 import { isContentionAbort } from "../contention"
 import type { Caller } from "../../p5/auth"
 import { isKnownClassification, rankOf } from "../../p5/classification"
-import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
+import { isFirestoreDocId, isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { checkPermission, requirePermission } from "../../p5/permission"
 import { loadRegistry, maxLabel, runEngine, unseenHits } from "../conflict/engine"
 import { nameForms } from "../conflict/normalise"
-import type { Hit, Subject } from "../conflict/match"
+import { reliedOnLinkIds, type Hit, type Subject } from "../conflict/match"
 import { isUnmergeInProgress } from "../entity/linkState"
-import { isFirestoreDocId } from "../../p2/fanout"
 import { allocateNumber, formatMatterNo, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
 import { bumpRegistryVersion, readRegistryVersion, readRegistryVersionTx } from "../registryVersion"
@@ -161,23 +160,6 @@ function gateOpen(caller: Caller, check: DocumentData | undefined, now: Date): {
 }
 
 /**
- * The entity link ids a stored check's hits relied on (`hits[].reliedOnLinkIds`, read as the un-merge
- * checks job reads them, `checkReliesOn`), deduplicated. An entry that is not a Firestore document id
- * cannot name a link row, so skipping it skips no row.
- */
-function reliedOnLinkIds(check: DocumentData | undefined): string[] {
-  const hits: unknown = check?.hits
-  if (!Array.isArray(hits)) return []
-  const ids = new Set<string>()
-  for (const h of hits) {
-    const relied = (h as { reliedOnLinkIds?: unknown } | null)?.reliedOnLinkIds
-    if (!Array.isArray(relied)) continue
-    for (const id of relied) if (isFirestoreDocId(id)) ids.add(id)
-  }
-  return [...ids]
-}
-
-/**
  * P3-40 (O-46): 409 unmerge_in_progress when any link the check's hits relied on is being un-merged: the
  * check was cleared on an identity that is being reversed. One getAll in the caller's transaction, before
  * any write. The row rule is isUnmergeInProgress, the one behind the read-time `unmerging` state (E-43(c)),
@@ -185,7 +167,8 @@ function reliedOnLinkIds(check: DocumentData | undefined): string[] {
  * link that is merely confirmed, disputed or a candidate, or whose un-merge has completed.
  */
 async function refuseUnmerging(tx: Transaction, check: DocumentData | undefined): Promise<void> {
-  const ids = reliedOnLinkIds(check)
+  // The ids the un-merge checks job reads (`checkReliesOn`); one that is not a Firestore document id cannot name a row.
+  const ids = reliedOnLinkIds(check).filter((id) => isFirestoreDocId(id))
   if (ids.length === 0) return
   const links = adminDb().collection("entity_links")
   const rows = await tx.getAll(...ids.map((id) => links.doc(id)))

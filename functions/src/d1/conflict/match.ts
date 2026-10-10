@@ -31,6 +31,24 @@ export type Hit = {
   review?: { resolution: "different_person" | "same_person"; by: string; note: string; at: string }
 }
 
+/**
+ * The entity link ids a stored check's hits relied on (`hits[].reliedOnLinkIds`, P2-21), deduplicated
+ * in first-seen order. Tolerant of a malformed row: hits that are not an array, a hit that is not an
+ * object or has no array `reliedOnLinkIds`, and ids that are not strings are skipped. Shared by the
+ * un-merge checks job (`checkReliesOn`) and openMatter's P3-40 refusal, so both read "relied on" alike.
+ */
+export function reliedOnLinkIds(check: { readonly hits?: unknown } | undefined): string[] {
+  const hits = check?.hits
+  if (!Array.isArray(hits)) return []
+  const ids = new Set<string>()
+  for (const h of hits) {
+    const relied = (h as { reliedOnLinkIds?: unknown } | null)?.reliedOnLinkIds
+    if (!Array.isArray(relied)) continue
+    for (const id of relied) if (typeof id === "string") ids.add(id)
+  }
+  return [...ids]
+}
+
 /** One registry row to screen against: a firm client or an opposing `matter_parties` row. */
 export type Candidate = {
   /** Registry identity: "client:{clientId}" or "party:{matter_parties id}". */
