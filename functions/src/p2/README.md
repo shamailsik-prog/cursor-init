@@ -23,6 +23,8 @@ To add one: register its handler in `registry.ts`, add a `ScheduledJobSpec` to `
 
 The sweeper (`jobSweeper`, every minute) is the engine's heartbeat, not a P2 job: it re-dispatches lost dispatches and expired leases and is not in `SCHEDULED_JOBS`.
 
+How the sweeper picks rows (P3-34 to P3-36, O-36): every row carries `sweepAt`, the earliest time the sweeper may act on it, written with every status change (enqueue and manual requeue: now + 30 s; scheduled retry: `nextAttemptAt` + 30 s; claim: the lease expiry; terminal: null). Query B runs first and takes `running` rows with `sweepAt <= now` (expired leases); query A takes `queued` and `failed` rows with `sweepAt <= now`, and query A' `queued` and `failed` rows whose `sweepAt` lies more than 600 s ahead (stamped by a clock running fast). Each row is still re-read in its own transaction, which decides. A re-dispatch backs off `min(30 s × 2^redispatches, 600 s)`, so a row waiting in a busy queue gets 1 + 9 tasks in its first hour and 6 per hour after that, instead of one every sweep. Each query reads up to 5 pages of 100 rows per sweep, and a sweep stops after 30 s of wall-clock time; the next minute's sweep continues. Load test: `functions/test/p2.jobs-load.emu.test.ts`.
+
 ## Deploy prerequisites
 
 Derived from what the code calls (`dispatch.ts` enqueues on the `jobWorker` task queue through the Admin SDK; `functions.ts` declares `jobWorker` as a task-queue function with no `invoker`). Confirm them at the first deploy; none can be proved without one.

@@ -30,8 +30,28 @@ export const DISPATCH_GRACE_MS = 30_000
 export const CLOCK_SKEW_TOLERANCE_MS = 2_000
 /** A `dispatchedAt` further than this in the future is not trusted (P3-8). */
 export const MAX_CLOCK_SKEW_MS = 300_000
-/** Rows per sweeper query (P3-8). */
+/** Rows per sweeper query page (P3-8). */
 export const SWEEP_LIMIT = 100
+/** Pages each sweeper query may run in one sweep (P3-36): at most 500 rows per query per sweep. */
+export const SWEEP_MAX_PAGES = 5
+/**
+ * One sweep's wall-clock budget (final review): measured on the real clock, checked before each
+ * page and each row; once spent the sweep stops and the next minute's sweep continues. It ends
+ * the sweep well inside the sweeper function's 45 s timeout (asserted in `functions.ts`).
+ */
+export const SWEEP_BUDGET_MS = 30_000
+/** The longest wait between two sweeper re-dispatches of one row: one lease (P3-35). */
+export const MAX_REDISPATCH_BACKOFF_MS = 600_000
+
+/**
+ * How long after a dispatch the sweeper waits before re-dispatching a row that the sweeper has
+ * already re-dispatched `redispatches` times (P3-35): `DISPATCH_GRACE_MS * 2^redispatches`, capped
+ * at `MAX_REDISPATCH_BACKOFF_MS`. 0 gives the plain grace (30 s), 1 gives 60 s, 5 or more 600 s.
+ */
+export function redispatchBackoffMs(redispatches: number): number {
+  const n = Number.isInteger(redispatches) && redispatches > 0 ? redispatches : 0
+  return Math.min(DISPATCH_GRACE_MS * 2 ** Math.min(n, 30), MAX_REDISPATCH_BACKOFF_MS)
+}
 /** Serialised (canonical JSON) payload limit (P3-2). */
 export const MAX_PAYLOAD_BYTES = 16_384
 /** Log entries kept on a job row, oldest dropped first (P3-2). */

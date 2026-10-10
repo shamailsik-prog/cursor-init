@@ -113,9 +113,9 @@ export async function runAudited<T>(audit: CallAudit, body: () => Promise<T>): P
  * A firm-bound, authenticated session: the Caller, whether the token has a second factor, and
  * the router's clock for this request (`now`, epoch ms; absent outside the router → Date.now()).
  * `idempotencyKey` is the request's Idempotency-Key on POST/PUT (absent on GET), for keys of
- * jobs the call causes (P3-4, `jobKey`).
+ * jobs the call causes (P3-4, `jobKey`). `route` is the operation's route, `"POST /api/..."` (set with the key; P3-38).
  */
-export type Session = { caller: Caller; secondFactor: boolean; now?: number; idempotencyKey?: string }
+export type Session = { caller: Caller; secondFactor: boolean; now?: number; idempotencyKey?: string; route?: string }
 
 export type { FirmlessIdentity }
 
@@ -163,6 +163,19 @@ export function isSafeDocId(value: unknown): value is string {
     value !== "." &&
     value !== ".." &&
     !/^__.*__$/.test(value)
+  )
+}
+
+/** Firestore's own document-id rule: non-empty, no `/`, not `.` or `..`, not `__.*__`, at most 1500 bytes UTF-8. */
+export function isFirestoreDocId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    !value.includes("/") &&
+    value !== "." &&
+    value !== ".." &&
+    !/^__.*__$/.test(value) &&
+    Buffer.byteLength(value, "utf8") <= 1500
   )
 }
 

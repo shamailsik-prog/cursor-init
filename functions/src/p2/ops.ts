@@ -6,9 +6,9 @@ import { logFailure } from "../log"
 import type { Caller } from "../p5/auth"
 import { isSafeDocId, type Data, type FirmOperation, type Session } from "../p5/common"
 import { requirePermission } from "../p5/permission"
-import { JOB_STATUSES, MAX_MANUAL_RETRIES } from "./constants"
+import { DISPATCH_GRACE_MS, JOB_STATUSES, MAX_MANUAL_RETRIES } from "./constants"
 import { runtimeDeps } from "./dispatch"
-import { jobsRef, type JobActorNote, type JobRow } from "./enqueue"
+import { jobsRef, stageJobUpdate, type JobActorNote, type JobRow } from "./enqueue"
 import { handlerFor } from "./registry"
 import { jobView, visibilityOf, type JobView, type Visibility } from "./view"
 import { appendLog } from "./worker"
@@ -215,8 +215,9 @@ export const getJobOp: FirmOperation<JobView> = {
  * retryFailedJob({ jobId, note }) → the job's view (P3-12). `job.retry` (partner, associate); a
  * saga type, or one no longer registered, needs a partner. Only a dead-lettered job with fewer
  * than 3 manual retries is requeued: `queued`, `attempts` 0, `manualRetries + 1`, due now, with a
- * new dispatch seq; `lastError` is kept until the next attempt ends. Dispatched after commit; a
- * dispatch failure is logged and left to the sweeper.
+ * new dispatch seq, `sweepAt` one dispatch grace on and `redispatches` 0 (P3-34, P3-35);
+ * `lastError` is kept until the next attempt ends. Dispatched after commit; a dispatch failure is
+ * logged and left to the sweeper.
  */
 export const retryFailedJobOp: FirmOperation<JobView> = {
   auth: "firm",
@@ -248,13 +249,16 @@ export const retryFailedJobOp: FirmOperation<JobView> = {
         nextAttemptAt: at,
         dispatchSeq: job.dispatchSeq + 1,
         dispatchedAt: at,
+        // The sweeper may re-dispatch once the grace has passed, with a fresh backoff (P3-34, P3-35).
+        sweepAt: Timestamp.fromMillis(now + DISPATCH_GRACE_MS),
+        redispatches: 0,
         updatedAt: at,
         finishedAt: null,
         requeues: [...(Array.isArray(job.requeues) ? job.requeues : []), requeue],
         logs: appendLog(job, "requeued", 0, now),
       }
       await audit.stage(tx, "allow", "ok")
-      tx.update(jobsRef().doc(jobId), update)
+      stageJobUpdate(tx, jobsRef().doc(jobId), update)
       return { view: jobView(jobId, { ...job, ...update }, "full", { logs: true }), seq: update.dispatchSeq }
     })
     audit.committed()
@@ -303,12 +307,13 @@ export const cancelJobOp: FirmOperation<JobView> = {
         cancellation,
         lease: null,
         nextAttemptAt: null,
+        sweepAt: null,
         finishedAt: at,
         updatedAt: at,
         logs: appendLog(job, "cancelled", typeof job.attempts === "number" ? job.attempts : 0, now),
       }
       await audit.stage(tx, "allow", "ok")
-      tx.update(jobsRef().doc(jobId), update)
+      stageJobUpdate(tx, jobsRef().doc(jobId), update)
       return jobView(jobId, { ...job, ...update }, "full", { logs: true })
     })
     audit.committed()

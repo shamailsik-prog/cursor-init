@@ -4,6 +4,7 @@ import { adminDb } from "../../admin"
 import { isSafeDocId } from "../../p5/common"
 import { JobError } from "../../p2/errors"
 import type { JobContext, JobHandler, JobResult } from "../../p2/registry"
+import { reliedOnLinkIds } from "../conflict/match"
 import { bumpRegistryVersion } from "../registryVersion"
 import { DETERMINISTIC_KEY_SCORE, isUnmergeInProgress } from "./linkState"
 
@@ -122,11 +123,7 @@ async function runLinks(ctx: JobContext<UnmergePayload>): Promise<JobResult> {
 
 /** Whether a stored check's hits relied on any of `linkIds` (P2-21: `hits[].reliedOnLinkIds`). */
 export function checkReliesOn(check: DocumentData, linkIds: ReadonlySet<string>): boolean {
-  if (!Array.isArray(check.hits)) return false
-  return check.hits.some((h: unknown) => {
-    const relied = (h as { reliedOnLinkIds?: unknown } | null)?.reliedOnLinkIds
-    return Array.isArray(relied) && relied.some((id) => typeof id === "string" && linkIds.has(id))
-  })
+  return reliedOnLinkIds(check).some((id) => linkIds.has(id))
 }
 
 /** A step id from the chunk's own check ids, so a retry that finds fewer checks never skips a different chunk. */

@@ -6,7 +6,7 @@ import { onTaskDispatched } from "firebase-functions/v2/tasks"
 import { REGION } from "../health"
 import { logFailure } from "../log"
 import { isSafeDocId } from "../p5/common"
-import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS } from "./constants"
+import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS, SWEEP_BUDGET_MS } from "./constants"
 import { runtimeDeps, type JobDeps, type JobTask } from "./dispatch"
 import { fanOutEvent } from "./fanout"
 import { sweep } from "./sweeper"
@@ -88,11 +88,17 @@ export const jobWorker = onTaskDispatched(
 
 /**
  * The sweeper's timeout, pinned (the platform default is 60 s). It stays below the one-minute
- * schedule so a slow sweep is cut off before the next one starts rather than overlapping it. A
- * sweep killed between a commit and its dispatch loses nothing: the row is due again and the
- * next sweep re-dispatches it after the 30 s grace.
+ * schedule so a slow sweep is cut off before the next one starts rather than overlapping it. The
+ * sweep's own wall-clock budget (`SWEEP_BUDGET_MS`, 30 s) normally ends it first, between rows. A
+ * sweep killed between a commit and its dispatch loses nothing: the commit stamped the row's
+ * `sweepAt`, so the row is due again after its backoff and a later sweep re-dispatches it.
  */
 const SWEEPER_TIMEOUT_SECONDS = 45
+
+// The budget must leave the last row's transaction and dispatch room before the timeout.
+if (!(SWEEP_BUDGET_MS + 10_000 <= SWEEPER_TIMEOUT_SECONDS * 1000)) {
+  throw new Error(`sweep budget (${SWEEP_BUDGET_MS} ms) must end at least 10 s before the sweeper timeout (${SWEEPER_TIMEOUT_SECONDS} s)`)
+}
 
 /** The safety net (P3-8): re-dispatches lost dispatches and expired leases every minute. */
 export const jobSweeper = onSchedule({ schedule: "every 1 minutes", region: REGION, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS }, async () => {

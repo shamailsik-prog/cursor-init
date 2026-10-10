@@ -3,13 +3,15 @@ import type { Classification } from "@/platform/p1/types"
 import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
+import { contentionDeadline, isContentionAbort } from "../contention"
 import type { Caller } from "../../p5/auth"
 import { isKnownClassification, rankOf } from "../../p5/classification"
-import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
+import { isFirestoreDocId, isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { checkPermission, requirePermission } from "../../p5/permission"
 import { loadRegistry, maxLabel, runEngine, unseenHits } from "../conflict/engine"
 import { nameForms } from "../conflict/normalise"
-import type { Hit, Subject } from "../conflict/match"
+import { reliedOnLinkIds, type Hit, type Subject } from "../conflict/match"
+import { isUnmergeInProgress } from "../entity/linkState"
 import { allocateNumber, formatMatterNo, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
 import { bumpRegistryVersion, readRegistryVersion, readRegistryVersionTx } from "../registryVersion"
@@ -40,7 +42,8 @@ const OPEN_TX_ATTEMPTS = 10
 
 /**
  * Re-screen rounds of one openMatter (Bugbot PR #8): a round whose registry version moved between its
- * pre-screen and its transaction writes nothing and is redone; after this many, 409 registry_contended.
+ * pre-screen and its transaction writes nothing and is redone; after this many, 409 registry_contended
+ * (sooner if CONTENTION_DEADLINE_MS of the call passes first: no round starts after it).
  * Every open bumps the version, and a round fails only when another registry write commits inside it, so
  * N concurrent opens in one firm all finish within N rounds: 10, as OPEN_TX_ATTEMPTS (3 failed Review Focus 3).
  */
@@ -54,28 +57,6 @@ export const openMatterTestSeam: { afterPreScreen?: (round: number) => Promise<v
 
 /** A round's transaction saw a registry version other than its pre-screen's: nothing written, redo. */
 const REGISTRY_MOVED = Symbol("registry_moved")
-
-/**
- * gRPC INVALID_ARGUMENT (3) texts that mean "this transaction is gone", not a bad request: the
- * emulator's closed transaction, and the expired transaction the Admin SDK itself retries
- * (its isRetryableTransactionError matches /transaction has expired/).
- */
-const DEAD_TRANSACTION = /Transaction is invalid or closed|transaction has expired/i
-
-/**
- * A Firestore transaction that gave up under lock contention after its maxAttempts. In openMatter it
- * wrote nothing, so it is a moved round, not a 500 (PR #9 CI). Either gRPC ABORTED (code 10), or gRPC
- * INVALID_ARGUMENT (code 3) for a dead transaction: under load a transactional read waits out the
- * emulator's 2s lock timeout (10 ABORTED), gax's stream retry re-sends it on the transaction that abort
- * closed, and the "3 INVALID_ARGUMENT: Transaction is invalid or closed." that comes back is not
- * retried by the SDK runner. Any other INVALID_ARGUMENT is a bug and stays a 500.
- */
-export function isContentionAbort(err: unknown): boolean {
-  if (!(err instanceof Error) || err instanceof HttpError) return false
-  const code = (err as { code?: unknown }).code
-  if (code === 10 || (typeof code === "string" && code.toLowerCase() === "aborted")) return true
-  return code === 3 && DEAD_TRANSACTION.test(err.message)
-}
 
 const STAFF_ROLES: ReadonlySet<string> = new Set(["partner", "associate", "clerk", "intern"])
 
@@ -179,6 +160,29 @@ function gateOpen(caller: Caller, check: DocumentData | undefined, now: Date): {
   return { subjects, clientId }
 }
 
+/**
+ * P3-40 (O-46): 409 unmerge_in_progress when any link the check's hits relied on is being un-merged: the
+ * check was cleared on an identity that is being reversed. One getAll in the caller's transaction, before
+ * any write. The row rule is isUnmergeInProgress, the one behind the read-time `unmerging` state (E-43(c)),
+ * applied whatever the L17.2 flag says (a saga started while it was on still runs): never refused for a
+ * link that is merely confirmed, disputed or a candidate, or whose un-merge has completed. Only a row of
+ * the caller's firm counts (final review, defensive: the ids come from the caller's own firm-checked
+ * check); another firm's row is ignored, not refused.
+ */
+async function refuseUnmerging(tx: Transaction, check: DocumentData | undefined, firmId: string): Promise<void> {
+  // The ids the un-merge checks job reads (`checkReliesOn`); one that is not a Firestore document id cannot name a row.
+  const ids = reliedOnLinkIds(check).filter((id) => isFirestoreDocId(id))
+  if (ids.length === 0) return
+  const links = adminDb().collection("entity_links")
+  const rows = await tx.getAll(...ids.map((id) => links.doc(id)))
+  if (rows.some((r) => {
+    const row = r.data()
+    return row !== undefined && row.firmId === firmId && isUnmergeInProgress(row)
+  })) {
+    throw new HttpError(409, "unmerge_in_progress")
+  }
+}
+
 /** The check's client record in the caller's firm (else subjects_mismatch) and its entity. */
 function clientOf(caller: Caller, client: DocumentData | undefined): { entityId: string | undefined; classification: unknown } {
   if (!client || client.firmId !== caller.firmId) throw mismatch()
@@ -192,15 +196,19 @@ function clientOf(caller: Caller, client: DocumentData | undefined): { entityId:
  * check and refuses: missing or another firm's 404 check_not_found; not cleared 409 check_not_cleared;
  * already bound 409 check_already_bound; stale 409 check_stale; older than 30 days by its stored
  * createdAt 409 check_expired; a client subject that is not an existing client of the firm 409
- * subjects_mismatch; a listed member who is not an active same-firm staff user 400 invalid_member.
+ * subjects_mismatch; a hit that relied on an entity link being un-merged 409 unmerge_in_progress
+ * (P3-40, nothing written; a check already marked stale answers check_stale first); a listed member
+ * who is not an active same-firm staff user 400 invalid_member.
  * Before the transaction the stored subjects are re-screened against the current registry (the
  * runConflictCheck engine, no daily-limit spend, no check written); a non-NONE hit the check does not
  * already hold (or hold resolved) marks the check stale in the transaction and answers 409 check_stale.
  * The screen is tied to the transaction by the firm's registry version (`counters/{firmId}_registry`,
  * registryVersion.ts; Bugbot PR #8): read before the screen and again first in the transaction. A
  * moved version (a registry write committed in between) makes the round write nothing, no audit row
- * either, and the screen and transaction are redone; after OPEN_SCREEN_ROUNDS (10) moved rounds, 409
- * registry_contended (nothing written; a retry is safe), audited as the call's one deny row. A
+ * either, and the screen and transaction are redone, as is a round whose transaction gave up under lock
+ * contention; after OPEN_SCREEN_ROUNDS (10) such rounds, or when CONTENTION_DEADLINE_MS (90 s) of the
+ * call has passed before a round would start, 409 registry_contended (nothing written; a retry is safe),
+ * audited as the call's one deny row. A
  * writer committing after the transaction's version read either aborts it (it retries and sees the
  * move) or commits after the matter opened, which is the correct order.
  * Then it allocates `{matterPrefix}/{YYYY}/{NNNN}` and writes the matter, the members (caller and
@@ -214,6 +222,7 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
   action: "matter.open",
   target: "matters",
   run: async ({ caller, now: clock }, data, audit) => {
+    const pastDeadline = contentionDeadline()
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     await requirePermission(caller, "matter.open")
@@ -232,7 +241,8 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
     const matterId = matterRef.id
     audit.target = `matters/${matterId}`
 
-    for (let round = 1; round <= OPEN_SCREEN_ROUNDS; round++) {
+    // No round starts once the deadline has passed: the call answers its 409 before the function times out.
+    for (let round = 1; round <= OPEN_SCREEN_ROUNDS && !pastDeadline(); round++) {
       // Re-screen (spec P2-6, final review I5): the stored subjects against today's registry, through the
       // same engine as runConflictCheck, after the same gate the transaction applies again below. The
       // registry version is read first: a registry write the screen missed has bumped it by the transaction.
@@ -253,6 +263,9 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
           const { subjects, clientId } = gateOpen(caller, check, now)
           const client = clientOf(caller, (await tx.get(db.collection("clients").doc(clientId))).data())
           const entityId = client.entityId
+          // P3-40: after gateOpen, so a check the un-merge checks job already marked stale answers check_stale;
+          // before the stale write below, so the refusal writes nothing (the checks job marks the check).
+          await refuseUnmerging(tx, check, caller.firmId)
           if (unseenHits(fresh, Array.isArray(check?.hits) ? check.hits : []).length > 0) {
             // A hit the check never saw: the check no longer describes the registry. Marked stale atomically with the deny row.
             await audit.stage(tx, "deny", "check_stale")
@@ -359,7 +372,8 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
       if (row === null) throw new HttpError(409, "check_stale")
       return present(matterId, { ...row, createdAt: Timestamp.fromDate(now) })
     }
-    // Every round's registry moved under it: nothing was written and a retry is safe. runAudited writes the one deny row.
+    // Every round's registry moved under it or gave up under contention, or the deadline passed: nothing was
+    // written and a retry is safe. runAudited writes the one deny row.
     throw new HttpError(409, "registry_contended")
   },
 }

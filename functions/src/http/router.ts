@@ -237,10 +237,11 @@ async function auditRefusal(op: Operation, uid: string, firmId: string, err: unk
  * daily_limit) keeps its Retry-After header; a 429 is never stored for idempotent replay
  * (isStorableResult), so a same-key retry after the reset runs.
  */
-async function execute(op: Operation, auth: Authenticated, body: Data, now: number, idempotencyKey?: string): Promise<HttpResult> {
+async function execute(op: Operation, auth: Authenticated, body: Data, now: number, idempotencyKey?: string, routeName?: string): Promise<HttpResult> {
   const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
   const audit = new CallAudit(op.action, uid, op.target)
-  const session = (s: Session): Session => (idempotencyKey === undefined ? { ...s, now } : { ...s, now, idempotencyKey })
+  const session = (s: Session): Session =>
+    idempotencyKey === undefined || routeName === undefined ? { ...s, now } : { ...s, now, idempotencyKey, route: routeName }
   try {
     const result = await runAudited(audit, () =>
       op.auth === "firm" && auth.kind === "firm" ? op.run(session(auth.session), body, audit) : runFirmless(op, auth, body, audit)
@@ -298,11 +299,12 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       await rateLimit({ uid }, route.kind, { firm: auth.kind === "firm" ? auth.firm : undefined, now })
 
       const idempotencyKey = hasBody ? header(headers, "idempotency-key") : undefined
-      const run = () => execute(op, auth, body, now, idempotencyKey)
+      const routeName = `${route.method} ${route.path}`
+      const run = () => execute(op, auth, body, now, idempotencyKey, hasBody ? routeName : undefined)
       const firmId = auth.kind === "firm" ? auth.session.caller.firmId : ""
       const result = hasBody
         ? await withIdempotency(
-            { firmId, uid, route: `${route.method} ${route.path}`, key: idempotencyKey, body, now, redact: route.redactReplay },
+            { firmId, uid, route: routeName, key: idempotencyKey, body, now, redact: route.redactReplay },
             run
           ).catch((err: unknown) => auditRefusal(op, uid, firmId, err))
         : await run()

@@ -5,7 +5,7 @@ import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
 import { isKnownClassification } from "../p5/classification"
-import { isSafeDocId } from "../p5/common"
+import { isFirestoreDocId, isSafeDocId } from "../p5/common"
 import type { JobDeps } from "./dispatch"
 import { enqueueJobs, isSafeRef, type JobSpec } from "./enqueue"
 import { handlerFor, jobTestSeam } from "./registry"
@@ -17,19 +17,6 @@ import { handlerFor, jobTestSeam } from "./registry"
  * (`fanOutKey`), so a redelivered trigger reuses the rows (delivery is at least once) and the key
  * stays far below the 512-character cap whatever the event id's length (P3-15 amendment).
  */
-
-/** Firestore's own document-id rule: non-empty, no `/`, not `.` or `..`, not `__.*__`, at most 1500 bytes UTF-8. */
-export function isFirestoreDocId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value !== "" &&
-    !value.includes("/") &&
-    value !== "." &&
-    value !== ".." &&
-    !/^__.*__$/.test(value) &&
-    Buffer.byteLength(value, "utf8") <= 1500
-  )
-}
 
 /** The fan-out job's idempotency key: deterministic, and free of the raw event id. */
 export function fanOutKey(eventId: string, subscriberId: string): string {

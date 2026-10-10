@@ -2,6 +2,7 @@ import { FieldPath, FieldValue, Timestamp, type DocumentData, type Query } from 
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
+import { contentionDeadline, isContentionAbort } from "../contention"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { requirePermission } from "../../p5/permission"
@@ -23,6 +24,21 @@ const ENTITY_FIELD: Record<KeyName, string> = { cnic: "cnic", ntn: "ntn", secp: 
 const KEY_ORDER: readonly KeyName[] = ["cnic", "ntn", "secp", "phone"]
 
 const invalid = () => new HttpError(400, "invalid_subjects")
+
+/** Counter contention under parallel registrations: more transaction attempts than the SDK default of 5. */
+const REGISTER_TX_ATTEMPTS = 10
+/**
+ * Rounds of one registerClient (O-45, P3-39): a round whose transaction gives up under lock contention
+ * (isContentionAbort) wrote nothing and is redone; after this many, or once no new round may start after
+ * CONTENTION_DEADLINE_MS (90 s) of the call, 409 registry_contended, as openMatter.
+ */
+export const REGISTER_CLIENT_ROUNDS = 10
+
+/**
+ * Test seam only (the emulator suites set it; production code never does): awaited inside each round's
+ * transaction after its reads and before its writes, so a test can make a round abort deterministically.
+ */
+export const registerClientTestSeam: { beforeCommit?: (round: number) => Promise<void> | void } = {}
 
 /** An optional free-text field: absent or blank is omitted; otherwise a trimmed string of at most `max` characters. */
 function optionalText(value: unknown, max = 500): string | undefined {
@@ -76,6 +92,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
   action: "client.register",
   target: "clients",
   run: async ({ caller }, data, audit) => {
+    const pastDeadline = contentionDeadline()
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     await requirePermission(caller, "client.register")
@@ -108,7 +125,9 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
     const clientRef = clients().doc()
     audit.target = `clients/${clientRef.id}`
 
-    const result = await db.runTransaction(async (tx) => {
+    const runRound = (round: number) =>
+      db.runTransaction(
+      async (tx) => {
       // Reads first: prefixes, entities sharing a key, the clients of those entities, then the counter.
       const { clientPrefix } = await readPrefixes(tx, caller.firmId)
       const matched = new Map<string, KeyName[]>()
@@ -134,6 +153,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       }
       const n = await allocateNumber(tx, caller.firmId, "client", now)
       const clientCode = formatClientCode(clientPrefix, karachiYear(now), n)
+      await registerClientTestSeam.beforeCommit?.(round)
 
       await audit.stage(tx, "allow", "ok")
       bumpRegistryVersion(tx, caller.firmId)
@@ -189,9 +209,24 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
         }
       }
       return { clientId: clientRef.id, clientCode, entityId: entityRef.id, possibleDuplicates: duplicates }
-    })
-    audit.committed()
-    return result
+      },
+      { maxAttempts: REGISTER_TX_ATTEMPTS }
+      )
+    // No round starts once the deadline has passed: the call answers its 409 before the function times out.
+    for (let round = 1; round <= REGISTER_CLIENT_ROUNDS && !pastDeadline(); round++) {
+      try {
+        const result = await runRound(round)
+        audit.committed()
+        return result
+      } catch (err) {
+        // Contention exhausted the round's transaction attempts: nothing was written, so redo the round.
+        if (isContentionAbort(err)) continue
+        throw err
+      }
+    }
+    // Every round gave up under contention, or the deadline passed: nothing was written and a retry is
+    // safe. runAudited writes the one deny row.
+    throw new HttpError(409, "registry_contended")
   },
 }
 

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
+import { FieldPath } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
+import { REGISTER_CLIENT_ROUNDS, registerClientTestSeam } from "../src/d1/client/ops"
+import { CONTENTION_DEADLINE_MS, contentionTestSeam } from "../src/d1/contention"
+import { readRegistryVersion } from "../src/d1/registryVersion"
 import { parseKeys, parseName } from "../src/d1/validate"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
@@ -51,7 +55,134 @@ describe("parseName and parseKeys (no emulator needed)", () => {
   })
 })
 
+/** The operation's own decision rows (target `clients/<id>`); requirePermission's separate row targets `firms/<firmId>`. */
+const auditOf = async (uid: string): Promise<Array<[unknown, unknown]>> =>
+  (await adminDb().collection("audit_log").where("actorId", "==", uid).where("action", "==", "client.register").get()).docs
+    .map((d) => d.data())
+    .filter((r) => String(r.target).startsWith("clients/"))
+    .map((r) => [r.decision, r.reason])
+
+const clientCounters = async (firmId: string) =>
+  (
+    await adminDb()
+      .collection("counters")
+      .where(FieldPath.documentId(), ">=", `${firmId}_client_`)
+      .where(FieldPath.documentId(), "<", `${firmId}_client_~`)
+      .get()
+  ).size
+
+const deadTransaction = () =>
+  Object.assign(new Error("3 INVALID_ARGUMENT: Transaction is invalid or closed."), { code: 3, details: "Transaction is invalid or closed." })
+
+describe.skipIf(!EMULATORS)("registerClient contention rounds (O-45, P3-39)", () => {
+  it("a contention abort in round 1 only → 200, one client, the registry version bumped once", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const rounds: number[] = []
+    registerClientTestSeam.beforeCommit = (round) => {
+      rounds.push(round)
+      if (round === 1) throw deadTransaction()
+    }
+    try {
+      const out = await registerClient({ token: partner.token, data: body(firmId) } as never)
+      expect(out.clientCode).toMatch(/^SKD-\d{4}-0001$/)
+    } finally {
+      delete registerClientTestSeam.beforeCommit
+    }
+    expect(rounds).toEqual([1, 2])
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(1)
+    expect(await readRegistryVersion(firmId)).toBe(1)
+    expect(await auditOf(partner.uid)).toEqual([["allow", "ok"]])
+  }, 60_000)
+
+  it("a contention abort in every round → 409 registry_contended after REGISTER_CLIENT_ROUNDS rounds, nothing written", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    let calls = 0
+    registerClientTestSeam.beforeCommit = () => {
+      calls++
+      throw deadTransaction()
+    }
+    try {
+      const err = await apiErrorOf(registerClient({ token: partner.token, data: body(firmId) } as never))
+      expect([err.status, err.code]).toEqual([409, "registry_contended"])
+    } finally {
+      delete registerClientTestSeam.beforeCommit
+    }
+    expect(REGISTER_CLIENT_ROUNDS).toBe(10)
+    expect(calls).toBe(REGISTER_CLIENT_ROUNDS)
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect((await adminDb().collection("entities").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect(await readRegistryVersion(firmId)).toBe(0)
+    expect(await auditOf(partner.uid)).toEqual([["deny", "registry_contended"]])
+    expect(await clientCounters(firmId)).toBe(0)
+  }, 60_000)
+
+  it("a contention abort in round 1 after 90 s of real time → 409 registry_contended, no round 2; nothing written, one deny row (final review)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    let wall = 1_000_000
+    const rounds: number[] = []
+    contentionTestSeam.wallClock = () => wall
+    registerClientTestSeam.beforeCommit = (round) => {
+      rounds.push(round)
+      // Round 1's transaction attempts have used up the deadline before it gives up under contention.
+      wall += CONTENTION_DEADLINE_MS + 1
+      throw deadTransaction()
+    }
+    try {
+      const err = await apiErrorOf(registerClient({ token: partner.token, data: body(firmId) } as never))
+      expect([err.status, err.code]).toEqual([409, "registry_contended"])
+    } finally {
+      delete registerClientTestSeam.beforeCommit
+      delete contentionTestSeam.wallClock
+    }
+    expect(CONTENTION_DEADLINE_MS).toBe(90_000)
+    expect(rounds).toEqual([1])
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect((await adminDb().collection("entities").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect(await readRegistryVersion(firmId)).toBe(0)
+    expect(await auditOf(partner.uid)).toEqual([["deny", "registry_contended"]])
+    expect(await clientCounters(firmId)).toBe(0)
+  }, 60_000)
+
+  it("a non-contention error from the transaction → 500 internal, not retried, nothing written", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    let calls = 0
+    registerClientTestSeam.beforeCommit = () => {
+      calls++
+      throw new Error("boom")
+    }
+    try {
+      const err = await apiErrorOf(registerClient({ token: partner.token, data: body(firmId) } as never))
+      expect([err.status, err.code]).toEqual([500, "internal"])
+    } finally {
+      delete registerClientTestSeam.beforeCommit
+    }
+    expect(calls).toBe(1)
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect((await adminDb().collection("entities").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect(await readRegistryVersion(firmId)).toBe(0)
+    expect(await auditOf(partner.uid)).toEqual([["deny", "internal"]])
+    expect(await clientCounters(firmId)).toBe(0)
+  }, 60_000)
+})
+
 describe.skipIf(!EMULATORS)("registerClient", () => {
+  it("10 parallel registrations in one firm answer 200 or 409 registry_contended, never 500 (O-45)", async () => {
+    const firmId = await newFirm()
+    const tokens = await Promise.all(Array.from({ length: 10 }, () => mintIdToken(claims(firmId, "partner"))))
+    const results = await Promise.allSettled(tokens.map((t) => registerClient({ token: t.token, data: body(firmId) } as never)))
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected")
+    for (const f of failed) expect([f.reason.status, f.reason.code]).toEqual([409, "registry_contended"])
+    const codes = results.flatMap((r) => (r.status === "fulfilled" ? [r.value.clientCode] : []))
+    const ok = codes.length
+    expect(ok).toBeGreaterThan(0)
+    expect(new Set(codes).size).toBe(ok)
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(ok)
+  }, 120_000)
+
   it("allocates SKD-YYYY-0001 then -0002; clerk may register; one allow audit row per call", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))

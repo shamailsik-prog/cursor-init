@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
+import { CONTENTION_DEADLINE_MS, contentionTestSeam } from "../src/d1/contention"
 import { OPEN_SCREEN_ROUNDS, openMatterTestSeam } from "../src/d1/matter/ops"
 import { karachiYear } from "../src/d1/numbering"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -423,6 +424,43 @@ describe.skipIf(!EMULATORS)("openMatter re-screen vs the registry version", () =
     expect(rounds).toEqual([1, 2])
     expect((await openRows(partner.uid)).map((r) => [r.decision, r.reason])).toEqual([["allow", "ok"]])
     expect((await db.collection("matters").where("firmId", "==", firmId).get()).size).toBe(1)
+  })
+
+  it("a contention abort in round 1 after 90 s of real time → 409 registry_contended, no round 2; nothing written, one deny row (final review)", async () => {
+    const { firmId, partner, checkId } = await setup()
+    const db = adminDb()
+    const real = db.runTransaction.bind(db)
+    let armed = false
+    let wall = 1_000_000
+    const spy = vi.spyOn(db, "runTransaction").mockImplementation(((fn: never, opts: never) => {
+      if (!armed) return real(fn, opts)
+      armed = false // the seam is awaited just before the round's transaction: this call is round 1's
+      // Round 1's transaction attempts have used up the deadline before it gives up under contention.
+      wall += CONTENTION_DEADLINE_MS + 1
+      return Promise.reject(Object.assign(new Error("10 ABORTED: Transaction lock timeout."), { code: 10 }))
+    }) as typeof db.runTransaction)
+    const rounds: number[] = []
+    contentionTestSeam.wallClock = () => wall
+    try {
+      const err = await withSeam(
+        async (r) => {
+          rounds.push(r)
+          if (r === 1) armed = true
+        },
+        () => apiErrorOf(open(partner.token, firmId, checkId))
+      )
+      expectKind(err, "failed-precondition", "registry_contended")
+    } finally {
+      spy.mockRestore()
+      delete contentionTestSeam.wallClock
+    }
+    expect(CONTENTION_DEADLINE_MS).toBe(90_000)
+    expect(rounds).toEqual([1])
+    expect((await checkRef(checkId).get()).data()).toMatchObject({ boundMatterId: null })
+    expect((await checkRef(checkId).get()).data()?.stale).not.toBe(true)
+    expect((await db.collection("matters").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect((await db.collection("counters").doc(`${firmId}_matter_${YEAR}`).get()).exists).toBe(false)
+    expect((await openRows(partner.uid)).map((r) => [r.decision, r.reason])).toEqual([["deny", "registry_contended"]])
   })
 
   it(`a version that moves every round → 409 registry_contended after ${OPEN_SCREEN_ROUNDS} rounds; nothing written, one deny row`, async () => {
