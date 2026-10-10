@@ -261,4 +261,20 @@ Open items opened: O-46 (window before the checks job), O-47 (scan and cap for r
 O-28 stays open (3c). O-44 stays open: 3b does not use `jobKey`. O-36 (sweeper head-of-line blocking with long handlers)
 still applies; the saga handlers are short (one transaction per step) and do not hold dispatch slots for minutes.
 
-Phase 3b gate is `npm run gate:g4:phase3b` (local; not yet a CI step).
+Phase 3b gate is `npm run gate:g4:phase3b`; a CI step since the Phase 3b close-out (P3-41).
+
+## Phase 3b close-out rulings
+
+PR #12 shipped the saga with O-36, O-44, O-45 and O-46 still open, although the 3a and 3b rulings had made them
+preconditions, and without its CI gate step. The close-out rulings are P3-34 to P3-41 in
+`docs/superpowers/specs/2026-10-10-phase3b-closeout-design.md` (each with its reason and cost if wrong); the architecture
+record is Erratum E-44, and O-36, O-44, O-45 and O-46 are closed. The deciding value of each:
+
+- P3-34 every job row carries `sweepAt`, written with every status change; the sweeper selects on `(status, sweepAt)`. Amended in execution: a third query (A') re-reads queued or failed rows whose `sweepAt` lies more than 600 s ahead, so a sweep on a clock running fast cannot hide a row; cost one extra page read per sweep, and a skewed row can wait up to about 300 s longer when 100 or more trusted near-threshold rows sort ahead of it.
+- P3-35 re-dispatch backoff `min(30 s × 2^redispatches, 600 s)`; `redispatches` resets at enqueue, claim, scheduled retry and manual requeue. Amended in execution: 1 + 9 tasks in a waiting row's first hour (the draft said about 7), then 6 per further hour.
+- P3-36 each query reads up to 5 pages of 100 rows per sweep; the page loop stops on a short page or a page that acted on no row, and a shared set keeps one row from being handled twice in a sweep.
+- P3-37 load test: 250 jobs, 240 s handlers, 10 FIFO slots, sweep every 60 s, virtual clock, real store, sweeper and worker. Amended in execution: the draft's bound of 8 tasks per job was an arithmetic error; the bound is the P3-35 schedule for each job's wait, and the fixed total must be at most a fifth of the fixed-grace control's (measured: worst job 14 against 97; total 2,170 against 12,250).
+- P3-38 `jobKey` is `uid:route:lower-cased key:suffix`; it throws without a key or a route.
+- P3-39 `registerClient` runs up to 10 rounds on a contention abort, then 409 `registry_contended` with one deny audit row and nothing written; `isContentionAbort` moved to `functions/src/d1/contention.ts`.
+- P3-40 `openMatter` reads the links a stored check's hits relied on, inside its transaction before any write, and answers 409 `unmerge_in_progress` if any has an un-merge in progress, whatever the L17.2 layer flag (a saga started with the flag on runs on if it is switched off); a check the checks job already marked stale answers `check_stale` first. `reliedOnLinkIds(check)` is shared with the checks job.
+- P3-41 `gate:g4:phase3b` runs in the gates job after Phase 3a; it selects sixteen tests by exact name (the eleven of P3-33, the two O-46 refusals, the sweeper back-off and head-of-line tests, and the load test).

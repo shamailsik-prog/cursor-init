@@ -180,6 +180,9 @@ jobs:
       - name: Gate G-4 Phase 3a close (routes, boot, job invariants, registry discipline, functions lint, G-2)
         if: ${{ !cancelled() }}
         run: npm run gate:g4:phase3a
+      - name: Gate G-4 Phase 3b close (routes, boot, saga and O-46 invariants, sweeper back-pressure and load, registry discipline, functions lint, G-2)
+        if: ${{ !cancelled() }}
+        run: npm run gate:g4:phase3b
 
   next-build:
     name: Next.js build

@@ -4,9 +4,11 @@
 # 1. route coverage by domain (check_route_coverage.py): 21 /api/d1 routes and 4 /api/platform/jobs routes,
 #    each exercised by a viaApi test
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed)
-# 3. the four "saga invariant" tests of d1.entity-unmerge.emu.test.ts, the five "P2 invariant" tests of
-#    p2.jobs-invariants.emu.test.ts and the two registry-discipline tests of p2.registry-discipline.emu.test.ts,
-#    selected by exact full name, under the Auth and Firestore emulators
+# 3. sixteen tests selected by exact full name, under the Auth and Firestore emulators: the four saga
+#    invariants and the two O-46 openMatter refusals of d1.entity-unmerge.emu.test.ts, the five "P2 invariant"
+#    tests of p2.jobs-invariants.emu.test.ts, the two registry-discipline tests of p2.registry-discipline.emu.test.ts,
+#    the back-off and head-of-line sweeper tests of p2.jobs-sweeper.emu.test.ts (O-36) and the long-handler load
+#    test of p2.jobs-load.emu.test.ts (P3-37)
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -23,6 +25,17 @@ SAGA_TESTS=(
   'the jobs finish the saga: links reopened as disputed, relying checks stale, entity.unmerged once, even when delivered twice'
   'the links job may finish last or first: the completion is the same'
   'a dead-lettered saga job leaves the pair in progress; only a partner retries it, and the retry finishes the saga'
+  'openMatter refuses a cleared check that relied on a link being un-merged: 409 unmerge_in_progress, nothing written; check_stale once the checks job ran (P3-40, O-46)'
+  'openMatter refuses it even when the re-screen at open finds nothing new (O-46: every review item resolved before the un-merge)'
+)
+SWEEP_SUITE='P2 sweeper (P3-8)'
+SWEEP_TESTS=(
+  'each sweeper re-dispatch backs off: 60 s, 120 s, 240 s, 480 s, then capped at 600 s (P3-35)'
+  'head-of-line (O-36): 120 rows dispatched 10 s ago do not hide the 30 eligible rows behind them'
+)
+LOAD_SUITE='P2 long-handler load test (P3-37, O-36)'
+LOAD_TESTS=(
+  "250 jobs, 240 s handlers, 10 FIFO slots: every job done, none starved, tasks within the P3-35 schedule and at most 1/5 of the fixed-grace control's"
 )
 INV_SUITE='P2 job engine invariants (P3-4, P3-6..P3-8)'
 REG_SUITE='Registry-version discipline (P3-20)'
@@ -41,7 +54,7 @@ REG_TESTS=(
 if [ "${1:-}" = "--inner" ]; then
   cd "$ROOT/functions"
   # vitest exits 0 when -t matches nothing (renamed test) or the emulator suites are skipped, so the
-  # JSON result must show exactly the eleven named tests passed and nothing failed. The tests are
+  # JSON result must show exactly the sixteen named tests passed and nothing failed. The tests are
   # selected by their exact full names (anchored, escaped), and the JSON check repeats the names,
   # so a renamed or swapped test fails the gate. G4C_FILTER exists only to prove this can fail.
   json="$2/invariants.json"
@@ -51,16 +64,18 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${SAGA_TESTS[@]}"; do names+=("$SAGA_SUITE $t"); done
   for t in "${INV_TESTS[@]}"; do names+=("$INV_SUITE $t"); done
   for t in "${REG_TESTS[@]}"; do names+=("$REG_SUITE $t"); done
+  for t in "${SWEEP_TESTS[@]}"; do names+=("$SWEEP_SUITE $t"); done
+  for t in "${LOAD_TESTS[@]}"; do names+=("$LOAD_SUITE $t"); done
   for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
-  npx vitest run test/d1.entity-unmerge.emu.test.ts test/p2.jobs-invariants.emu.test.ts test/p2.registry-discipline.emu.test.ts -t "${G4C_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
+  npx vitest run test/d1.entity-unmerge.emu.test.ts test/p2.jobs-invariants.emu.test.ts test/p2.registry-discipline.emu.test.ts test/p2.jobs-sweeper.emu.test.ts test/p2.jobs-load.emu.test.ts -t "${G4C_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
   EXPECTED="$(printf '%s\n' "${names[@]}")" node -e '
     const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
     console.log(`saga and job-engine invariants: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)
     const passed = r.testResults.flatMap((f) => f.assertionResults).filter((a) => a.status === "passed").map((a) => a.fullName).sort()
     const want = process.env.EXPECTED.split("\n").sort()
     const exact = passed.length === want.length && passed.every((n, i) => n === want[i])
-    if (!exact) console.log("passed tests are not exactly the eleven named invariants:", JSON.stringify(passed))
-    process.exit(r.numPassedTests === 11 && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
+    if (!exact) console.log("passed tests are not exactly the sixteen named tests:", JSON.stringify(passed))
+    process.exit(r.numPassedTests === 16 && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
   exit $?
 fi
 
