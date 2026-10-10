@@ -11,6 +11,8 @@ import { checkPermission, requirePermission } from "../../p5/permission"
 import { loadRegistry, maxLabel, runEngine, unseenHits } from "../conflict/engine"
 import { nameForms } from "../conflict/normalise"
 import type { Hit, Subject } from "../conflict/match"
+import { isUnmergeInProgress } from "../entity/linkState"
+import { isFirestoreDocId } from "../../p2/fanout"
 import { allocateNumber, formatMatterNo, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
 import { bumpRegistryVersion, readRegistryVersion, readRegistryVersionTx } from "../registryVersion"
@@ -158,6 +160,43 @@ function gateOpen(caller: Caller, check: DocumentData | undefined, now: Date): {
   return { subjects, clientId }
 }
 
+/**
+ * The entity link ids a stored check's hits relied on (`hits[].reliedOnLinkIds`, read as the un-merge
+ * checks job reads them, `checkReliesOn`), deduplicated. An entry that is not a Firestore document id
+ * cannot name a link row, so skipping it skips no row.
+ */
+function reliedOnLinkIds(check: DocumentData | undefined): string[] {
+  const hits: unknown = check?.hits
+  if (!Array.isArray(hits)) return []
+  const ids = new Set<string>()
+  for (const h of hits) {
+    const relied = (h as { reliedOnLinkIds?: unknown } | null)?.reliedOnLinkIds
+    if (!Array.isArray(relied)) continue
+    for (const id of relied) if (isFirestoreDocId(id)) ids.add(id)
+  }
+  return [...ids]
+}
+
+/**
+ * P3-40 (O-46): 409 unmerge_in_progress when any link the check's hits relied on is being un-merged: the
+ * check was cleared on an identity that is being reversed. One getAll in the caller's transaction, before
+ * any write. The row rule is isUnmergeInProgress, the one behind the read-time `unmerging` state (E-43(c)),
+ * applied whatever the L17.2 flag says (a saga started while it was on still runs): never refused for a
+ * link that is merely confirmed, disputed or a candidate, or whose un-merge has completed.
+ */
+async function refuseUnmerging(tx: Transaction, check: DocumentData | undefined): Promise<void> {
+  const ids = reliedOnLinkIds(check)
+  if (ids.length === 0) return
+  const links = adminDb().collection("entity_links")
+  const rows = await tx.getAll(...ids.map((id) => links.doc(id)))
+  if (rows.some((r) => {
+    const row = r.data()
+    return row !== undefined && isUnmergeInProgress(row)
+  })) {
+    throw new HttpError(409, "unmerge_in_progress")
+  }
+}
+
 /** The check's client record in the caller's firm (else subjects_mismatch) and its entity. */
 function clientOf(caller: Caller, client: DocumentData | undefined): { entityId: string | undefined; classification: unknown } {
   if (!client || client.firmId !== caller.firmId) throw mismatch()
@@ -171,7 +210,9 @@ function clientOf(caller: Caller, client: DocumentData | undefined): { entityId:
  * check and refuses: missing or another firm's 404 check_not_found; not cleared 409 check_not_cleared;
  * already bound 409 check_already_bound; stale 409 check_stale; older than 30 days by its stored
  * createdAt 409 check_expired; a client subject that is not an existing client of the firm 409
- * subjects_mismatch; a listed member who is not an active same-firm staff user 400 invalid_member.
+ * subjects_mismatch; a hit that relied on an entity link being un-merged 409 unmerge_in_progress
+ * (P3-40, nothing written; a check already marked stale answers check_stale first); a listed member
+ * who is not an active same-firm staff user 400 invalid_member.
  * Before the transaction the stored subjects are re-screened against the current registry (the
  * runConflictCheck engine, no daily-limit spend, no check written); a non-NONE hit the check does not
  * already hold (or hold resolved) marks the check stale in the transaction and answers 409 check_stale.
@@ -232,6 +273,9 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
           const { subjects, clientId } = gateOpen(caller, check, now)
           const client = clientOf(caller, (await tx.get(db.collection("clients").doc(clientId))).data())
           const entityId = client.entityId
+          // P3-40: after gateOpen, so a check the un-merge checks job already marked stale answers check_stale;
+          // before the stale write below, so the refusal writes nothing (the checks job marks the check).
+          await refuseUnmerging(tx, check)
           if (unseenHits(fresh, Array.isArray(check?.hits) ? check.hits : []).length > 0) {
             // A hit the check never saw: the check no longer describes the registry. Marked stale atomically with the deny row.
             await audit.stage(tx, "deny", "check_stale")
