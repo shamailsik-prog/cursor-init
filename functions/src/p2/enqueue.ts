@@ -110,10 +110,14 @@ export function jobIdFor(firmId: string, jobType: string, idempotencyKey: string
   return "j" + createHash("sha256").update(`${firmId}\0${jobType}\0${idempotencyKey}`).digest("hex").slice(0, 40)
 }
 
-/** The key of a job caused by an HTTP call: the request's Idempotency-Key plus a suffix (P3-4). */
+/**
+ * The key of a job caused by an HTTP call (P3-4, P3-38): scoped like withIdempotency, by caller uid and
+ * route, then the request's Idempotency-Key lower-cased (both cases of one UUID are one job) and a suffix.
+ */
 export function jobKey(session: Session, suffix: string): string {
   if (typeof session.idempotencyKey !== "string" || session.idempotencyKey === "") throw new Error("jobKey: no idempotency key")
-  return `${session.idempotencyKey}:${suffix}`
+  if (typeof session.route !== "string" || session.route === "") throw new Error("jobKey: no route")
+  return `${session.caller.uid}:${session.route}:${session.idempotencyKey.toLowerCase()}:${suffix}`
 }
 
 const invalid = (field: string) => new Error(`enqueue: invalid ${field}`)

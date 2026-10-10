@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { HttpError } from "../src/http/errors"
-import { isContentionAbort } from "../src/d1/matter/ops"
+import { isContentionAbort } from "../src/d1/contention"
 
 // PR #9 CI: openMatter's round transaction gave up under lock contention (gRPC ABORTED) and the
 // router answered 500 internal. A contention abort is now a moved round, never a 500.

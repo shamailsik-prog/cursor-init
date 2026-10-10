@@ -52,6 +52,17 @@ describe("parseName and parseKeys (no emulator needed)", () => {
 })
 
 describe.skipIf(!EMULATORS)("registerClient", () => {
+  it("10 parallel registrations in one firm answer 200 or 409 registry_contended, never 500 (O-45)", async () => {
+    const firmId = await newFirm()
+    const tokens = await Promise.all(Array.from({ length: 10 }, () => mintIdToken(claims(firmId, "partner"))))
+    const results = await Promise.allSettled(tokens.map((t) => registerClient({ token: t.token, data: body(firmId) } as never)))
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected")
+    for (const f of failed) expect([f.reason.status, f.reason.code]).toEqual([409, "registry_contended"])
+    const ok = results.filter((r) => r.status === "fulfilled").length
+    expect(ok).toBeGreaterThan(0)
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(ok)
+  }, 120_000)
+
   it("allocates SKD-YYYY-0001 then -0002; clerk may register; one allow audit row per call", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))

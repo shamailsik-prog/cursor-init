@@ -3,6 +3,7 @@ import type { Classification } from "@/platform/p1/types"
 import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
+import { isContentionAbort } from "../contention"
 import type { Caller } from "../../p5/auth"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
@@ -54,28 +55,6 @@ export const openMatterTestSeam: { afterPreScreen?: (round: number) => Promise<v
 
 /** A round's transaction saw a registry version other than its pre-screen's: nothing written, redo. */
 const REGISTRY_MOVED = Symbol("registry_moved")
-
-/**
- * gRPC INVALID_ARGUMENT (3) texts that mean "this transaction is gone", not a bad request: the
- * emulator's closed transaction, and the expired transaction the Admin SDK itself retries
- * (its isRetryableTransactionError matches /transaction has expired/).
- */
-const DEAD_TRANSACTION = /Transaction is invalid or closed|transaction has expired/i
-
-/**
- * A Firestore transaction that gave up under lock contention after its maxAttempts. In openMatter it
- * wrote nothing, so it is a moved round, not a 500 (PR #9 CI). Either gRPC ABORTED (code 10), or gRPC
- * INVALID_ARGUMENT (code 3) for a dead transaction: under load a transactional read waits out the
- * emulator's 2s lock timeout (10 ABORTED), gax's stream retry re-sends it on the transaction that abort
- * closed, and the "3 INVALID_ARGUMENT: Transaction is invalid or closed." that comes back is not
- * retried by the SDK runner. Any other INVALID_ARGUMENT is a bug and stays a 500.
- */
-export function isContentionAbort(err: unknown): boolean {
-  if (!(err instanceof Error) || err instanceof HttpError) return false
-  const code = (err as { code?: unknown }).code
-  if (code === 10 || (typeof code === "string" && code.toLowerCase() === "aborted")) return true
-  return code === 3 && DEAD_TRANSACTION.test(err.message)
-}
 
 const STAFF_ROLES: ReadonlySet<string> = new Set(["partner", "associate", "clerk", "intern"])
 
