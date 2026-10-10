@@ -206,13 +206,14 @@ jobs:
             | --- | --- |
             | backend_real | true/false |
             | frontend_real | true/false |
-            | transport_stub | true |
+            | transport_stub | true (false only once no stub marker remains) |
             and the line "Not a COMPLETE / product-done claim." Never write that the product, a phase or
             anything is complete or done. Do not edit docs/LEGAL_OS_PHASE_VERIFICATION.md or
             docs/audits/*audit.md in the same PR as app/, platform/ or tests/ changes.
             transport_stub MUST be true while the filing transport stub markers remain, because the
-            claim gate (rule 8 of ci_gates/check_pr_phase_claims.py) fails false then. Declare each flag
-            only in that table: a second declaration with another value fails the gate.
+            claim gate (rule 8 of ci_gates/check_pr_phase_claims.py) fails false then. Declare every flag
+            (backend_real, frontend_real, transport_stub) only in that table: a second declaration of
+            the same flag with another value fails the gate.
 
             Conserve usage: one slice only, no exploratory rewrites, no dependency upgrades, no
             unrelated refactors, no re-running green suites without a reason. If you cannot finish the

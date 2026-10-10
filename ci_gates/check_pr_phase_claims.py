@@ -254,7 +254,9 @@ def main() -> int:
     if missing_flags:
         failures.append(
             "PR metadata must declare backend_real, frontend_real, and transport_stub "
-            f"(missing: {', '.join(missing_flags)})."
+            f"(missing: {', '.join(missing_flags)}). Declare each at the start of a line "
+            "(`flag: value`, optionally as a list item) or in a `| flag | value |` table row; "
+            "an inline mention inside a sentence is not a declaration."
         )
 
     callsite_evidence_required = flags.get("frontend_real") is True
