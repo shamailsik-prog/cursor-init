@@ -207,9 +207,12 @@ type SweepRun = { deps: JobDeps; out: SweepResult; settled: Set<string>; spent: 
 
 /**
  * Runs one query in pages (P3-36) and settles each row it returns that this sweep has not yet
- * settled. A row whose queried snapshot already fails `qualifies` is skipped without a
- * transaction (the transaction's re-read stays the authority for every row it does open). Stops on
- * a short page, after `SWEEP_MAX_PAGES`, or on a page that acted on no row. A failed page is
+ * settled. Each page starts after the previous page's last row (a query cursor), so a row the sweep
+ * re-stamps but that still matches the query (query A' at the 600 s cap: the re-stamp lands above
+ * its fixed bound) cannot push the next page back onto rows already handled. A row whose queried
+ * snapshot already fails `qualifies` is skipped without a transaction (the transaction's re-read
+ * stays the authority for every row it does open). Stops on a short page, after `SWEEP_MAX_PAGES`,
+ * or on a page that acted on no row. A failed page is
  * logged and ends the query. Answers "spent" when the sweep's budget, checked before each page and
  * each row, ran out: the caller then ends the whole sweep.
  */
@@ -221,12 +224,13 @@ async function sweepQuery(
   run: SweepRun
 ): Promise<"done" | "spent"> {
   const { deps, out, settled } = run
+  let after: QueryDocumentSnapshot | undefined
   for (let page = 0; page < SWEEP_MAX_PAGES; page++) {
     if (run.spent()) return "spent"
     let docs: QueryDocumentSnapshot[]
     try {
       await sweepTestSeam.beforeQuery?.(name)
-      docs = (await query.get()).docs
+      docs = (await (after === undefined ? query : query.startAfter(after)).get()).docs
     } catch (err) {
       logFailure("job sweep failed", err)
       return "done"
@@ -240,6 +244,7 @@ async function sweepQuery(
       await settle(doc.ref, step, deps, out)
     }
     if (docs.length < SWEEP_LIMIT || actedOn(out) === before) return "done"
+    after = docs[docs.length - 1]
   }
   return "done"
 }

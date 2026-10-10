@@ -368,6 +368,30 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     expect((await readJob(trusted)).updateTime.isEqual(before.updateTime)).toBe(true)
   })
 
+  it("query A' pages past rows it re-stamps: 150 skewed rows at the 600 s cap are all reset in one sweep (cursor paging, PR #16 review)", async () => {
+    const ids = await seedMany(SWEEP_LIMIT + 50, T0)
+    const now = T0 + 1_000_000
+    const batch = adminDb().batch()
+    // Stamps from a sweep 1 h ahead: untrusted dispatchedAt, sweepAt far beyond now + 600 s, redispatches at the cap.
+    ids.forEach((id, i) =>
+      batch.update(jobsRef().doc(id), { dispatchSeq: 5, redispatches: 5, dispatchedAt: Timestamp.fromMillis(now + 3_600_000), sweepAt: Timestamp.fromMillis(now + 4_200_000 + i) })
+    )
+    await batch.commit()
+    // A' takes its bound before its first page; the page then takes 1 s of the sweep's clock, as a real page does,
+    // so each row it resets is re-stamped at now + 1 s + 600 s, still above the bound. Re-running the same query for
+    // page 2 would return those 100 re-stamped rows again (they sort first), all settled: a page that acts on no row.
+    let skewPages = 0
+    sweepTestSeam.beforeQuery = async (name) => {
+      if (name === "skew" && ++skewPages === 1) clock.advance(1_000)
+    }
+    const r = await sweepAt(now)
+    expect(r.dispatched.sort()).toEqual([...ids].sort())
+    expect(new Set(r.dispatched).size).toBe(ids.length)
+    // At least the two pages this test's 150 rows need (rows other tests leave in the shared emulator may add one).
+    expect(skewPages).toBeGreaterThanOrEqual(2)
+    expect((await readJob(ids[0])).sweepAt?.toMillis()).toBe(now + 1_000 + MAX_REDISPATCH_BACKOFF_MS)
+  }, 60_000)
+
   it("query A' takes its bound from a clock read after query A: 100 rows A re-dispatches at the 600 s cap do not fill A's page, and a skewed row is still reset (final review)", async () => {
     const ids = await seedMany(SWEEP_LIMIT, T0)
     const skewed = await seed()
@@ -445,8 +469,8 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     eligible.forEach((id, i) => batch.update(jobsRef().doc(id), { sweepAt: Timestamp.fromMillis(T0 + 1_000 + i) }))
     await batch.commit()
     // Between query A's first and second page the 30 declined rows qualify (their last dispatch is now 700 s
-    // old, past the 600 s backoff; they are still queued and due). Only the sweep's `settled` set keeps the
-    // second page from dispatching them: their queried snapshot now passes `qualifies` and the re-read agrees.
+    // old, past the 600 s backoff; they are still queued and due). The second page must not dispatch them:
+    // it starts after the first page's last row (the query cursor), and the sweep's `settled` set backs that up.
     let aPages = 0
     let before: Awaited<ReturnType<typeof readJob>>[] = []
     let r: Awaited<ReturnType<typeof sweep>>
@@ -462,8 +486,9 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     } finally {
       delete sweepTestSeam.beforeQuery
     }
-    // Pages of 100: 30 declined + 70, then 30 settled + 70, then 30 settled + 10 (short page, stop).
-    expect(aPages).toBe(3)
+    // Pages of 100 with a cursor: 30 declined + 70, then the remaining 80 (short page, stop). (Re-running the
+    // query without a cursor read three pages: 30 declined + 70, 30 settled + 70, 30 settled + 10.)
+    expect(aPages).toBe(2)
     expect(before).toHaveLength(30)
     const perJob = new Map<string, number>()
     for (const t of d.dispatcher.tasks) perJob.set(t.jobId, (perJob.get(t.jobId) ?? 0) + 1)
