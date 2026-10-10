@@ -7081,19 +7081,19 @@ export function OperatorAuditConsole() {
           </label>
           <div className="grid gap-3 md:grid-cols-5">
             <label className="block">
-              <span className="mb-1 block text-xs tracking-wide uppercase">matterId</span>
+              <span className="mb-1 block font-mono text-xs">matterId</span>
               <Input className="rounded-none font-mono text-xs" value={matterId} onChange={(e) => setMatterId(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs tracking-wide uppercase">documentId</span>
+              <span className="mb-1 block font-mono text-xs">documentId</span>
               <Input className="rounded-none font-mono text-xs" value={documentId} onChange={(e) => setDocumentId(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs tracking-wide uppercase">draftId</span>
+              <span className="mb-1 block font-mono text-xs">draftId</span>
               <Input className="rounded-none font-mono text-xs" value={draftId} onChange={(e) => setDraftId(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs tracking-wide uppercase">packageId</span>
+              <span className="mb-1 block font-mono text-xs">packageId</span>
               <Input className="rounded-none font-mono text-xs" value={packageId} onChange={(e) => setPackageId(e.target.value)} />
             </label>
             <label className="block">
@@ -7103,19 +7103,19 @@ export function OperatorAuditConsole() {
           </div>
           <div className="grid gap-3 md:grid-cols-4">
             <label className="block">
-              <span className="mb-1 block text-xs tracking-wide uppercase">attestationId</span>
+              <span className="mb-1 block font-mono text-xs">attestationId</span>
               <Input className="rounded-none font-mono text-xs" value={attestationId} onChange={(e) => setAttestationId(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs tracking-wide uppercase">disputeId</span>
+              <span className="mb-1 block font-mono text-xs">disputeId</span>
               <Input className="rounded-none font-mono text-xs" value={disputeId} onChange={(e) => setDisputeId(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs tracking-wide uppercase">adjudicationId (#70-#73 path)</span>
+              <span className="mb-1 block font-mono text-xs">adjudicationId (#70-#73 path)</span>
               <Input className="rounded-none font-mono text-xs" value={adjudicationId} onChange={(e) => setAdjudicationId(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs tracking-wide uppercase">rebalanceId (#60-#69 path)</span>
+              <span className="mb-1 block font-mono text-xs">rebalanceId (#60-#69 path)</span>
               <Input className="rounded-none font-mono text-xs" value={rebalanceId} onChange={(e) => setRebalanceId(e.target.value)} />
             </label>
           </div>
