@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { afterEach, describe, expect, it } from "vitest"
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
-import { AUTO_CONFIRM_JOB_TYPE, AUTO_CONFIRM_MAX_STEPS, AUTO_CONFIRM_STEP_PAIRS, autoConfirmTestSeam } from "../src/d1/entity/autoConfirmJob"
+import { AUTO_CONFIRM_JOB_TYPE, AUTO_CONFIRM_MAX_STEPS, AUTO_CONFIRM_STEP_PAIRS, autoConfirmTestSeam, mergeEventIdOf } from "../src/d1/entity/autoConfirmJob"
 import { LINK_AUTO_CONFIRM_MS } from "../src/d1/entity/linkState"
 import { readRegistryVersion } from "../src/d1/registryVersion"
 import { MAX_FENCED_STEPS, RETRY_DELAYS_MS } from "../src/p2/constants"
@@ -289,14 +289,20 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     const s = await seed()
     const at = ((await linkRow(s)).createdAt as Timestamp).toMillis() + LINK_AUTO_CONFIRM_MS + DAY
     // The dispute goes through the real route after the scan, before step 0's transaction (a late dispute, P2-28).
+    // The baseline is taken right after the dispute, so the comparison proves the job's own step wrote nothing
+    // and bumped nothing (disputeLink bumps the registry itself).
+    let disputed: DocumentData[] = []
+    let registryAfterDispute: number | null = null
     const steps = recordSteps(async ({ index }) => {
-      if (index === 0) await disputeLink({ token: s.partner.token, data: { firmId: s.firmId, linkId: s.linkId, note: NOTE } } as never)
+      if (index !== 0) return
+      await disputeLink({ token: s.partner.token, data: { firmId: s.firmId, linkId: s.linkId, note: NOTE } } as never)
+      disputed = await rowsOf([s.linkId])
+      registryAfterDispute = await readRegistryVersion(s.firmId)
     })
     expect((await runDay(s.firmId, at)).outcome).toBe("done")
-    const disputed = await rowsOf([s.linkId])
     expect(disputed[0]).toMatchObject({ state: "candidate", disputed: true })
-    // disputeLink bumps the registry itself, so the version is not compared here.
-    await expectAdmittedAndRejected(s.firmId, s.pairId, [s.linkId], steps, disputed, null)
+    expect(registryAfterDispute).not.toBeNull()
+    await expectAdmittedAndRejected(s.firmId, s.pairId, [s.linkId], steps, disputed, registryAfterDispute)
   })
 
   it("P3-56(d): a row with an un-merge in progress is admitted by the scan and rejected in the transaction; nothing is written", async () => {
@@ -435,5 +441,12 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     expect(await deps.dispatcher.drainDue(at + RETRY_DELAYS_MS[0])).toEqual(["done"])
     expect(await mergeEvents(s)).toHaveLength(1)
     expect(await linkRow(s)).toMatchObject({ state: "confirmed", confirmation: { auto: true } })
+  })
+})
+
+describe("auto-confirm merge event id (P3-55), fixed vector", () => {
+  it("auto_ + the first 32 hex of SHA-256(firmId NUL pairId NUL sorted link ids joined by commas), checked against a hard-coded digest", () => {
+    // Computed independently (Python hashlib) from b"firm-1\x00aaa_bbb\x00l1,l2"; the link ids are given unsorted on purpose.
+    expect(mergeEventIdOf("firm-1", "aaa_bbb", ["l2", "l1"])).toBe("auto_75edbd70e2bf68a6bf4f13bf1fdaa5b7")
   })
 })

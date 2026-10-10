@@ -36,7 +36,7 @@ export const AUTO_CONFIRM_SPEC = { jobType: AUTO_CONFIRM_JOB_TYPE, cron: "15 2 *
 
 /** Pairs materialised per fenced step (one transaction). */
 export const AUTO_CONFIRM_STEP_PAIRS = 10
-/** Positional steps per run (P3-51): two of the job's MAX_FENCED_STEPS stay spare, so a retry never reaches `fenced_step_limit`. */
+/** Positional steps per run (P3-51): ids are reused on a retry, so a job never records more than 48 of its MAX_FENCED_STEPS; the two spare are headroom. */
 export const AUTO_CONFIRM_MAX_STEPS = MAX_FENCED_STEPS - 2
 /** Candidate link rows one run reads; rows beyond it wait for the next day's run. */
 export const AUTO_CONFIRM_ROW_LIMIT = 2000
@@ -70,7 +70,7 @@ function parse(payload: unknown): Payload {
  * The pair's merge event id (P3-55): `auto_` and the first 32 hex characters of
  * SHA-256(firmId NUL pairId NUL the sorted link ids joined by commas).
  */
-function mergeEventIdOf(firmId: string, pairId: string, linkIds: readonly string[]): string {
+export function mergeEventIdOf(firmId: string, pairId: string, linkIds: readonly string[]): string {
   const digest = createHash("sha256").update(`${firmId}\0${pairId}\0${[...linkIds].sort().join(",")}`).digest("hex")
   return `auto_${digest.slice(0, 32)}`
 }
