@@ -326,6 +326,33 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     expect((await sweepAt(T0 + 30_001)).dispatched).toHaveLength(100)
   }, 180_000)
 
+  it("a row the re-read declines stays in every page's result and is settled once: 150 eligible rows behind 30 declined ones are each dispatched once (P3-36)", async () => {
+    const ids = await seedMany(180, T0)
+    const now = T0 + 30_000
+    const [declined, eligible] = [ids.slice(0, 30), ids.slice(30)]
+    const batch = adminDb().batch()
+    // The 30 declined rows sort first (earliest sweepAt) and were re-dispatched 10 s ago with a 600 s
+    // backoff (a lost race): the re-read declines each, so they stay in the result set of every page.
+    declined.forEach((id, i) =>
+      batch.update(jobsRef().doc(id), { sweepAt: Timestamp.fromMillis(T0 + i), dispatchSeq: 5, dispatchedAt: Timestamp.fromMillis(now - 10_000), redispatches: 5 })
+    )
+    eligible.forEach((id, i) => batch.update(jobsRef().doc(id), { sweepAt: Timestamp.fromMillis(T0 + 1_000 + i) }))
+    await batch.commit()
+    const before = await Promise.all(declined.map((id) => readJob(id)))
+    const pages: string[] = []
+    sweepTestSeam.beforeQuery = async (name) => void pages.push(name)
+    const r = await sweepAt(now)
+    // Pages of 100: 30 declined + 70, then 30 settled + 70, then 30 settled + 10 (short page, stop).
+    expect(pages.filter((p) => p === "A")).toHaveLength(3)
+    const perJob = new Map<string, number>()
+    for (const t of d.dispatcher.tasks) perJob.set(t.jobId, (perJob.get(t.jobId) ?? 0) + 1)
+    expect([...perJob.keys()].sort()).toEqual([...eligible].sort())
+    expect([...perJob.values()].every((n) => n === 1)).toBe(true)
+    expect([...r.dispatched].sort()).toEqual([...eligible].sort())
+    const after = await Promise.all(declined.map((id) => readJob(id)))
+    expect(after.map((row, i) => row.updateTime.isEqual(before[i].updateTime))).toEqual(declined.map(() => true))
+  }, 60_000)
+
   it("paging stops when a page acts on no row: a full page of rows that all lose the re-read is read once", async () => {
     const ids = await seedMany(SWEEP_LIMIT + 20, T0)
     const now = T0 + 30_000
