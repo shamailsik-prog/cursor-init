@@ -52,4 +52,14 @@ describe("/ops design review: labels, landmark, readable actions", () => {
     const secondary = source.match(/<Button\s+variant="secondary"/g) ?? []
     expect(secondary.length).toBe(19)
   })
+
+  it("controls are at least 44px tall on small screens and compact from md up", () => {
+    const actionButtons = source.match(/<Button\s+(?:variant="secondary"\s+)?className="[^"]*"\s+disabled=\{busy\}/g) ?? []
+    expect(actionButtons.length).toBe(39)
+    for (const button of actionButtons) expect(button).toContain("min-h-11 w-full md:min-h-9")
+    const inputs = source.match(/<Input className="[^"]*"/g) ?? []
+    expect(inputs.length).toBe(17)
+    for (const input of inputs) expect(input).toContain("h-11 rounded-none md:h-8")
+    expect(source).toContain("inline-flex h-11 items-center justify-center rounded-none border border-border px-2.5 text-sm md:h-8")
+  })
 })
