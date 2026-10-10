@@ -72,5 +72,7 @@ Separate from #19's Phase 3c close-out (`docs/superpowers/plans/2026-10-11-phase
 
 - [x] Merge `origin/main` (no rebase). Keep #20's single Phase 3c CI step, and keep #19's E-46, P3-51, P3-52 and the O-43 closure. Re-apply this branch's rulings as P3-53..P3-59, E-47, and its ledger section as "Phase 3c auto-confirm fixes".
 - [x] Rename the spec and plan to `2026-10-10-phase3c-autoconfirm-fixes*`. Renumber the code comments, the test names and the gate's `AUTO_TESTS` to match.
+- [x] I1: the claim gate counts only line-anchored flag declarations (`flag: value` or `flag=value` at the start of a line, optionally a list item, or a `| flag | value |` table row) and fails when declarations of one flag conflict. Tests are written first, among them this PR's own body as a fixture.
+- [x] I2: the autopilot workflow must declare `transport_stub` true while the filing transport stub markers remain.
 - [x] M1: the audit row is written in the step transaction that writes its merge event (E-47(b), P3-54). M2: the `ops.ts` late-dispute comment cites P3-46 and E-45(c). M3: an existing event is skipped and logged, `autoconfirm.event_exists_skip` with `firmId` and `pairId` only (the test is written first), and O-52 is opened. M4: O-50 records the starvation of the scan window. M5: the gate derives its expected count from its name arrays.
 

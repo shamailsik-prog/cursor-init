@@ -3,7 +3,10 @@
 
 Rules:
 1) Require explicit `backend_real`, `frontend_real`, and `transport_stub` flags
-   in PR metadata.
+   in PR metadata. Only line-anchored declarations count: `flag: value` or
+   `flag=value` at the start of a line (optionally a `-`/`*`/`+` list item), or
+   a markdown table row `| flag | value |`. A mention inside a sentence, such as
+   "fails `transport_stub: false` while...", is not a declaration.
 2) Require action/view -> `/ops` call-site evidence in PR metadata only when
    `frontend_real=true` or `/ops` files are changed.
 3) If PR metadata claims "scaffold-only/docs-only/no runtime change", fail when
@@ -18,6 +21,8 @@ Rules:
 7) Reject self-certifying DONE/COMPLETE statements directed to Shamail.
 8) Fail when `transport_stub` is declared false while filing transport
    TODO/stub markers remain in the tree (the flag must say what the code is).
+9) Fail when one flag is declared more than once with different values
+   ("conflicting <flag> declarations"); no declaration silently wins.
 """
 
 from __future__ import annotations
@@ -63,10 +68,20 @@ FLAG_NAMES = ("backend_real", "frontend_real", "transport_stub")
 TRUTHY = frozenset({"true", "pass", "yes", "1"})
 FALSY = frozenset({"false", "fail", "no", "0"})
 
-FLAG_VALUE_RE = re.compile(
-    r"\b(?P<name>backend_real|frontend_real|transport_stub)\b\s*[:=]\s*"
-    r"(?P<value>true|false|pass|fail|yes|no|1|0)\b",
-    re.IGNORECASE,
+_FLAG_NAME = r"backend_real|frontend_real|transport_stub"
+_FLAG_VALUE = r"true|false|pass|fail|yes|no|1|0"
+
+# A declaration line: the flag name at the start of a line (optionally a `-`/`*`/`+` list item;
+# the name alone may be wrapped in backticks or bold), then `:` or `=`, then the value. A mention
+# inside a sentence ("fails `transport_stub: false` while...") is not at the start of a line, and
+# a code span quoting a whole declaration ("`transport_stub=false` is refused") does not wrap the
+# name alone, so neither is a declaration. `true/false` (a template placeholder) is no value.
+FLAG_DECLARATION_LINE_RE = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?"
+    rf"(?:`(?P<n1>{_FLAG_NAME})`|\*\*(?P<n2>{_FLAG_NAME})\*\*|(?P<n3>{_FLAG_NAME}))"
+    r"[ \t]*[:=][ \t]*(?:\*\*|`)?"
+    rf"(?P<value>{_FLAG_VALUE})\b(?!/)",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # Markdown table rows, e.g. `| backend_real | true |` or `| **backend_real** | **true** |`.
@@ -155,13 +170,14 @@ def transport_stub_present() -> bool:
     return bool(transport_stub_files())
 
 
-def parse_flags(claim_text: str) -> dict[str, bool]:
-    parsed: dict[str, bool] = {}
-    for match in FLAG_VALUE_RE.finditer(claim_text):
-        name = match.group("name").lower()
+def flag_declarations(claim_text: str) -> dict[str, list[bool]]:
+    """Every line-anchored declaration of each flag, in the order they appear."""
+    found: list[tuple[int, str, bool]] = []
+    for match in FLAG_DECLARATION_LINE_RE.finditer(claim_text):
+        name = (match.group("n1") or match.group("n2") or match.group("n3")).lower()
         coerced = _coerce_flag_value(match.group("value"))
         if coerced is not None:
-            parsed[name] = coerced
+            found.append((match.start(), name, coerced))
     for match in FLAG_TABLE_ROW_RE.finditer(claim_text):
         name = _strip_markdown_cell(match.group("name"))
         if name not in FLAG_NAMES:
@@ -170,8 +186,23 @@ def parse_flags(claim_text: str) -> dict[str, bool]:
         value_token = re.split(r"\s+[-—]\s+|\s+", value_cell, maxsplit=1)[0]
         coerced = _coerce_flag_value(value_token)
         if coerced is not None:
-            parsed[name] = coerced
-    return parsed
+            found.append((match.start(), name, coerced))
+    declarations: dict[str, list[bool]] = {}
+    for _, name, value in sorted(found):
+        declarations.setdefault(name, []).append(value)
+    return declarations
+
+
+def parse_flags(claim_text: str) -> tuple[dict[str, bool], dict[str, list[bool]]]:
+    """The declared flags, and apart from them the flags whose declarations disagree."""
+    flags: dict[str, bool] = {}
+    conflicts: dict[str, list[bool]] = {}
+    for name, values in flag_declarations(claim_text).items():
+        if len(set(values)) > 1:
+            conflicts[name] = values
+        else:
+            flags[name] = values[0]
+    return flags, conflicts
 
 
 def _contained_in_spans(match: re.Match[str], spans: list[tuple[int, int]]) -> bool:
@@ -211,9 +242,15 @@ def main() -> int:
         print("BASE_SHA/HEAD_SHA missing; changed-file checks skipped.")
 
     failures: list[str] = []
-    flags = parse_flags(claim_text)
+    flags, conflicting_flags = parse_flags(claim_text)
 
-    missing_flags = [name for name in ("backend_real", "frontend_real", "transport_stub") if name not in flags]
+    for name, values in conflicting_flags.items():
+        failures.append(
+            f"conflicting {name} declarations ({', '.join('true' if v else 'false' for v in values)}, "
+            "in order); declare each flag once, at the start of a line or in a `| flag | value |` row."
+        )
+
+    missing_flags = [name for name in FLAG_NAMES if name not in flags and name not in conflicting_flags]
     if missing_flags:
         failures.append(
             "PR metadata must declare backend_real, frontend_real, and transport_stub "

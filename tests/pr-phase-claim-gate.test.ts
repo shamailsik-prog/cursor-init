@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -471,6 +471,100 @@ describe("PR phase claim gate hardening", () => {
       expect(result.status).toBe(1)
       expect(result.stdout).toContain("transport_stub=false but filing transport stub markers remain")
       expect(result.stdout).toContain("PR claims COMPLETE/product-done while filing transport TODO/stub markers still exist.")
+    })
+
+    describe("only line-anchored flag declarations count, and conflicting declarations fail (final review I1)", () => {
+      const gate = (files: Record<string, string>, body: string) => {
+        const repo = makeRepo(files, { ...files, "README.md": "head\n" })
+        return runGate(repo.root, { PR_TITLE: "Auto-confirm fixes", PR_BODY: body, BASE_SHA: repo.baseSha, HEAD_SHA: repo.headSha })
+      }
+
+      it("fails transport_stub declared false and then true (the later one no longer wins)", () => {
+        const result = gate(CLEAN, ["backend_real=true", "frontend_real=false", "transport_stub=false", "transport_stub=true"].join("\n"))
+        expect(result.status).toBe(1)
+        expect(result.stdout).toContain("conflicting transport_stub declarations")
+      })
+
+      it("fails transport_stub declared true and then false", () => {
+        const result = gate(CLEAN, ["backend_real: true", "frontend_real: false", "transport_stub: true", "", "Notes.", "transport_stub: false"].join("\n"))
+        expect(result.status).toBe(1)
+        expect(result.stdout).toContain("conflicting transport_stub declarations")
+      })
+
+      it("fails a list-item transport_stub: false in the prose mixed with a table row that says true", () => {
+        const result = gate(
+          STUBBED,
+          [
+            "## Flags",
+            "- transport_stub: false",
+            "",
+            "| flag | value |",
+            "| --- | --- |",
+            "| backend_real | true |",
+            "| frontend_real | false |",
+            "| transport_stub | true |",
+          ].join("\n")
+        )
+        expect(result.status).toBe(1)
+        expect(result.stdout).toContain("conflicting transport_stub declarations")
+      })
+
+      it("passes a prose mention of `transport_stub: false` beside a table row that says true", () => {
+        const result = gate(
+          STUBBED,
+          [
+            "| flag | value |",
+            "| --- | --- |",
+            "| backend_real | true |",
+            "| frontend_real | false |",
+            "| transport_stub | true |",
+            "",
+            "The claim gate fails `transport_stub: false` while the filing transport stub markers remain.",
+          ].join("\n")
+        )
+        expect(result.status).toBe(0)
+        expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+      })
+
+      it("passes a transport_stub=true line followed by a prose mention of transport_stub=false (a mention is not a declaration)", () => {
+        const result = gate(
+          STUBBED,
+          ["backend_real=true", "frontend_real=false", "transport_stub=true", "", "A PR that says transport_stub=false while the markers remain is refused."].join("\n")
+        )
+        expect(result.status).toBe(0)
+        expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+      })
+
+      it("treats a flag that appears only inside a sentence as missing", () => {
+        const result = gate(CLEAN, ["backend_real=true", "frontend_real=false", "We keep transport_stub=true for now."].join("\n"))
+        expect(result.status).toBe(1)
+        expect(result.stdout).toContain("missing: transport_stub")
+      })
+
+      it("fails conflicting backend_real and frontend_real declarations the same way", () => {
+        const result = gate(
+          CLEAN,
+          ["backend_real=true", "frontend_real=false", "transport_stub=true", "| backend_real | false |", "| `frontend_real` | **true** |"].join("\n")
+        )
+        expect(result.status).toBe(1)
+        expect(result.stdout).toContain("conflicting backend_real declarations")
+        expect(result.stdout).toContain("conflicting frontend_real declarations")
+        expect(result.stdout).not.toContain("missing:")
+      })
+
+      it("passes one flag declared twice with the same value (a key=value line and a table row)", () => {
+        const result = gate(STUBBED, ["backend_real=true", "frontend_real=false", "transport_stub=true", "| transport_stub | **true** |"].join("\n"))
+        expect(result.status).toBe(0)
+        expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+      })
+
+      it("passes this PR's own body (#21), which quotes `transport_stub: false` in prose and declares true in its table", () => {
+        const body = readFileSync(resolve(process.cwd(), "tests/fixtures/pr-21-body.md"), "utf-8")
+        expect(body).toContain("`transport_stub: false`")
+        const result = gate(STUBBED, body)
+        expect(result.status).toBe(0)
+        expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+      })
     })
   })
 
