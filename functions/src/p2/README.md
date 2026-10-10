@@ -52,4 +52,4 @@ carrying codes only, never payload values. Create the log-based alert policy at 
 
 ## Scheduled job types
 
-`d1.autoconfirm` (Phase 3c, P3-43) is the one scheduled type: `SCHEDULED_JOBS` in `scheduled.ts`, deployed as `d1AutoConfirmTick`.
+`d1.autoconfirm` (Phase 3c, P3-43) is the one scheduled type: `SCHEDULED_JOBS` in `scheduled.ts`, deployed as `d1AutoConfirmTick`. Every scheduled tick retries up to 3 times (60 s to 600 s backoff, `SCHEDULE_RETRY`, O-43); runs are idempotent per firm and period, so a retry reuses what the failed tick created.

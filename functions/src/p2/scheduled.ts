@@ -204,9 +204,16 @@ export async function backfillScheduledRuns(spec: ScheduledJobSpec, fromKey: str
   return total
 }
 
+/**
+ * O-43 (P3-51): a tick that throws (`ScheduledRunsFailedError`, a firm-page read failure) is retried
+ * by the scheduler, 3 times at 60 s to 600 s. Safe because a run is keyed per firm and period, so a
+ * retry reuses the jobs the failed tick already created.
+ */
+export const SCHEDULE_RETRY = { retryCount: 3, minBackoffSeconds: 60, maxBackoffSeconds: 600 } as const
+
 /** A deployed schedule for `spec`, in PKT. */
 export function scheduledJobFunction(spec: ScheduledJobSpec): ScheduleFunction {
-  return onSchedule({ schedule: spec.cron, timeZone: "Asia/Karachi", region: REGION }, async () => {
+  return onSchedule({ schedule: spec.cron, timeZone: "Asia/Karachi", region: REGION, ...SCHEDULE_RETRY }, async () => {
     await enqueueScheduledRuns(spec, Date.now())
   })
 }

@@ -18,4 +18,4 @@
 - [x] Task 2: register the handler (`p2/registry.ts`), the schedule (`p2/scheduled.ts`), the deployed tick `d1AutoConfirmTick` (`p2/functions.ts`, `index.ts`); update the boot, engine and scheduled tests.
 - [x] Task 3: gate `ci_gates/gate_g4_phase3c.sh`, `npm run gate:g4:phase3c`. The `gate-g0.yml` step is NOT in this PR (token lacks `workflows` permission): add after the Phase 3b step `- name: Gate G-4 Phase 3c` `run: npm run gate:g4:phase3c`.
 - [x] Task 4: rulings P3-42..P3-50 in the rulings file; erratum E-45; O-28 closed; `p2/README.md` note.
-- [ ] Remaining (not in 3c): O-43 tick retry, O-47, O-48, O-29, 2b-B probabilistic `resolveEntity`.
+- [ ] Remaining (not in 3c): O-47 (O-43 closed by the close-out plan), O-48, O-29, 2b-B probabilistic `resolveEntity`.
