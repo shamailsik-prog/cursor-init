@@ -53,6 +53,10 @@ describe("P2 boot (P3-5, P3-8)", () => {
       },
     })
     expect([index.d1AutoConfirmTick.__endpoint.region, index.d1AutoConfirmTick.__endpoint.scheduleTrigger]).toEqual([["asia-south1"], expect.objectContaining({ schedule: "15 2 * * *", timeZone: "Asia/Karachi" })])
+    // O-43 (P3-51): a failed daily tick is retried by the scheduler; the runs are idempotent per firm and day.
+    expect(index.d1AutoConfirmTick.__endpoint.scheduleTrigger).toMatchObject({ retryConfig: { retryCount: 3, minBackoffSeconds: 60, maxBackoffSeconds: 600 } })
+    // The sweeper sets no retry count: the next minute's sweep is its retry.
+    expect(index.jobSweeper.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
     expect(index.jobSweeper.__endpoint.scheduleTrigger).toMatchObject({ schedule: "every 1 minutes" })
     // Pinned below the one-minute schedule, not left to the platform default.
     expect(index.jobSweeper.__endpoint.timeoutSeconds).toBe(45)
