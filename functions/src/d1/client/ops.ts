@@ -33,6 +33,12 @@ const REGISTER_TX_ATTEMPTS = 10
  */
 export const REGISTER_CLIENT_ROUNDS = 10
 
+/**
+ * Test seam only (the emulator suites set it; production code never does): awaited inside each round's
+ * transaction after its reads and before its writes, so a test can make a round abort deterministically.
+ */
+export const registerClientTestSeam: { beforeCommit?: (round: number) => Promise<void> | void } = {}
+
 /** An optional free-text field: absent or blank is omitted; otherwise a trimmed string of at most `max` characters. */
 function optionalText(value: unknown, max = 500): string | undefined {
   if (value === undefined || value === null) return undefined
@@ -117,7 +123,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
     const clientRef = clients().doc()
     audit.target = `clients/${clientRef.id}`
 
-    const runRound = () =>
+    const runRound = (round: number) =>
       db.runTransaction(
       async (tx) => {
       // Reads first: prefixes, entities sharing a key, the clients of those entities, then the counter.
@@ -145,6 +151,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       }
       const n = await allocateNumber(tx, caller.firmId, "client", now)
       const clientCode = formatClientCode(clientPrefix, karachiYear(now), n)
+      await registerClientTestSeam.beforeCommit?.(round)
 
       await audit.stage(tx, "allow", "ok")
       bumpRegistryVersion(tx, caller.firmId)
@@ -205,7 +212,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       )
     for (let round = 1; round <= REGISTER_CLIENT_ROUNDS; round++) {
       try {
-        const result = await runRound()
+        const result = await runRound(round)
         audit.committed()
         return result
       } catch (err) {

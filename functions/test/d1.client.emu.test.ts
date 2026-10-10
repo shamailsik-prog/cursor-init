@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
+import { REGISTER_CLIENT_ROUNDS, registerClientTestSeam } from "../src/d1/client/ops"
+import { readRegistryVersion } from "../src/d1/registryVersion"
 import { parseKeys, parseName } from "../src/d1/validate"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
@@ -49,6 +51,51 @@ describe("parseName and parseKeys (no emulator needed)", () => {
     expect(() => parseKeys({ phone: "12345" })).toThrow(expect.objectContaining({ code: "invalid_subjects" }))
     expect(() => parseKeys({ cnic: 4210112345671 })).toThrow(expect.objectContaining({ code: "invalid_subjects" }))
   })
+})
+
+const deadTransaction = () =>
+  Object.assign(new Error("3 INVALID_ARGUMENT: Transaction is invalid or closed."), { code: 3, details: "Transaction is invalid or closed." })
+
+describe.skipIf(!EMULATORS)("registerClient contention rounds (O-45, P3-39)", () => {
+  it("a contention abort in round 1 only → 200, one client, the registry version bumped once", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    const rounds: number[] = []
+    registerClientTestSeam.beforeCommit = (round) => {
+      rounds.push(round)
+      if (round === 1) throw deadTransaction()
+    }
+    try {
+      const out = await registerClient({ token: partner.token, data: body(firmId) } as never)
+      expect(out.clientCode).toMatch(/^SKD-\d{4}-0001$/)
+    } finally {
+      delete registerClientTestSeam.beforeCommit
+    }
+    expect(rounds).toEqual([1, 2])
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(1)
+    expect(await readRegistryVersion(firmId)).toBe(1)
+  }, 60_000)
+
+  it("a contention abort in every round → 409 registry_contended after REGISTER_CLIENT_ROUNDS rounds, nothing written", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    let calls = 0
+    registerClientTestSeam.beforeCommit = () => {
+      calls++
+      throw deadTransaction()
+    }
+    try {
+      const err = await apiErrorOf(registerClient({ token: partner.token, data: body(firmId) } as never))
+      expect([err.status, err.code]).toEqual([409, "registry_contended"])
+    } finally {
+      delete registerClientTestSeam.beforeCommit
+    }
+    expect(REGISTER_CLIENT_ROUNDS).toBe(10)
+    expect(calls).toBe(REGISTER_CLIENT_ROUNDS)
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect((await adminDb().collection("entities").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect(await readRegistryVersion(firmId)).toBe(0)
+  }, 60_000)
 })
 
 describe.skipIf(!EMULATORS)("registerClient", () => {
