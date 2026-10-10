@@ -87,6 +87,7 @@ export const D1_ACTIONS = [
   "entity.confirm",
   "entity.dispute",
   "entity.reject",
+  "entity.unmerge",
 ] as const
 export type D1Action = (typeof D1_ACTIONS)[number]
 const D1_ACTION_SET: ReadonlySet<string> = new Set(D1_ACTIONS)
@@ -113,6 +114,7 @@ const D1_ROLES: Record<D1Action, readonly string[]> = {
   "entity.confirm": D1_PARTNER_ASSOCIATE,
   "entity.dispute": D1_PARTNER_ASSOCIATE,
   "entity.reject": ["partner"],
+  "entity.unmerge": ["partner"],
 }
 const D1_MATTER_LEVEL: ReadonlySet<string> = new Set(["matter.read", "matter.advance_stage", "matter.close"])
 

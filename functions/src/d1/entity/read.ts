@@ -10,7 +10,7 @@ import { requirePermission } from "../../p5/permission"
 import { knownOrHighest, maxLabel } from "../conflict/engine"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
 import { requireL17_2 } from "./flag"
-import { LINK_AUTO_CONFIRM_MS, autoConfirmAt, effectiveLinkState, isConfirmedState, pairIdOf, type EffectiveLinkState } from "./linkState"
+import { LINK_AUTO_CONFIRM_MS, autoConfirmAt, effectiveLinkState, isConfirmedState, isUnmergeInProgress, pairIdOf, type EffectiveLinkState } from "./linkState"
 import { clientOfEntity, entityKeys, entitySummary, type ClientRef, type EntitySummary } from "./summary"
 
 /**
@@ -69,7 +69,7 @@ const sortKeys = (keys: Iterable<string>): string[] =>
   })
 
 /** The permission and layer gates every entity route starts with (reads: `entity.review`). */
-export async function gate(caller: Caller, action: "entity.review" | "entity.confirm" | "entity.dispute" | "entity.reject" = "entity.review"): Promise<void> {
+export async function gate(caller: Caller, action: "entity.review" | "entity.confirm" | "entity.dispute" | "entity.reject" | "entity.unmerge" = "entity.review"): Promise<void> {
   await requirePermission(caller, action)
   await requireL17_2(caller.firmId)
 }
@@ -191,6 +191,11 @@ export const listReviewQueueOp: FirmOperation<Page<QueueItem>> = {
         const pairId = pairIdOf(row)
         // Visibility first (as listClients): a hidden pair is skipped and never signals a next page.
         if (hidden.has(pairId)) continue
+        // P3-26: a pair whose un-merge saga is running is not reviewable until it completes.
+        if (isUnmergeInProgress(row)) {
+          hide(pairId)
+          continue
+        }
         if (!withinClearance(row.classification, caller.clearanceLevel) || !(row.createdAt instanceof Timestamp)) {
           hide(pairId)
           continue
@@ -253,7 +258,7 @@ export const listReviewQueueOp: FirmOperation<Page<QueueItem>> = {
 }
 
 /** Unresolved states win when a pair's rows disagree (fail toward review). */
-const PAIR_STATE_PRECEDENCE: readonly EffectiveLinkState[] = ["disputed", "candidate", "rejected", "auto_confirmed", "confirmed"]
+const PAIR_STATE_PRECEDENCE: readonly EffectiveLinkState[] = ["unmerging", "disputed", "candidate", "rejected", "auto_confirmed", "confirmed"]
 
 type PairView = EntityLinkView & { otherRow: DocumentData }
 

@@ -22,6 +22,9 @@ const table: Array<[string, Record<string, unknown>, string]> = [
   ["disputed candidate at 31 d", { state: "candidate", disputed: true, createdAt: ts(now - 31 * DAY_MS) }, "disputed"],
   ["confirmed (even if disputed was set)", { state: "confirmed", disputed: true }, "confirmed"],
   ["rejected", { state: "rejected" }, "rejected"],
+  ["a confirmed row whose un-merge is in progress (P3-26)", { state: "confirmed", disputed: false, unmerge: { status: "in_progress" } }, "unmerging"],
+  ["a reopened row whose un-merge is still in progress", { state: "candidate", disputed: true, unmerge: { status: "in_progress" } }, "unmerging"],
+  ["a reopened row once the un-merge completed", { state: "candidate", disputed: true, unmerge: { status: "completed" } }, "disputed"],
   ["an unknown state", { state: "split" }, "candidate"],
   ["a candidate with disputed missing", { state: "candidate", createdAt: ts(now - 31 * DAY_MS) }, "candidate"],
 ]

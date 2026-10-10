@@ -21,6 +21,7 @@ import * as conflictOps from "../src/d1/conflict/ops"
 import * as matterOps from "../src/d1/matter/ops"
 import * as entityRead from "../src/d1/entity/read"
 import * as entityOps from "../src/d1/entity/ops"
+import * as entityUnmerge from "../src/d1/entity/unmerge"
 import * as jobOps from "../src/p2/ops"
 import { enqueueJob } from "../src/p2/enqueue"
 import { ROUTES, createRouter } from "../src/http/router"
@@ -100,6 +101,7 @@ const PROBES: Record<string, Probe> = {
   listAliases: { data: (a) => ({ entityId: a.entityId }), target: true },
   confirmMerge: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
   disputeLink: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
+  unmergeEntity: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
   rejectLink: { data: (a) => ({ linkId: a.linkId, note: "G2 probe decision note, long enough" }), target: true },
   listJobs: { data: (a) => ({ matterId: a.matterId }), target: true },
   getJob: { data: (a) => ({ jobId: a.deadJobId }), target: true },
@@ -107,7 +109,7 @@ const PROBES: Record<string, Probe> = {
   cancelJob: { data: (a) => ({ jobId: a.queuedJobId, note: "G2 probe cancel note, long enough" }), target: true },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, jobOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined

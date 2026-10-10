@@ -239,3 +239,26 @@ its spec ruling and in E-42 (k) to (r)):
 Phase 3a close is Gate G-4 (`npm run gate:g4:phase3a`): route coverage (20 d1 routes, 4 platform/jobs routes), boot with
 every layer flag off, the five job-engine invariants and two registry-discipline tests by exact name, functions lint at
 zero warnings, and Gate G-2 over all routes.
+
+## Phase 3b rulings
+
+The un-merge saga rulings are P3-24 to P3-33 in `docs/superpowers/specs/2026-10-09-phase3b-unmerge-saga-design.md` (each with
+its reason and cost if wrong). The architecture record is Erratum E-43 and open items O-46 to O-48 in
+`docs/architecture/ERRATUM_SET_2_PROPOSED.md`. The deciding value of each:
+
+- P3-24 scope: `unmergeEntity` and two saga jobs for the collections that reference a link today (`entity_links`, `conflict_checks`); L8411's other collections hold no entity reference yet.
+- P3-25 route: `POST /api/d1/entity/unmergeEntity { linkId, note }`, partner only, 409 `link_not_confirmed` unless every row is confirmed by one unreverted `merge_events` row.
+- P3-26 "unmerge in progress" is the read-time link state `unmerging`: unresolved for the engine, 409 `unmerge_in_progress` for every decision, hidden from the queue.
+- P3-27 the reversal reopens the pair as a disputed candidate (partner-only decision), not a rejection and not the prior state.
+- P3-28 job types `d1.unmerge.links` and `d1.unmerge.checks`, `saga: true`, key `mergeEventId:collection`, payload ids only.
+- P3-29 every effect is a `runFenced` step.
+- P3-30 the last job to finish completes the saga in its own transaction and emits `entity.unmerged` once.
+- P3-31 eager staleness: relying checks marked stale in fenced chunks of 200, step id from the chunk's check ids, cap 9,600.
+- P3-32 no rules or index change; `merge_events` carries the revert record.
+- P3-33 gate `gate_g4_phase3b.sh` (eleven named tests, 21 d1 routes); the 2b-A and 3a gates' route count moves 20 to 21. Its `gate-g0.yml` CI step is a follow-up (the autopilot token cannot edit workflow files).
+
+Open items opened: O-46 (window before the checks job), O-47 (scan and cap for relying checks), O-48 (stuck-saga visibility).
+O-28 stays open (3c). O-44 stays open: 3b does not use `jobKey`. O-36 (sweeper head-of-line blocking with long handlers)
+still applies; the saga handlers are short (one transaction per step) and do not hold dispatch slots for minutes.
+
+Phase 3b gate is `npm run gate:g4:phase3b` (local; not yet a CI step).

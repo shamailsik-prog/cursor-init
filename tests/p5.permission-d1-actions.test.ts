@@ -25,6 +25,7 @@ const MATRIX: Record<string, Role[]> = {
   "entity.confirm": PA,
   "entity.dispute": PA,
   "entity.reject": P,
+  "entity.unmerge": P,
 }
 const MATTER_LEVEL = ["matter.read", "matter.advance_stage", "matter.close"]
 
