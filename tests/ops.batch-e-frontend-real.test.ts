@@ -93,7 +93,7 @@ describe("Batch E frontend_real /ops lattice coverage", () => {
       expect(batchEViewsSource).toContain(`view: "${view}"`)
     }
 
-    expect(source).toContain("23) Batch E actions (#48-#59 filing/escalation lattice)")
-    expect(source).toContain("24) Batch E views (#48-#59 governance reads)")
+    expect(source).toContain("33) Batch E actions (#48-#59 filing/escalation lattice)")
+    expect(source).toContain("34) Batch E views (#48-#59 governance reads)")
   })
 })

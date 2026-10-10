@@ -7003,9 +7003,9 @@ export function OperatorAuditConsole() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 md:px-8">
+    <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 md:px-8">
       <header className="space-y-3">
-        <p className="text-xs tracking-[0.28em] text-[color:var(--brass)] uppercase">Legal OS · phase auditor</p>
+        <p className="text-xs tracking-[0.28em] text-[color:var(--brass-ink)] uppercase">Legal OS · phase auditor</p>
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-heading text-3xl">Operator API audit console</h1>
           <Badge variant="outline" className="rounded-none">
@@ -7021,7 +7021,7 @@ export function OperatorAuditConsole() {
         </p>
         <Link
           href="/"
-          className="inline-flex h-8 items-center justify-center rounded-none border border-border px-2.5 text-sm"
+          className="inline-flex h-11 items-center justify-center rounded-none border border-border px-2.5 text-sm md:h-8"
         >
           Back to foundation console
         </Link>
@@ -7036,98 +7036,98 @@ export function OperatorAuditConsole() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 md:grid-cols-4">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Partner actor</p>
-              <Input className="rounded-none" value={partnerId} onChange={(e) => setPartnerId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Second reviewer actor</p>
-              <Input className="rounded-none" value={secondReviewerId} onChange={(e) => setSecondReviewerId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Operator actor</p>
-              <Input className="rounded-none" value={operatorId} onChange={(e) => setOperatorId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Clerk actor</p>
-              <Input className="rounded-none" value={clerkId} onChange={(e) => setClerkId(e.target.value)} />
-            </div>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Partner actor</span>
+              <Input className="h-11 rounded-none md:h-8" value={partnerId} onChange={(e) => setPartnerId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Second reviewer actor</span>
+              <Input className="h-11 rounded-none md:h-8" value={secondReviewerId} onChange={(e) => setSecondReviewerId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Operator actor</span>
+              <Input className="h-11 rounded-none md:h-8" value={operatorId} onChange={(e) => setOperatorId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Clerk actor</span>
+              <Input className="h-11 rounded-none md:h-8" value={clerkId} onChange={(e) => setClerkId(e.target.value)} />
+            </label>
           </div>
-          <div>
-            <p className="mb-1 text-xs tracking-wide uppercase">Document text payload</p>
+          <label className="block">
+            <span className="mb-1 block text-xs tracking-wide uppercase">Document text payload</span>
             <textarea
               className="border-input bg-background min-h-24 w-full rounded-none border px-3 py-2 text-sm"
               value={fileText}
               onChange={(e) => setFileText(e.target.value)}
             />
-          </div>
+          </label>
           <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Case number raw input</p>
-              <Input className="rounded-none" value={caseNumberRaw} onChange={(e) => setCaseNumberRaw(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Committee purpose</p>
-              <Input className="rounded-none" value={committeePurpose} onChange={(e) => setCommitteePurpose(e.target.value)} />
-            </div>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Case number raw input</span>
+              <Input className="h-11 rounded-none md:h-8" value={caseNumberRaw} onChange={(e) => setCaseNumberRaw(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Committee purpose</span>
+              <Input className="h-11 rounded-none md:h-8" value={committeePurpose} onChange={(e) => setCommitteePurpose(e.target.value)} />
+            </label>
           </div>
-          <div>
-            <p className="mb-1 text-xs tracking-wide uppercase">Committee body</p>
+          <label className="block">
+            <span className="mb-1 block text-xs tracking-wide uppercase">Committee body</span>
             <textarea
               className="border-input bg-background min-h-20 w-full rounded-none border px-3 py-2 text-sm"
               value={committeeBody}
               onChange={(e) => setCommitteeBody(e.target.value)}
             />
-          </div>
+          </label>
           <div className="grid gap-3 md:grid-cols-5">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">matterId</p>
-              <Input className="rounded-none font-mono text-xs" value={matterId} onChange={(e) => setMatterId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">documentId</p>
-              <Input className="rounded-none font-mono text-xs" value={documentId} onChange={(e) => setDocumentId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">draftId</p>
-              <Input className="rounded-none font-mono text-xs" value={draftId} onChange={(e) => setDraftId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">packageId</p>
-              <Input className="rounded-none font-mono text-xs" value={packageId} onChange={(e) => setPackageId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">clientEntityId (#38-#47 path)</p>
-              <Input className="rounded-none font-mono text-xs" value={clientEntityId} onChange={(e) => setClientEntityId(e.target.value)} />
-            </div>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs">matterId</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={matterId} onChange={(e) => setMatterId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs">documentId</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={documentId} onChange={(e) => setDocumentId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs">draftId</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={draftId} onChange={(e) => setDraftId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs">packageId</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={packageId} onChange={(e) => setPackageId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">clientEntityId (#38-#47 path)</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={clientEntityId} onChange={(e) => setClientEntityId(e.target.value)} />
+            </label>
           </div>
           <div className="grid gap-3 md:grid-cols-4">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">attestationId</p>
-              <Input className="rounded-none font-mono text-xs" value={attestationId} onChange={(e) => setAttestationId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">disputeId</p>
-              <Input className="rounded-none font-mono text-xs" value={disputeId} onChange={(e) => setDisputeId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">adjudicationId (#70-#73 path)</p>
-              <Input className="rounded-none font-mono text-xs" value={adjudicationId} onChange={(e) => setAdjudicationId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">rebalanceId (#60-#69 path)</p>
-              <Input className="rounded-none font-mono text-xs" value={rebalanceId} onChange={(e) => setRebalanceId(e.target.value)} />
-            </div>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs">attestationId</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={attestationId} onChange={(e) => setAttestationId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs">disputeId</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={disputeId} onChange={(e) => setDisputeId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs">adjudicationId (#70-#73 path)</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={adjudicationId} onChange={(e) => setAdjudicationId(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs">rebalanceId (#60-#69 path)</span>
+              <Input className="h-11 rounded-none md:h-8 font-mono text-xs" value={rebalanceId} onChange={(e) => setRebalanceId(e.target.value)} />
+            </label>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Burndown target hours</p>
-              <Input className="rounded-none" value={burndownTargetHours} onChange={(e) => setBurndownTargetHours(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Rebaseline target hours</p>
-              <Input className="rounded-none" value={rebaselineTargetHours} onChange={(e) => setRebaselineTargetHours(e.target.value)} />
-            </div>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Burndown target hours</span>
+              <Input className="h-11 rounded-none md:h-8" value={burndownTargetHours} onChange={(e) => setBurndownTargetHours(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Rebaseline target hours</span>
+              <Input className="h-11 rounded-none md:h-8" value={rebaselineTargetHours} onChange={(e) => setRebaselineTargetHours(e.target.value)} />
+            </label>
           </div>
           {notice ? <p className="text-sm text-emerald-700">{notice}</p> : null}
           {error ? <p className="text-destructive text-sm">{error}</p> : null}
@@ -7143,137 +7143,171 @@ export function OperatorAuditConsole() {
               are additive and keep transport-stub behavior visible.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Matter created", seedMatter)}>
-              1) Create matter fixture
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Matter engagement confirmed", confirmMatterEngagementAction)}>
-              2) Confirm engagement (/api/d1/matters)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Matter case-number action recorded", recordMatterCaseNumberAction)}>
-              3) Record case number (/api/d1/matters)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Tenancy memberships read", readTenancyMemberships)}>
-              4) Read tenancy memberships (/api/p5/tenancy)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Tenancy audit read", readTenancyAudit)}>
-              5) Read tenancy audit (/api/p5/tenancy)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Clients registry read", readClientsRegistry)}>
-              6) Read clients list (/api/d1/clients)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Matter reporting read", readMatterReporting)}>
-              7) Read reporting index (/api/d1/reporting)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Ops reporting read", readOpsReporting)}>
-              8) Read ops reporting (/api/d2/ops-reporting)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Committee output persisted", postCommitteeBrainOutput)}>
-              9) Persist committee output (/api/p1/committee-brain)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Committee output list hydrated", readCommitteeBrainOutputs)}>
-              10) Hydrate committee output list (/api/p1/committee-brain)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Document ingested", ingestDocument)}>
-              11) Ingest document
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Workflow transitioned", transitionWorkflow)}>
-              12) Transition workflow
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Workflow queue read", readWorkflowQueue)}>
-              13) Read workflow queue
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Draft composed", composeDraft)}>
-              14) Compose draft
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Draft list read", readDrafts)}>
-              15) Read drafts view
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Court ops queue read", readCourtOpsQueue)}>
-              16) Read court ops queue
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Court ops command sent", runCourtOpsCommand)}>
-              17) Post court ops command
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Filing package created", createFilingPackage)}>
-              18) Create filing package
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Filing package approved", approveFilingPackage)}>
-              19) Approve filing package
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Dispatch queue updated", updateDispatchQueue)}>
-              20) Dispatch update
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Dispatch view read", readFilingsDispatchView)}>
-              21) Read filings dispatch view
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Closure compliance view read", readClosureComplianceView)}>
-              22) Read filings closure compliance view
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Phase #70-#73 adjudication context seeded", seedPhase7073AdjudicationContext)}>
-              23) Seed #70-#73 adjudication context
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch F #60-#69 governance lattice executed", runBatch6069GovernanceLattice)}>
-              15) Run Batch F #60-#69 governance lattice
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Debt burndown target action sent", setClosureAdjudicationDebtBurndownTarget)}>
-              24) Action: set_closure_adjudication_debt_burndown_target
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown rebaseline action sent", rebaselineClosureAdjudicationBurndownForecast)}>
-              25) Action: rebaseline_closure_adjudication_burndown_forecast
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement drift action sent", acknowledgeClosureBurndownSettlementDrift)}>
-              26) Action: acknowledge_closure_burndown_settlement_drift
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement post-resolution action sent", checkpointClosureSettlementPostResolutionVerification)}>
-              27) Action: checkpoint_closure_settlement_post_resolution_verification
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Debt burndown view read", readClosureAdjudicationDebtBurndownView)}>
-              28) View: closure_adjudication_debt_burndown
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown recalibration view read", readClosureBurndownRecalibrationView)}>
-              29) View: closure_burndown_recalibration
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Burndown settlement view read", readClosureBurndownSettlementView)}>
-              30) View: closure_burndown_settlement
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Settlement attestation view read", readClosureSettlementAttestationView)}>
-              31) View: closure_settlement_attestation
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch E action lattice executed", runBatchEActionLattice)}>
-              23) Batch E actions (#48-#59 filing/escalation lattice)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch E governance views read", readBatchEGovernanceViews)}>
-              24) Batch E views (#48-#59 governance reads)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch F governance action lattice executed", runBatchFGovernanceLattice)}>
-              25) Batch F actions (#60-#69 governance lattice)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch F governance views read", readBatchFGovernanceViews)}>
-              26) Batch F views (#60-#69 closure governance reads)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch D API actions executed", runBatchDActions)}>
-              27) Batch D actions (/p5 tenancy + /d1 clients + source actions + committee write)
-            </Button>
-            <Button className="w-full rounded-none" disabled={busy} onClick={() => runStep("Batch D API views read", readBatchDViews)}>
-              28) Batch D views (/p5 tenancy + /d1 reporting + /d2 ops-reporting + committee list)
-            </Button>
-            <Button
-              className="w-full rounded-none"
-              disabled={busy}
-              onClick={() =>
-                runStep(
-                  "PR #202 TB seal verification transport boundary receipt reconciliation lattice",
-                  readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice
-                )
-              }
-            >
-              29) PR #202 ack-recon TB seal verification transport boundary receipt reconciliation
-            </Button>
+          <CardContent className="space-y-6">
+            <section aria-labelledby="ops-steps-matter-fixture" className="space-y-2">
+              <h2 id="ops-steps-matter-fixture" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Matter fixture
+              </h2>
+              <p className="text-muted-foreground text-xs">Create the matter the later steps act on.</p>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter created", seedMatter)}>
+                1) Create matter fixture
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter engagement confirmed", confirmMatterEngagementAction)}>
+                2) Confirm engagement (/api/d1/matters)
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter case-number action recorded", recordMatterCaseNumberAction)}>
+                3) Record case number (/api/d1/matters)
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-tenancy-clients-reporting-and-committee" className="space-y-2">
+              <h2 id="ops-steps-tenancy-clients-reporting-and-committee" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Tenancy, clients, reporting and committee
+              </h2>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Tenancy memberships read", readTenancyMemberships)}>
+                4) Read tenancy memberships (/api/p5/tenancy)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Tenancy audit read", readTenancyAudit)}>
+                5) Read tenancy audit (/api/p5/tenancy)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Clients registry read", readClientsRegistry)}>
+                6) Read clients list (/api/d1/clients)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Matter reporting read", readMatterReporting)}>
+                7) Read reporting index (/api/d1/reporting)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Ops reporting read", readOpsReporting)}>
+                8) Read ops reporting (/api/d2/ops-reporting)
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Committee output persisted", postCommitteeBrainOutput)}>
+                9) Persist committee output (/api/p1/committee-brain)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Committee output list hydrated", readCommitteeBrainOutputs)}>
+                10) Hydrate committee output list (/api/p1/committee-brain)
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-documents-drafts-and-court-ops" className="space-y-2">
+              <h2 id="ops-steps-documents-drafts-and-court-ops" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Documents, drafts and court ops
+              </h2>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Document ingested", ingestDocument)}>
+                11) Ingest document
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Workflow transitioned", transitionWorkflow)}>
+                12) Transition workflow
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Workflow queue read", readWorkflowQueue)}>
+                13) Read workflow queue
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Draft composed", composeDraft)}>
+                14) Compose draft
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Draft list read", readDrafts)}>
+                15) Read drafts view
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Court ops queue read", readCourtOpsQueue)}>
+                16) Read court ops queue
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Court ops command sent", runCourtOpsCommand)}>
+                17) Post court ops command
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-filings" className="space-y-2">
+              <h2 id="ops-steps-filings" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Filings
+              </h2>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Filing package created", createFilingPackage)}>
+                18) Create filing package
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Filing package approved", approveFilingPackage)}>
+                19) Approve filing package
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Dispatch queue updated", updateDispatchQueue)}>
+                20) Dispatch update
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Dispatch view read", readFilingsDispatchView)}>
+                21) Read filings dispatch view
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Closure compliance view read", readClosureComplianceView)}>
+                22) Read filings closure compliance view
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-closure-adjudication-60-73" className="space-y-2">
+              <h2 id="ops-steps-closure-adjudication-60-73" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Closure adjudication (#60-#73)
+              </h2>
+              <p className="text-muted-foreground text-xs">Seed the adjudication context and run the Batch F lattice before the actions and views.</p>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Phase #70-#73 adjudication context seeded", seedPhase7073AdjudicationContext)}>
+                23) Seed #70-#73 adjudication context
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F #60-#69 governance lattice executed", runBatch6069GovernanceLattice)}>
+                24) Run Batch F #60-#69 governance lattice
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Debt burndown target action sent", setClosureAdjudicationDebtBurndownTarget)}>
+                25) Action: set_closure_adjudication_debt_burndown_target
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown rebaseline action sent", rebaselineClosureAdjudicationBurndownForecast)}>
+                26) Action: rebaseline_closure_adjudication_burndown_forecast
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement drift action sent", acknowledgeClosureBurndownSettlementDrift)}>
+                27) Action: acknowledge_closure_burndown_settlement_drift
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement post-resolution action sent", checkpointClosureSettlementPostResolutionVerification)}>
+                28) Action: checkpoint_closure_settlement_post_resolution_verification
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Debt burndown view read", readClosureAdjudicationDebtBurndownView)}>
+                29) View: closure_adjudication_debt_burndown
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown recalibration view read", readClosureBurndownRecalibrationView)}>
+                30) View: closure_burndown_recalibration
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Burndown settlement view read", readClosureBurndownSettlementView)}>
+                31) View: closure_burndown_settlement
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Settlement attestation view read", readClosureSettlementAttestationView)}>
+                32) View: closure_settlement_attestation
+              </Button>
+            </section>
+            <section aria-labelledby="ops-steps-batch-lattice-probes" className="space-y-2">
+              <h2 id="ops-steps-batch-lattice-probes" className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                Batch lattice probes
+              </h2>
+              <p className="text-muted-foreground text-xs">Each probe runs a whole batch of actions or views in one press.</p>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch E action lattice executed", runBatchEActionLattice)}>
+                33) Batch E actions (#48-#59 filing/escalation lattice)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch E governance views read", readBatchEGovernanceViews)}>
+                34) Batch E views (#48-#59 governance reads)
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F governance action lattice executed", runBatchFGovernanceLattice)}>
+                35) Batch F actions (#60-#69 governance lattice)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch F governance views read", readBatchFGovernanceViews)}>
+                36) Batch F views (#60-#69 closure governance reads)
+              </Button>
+              <Button className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch D API actions executed", runBatchDActions)}>
+                37) Batch D actions (/p5 tenancy + /d1 clients + source actions + committee write)
+              </Button>
+              <Button variant="secondary" className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]" disabled={busy} onClick={() => runStep("Batch D API views read", readBatchDViews)}>
+                38) Batch D views (/p5 tenancy + /d1 reporting + /d2 ops-reporting + committee list)
+              </Button>
+              <Button
+                variant="secondary"
+                className="h-auto min-h-11 w-full md:min-h-9 justify-start rounded-none py-2 text-left whitespace-normal [overflow-wrap:anywhere]"
+                disabled={busy}
+                onClick={() =>
+                  runStep(
+                    "PR #202 TB seal verification transport boundary receipt reconciliation lattice",
+                    readAckReconTbSealVerificationTransportBoundaryReceiptReconciliationLattice
+                  )
+                }
+              >
+                39) PR #202 ack-recon TB seal verification transport boundary receipt reconciliation
+              </Button>
+            </section>
           </CardContent>
         </Card>
 
-        <Card className="rounded-none">
+        <Card className="rounded-none lg:sticky lg:top-4 lg:self-start">
           <CardHeader>
             <CardTitle>API call logs</CardTitle>
             <CardDescription>
@@ -7281,7 +7315,7 @@ export function OperatorAuditConsole() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ScrollArea className="h-[740px] border border-border p-3">
+            <ScrollArea className="h-[min(740px,calc(100svh-12rem))] border border-border p-3">
               <div className="space-y-3">
                 {logs.length === 0 ? (
                   <p className="text-muted-foreground text-sm">No calls yet.</p>
@@ -7313,6 +7347,6 @@ export function OperatorAuditConsole() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </main>
   )
 }
