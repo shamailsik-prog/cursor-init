@@ -7,7 +7,9 @@ push here or open PRs here. Claude Code is the only builder.
 ## How it runs
 
 1. **A merge starts the next phase.** Every push to `main` (merging a PR) runs
-   `.github/workflows/legal-os-continue.yml`. Claude Code (`anthropics/claude-code-action`,
+   `.github/workflows/legal-os-continue.yml`. Because `claude-code-action` does not accept the
+   `push` event, that run only re-dispatches the workflow (`workflow_dispatch`, reason
+   `merge to main (<sha>)`), and the build happens in the dispatched run. Claude Code (`anthropics/claude-code-action`,
    model `sonnet`) reads `CLAUDE.md`, the architecture set, `ERRATUM_SET_2_PROPOSED.md` and
    `docs/superpowers/plans|specs`. It picks the **one** next incomplete phase or slice in the build
    order, builds it with the Superpowers workflow, runs the suites and gates, and opens **one** PR

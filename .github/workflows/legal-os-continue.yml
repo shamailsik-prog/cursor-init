@@ -104,10 +104,29 @@ jobs:
 
           echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
 
+  # anthropics/claude-code-action rejects the push event ("Unsupported event type: push"), so a
+  # merge to main does not build directly: it re-dispatches this workflow, and the build runs in
+  # that workflow_dispatch run. GITHUB_TOKEN may dispatch workflows (same as the watchdog).
+  handoff:
+    name: Hand off merge to a dispatched run
+    needs: preflight
+    if: needs.preflight.outputs.should_run == 'true' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch legal-os-continue.yml on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: gh workflow run legal-os-continue.yml -R "$REPO" --ref main -f reason="merge to main (${SHA:0:7})"
+
   build:
     name: Claude Code - next phase/slice
     needs: preflight
-    if: needs.preflight.outputs.should_run == 'true'
+    if: needs.preflight.outputs.should_run == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     permissions:
@@ -200,7 +219,8 @@ jobs:
       - name: Ensure the pushed branch has a PR
         if: always()
         env:
-          GH_TOKEN: ${{ steps.claude.outputs.github_token || github.token }}
+          # The Claude App token is revoked when the action finishes, so use the job token here.
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SINCE_SHA: ${{ github.sha }}
         run: |
