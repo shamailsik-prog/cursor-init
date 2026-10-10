@@ -38,6 +38,9 @@ const JOB_TYPE = "test.long"
 
 const nextOrigin = sweepOrigins(400)
 
+/** Every outcome `runJobTask` can return, at zero: a run's tally holds only the kinds it saw. */
+const NO_OUTCOMES: Record<TaskOutcome, number> = { done: 0, dropped: 0, failed: 0, dead_lettered: 0, lease_lost: 0 }
+
 /**
  * The P3-35 re-send schedule for one waiting row, in ms after its enqueue, derived from
  * `redispatchBackoffMs` on the sweep grid: re-send i + 1 is the first sweep at least
@@ -271,6 +274,11 @@ describe.skipIf(!EMULATORS)("P2 long-handler load test (P3-37, O-36)", () => {
     const fixed = await scenario(firmId, nextOrigin(), redispatchBackoffMs)
     report("fixed", fixed)
     expect(fixed.done).toBe(JOBS)
+    // The tally: each of the 250 jobs is claimed and finished by exactly one delivery ("done"). The only
+    // outcome the worker returns for a duplicate or stale task is "dropped"; the run delivers none, because
+    // every re-dispatched task joins the tail of the FIFO behind all 250 first tasks and the run ends when
+    // the last job is done. A "failed", "dead_lettered" or "lease_lost" outcome would be a real fault.
+    expect({ ...NO_OUTCOMES, ...fixed.outcomes }).toEqual({ done: JOBS, dropped: 0, failed: 0, dead_lettered: 0, lease_lost: 0 })
     expect(fixed.completedAfterMs).not.toBeNull()
     expect(fixed.worstOverrun).toBeLessThanOrEqual(0)
     expect(fixed.overBound).toBe(0)

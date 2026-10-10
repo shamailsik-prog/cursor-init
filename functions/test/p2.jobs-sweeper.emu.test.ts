@@ -326,7 +326,7 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     expect((await sweepAt(T0 + 30_001)).dispatched).toHaveLength(100)
   }, 180_000)
 
-  it("a row the re-read declines stays in every page's result and is settled once: 150 eligible rows behind 30 declined ones are each dispatched once (P3-36)", async () => {
+  it("a row settled on one page is not settled again on a later page, even once it qualifies: 150 eligible rows behind 30 declined ones are each dispatched once (P3-36)", async () => {
     const ids = await seedMany(180, T0)
     const now = T0 + 30_000
     const [declined, eligible] = [ids.slice(0, 30), ids.slice(30)]
@@ -338,19 +338,39 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     )
     eligible.forEach((id, i) => batch.update(jobsRef().doc(id), { sweepAt: Timestamp.fromMillis(T0 + 1_000 + i) }))
     await batch.commit()
-    const before = await Promise.all(declined.map((id) => readJob(id)))
-    const pages: string[] = []
-    sweepTestSeam.beforeQuery = async (name) => void pages.push(name)
-    const r = await sweepAt(now)
+    // Between query A's first and second page the 30 declined rows qualify (their last dispatch is now 700 s
+    // old, past the 600 s backoff; they are still queued and due). Only the sweep's `settled` set keeps the
+    // second page from dispatching them: their queried snapshot now passes `qualifies` and the re-read agrees.
+    let aPages = 0
+    let before: Awaited<ReturnType<typeof readJob>>[] = []
+    let r: Awaited<ReturnType<typeof sweep>>
+    try {
+      sweepTestSeam.beforeQuery = async (name) => {
+        if (name !== "A" || ++aPages !== 2) return
+        const flip = adminDb().batch()
+        declined.forEach((id) => flip.update(jobsRef().doc(id), { dispatchedAt: Timestamp.fromMillis(now - 700_000) }))
+        await flip.commit()
+        before = await Promise.all(declined.map((id) => readJob(id)))
+      }
+      r = await sweepAt(now)
+    } finally {
+      delete sweepTestSeam.beforeQuery
+    }
     // Pages of 100: 30 declined + 70, then 30 settled + 70, then 30 settled + 10 (short page, stop).
-    expect(pages.filter((p) => p === "A")).toHaveLength(3)
+    expect(aPages).toBe(3)
+    expect(before).toHaveLength(30)
     const perJob = new Map<string, number>()
     for (const t of d.dispatcher.tasks) perJob.set(t.jobId, (perJob.get(t.jobId) ?? 0) + 1)
+    // None of the 30 is dispatched in this sweep, and each of the 150 eligible rows exactly once.
+    expect(declined.filter((id) => perJob.has(id) || r.dispatched.includes(id))).toEqual([])
+    expect(eligible.map((id) => perJob.get(id))).toEqual(eligible.map(() => 1))
     expect([...perJob.keys()].sort()).toEqual([...eligible].sort())
-    expect([...perJob.values()].every((n) => n === 1)).toBe(true)
     expect([...r.dispatched].sort()).toEqual([...eligible].sort())
+    // Their rows were not written: the baseline is taken after the mutation above.
     const after = await Promise.all(declined.map((id) => readJob(id)))
     expect(after.map((row, i) => row.updateTime.isEqual(before[i].updateTime))).toEqual(declined.map(() => true))
+    // Control: they did qualify. The next sweep, with a fresh `settled` set, dispatches each of them (and nothing else).
+    expect([...(await sweepAt(now + 1)).dispatched].sort()).toEqual([...declined].sort())
   }, 60_000)
 
   it("paging stops when a page acts on no row: a full page of rows that all lose the re-read is read once", async () => {
