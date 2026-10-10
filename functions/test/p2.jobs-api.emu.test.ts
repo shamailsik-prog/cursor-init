@@ -321,6 +321,7 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     const f = await seedFirm()
     const dead = await job(f)
     await deadLetter(dead)
+    await setJob(dead, { redispatches: 4 })
     const prevSeq = (await readJob(dead)).dispatchSeq
     clock.set(T0 + 60_000)
     expect(await retry(f, f.A, { jobId: dead, note: NOTE })).toMatchObject({
@@ -336,6 +337,9 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     expect(row.requeues).toEqual([expect.objectContaining({ by: f.A.uid, role: "associate", note: NOTE })])
     expect(row.dispatchSeq).toBe(prevSeq + 1)
     expect(row.nextAttemptAt?.toMillis()).toBe(T0 + 60_000)
+    // Due for the sweeper one dispatch grace after the requeue, with the re-dispatch count reset (P3-34, P3-35).
+    expect(row.sweepAt?.toMillis()).toBe(T0 + 60_000 + 30_000)
+    expect(row.redispatches).toBe(0)
     expect(row.dispatchedAt.toMillis()).toBe(T0 + 60_000)
     expect(row.finishedAt).toBeNull()
     expect(row.logs.at(-1)).toMatchObject({ event: "requeued", attempt: 0 })
@@ -424,6 +428,8 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     expect(row.cancellation?.at.toMillis()).toBe(T0 + 5_000)
     expect(row.lease).toBeNull()
     expect(row.nextAttemptAt).toBeNull()
+    // A cancelled row is never the sweeper's (P3-34).
+    expect(row.sweepAt).toBeNull()
     expect(row.finishedAt?.toMillis()).toBe(T0 + 5_000)
     expect(row.logs.at(-1)).toMatchObject({ event: "cancelled" })
     // A task delivered after the cancel is dropped.
@@ -437,6 +443,7 @@ describe.skipIf(!EMULATORS)("P2 jobs API (P3-10..P3-13)", () => {
     const dead = await job(f)
     await deadLetter(dead)
     expect((await cancel(f, f.P, { jobId: dead, note: CANCEL_NOTE })).status).toBe("cancelled")
+    expect([(await readJob(failed)).sweepAt, (await readJob(dead)).sweepAt]).toEqual([null, null])
     expect((await readJob(dead)).lastError).toEqual({ code: "diag_failure", message: "Diagnostic failure (planned)." })
 
     const running = await job(f)

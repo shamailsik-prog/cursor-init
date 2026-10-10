@@ -110,6 +110,44 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     expect(await jobEvents(jobId)).toEqual({})
   })
 
+  it("sweepAt per transition (P3-34): a claim sets the lease expiry, a scheduled retry nextAttemptAt + 30 s, done null; each resets redispatches", async () => {
+    const jobId = await enqueue({ behaviour: "fail_times", failTimes: 1 })
+    await jobsRef().doc(jobId).update({ redispatches: 3 })
+    const running: Array<[unknown, number | undefined, number | undefined]> = []
+    jobWorkerTestSeam.afterClaim = async () => {
+      const row = await readJob(jobId)
+      running.push([row.redispatches, row.sweepAt?.toMillis(), row.lease?.expiresAt.toMillis()])
+      // A sweeper re-dispatch while running (query B) bumps the count; the attempt's end resets it.
+      await jobsRef().doc(jobId).update({ redispatches: 2 })
+    }
+    try {
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+      let row = await readJob(jobId)
+      expect([row.status, row.redispatches, row.sweepAt?.toMillis()]).toEqual(["failed", 0, T0 + 1_000 + 30_000])
+      expect(await d.dispatcher.deliver({ jobId, seq: 1 }, T0 + 1_000)).toBe("done")
+      row = await readJob(jobId)
+      expect([row.status, row.sweepAt]).toEqual(["done", null])
+    } finally {
+      delete jobWorkerTestSeam.afterClaim
+    }
+    expect(running).toEqual([
+      [0, T0 + 600_000, T0 + 600_000],
+      [0, T0 + 1_000 + 600_000, T0 + 1_000 + 600_000],
+    ])
+  })
+
+  it("sweepAt per transition (P3-34): a dead-letter, by the worker or by a reclaim at attempt 4, sets sweepAt null", async () => {
+    const permanent = await enqueue({ behaviour: "permanent" })
+    expect(await d.dispatcher.deliver({ jobId: permanent, seq: 0 }, T0)).toBe("dead_lettered")
+    expect((await readJob(permanent)).sweepAt).toBeNull()
+    const reclaimed = await enqueue({ behaviour: "succeed" })
+    await jobsRef()
+      .doc(reclaimed)
+      .update({ status: "running", attempts: 4, totalAttempts: 4, lease: { owner: "w1", expiresAt: Timestamp.fromMillis(T0) }, sweepAt: Timestamp.fromMillis(T0) })
+    expect(await d.dispatcher.deliver({ jobId: reclaimed, seq: 0 }, T0)).toBe("dead_lettered")
+    expect((await readJob(reclaimed)).sweepAt).toBeNull()
+  })
+
   it("retry schedule: fail_times 2 fails at attempts 1 and 2 (1 s, then 5 s later) and succeeds at 3", async () => {
     const jobId = await enqueue({ behaviour: "fail_times", failTimes: 2 })
     expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")

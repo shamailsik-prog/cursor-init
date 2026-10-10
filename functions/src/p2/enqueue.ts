@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { Timestamp, type CollectionReference, type Transaction } from "firebase-admin/firestore"
+import { Timestamp, type CollectionReference, type DocumentReference, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
@@ -7,7 +7,7 @@ import { canonicalJson } from "../http/idempotency"
 import { isKnownClassification } from "../p5/classification"
 import { isSafeDocId, type Session } from "../p5/common"
 import { stageJobAudit } from "./audit"
-import { JOB_ENGINE, JOB_SCHEMA_VERSION, MAX_ATTEMPTS, MAX_PAYLOAD_BYTES, MAX_REFS, type JobStatus } from "./constants"
+import { DISPATCH_GRACE_MS, JOB_ENGINE, JOB_SCHEMA_VERSION, MAX_ATTEMPTS, MAX_PAYLOAD_BYTES, MAX_REFS, type JobStatus } from "./constants"
 import { handlerFor } from "./registry"
 
 /**
@@ -44,6 +44,15 @@ export type JobRow = {
   lease: { owner: string; expiresAt: Timestamp } | null
   dispatchSeq: number
   dispatchedAt: Timestamp
+  /**
+   * The earliest time the sweeper may act on the row (P3-34), written with every status change:
+   * `queued` at enqueue or requeue, now + `DISPATCH_GRACE_MS`; `failed`, `nextAttemptAt` + the grace;
+   * `running`, the lease's `expiresAt`; after a sweeper re-dispatch, now + its backoff; null when
+   * finished. The sweeper's queries filter and order on it; its re-reads stay the authority.
+   */
+  sweepAt: Timestamp | null
+  /** Sweeper re-dispatches since the row last became due (P3-35); 0 at enqueue, claim, retry and requeue. */
+  redispatches: number
   traceId: string
   lastError: { code: string; message: string } | null
   logs: JobLogEntry[]
@@ -78,6 +87,22 @@ const MAX_KEY_LENGTH = 512
 
 export function jobsRef(): CollectionReference {
   return adminDb().collection("jobs")
+}
+
+/**
+ * A job-row update: one that changes `status` must also set `sweepAt` (P3-34), or the row could
+ * fall out of (or linger in) the sweeper's queries. The type requires it; the runtime check backs
+ * the type for callers that build the update dynamically.
+ */
+export type JobRowUpdate = Partial<Omit<JobRow, "status" | "sweepAt">> &
+  ({ status?: never; sweepAt?: Timestamp | null } | { status: JobStatus; sweepAt: Timestamp | null })
+
+/** Stages `update` on the job row `ref` in `tx`: every engine writer of `status` goes through here. */
+export function stageJobUpdate(tx: Transaction, ref: DocumentReference, update: JobRowUpdate): void {
+  if ("status" in update && !(update.sweepAt === null || update.sweepAt instanceof Timestamp)) {
+    throw new Error("job update: a status change must set sweepAt")
+  }
+  tx.update(ref, update)
 }
 
 /** `"j"` + the first 40 hex characters of SHA-256(firmId NUL jobType NUL idempotencyKey). */
@@ -202,6 +227,8 @@ function newRow(v: Validated, now: number): JobRow {
     lease: null,
     dispatchSeq: 0,
     dispatchedAt: at,
+    sweepAt: Timestamp.fromMillis(now + DISPATCH_GRACE_MS),
+    redispatches: 0,
     traceId: randomUUID(),
     lastError: null,
     logs: [{ at, event: "enqueued", attempt: 0 }],

@@ -4,9 +4,9 @@ import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
 import { logFailure } from "../log"
 import { stageJobAudit, stageJobAuditSync } from "./audit"
-import { CLOCK_SKEW_TOLERANCE_MS, JOB_ENGINE, JOB_LEASE_MS, MAX_ATTEMPTS, MAX_FENCED_STEPS, MAX_LOG_ENTRIES, MAX_REFS, RETRY_DELAYS_MS } from "./constants"
+import { CLOCK_SKEW_TOLERANCE_MS, DISPATCH_GRACE_MS, JOB_ENGINE, JOB_LEASE_MS, MAX_ATTEMPTS, MAX_FENCED_STEPS, MAX_LOG_ENTRIES, MAX_REFS, RETRY_DELAYS_MS } from "./constants"
 import type { JobDeps, JobTask } from "./dispatch"
-import { isSafeRef, jobsRef, type FencedStepRecord, type JobLogEntry, type JobLogEvent, type JobRow } from "./enqueue"
+import { isSafeRef, jobsRef, stageJobUpdate, type FencedStepRecord, type JobLogEntry, type JobLogEvent, type JobRow } from "./enqueue"
 import { JobError, LeaseLostError, sanitizeError, type SanitizedError } from "./errors"
 import { stageJobDeadLetteredEvent, stageJobFailedEvent } from "./jobEvents"
 import { handlerFor, type JobHandler, type JobResult } from "./registry"
@@ -76,8 +76,9 @@ function auditSubject(id: string, row: JobRow) {
  * Stages the end of a failed attempt (shared with the sweeper's `lease_expired` dead-letter).
  * `row` is the row as read in `tx`, its `attempts` counting the attempt that failed. A retryable
  * error below `MAX_ATTEMPTS` → `failed`, due after `RETRY_DELAYS_MS[attempts - 1]`, with
- * `dispatchSeq + 1` (the caller dispatches after commit). Otherwise → `dead_lettered` (the caller
- * raises the alert after commit). Both stage `job.failed`, and the dead-letter also
+ * `dispatchSeq + 1` (the caller dispatches after commit), `sweepAt` one dispatch grace after it is
+ * due and `redispatches` 0 (P3-34, P3-35). Otherwise → `dead_lettered` with `sweepAt` null (the
+ * caller raises the alert after commit). Both stage `job.failed`, and the dead-letter also
  * `job.deadLettered`, plus the system audit row. Writes only; the caller has done its reads.
  */
 export function stageFailure(tx: Transaction, ref: DocumentReference, row: JobRow, err: SanitizedError, now: number): "failed" | "dead_lettered" {
@@ -88,14 +89,18 @@ export function stageFailure(tx: Transaction, ref: DocumentReference, row: JobRo
 function stageFailureRow(tx: Transaction, ref: DocumentReference, row: JobRow, err: SanitizedError, now: number): JobRow {
   const lastError = { code: err.code, message: err.message }
   const retry = !err.permanent && row.attempts < MAX_ATTEMPTS
+  // Only read on a retry, where attempts is 1..3 and the delay exists.
+  const due = retry ? now + RETRY_DELAYS_MS[Math.max(0, row.attempts - 1)] : now
   const next: JobRow = retry
     ? {
         ...row,
         status: "failed",
         lastError,
-        nextAttemptAt: at(now + RETRY_DELAYS_MS[Math.max(0, row.attempts - 1)]),
+        nextAttemptAt: at(due),
         dispatchSeq: row.dispatchSeq + 1,
         dispatchedAt: at(now),
+        sweepAt: at(due + DISPATCH_GRACE_MS),
+        redispatches: 0,
         lease: null,
         updatedAt: at(now),
         logs: appendLog(row, "failed", row.attempts, now, err.code),
@@ -105,17 +110,20 @@ function stageFailureRow(tx: Transaction, ref: DocumentReference, row: JobRow, e
         status: "dead_lettered",
         lastError,
         nextAttemptAt: null,
+        sweepAt: null,
         lease: null,
         updatedAt: at(now),
         finishedAt: at(now),
         logs: appendLog(row, "dead_lettered", row.attempts, now, err.code),
       }
-  tx.update(ref, {
+  stageJobUpdate(tx, ref, {
     status: next.status,
     lastError: next.lastError,
     nextAttemptAt: next.nextAttemptAt,
     dispatchSeq: next.dispatchSeq,
     dispatchedAt: next.dispatchedAt,
+    sweepAt: next.sweepAt,
+    ...(retry ? { redispatches: 0 } : {}),
     lease: null,
     updatedAt: next.updatedAt,
     finishedAt: next.finishedAt,
@@ -170,15 +178,20 @@ async function claim(ref: DocumentReference, task: JobTask, deps: JobDeps): Prom
       attempts: row.attempts + 1,
       totalAttempts: row.totalAttempts + 1,
       lease: { owner, expiresAt: at(now + JOB_LEASE_MS) },
+      // The sweeper's next look is the lease's expiry (query B, P3-34).
+      sweepAt: at(now + JOB_LEASE_MS),
+      redispatches: 0,
       startedAt: at(now),
       updatedAt: at(now),
       logs: appendLog(row, reclaim ? "reclaimed" : "claimed", row.attempts + 1, now),
     }
-    tx.update(ref, {
+    stageJobUpdate(tx, ref, {
       status: claimed.status,
       attempts: claimed.attempts,
       totalAttempts: claimed.totalAttempts,
       lease: claimed.lease,
+      sweepAt: claimed.sweepAt,
+      redispatches: 0,
       startedAt: claimed.startedAt,
       updatedAt: claimed.updatedAt,
       logs: claimed.logs,
@@ -302,12 +315,13 @@ async function commit(ref: DocumentReference, owner: string, outcome: HandlerOut
     } catch (err) {
       throw new ApplyFailed(err)
     }
-    tx.update(ref, {
+    stageJobUpdate(tx, ref, {
       status: "done",
       lastError: null,
       outputRefs: [...outputRefs],
       lease: null,
       nextAttemptAt: null,
+      sweepAt: null,
       updatedAt: at(now),
       finishedAt: at(now),
       logs: appendLog(row, "done", row.attempts, now),

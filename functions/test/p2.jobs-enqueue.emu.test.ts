@@ -58,6 +58,9 @@ describe.skipIf(!EMULATORS)("P2 enqueue (P3-2, P3-4)", () => {
       finishedAt: null,
     })
     for (const f of ["nextAttemptAt", "dispatchedAt", "createdAt", "updatedAt"] as const) expect(row[f]?.toMillis()).toBe(T0)
+    // The sweeper may act on a new row once the dispatch grace has passed (P3-34); no re-dispatch yet (P3-35).
+    expect(row.sweepAt?.toMillis()).toBe(T0 + 30_000)
+    expect(row.redispatches).toBe(0)
     expect(row.traceId).toMatch(/^[0-9a-f-]{36}$/)
     expect(row.logs.map((l) => [l.event, l.attempt])).toEqual([["enqueued", 0]])
     expect(row.logs[0].at.toMillis()).toBe(T0)

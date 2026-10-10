@@ -209,9 +209,10 @@ describe.skipIf(!EMULATORS)("P2 job engine invariants (P3-4, P3-6..P3-8)", () =>
       expect((await readJob(jobId)).dispatchedAt.toMillis()).toBe(dueAt40 ? T + 40_000 : T + 600_000)
       expect(await attempts()).toBeLessThanOrEqual(4)
       if (k === 1) {
-        // Twenty sweeps at one clock, 40 s after that reset: the first may dispatch, the rest must not.
+        // Twenty sweeps at one clock, one backoff after that reset (its second re-dispatch: 120 s,
+        // P3-35): the first may dispatch, the rest must not.
         for (let i = 0; i < 20; i++) {
-          clock.set(T + 80_000)
+          clock.set(T + 40_000 + 120_000)
           twentyInARow.push(await sweep(d))
         }
         sweepResults.push(...twentyInARow)
