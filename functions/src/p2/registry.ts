@@ -1,5 +1,6 @@
 import type { Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
+import { autoConfirmHandler } from "../d1/entity/autoConfirmJob"
 import { unmergeChecksHandler, unmergeLinksHandler } from "../d1/entity/unmergeJobs"
 import { diagnosticHandler } from "./diagnostic"
 import type { Subscriber } from "./fanout"
@@ -47,11 +48,12 @@ export type JobHandler<P = unknown> = {
   run(ctx: JobContext<P>): Promise<JobResult>
 }
 
-/** Production job types: the diagnostic type (P3-17) and the 3b un-merge saga types (P3-24). */
+/** Production job types: the diagnostic type (P3-17) and the 3b un-merge saga types (P3-24) and the 3c auto-confirm job (P3-43). */
 export const JOB_HANDLERS: ReadonlyMap<string, JobHandler> = new Map<string, JobHandler>([
   [diagnosticHandler.jobType, diagnosticHandler as JobHandler],
   [unmergeLinksHandler.jobType, unmergeLinksHandler as JobHandler],
   [unmergeChecksHandler.jobType, unmergeChecksHandler as JobHandler],
+  [autoConfirmHandler.jobType, autoConfirmHandler as JobHandler],
 ])
 
 /** Test-only registrations (e.g. a saga-flagged type). Never set in production code. */

@@ -63,6 +63,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   onEventCreated: "Firestore trigger on events, no caller",
   jobWorker: "Cloud Tasks queue function, OIDC-invoked by Cloud Tasks only; acts on the job id it is given",
   jobSweeper: "scheduler, no caller",
+  d1AutoConfirmTick: "scheduler, no caller; enqueues d1.autoconfirm for every firm, which acts only on its own firm"
 }
 
 /**

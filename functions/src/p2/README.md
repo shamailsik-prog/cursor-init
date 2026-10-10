@@ -49,3 +49,7 @@ carrying codes only, never payload values. Create the log-based alert policy at 
     npm --prefix functions run jobs:backfill -- <jobType> <from> <to>
 
 `<from>` and `<to>` are inclusive period keys for the job's period (for example `2026-10-01 2026-10-07` for a daily job). At most 366 periods per call. It runs against the project in the ambient Admin credentials (`GOOGLE_APPLICATION_CREDENTIALS` / `GCLOUD_PROJECT`, or `FIRESTORE_EMULATOR_HOST` for the emulator). Re-running it is safe: runs that exist are reused. Exit codes: 0 done, 2 unknown job type or bad range, 64 wrong arguments, 1 store failure or a scheduled type whose handler is not registered.
+
+## Scheduled job types
+
+`d1.autoconfirm` (Phase 3c, P3-43) is the one scheduled type: `SCHEDULED_JOBS` in `scheduled.ts`, deployed as `d1AutoConfirmTick`.

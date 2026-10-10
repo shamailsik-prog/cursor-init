@@ -85,7 +85,7 @@ const ENTITY_FIELD = { cnic: "cnic", ntn: "ntn", secp: "secpNumber", phone: "pho
 type EntitySnap = { entityId: string; canonicalName: string; cnic?: string; ntn?: string; secpNumber?: string; phone?: string; classification: string }
 
 /** The pre-merge snapshot of an entity (P2-24): its name, keys and label. */
-function snapOf(entityId: string, row: DocumentData): EntitySnap {
+export function snapOf(entityId: string, row: DocumentData): EntitySnap {
   const keys = entityKeys(row)
   const snap: EntitySnap = { entityId, canonicalName: typeof row.canonicalName === "string" ? row.canonicalName : "", classification: knownOrHighest(row.classification) }
   for (const [key, field] of Object.entries(ENTITY_FIELD) as Array<[keyof EntityKeys, keyof EntitySnap]>) {

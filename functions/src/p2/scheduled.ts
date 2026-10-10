@@ -3,6 +3,7 @@ import { onSchedule, type ScheduleFunction } from "firebase-functions/v2/schedul
 import { adminDb } from "../admin"
 import { REGION } from "../health"
 import { logFailure } from "../log"
+import { AUTO_CONFIRM_SPEC } from "../d1/entity/autoConfirmJob"
 import { enqueueJob } from "./enqueue"
 import { handlerFor } from "./registry"
 
@@ -16,8 +17,8 @@ import { handlerFor } from "./registry"
 export type Period = "hour" | "day" | "week" | "month"
 export type ScheduledJobSpec = { jobType: string; cron: string; period: Period }
 
-/** No scheduled P2 job ships in Phase 3a. */
-export const SCHEDULED_JOBS: readonly ScheduledJobSpec[] = []
+/** The scheduled P2 jobs: none in 3a; the 3c auto-confirm materialisation (P3-43). */
+export const SCHEDULED_JOBS: readonly ScheduledJobSpec[] = [AUTO_CONFIRM_SPEC]
 
 const PKT_OFFSET_MS = 5 * 3_600_000
 const DAY_MS = 86_400_000

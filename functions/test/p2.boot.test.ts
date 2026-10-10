@@ -34,7 +34,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated"])
+    expect(Object.keys(index).sort()).toEqual(["api", "d1AutoConfirmTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated"])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
@@ -52,6 +52,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
         rateLimits: { maxConcurrentDispatches: 10, maxDispatchesPerSecond: 5 },
       },
     })
+    expect([index.d1AutoConfirmTick.__endpoint.region, index.d1AutoConfirmTick.__endpoint.scheduleTrigger]).toEqual([["asia-south1"], expect.objectContaining({ schedule: "15 2 * * *", timeZone: "Asia/Karachi" })])
     expect(index.jobSweeper.__endpoint.scheduleTrigger).toMatchObject({ schedule: "every 1 minutes" })
     // Pinned below the one-minute schedule, not left to the platform default.
     expect(index.jobSweeper.__endpoint.timeoutSeconds).toBe(45)
@@ -61,7 +62,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }
-    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks"])
+    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm"])
     expect(SUBSCRIBERS).toEqual([])
   })
 
