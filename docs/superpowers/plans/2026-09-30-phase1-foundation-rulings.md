@@ -278,3 +278,20 @@ record is Erratum E-44, and O-36, O-44, O-45 and O-46 are closed. The deciding v
 - P3-39 `registerClient` runs up to 10 rounds on a contention abort (and, like `openMatter`, starts no round after 90 s; a round already running can still overrun the 120 s timeout, O-49), then 409 `registry_contended` with one deny audit row and nothing written; `isContentionAbort` moved to `functions/src/d1/contention.ts`.
 - P3-40 `openMatter` reads the links a stored check's hits relied on, inside its transaction before any write (rows of the caller's firm only), and answers 409 `unmerge_in_progress` if any has an un-merge in progress, whatever the L17.2 layer flag (a saga started with the flag on runs on if it is switched off); a check the checks job already marked stale answers `check_stale` first. `reliedOnLinkIds(check)` is shared with the checks job.
 - P3-41 `gate:g4:phase3b` runs in the gates job after Phase 3a; it selects sixteen tests by exact name (the eleven of P3-33, the two O-46 refusals, the sweeper back-off and head-of-line tests, and the load test).
+
+## Phase 3c rulings
+
+The auto-confirm materialisation rulings are P3-42 to P3-50 in `docs/superpowers/specs/2026-10-11-phase3c-autoconfirm-design.md`
+(each with its reason and cost if wrong). The architecture record is Erratum E-45; O-28 is closed. The deciding value of each:
+
+- P3-42 scope: one job type `d1.autoconfirm`, one scheduled run per firm per PKT day; no route, rules or index change.
+- P3-43 schedule `15 2 * * *` Asia/Karachi (`d1AutoConfirmTick`), run key `d1.autoconfirm:YYYY-MM-DD`, label `internal`, `saga: false`. O-43 stays open; a lost tick costs at most one day.
+- P3-44 eligibility is the read-time rule: L17.2 on, every key row of the pair an `auto_confirmed` candidate; re-checked in the step's transaction.
+- P3-45 per pair: a `merge_events` row (`basis: "auto_confirm"`, `priorState: "candidate"`, actor `system`, `effectiveAt`), rows `confirmed` with `confirmation.auto: true`, `entity.confirmed`; the same shape `confirmMerge` writes.
+- P3-46 a materialised pair cannot be disputed (409 `link_not_candidate`) but can be un-merged; E-41(d), P2-28's late dispute and E-43(f) are superseded.
+- P3-47 a step that writes bumps the registry version in the same transaction.
+- P3-48 at most 2,000 rows read and 480 pairs per run, in fenced steps of 10 pairs.
+- P3-49 job label `internal`; event rows carry the pair label.
+- P3-50 gate `npm run gate:g4:phase3c` (twenty named tests, 21 d1 routes), its CI step is a follow-up (workflow edits need a token with `workflows` permission).
+
+Open items: O-28 closed. O-43 now applies to a shipped schedule (bounded to one day).

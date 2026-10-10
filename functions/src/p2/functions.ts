@@ -9,6 +9,8 @@ import { isSafeDocId } from "../p5/common"
 import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS, SWEEP_BUDGET_MS } from "./constants"
 import { runtimeDeps, type JobDeps, type JobTask } from "./dispatch"
 import { fanOutEvent } from "./fanout"
+import { AUTO_CONFIRM_SPEC } from "../d1/entity/autoConfirmJob"
+import { scheduledJobFunction } from "./scheduled"
 import { sweep } from "./sweeper"
 import { runJobTask } from "./worker"
 
@@ -104,3 +106,6 @@ if (!(SWEEP_BUDGET_MS + 10_000 <= SWEEPER_TIMEOUT_SECONDS * 1000)) {
 export const jobSweeper = onSchedule({ schedule: "every 1 minutes", region: REGION, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS }, async () => {
   await sweep(runtimeDeps())
 })
+
+/** The daily auto-confirm tick (P3-43): enqueues `d1.autoconfirm` for every firm, once per PKT day. */
+export const d1AutoConfirmTick = scheduledJobFunction(AUTO_CONFIRM_SPEC)
