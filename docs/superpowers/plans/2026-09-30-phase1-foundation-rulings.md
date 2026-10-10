@@ -295,3 +295,10 @@ The auto-confirm materialisation rulings are P3-42 to P3-50 in `docs/superpowers
 - P3-50 gate `npm run gate:g4:phase3c` (twenty named tests, 21 d1 routes), its CI step is a follow-up (workflow edits need a token with `workflows` permission).
 
 Open items: O-28 closed. O-43 now applies to a shipped schedule (bounded to one day).
+
+## Phase 3c close-out rulings
+
+P3-51 and P3-52 are in `docs/superpowers/specs/2026-10-11-phase3c-closeout-design.md`; the architecture record is Erratum E-46; O-43 is closed.
+
+- P3-51 scheduled ticks are deployed with `retryCount: 3`, backoff 60 s to 600 s (`SCHEDULE_RETRY`); the runs are idempotent per firm and period.
+- P3-52 `gate:g4:phase3c` is to run in CI after the Phase 3b step (workflow edit pending a token with `workflows` permission); its boot step (`p2.boot.test.ts`) now also pins the tick's retry config, so no new gate script.
