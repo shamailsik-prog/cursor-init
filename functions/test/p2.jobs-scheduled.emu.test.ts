@@ -35,7 +35,12 @@ describe.skipIf(!EMULATORS)("P2 scheduled jobs (P3-16)", () => {
     after.forEach((row, i) => expect(row.updateTime.isEqual(before[i].updateTime)).toBe(true))
   })
 
-  it("backfill enqueues every period of the range per firm, and a second run creates nothing", async () => {
+  // The backfill commits one transaction per firm per period over every firm in the shared emulator
+  // (and the second run reads them all again), so its cost is O(firms). The firm count is whatever
+  // the files that ran earlier left behind, and vitest orders files from its results cache, so this
+  // test ran in 0.8 s early and exceeded the 15 s default when its file ran last. The timeout bounds
+  // the worst case; the assertions are unchanged.
+  it("backfill enqueues every period of the range per firm, and a second run creates nothing", { timeout: 120_000 }, async () => {
     const run = await backfillScheduledRuns(spec, "2026-10-05", "2026-10-07", T0)
     expect(run.created).toBeGreaterThanOrEqual(9)
     for (const f of firms) {

@@ -301,4 +301,18 @@ Open items: O-28 closed. O-43 now applies to a shipped schedule (bounded to one 
 P3-51 and P3-52 are in `docs/superpowers/specs/2026-10-11-phase3c-closeout-design.md`; the architecture record is Erratum E-46; O-43 is closed.
 
 - P3-51 scheduled ticks are deployed with `retryCount: 3`, backoff 60 s to 600 s (`SCHEDULE_RETRY`); the runs are idempotent per firm and period.
-- P3-52 `gate:g4:phase3c` is to run in CI after the Phase 3b step (workflow edit pending a token with `workflows` permission); its boot step (`p2.boot.test.ts`) now also pins the tick's retry config, so no new gate script.
+- P3-52 `gate:g4:phase3c` is to run in CI after the Phase 3b step (workflow edit pending a token with `workflows` permission; #20, `5d888ce`, made it); its boot step (`p2.boot.test.ts`) now also pins the tick's retry config, so no new gate script.
+
+## Phase 3c auto-confirm fixes
+
+Separate from #19's close-out above, and numbered after it. PR #17 shipped the auto-confirm job with a retry that could dead-letter, no audit row, a `priorState` that meant two things, a flag read once per run and untested re-check branches. The auto-confirm fixes rulings are P3-53 to P3-59 in `docs/superpowers/specs/2026-10-10-phase3c-autoconfirm-fixes-design.md` (each with its reason and cost if wrong); the architecture record is Erratum E-47 (E-45 amended), and O-50, O-51 and O-52 are opened. The deciding value of each:
+
+- P3-53 fenced step ids are positional, `autoconfirm-<n>` for chunk n of the attempt, at most 48 (`AUTO_CONFIRM_MAX_STEPS = MAX_FENCED_STEPS - 2`); a retry reuses the ids and never reaches `fenced_step_limit`; pairs that shift into a committed position wait a day.
+- P3-54 one `audit_log` row per materialised pair, in the step transaction that writes its merge event (up to 10 pairs share a step's transaction): actor and `onBehalfOf` `system`, action `entity.confirm`, target `merge_events/<id>`, decision `allow`, reason `auto_confirm`, classification the pair's label.
+- P3-55 `priorState: "auto_confirmed"`, the pair's prior effective state, as `confirmMerge` records it; supersedes `"candidate"` in O-28 and E-45(a).
+- P3-56 each step's transaction reads `firms/{firmId}` and writes nothing when L17.2 is off; a failed flag read at the start of a run is the retryable `flag_read_failed`, not a run that ends as done.
+- P3-57 merge event id `auto_` + the first 32 hex characters of SHA-256 (`firmId`, NUL, `pairId`, NUL, sorted link ids joined by commas), written with `create`; an existing event means the pair is skipped (and logged, `autoconfirm.event_exists_skip` with the firm and pair ids only).
+- P3-58 the in-transaction re-check has four tests in which the scan admits the pair and the transaction must reject it (young sibling for another key, a confirmed row plus an aged candidate, a dispute between scan and step, an un-merge in progress), plus a retry test; all are in the Phase 3c gate.
+- P3-59 `gate:g4:phase3c` (its CI step after Phase 3b came from #20) selects twenty-nine tests by exact name, counted from its name arrays; E-45 and the 3c dates are corrected (10 October 2026, merged that day); the stale late-dispute comment in `ops.ts` is fixed; `check_pr_phase_claims.py` fails `transport_stub` false while the filing transport stub markers remain, counts only line-anchored flag declarations (a `flag: value` line or a `| flag | value |` row, not a mention in prose) and fails conflicting ones; the autopilot workflow declares `transport_stub` true while the markers remain.
+
+Open items opened: O-50 (mixed pairs, and the scan-window starvation they can cause), O-51 (the unused `period` payload field), O-52 (a pair whose deterministic event id is already taken has no repair path). O-47, O-48 and O-49 stay open; O-43 is closed by #19 (E-46, P3-51).
