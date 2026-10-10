@@ -7036,98 +7036,98 @@ export function OperatorAuditConsole() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 md:grid-cols-4">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Partner actor</p>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Partner actor</span>
               <Input className="rounded-none" value={partnerId} onChange={(e) => setPartnerId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Second reviewer actor</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Second reviewer actor</span>
               <Input className="rounded-none" value={secondReviewerId} onChange={(e) => setSecondReviewerId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Operator actor</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Operator actor</span>
               <Input className="rounded-none" value={operatorId} onChange={(e) => setOperatorId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Clerk actor</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Clerk actor</span>
               <Input className="rounded-none" value={clerkId} onChange={(e) => setClerkId(e.target.value)} />
-            </div>
+            </label>
           </div>
-          <div>
-            <p className="mb-1 text-xs tracking-wide uppercase">Document text payload</p>
+          <label className="block">
+            <span className="mb-1 block text-xs tracking-wide uppercase">Document text payload</span>
             <textarea
               className="border-input bg-background min-h-24 w-full rounded-none border px-3 py-2 text-sm"
               value={fileText}
               onChange={(e) => setFileText(e.target.value)}
             />
-          </div>
+          </label>
           <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Case number raw input</p>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Case number raw input</span>
               <Input className="rounded-none" value={caseNumberRaw} onChange={(e) => setCaseNumberRaw(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Committee purpose</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Committee purpose</span>
               <Input className="rounded-none" value={committeePurpose} onChange={(e) => setCommitteePurpose(e.target.value)} />
-            </div>
+            </label>
           </div>
-          <div>
-            <p className="mb-1 text-xs tracking-wide uppercase">Committee body</p>
+          <label className="block">
+            <span className="mb-1 block text-xs tracking-wide uppercase">Committee body</span>
             <textarea
               className="border-input bg-background min-h-20 w-full rounded-none border px-3 py-2 text-sm"
               value={committeeBody}
               onChange={(e) => setCommitteeBody(e.target.value)}
             />
-          </div>
+          </label>
           <div className="grid gap-3 md:grid-cols-5">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">matterId</p>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">matterId</span>
               <Input className="rounded-none font-mono text-xs" value={matterId} onChange={(e) => setMatterId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">documentId</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">documentId</span>
               <Input className="rounded-none font-mono text-xs" value={documentId} onChange={(e) => setDocumentId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">draftId</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">draftId</span>
               <Input className="rounded-none font-mono text-xs" value={draftId} onChange={(e) => setDraftId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">packageId</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">packageId</span>
               <Input className="rounded-none font-mono text-xs" value={packageId} onChange={(e) => setPackageId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">clientEntityId (#38-#47 path)</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">clientEntityId (#38-#47 path)</span>
               <Input className="rounded-none font-mono text-xs" value={clientEntityId} onChange={(e) => setClientEntityId(e.target.value)} />
-            </div>
+            </label>
           </div>
           <div className="grid gap-3 md:grid-cols-4">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">attestationId</p>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">attestationId</span>
               <Input className="rounded-none font-mono text-xs" value={attestationId} onChange={(e) => setAttestationId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">disputeId</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">disputeId</span>
               <Input className="rounded-none font-mono text-xs" value={disputeId} onChange={(e) => setDisputeId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">adjudicationId (#70-#73 path)</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">adjudicationId (#70-#73 path)</span>
               <Input className="rounded-none font-mono text-xs" value={adjudicationId} onChange={(e) => setAdjudicationId(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">rebalanceId (#60-#69 path)</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">rebalanceId (#60-#69 path)</span>
               <Input className="rounded-none font-mono text-xs" value={rebalanceId} onChange={(e) => setRebalanceId(e.target.value)} />
-            </div>
+            </label>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Burndown target hours</p>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Burndown target hours</span>
               <Input className="rounded-none" value={burndownTargetHours} onChange={(e) => setBurndownTargetHours(e.target.value)} />
-            </div>
-            <div>
-              <p className="mb-1 text-xs tracking-wide uppercase">Rebaseline target hours</p>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs tracking-wide uppercase">Rebaseline target hours</span>
               <Input className="rounded-none" value={rebaselineTargetHours} onChange={(e) => setRebaselineTargetHours(e.target.value)} />
-            </div>
+            </label>
           </div>
           {notice ? <p className="text-sm text-emerald-700">{notice}</p> : null}
           {error ? <p className="text-destructive text-sm">{error}</p> : null}
