@@ -261,6 +261,7 @@ describe.skipIf(!EMULATORS)("P2 enqueue (P3-2, P3-4)", () => {
     expect("idempotencyKey" in getSession).toBe(false)
     expect(postSession.route).toBe("POST /api/t/jobs/postProbe")
     expect(getSession.route).toBeUndefined()
+    expect("route" in getSession).toBe(false)
     expect(jobKey(postSession, "ocr")).toBe(`${postSession.caller.uid}:POST /api/t/jobs/postProbe:${key}:ocr`)
     expect(() => jobKey(getSession, "ocr")).toThrow(/no idempotency key/)
   })

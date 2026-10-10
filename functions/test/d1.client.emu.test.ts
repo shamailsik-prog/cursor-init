@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
+import { FieldPath } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { REGISTER_CLIENT_ROUNDS, registerClientTestSeam } from "../src/d1/client/ops"
 import { readRegistryVersion } from "../src/d1/registryVersion"
@@ -53,6 +54,22 @@ describe("parseName and parseKeys (no emulator needed)", () => {
   })
 })
 
+/** The operation's own decision rows (target `clients/<id>`); requirePermission's separate row targets `firms/<firmId>`. */
+const auditOf = async (uid: string): Promise<Array<[unknown, unknown]>> =>
+  (await adminDb().collection("audit_log").where("actorId", "==", uid).where("action", "==", "client.register").get()).docs
+    .map((d) => d.data())
+    .filter((r) => String(r.target).startsWith("clients/"))
+    .map((r) => [r.decision, r.reason])
+
+const clientCounters = async (firmId: string) =>
+  (
+    await adminDb()
+      .collection("counters")
+      .where(FieldPath.documentId(), ">=", `${firmId}_client_`)
+      .where(FieldPath.documentId(), "<", `${firmId}_client_~`)
+      .get()
+  ).size
+
 const deadTransaction = () =>
   Object.assign(new Error("3 INVALID_ARGUMENT: Transaction is invalid or closed."), { code: 3, details: "Transaction is invalid or closed." })
 
@@ -74,6 +91,7 @@ describe.skipIf(!EMULATORS)("registerClient contention rounds (O-45, P3-39)", ()
     expect(rounds).toEqual([1, 2])
     expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(1)
     expect(await readRegistryVersion(firmId)).toBe(1)
+    expect(await auditOf(partner.uid)).toEqual([["allow", "ok"]])
   }, 60_000)
 
   it("a contention abort in every round → 409 registry_contended after REGISTER_CLIENT_ROUNDS rounds, nothing written", async () => {
@@ -95,6 +113,30 @@ describe.skipIf(!EMULATORS)("registerClient contention rounds (O-45, P3-39)", ()
     expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(0)
     expect((await adminDb().collection("entities").where("firmId", "==", firmId).get()).size).toBe(0)
     expect(await readRegistryVersion(firmId)).toBe(0)
+    expect(await auditOf(partner.uid)).toEqual([["deny", "registry_contended"]])
+    expect(await clientCounters(firmId)).toBe(0)
+  }, 60_000)
+
+  it("a non-contention error from the transaction → 500 internal, not retried, nothing written", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    let calls = 0
+    registerClientTestSeam.beforeCommit = () => {
+      calls++
+      throw new Error("boom")
+    }
+    try {
+      const err = await apiErrorOf(registerClient({ token: partner.token, data: body(firmId) } as never))
+      expect([err.status, err.code]).toEqual([500, "internal"])
+    } finally {
+      delete registerClientTestSeam.beforeCommit
+    }
+    expect(calls).toBe(1)
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect((await adminDb().collection("entities").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect(await readRegistryVersion(firmId)).toBe(0)
+    expect(await auditOf(partner.uid)).toEqual([["deny", "internal"]])
+    expect(await clientCounters(firmId)).toBe(0)
   }, 60_000)
 })
 
@@ -105,8 +147,10 @@ describe.skipIf(!EMULATORS)("registerClient", () => {
     const results = await Promise.allSettled(tokens.map((t) => registerClient({ token: t.token, data: body(firmId) } as never)))
     const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected")
     for (const f of failed) expect([f.reason.status, f.reason.code]).toEqual([409, "registry_contended"])
-    const ok = results.filter((r) => r.status === "fulfilled").length
+    const codes = results.flatMap((r) => (r.status === "fulfilled" ? [r.value.clientCode] : []))
+    const ok = codes.length
     expect(ok).toBeGreaterThan(0)
+    expect(new Set(codes).size).toBe(ok)
     expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(ok)
   }, 120_000)
 
