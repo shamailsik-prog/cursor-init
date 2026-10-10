@@ -3,7 +3,7 @@ import type { Classification } from "@/platform/p1/types"
 import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
-import { isContentionAbort } from "../contention"
+import { contentionDeadline, isContentionAbort } from "../contention"
 import type { Caller } from "../../p5/auth"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isFirestoreDocId, isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
@@ -42,7 +42,8 @@ const OPEN_TX_ATTEMPTS = 10
 
 /**
  * Re-screen rounds of one openMatter (Bugbot PR #8): a round whose registry version moved between its
- * pre-screen and its transaction writes nothing and is redone; after this many, 409 registry_contended.
+ * pre-screen and its transaction writes nothing and is redone; after this many, 409 registry_contended
+ * (sooner if CONTENTION_DEADLINE_MS of the call passes first: no round starts after it).
  * Every open bumps the version, and a round fails only when another registry write commits inside it, so
  * N concurrent opens in one firm all finish within N rounds: 10, as OPEN_TX_ATTEMPTS (3 failed Review Focus 3).
  */
@@ -164,9 +165,11 @@ function gateOpen(caller: Caller, check: DocumentData | undefined, now: Date): {
  * check was cleared on an identity that is being reversed. One getAll in the caller's transaction, before
  * any write. The row rule is isUnmergeInProgress, the one behind the read-time `unmerging` state (E-43(c)),
  * applied whatever the L17.2 flag says (a saga started while it was on still runs): never refused for a
- * link that is merely confirmed, disputed or a candidate, or whose un-merge has completed.
+ * link that is merely confirmed, disputed or a candidate, or whose un-merge has completed. Only a row of
+ * the caller's firm counts (final review, defensive: the ids come from the caller's own firm-checked
+ * check); another firm's row is ignored, not refused.
  */
-async function refuseUnmerging(tx: Transaction, check: DocumentData | undefined): Promise<void> {
+async function refuseUnmerging(tx: Transaction, check: DocumentData | undefined, firmId: string): Promise<void> {
   // The ids the un-merge checks job reads (`checkReliesOn`); one that is not a Firestore document id cannot name a row.
   const ids = reliedOnLinkIds(check).filter((id) => isFirestoreDocId(id))
   if (ids.length === 0) return
@@ -174,7 +177,7 @@ async function refuseUnmerging(tx: Transaction, check: DocumentData | undefined)
   const rows = await tx.getAll(...ids.map((id) => links.doc(id)))
   if (rows.some((r) => {
     const row = r.data()
-    return row !== undefined && isUnmergeInProgress(row)
+    return row !== undefined && row.firmId === firmId && isUnmergeInProgress(row)
   })) {
     throw new HttpError(409, "unmerge_in_progress")
   }
@@ -202,8 +205,10 @@ function clientOf(caller: Caller, client: DocumentData | undefined): { entityId:
  * The screen is tied to the transaction by the firm's registry version (`counters/{firmId}_registry`,
  * registryVersion.ts; Bugbot PR #8): read before the screen and again first in the transaction. A
  * moved version (a registry write committed in between) makes the round write nothing, no audit row
- * either, and the screen and transaction are redone; after OPEN_SCREEN_ROUNDS (10) moved rounds, 409
- * registry_contended (nothing written; a retry is safe), audited as the call's one deny row. A
+ * either, and the screen and transaction are redone, as is a round whose transaction gave up under lock
+ * contention; after OPEN_SCREEN_ROUNDS (10) such rounds, or when CONTENTION_DEADLINE_MS (90 s) of the
+ * call has passed before a round would start, 409 registry_contended (nothing written; a retry is safe),
+ * audited as the call's one deny row. A
  * writer committing after the transaction's version read either aborts it (it retries and sees the
  * move) or commits after the matter opened, which is the correct order.
  * Then it allocates `{matterPrefix}/{YYYY}/{NNNN}` and writes the matter, the members (caller and
@@ -217,6 +222,7 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
   action: "matter.open",
   target: "matters",
   run: async ({ caller, now: clock }, data, audit) => {
+    const pastDeadline = contentionDeadline()
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     await requirePermission(caller, "matter.open")
@@ -235,7 +241,8 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
     const matterId = matterRef.id
     audit.target = `matters/${matterId}`
 
-    for (let round = 1; round <= OPEN_SCREEN_ROUNDS; round++) {
+    // No round starts once the deadline has passed: the call answers its 409 before the function times out.
+    for (let round = 1; round <= OPEN_SCREEN_ROUNDS && !pastDeadline(); round++) {
       // Re-screen (spec P2-6, final review I5): the stored subjects against today's registry, through the
       // same engine as runConflictCheck, after the same gate the transaction applies again below. The
       // registry version is read first: a registry write the screen missed has bumped it by the transaction.
@@ -258,7 +265,7 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
           const entityId = client.entityId
           // P3-40: after gateOpen, so a check the un-merge checks job already marked stale answers check_stale;
           // before the stale write below, so the refusal writes nothing (the checks job marks the check).
-          await refuseUnmerging(tx, check)
+          await refuseUnmerging(tx, check, caller.firmId)
           if (unseenHits(fresh, Array.isArray(check?.hits) ? check.hits : []).length > 0) {
             // A hit the check never saw: the check no longer describes the registry. Marked stale atomically with the deny row.
             await audit.stage(tx, "deny", "check_stale")
@@ -365,7 +372,8 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
       if (row === null) throw new HttpError(409, "check_stale")
       return present(matterId, { ...row, createdAt: Timestamp.fromDate(now) })
     }
-    // Every round's registry moved under it: nothing was written and a retry is safe. runAudited writes the one deny row.
+    // Every round's registry moved under it or gave up under contention, or the deadline passed: nothing was
+    // written and a retry is safe. runAudited writes the one deny row.
     throw new HttpError(409, "registry_contended")
   },
 }

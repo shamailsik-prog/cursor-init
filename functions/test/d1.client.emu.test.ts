@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import { FieldPath } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { REGISTER_CLIENT_ROUNDS, registerClientTestSeam } from "../src/d1/client/ops"
+import { CONTENTION_DEADLINE_MS, contentionTestSeam } from "../src/d1/contention"
 import { readRegistryVersion } from "../src/d1/registryVersion"
 import { parseKeys, parseName } from "../src/d1/validate"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -110,6 +111,34 @@ describe.skipIf(!EMULATORS)("registerClient contention rounds (O-45, P3-39)", ()
     }
     expect(REGISTER_CLIENT_ROUNDS).toBe(10)
     expect(calls).toBe(REGISTER_CLIENT_ROUNDS)
+    expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect((await adminDb().collection("entities").where("firmId", "==", firmId).get()).size).toBe(0)
+    expect(await readRegistryVersion(firmId)).toBe(0)
+    expect(await auditOf(partner.uid)).toEqual([["deny", "registry_contended"]])
+    expect(await clientCounters(firmId)).toBe(0)
+  }, 60_000)
+
+  it("a contention abort in round 1 after 90 s of real time → 409 registry_contended, no round 2; nothing written, one deny row (final review)", async () => {
+    const firmId = await newFirm()
+    const partner = await mintIdToken(claims(firmId, "partner"))
+    let wall = 1_000_000
+    const rounds: number[] = []
+    contentionTestSeam.wallClock = () => wall
+    registerClientTestSeam.beforeCommit = (round) => {
+      rounds.push(round)
+      // Round 1's transaction attempts have used up the deadline before it gives up under contention.
+      wall += CONTENTION_DEADLINE_MS + 1
+      throw deadTransaction()
+    }
+    try {
+      const err = await apiErrorOf(registerClient({ token: partner.token, data: body(firmId) } as never))
+      expect([err.status, err.code]).toEqual([409, "registry_contended"])
+    } finally {
+      delete registerClientTestSeam.beforeCommit
+      delete contentionTestSeam.wallClock
+    }
+    expect(CONTENTION_DEADLINE_MS).toBe(90_000)
+    expect(rounds).toEqual([1])
     expect((await adminDb().collection("clients").where("firmId", "==", firmId).get()).size).toBe(0)
     expect((await adminDb().collection("entities").where("firmId", "==", firmId).get()).size).toBe(0)
     expect(await readRegistryVersion(firmId)).toBe(0)

@@ -2,7 +2,7 @@ import { FieldPath, FieldValue, Timestamp, type DocumentData, type Query } from 
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
-import { isContentionAbort } from "../contention"
+import { contentionDeadline, isContentionAbort } from "../contention"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { requirePermission } from "../../p5/permission"
@@ -29,7 +29,8 @@ const invalid = () => new HttpError(400, "invalid_subjects")
 const REGISTER_TX_ATTEMPTS = 10
 /**
  * Rounds of one registerClient (O-45, P3-39): a round whose transaction gives up under lock contention
- * (isContentionAbort) wrote nothing and is redone; after this many, 409 registry_contended, as openMatter.
+ * (isContentionAbort) wrote nothing and is redone; after this many, or once no new round may start after
+ * CONTENTION_DEADLINE_MS (90 s) of the call, 409 registry_contended, as openMatter.
  */
 export const REGISTER_CLIENT_ROUNDS = 10
 
@@ -91,6 +92,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
   action: "client.register",
   target: "clients",
   run: async ({ caller }, data, audit) => {
+    const pastDeadline = contentionDeadline()
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     await requirePermission(caller, "client.register")
@@ -210,7 +212,8 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       },
       { maxAttempts: REGISTER_TX_ATTEMPTS }
       )
-    for (let round = 1; round <= REGISTER_CLIENT_ROUNDS; round++) {
+    // No round starts once the deadline has passed: the call answers its 409 before the function times out.
+    for (let round = 1; round <= REGISTER_CLIENT_ROUNDS && !pastDeadline(); round++) {
       try {
         const result = await runRound(round)
         audit.committed()
@@ -221,7 +224,8 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
         throw err
       }
     }
-    // Every round gave up under contention: nothing was written and a retry is safe. runAudited writes the one deny row.
+    // Every round gave up under contention, or the deadline passed: nothing was written and a retry is
+    // safe. runAudited writes the one deny row.
     throw new HttpError(409, "registry_contended")
   },
 }

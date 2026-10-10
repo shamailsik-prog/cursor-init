@@ -1,4 +1,29 @@
+import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { HttpError } from "../http/errors"
+
+/**
+ * How long a contention round loop (openMatter, registerClient) may go on starting rounds, on the real
+ * clock from the start of the call (final review). Once it has passed, no new round starts and the call
+ * answers 409 registry_contended, written and audited exactly as after its last round. Ten rounds, each
+ * up to ten transaction attempts with the SDK's backoff, can outlast the api function's 120 s timeout,
+ * which would end the call in a timeout instead of that 409. The round in flight at the deadline still
+ * runs to its end.
+ */
+export const CONTENTION_DEADLINE_MS = 90_000
+
+if (!(CONTENTION_DEADLINE_MS < FUNCTION_TIMEOUT_SECONDS * 1000)) {
+  throw new Error(`contention deadline (${CONTENTION_DEADLINE_MS} ms) must be less than the function timeout (${FUNCTION_TIMEOUT_SECONDS} s)`)
+}
+
+/** Test seam only (the emulator suites set it; production code never does): replaces `Date.now` as the deadline's clock. */
+export const contentionTestSeam: { wallClock?: () => number } = {}
+
+/** Starts a call's contention deadline: the returned check answers true once `CONTENTION_DEADLINE_MS` of real time has passed. */
+export function contentionDeadline(): () => boolean {
+  const clock = contentionTestSeam.wallClock ?? Date.now
+  const started = clock()
+  return () => clock() - started >= CONTENTION_DEADLINE_MS
+}
 
 /**
  * gRPC INVALID_ARGUMENT (3) texts that mean "this transaction is gone", not a bad request: the

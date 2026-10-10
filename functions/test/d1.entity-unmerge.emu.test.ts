@@ -356,6 +356,32 @@ describe.skipIf(!EMULATORS)("unmergeEntity and the un-merge saga (P3-24..P3-33)"
     expect(await open(d, dc.checkId)).toMatchObject({ conflictCheckId: dc.checkId })
   })
 
+  it("openMatter ignores a relied-on link row of another firm, even one reading as un-merging (P3-40, final review)", async () => {
+    const s = await seed()
+    const { check } = await confirmed(s)
+    await waived(s, check)
+    // The ids come from the caller's own firm-checked check, so only a corrupt stored hit can name another firm's row.
+    const otherFirm = uniq("firm")
+    const foreignId = `${otherFirm}_x_y_cnic`
+    await adminDb().collection("entity_links").doc(foreignId).set({
+      firmId: otherFirm,
+      leftId: "x",
+      rightId: "y",
+      key: "cnic",
+      state: "confirmed",
+      disputed: false,
+      classification: "internal",
+      unmerge: { status: "in_progress" },
+    })
+    const hits = ((await checkDoc(check.checkId)).hits as Array<Record<string, unknown>>).map((h) =>
+      Array.isArray(h.reliedOnLinkIds) && h.reliedOnLinkIds.includes(s.linkId) ? { ...h, reliedOnLinkIds: [...h.reliedOnLinkIds, foreignId] } : h
+    )
+    expect(hits.some((h) => (h.reliedOnLinkIds as string[] | undefined)?.includes(foreignId))).toBe(true)
+    await adminDb().collection("conflict_checks").doc(check.checkId).update({ hits })
+    expect(await open(s, check.checkId)).toMatchObject({ conflictCheckId: check.checkId })
+    expect(await openAudit(s)).toEqual(["allow:ok"])
+  })
+
   it("checkReliesOn reads hits[].reliedOnLinkIds and nothing else", () => {
     const ids = new Set(["l1"])
     expect(checkReliesOn({ hits: [{ reliedOnLinkIds: ["x", "l1"] }] }, ids)).toBe(true)
