@@ -400,7 +400,7 @@ describe("PR phase claim gate hardening", () => {
     expect(result.stdout).toContain("no focused tests under tests/ops*.test.ts were changed")
   }, 30000)
 
-  describe("transport_stub claim against the filing transport stub markers (P3-57)", () => {
+  describe("transport_stub claim against the filing transport stub markers (P3-59)", () => {
     // The gate reads the stub markers from the working tree it runs in, so each case builds a
     // repository that does, or does not, still carry them.
     const STUBBED = {

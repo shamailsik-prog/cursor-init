@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { logger } from "firebase-functions"
 import { adminDb } from "../src/admin"
 import { AUTO_CONFIRM_JOB_TYPE, AUTO_CONFIRM_MAX_STEPS, AUTO_CONFIRM_STEP_PAIRS, autoConfirmTestSeam, mergeEventIdOf } from "../src/d1/entity/autoConfirmJob"
 import { LINK_AUTO_CONFIRM_MS } from "../src/d1/entity/linkState"
@@ -58,7 +59,7 @@ async function runDay(firmId: string, at: number, period = "2026-10-11") {
 }
 
 /*
- * Close-out helpers (spec P3-51..P3-56). Pairs are seeded directly so a test can shape each key
+ * Auto-confirm fixes helpers (spec P3-53..P3-58). Pairs are seeded directly so a test can shape each key
  * row; `seedPair` writes two entities and one link row per key (defaults: an undisputed candidate,
  * label internal), and `seedPairs` writes `count` one-key pairs in batches.
  */
@@ -109,7 +110,7 @@ const firmEvents = async (firmId: string, name: string) => (await adminDb().coll
 const confirmAudits = async (firmId: string) => (await adminDb().collection("audit_log").where("firmId", "==", firmId).where("action", "==", "entity.confirm").get()).docs
 const rowsOf = async (linkIds: string[]) => Promise.all(linkIds.map(async (id) => (await links().doc(id).get()).data()!))
 
-/** The P3-55 merge event id, computed here from the ruling's formula (not the job's code). */
+/** The P3-57 merge event id, computed here from the ruling's formula (not the job's code). */
 const expectedEventId = (firmId: string, pairId: string, linkIds: string[]) =>
   "auto_" + createHash("sha256").update(`${firmId}\0${pairId}\0${[...linkIds].sort().join(",")}`).digest("hex").slice(0, 32)
 
@@ -126,7 +127,7 @@ function recordSteps(also?: (step: Step) => Promise<void>): Step[] {
 }
 
 /**
- * P3-56: the scan admitted `pairId` to a step, and the step's transaction rejected it: no merge
+ * P3-58: the scan admitted `pairId` to a step, and the step's transaction rejected it: no merge
  * event, no `entity.confirmed`, no audit row, rows as seeded, and (unless another writer bumped it)
  * the registry version unchanged.
  */
@@ -250,13 +251,14 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     expect(await events(s, "entity.confirmed")).toHaveLength(total + 1)
   })
 
-  // Close-out (spec P3-51..P3-56). The seams are set in a test and cleared here.
+  // Auto-confirm fixes (spec P3-53..P3-58). The seams are set in a test and cleared here.
   afterEach(() => {
     delete autoConfirmTestSeam.beforeStep
     delete autoConfirmTestSeam.beforeFlagRead
+    vi.restoreAllMocks()
   })
 
-  it("P3-56(a): an aged row with a young sibling for another key is admitted by the scan and rejected in the transaction; nothing is written", async () => {
+  it("P3-58(a): an aged row with a young sibling for another key is admitted by the scan and rejected in the transaction; nothing is written", async () => {
     const firmId = await bareFirm()
     const at = Date.now()
     const { pairId, linkIds } = await seedPair(firmId, "a", [
@@ -270,7 +272,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     await expectAdmittedAndRejected(firmId, pairId, linkIds, steps, seeded, before)
   })
 
-  it("P3-56(b): a confirmed row plus an aged candidate row is admitted by the scan and rejected in the transaction; nothing is written", async () => {
+  it("P3-58(b): a confirmed row plus an aged candidate row is admitted by the scan and rejected in the transaction; nothing is written", async () => {
     const firmId = await bareFirm()
     const at = Date.now()
     const old = Timestamp.fromMillis(at - LINK_AUTO_CONFIRM_MS - DAY)
@@ -285,7 +287,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     await expectAdmittedAndRejected(firmId, pairId, linkIds, steps, seeded, before)
   })
 
-  it("P3-56(c): a dispute that lands between the scan and the step is rejected in the transaction; nothing is written", async () => {
+  it("P3-58(c): a dispute that lands between the scan and the step is rejected in the transaction; nothing is written", async () => {
     const s = await seed()
     const at = ((await linkRow(s)).createdAt as Timestamp).toMillis() + LINK_AUTO_CONFIRM_MS + DAY
     // The dispute goes through the real route after the scan, before step 0's transaction (a late dispute, P2-28).
@@ -305,7 +307,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     await expectAdmittedAndRejected(s.firmId, s.pairId, [s.linkId], steps, disputed, registryAfterDispute)
   })
 
-  it("P3-56(d): a row with an un-merge in progress is admitted by the scan and rejected in the transaction; nothing is written", async () => {
+  it("P3-58(d): a row with an un-merge in progress is admitted by the scan and rejected in the transaction; nothing is written", async () => {
     const firmId = await bareFirm()
     const at = Date.now()
     const old = Timestamp.fromMillis(at - LINK_AUTO_CONFIRM_MS - DAY)
@@ -319,7 +321,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     await expectAdmittedAndRejected(firmId, pairId, linkIds, steps, seeded, before)
   })
 
-  it("P3-51: a retry after three committed steps with more than 480 pairs waiting never reaches fenced_step_limit, and every pair gets exactly one merge event across both attempts and the next day", async () => {
+  it("P3-53: a retry after three committed steps with more than 480 pairs waiting never reaches fenced_step_limit, and every pair gets exactly one merge event across both attempts and the next day", async () => {
     const firmId = await bareFirm()
     const at = Date.now()
     // 520 pairs: the first attempt commits steps 0-2 (30 pairs) and fails; 490 then wait, more than one run's 480.
@@ -362,7 +364,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     expect(confirmed.size).toBe(total)
   }, 300_000)
 
-  it("P3-52: each materialised pair writes one system entity.confirm audit row that targets its merge event", async () => {
+  it("P3-54: each materialised pair writes one system entity.confirm audit row that targets its merge event", async () => {
     const s = await seed()
     const at = ((await linkRow(s)).createdAt as Timestamp).toMillis() + LINK_AUTO_CONFIRM_MS + DAY
     expect((await runDay(s.firmId, at)).outcome).toBe("done")
@@ -384,7 +386,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     expect(await confirmAudits(s.firmId)).toHaveLength(1)
   })
 
-  it("P3-55: the merge event id is derived from firm, pair and sorted link ids, and a pair whose event already exists is left alone", async () => {
+  it("P3-57: the merge event id is derived from firm, pair and sorted link ids, and a pair whose event already exists is left alone", async () => {
     const firmId = await bareFirm()
     const at = Date.now()
     const old = Timestamp.fromMillis(at - LINK_AUTO_CONFIRM_MS - DAY)
@@ -396,6 +398,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     const doneId = expectedEventId(firmId, done.pairId, done.linkIds)
     await adminDb().collection("merge_events").doc(doneId).set({ firmId, kind: "link_confirmed", pairId: done.pairId, linkIds: done.linkIds, basis: "auto_confirm", reverted: false, classification: "internal" })
     const doneSeeded = await rowsOf(done.linkIds)
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
 
     expect((await runDay(firmId, at)).outcome).toBe("done")
     const freshId = expectedEventId(firmId, fresh.pairId, fresh.linkIds)
@@ -407,9 +410,13 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     expect((await confirmAudits(firmId)).map((d) => d.data().target)).toEqual([`merge_events/${freshId}`])
     // The pair whose event already exists: nothing written, and the run still succeeds.
     expect(await rowsOf(done.linkIds)).toEqual(doneSeeded)
+    // ...and the skip is logged, by code and ids only (no values, no payload).
+    const skips = warn.mock.calls.filter(([message]) => message === "autoconfirm.event_exists_skip")
+    expect(skips).toContainEqual(["autoconfirm.event_exists_skip", { firmId, pairId: done.pairId }])
+    for (const call of skips) expect(call).toEqual(["autoconfirm.event_exists_skip", { firmId, pairId: done.pairId }])
   })
 
-  it("P3-54: L17.2 switched off between two steps stops every later step from writing", async () => {
+  it("P3-56: L17.2 switched off between two steps stops every later step from writing", async () => {
     const firmId = await bareFirm()
     const at = Date.now()
     const total = AUTO_CONFIRM_STEP_PAIRS * 2 + 5
@@ -426,7 +433,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
     expect(await confirmAudits(firmId)).toHaveLength(AUTO_CONFIRM_STEP_PAIRS)
   })
 
-  it("P3-54: a failed flag read fails the attempt with the retryable flag_read_failed, and the retry materialises the pair", async () => {
+  it("P3-56: a failed flag read fails the attempt with the retryable flag_read_failed, and the retry materialises the pair", async () => {
     const s = await seed()
     const at = ((await linkRow(s)).createdAt as Timestamp).toMillis() + LINK_AUTO_CONFIRM_MS + DAY
     autoConfirmTestSeam.beforeFlagRead = async () => {
@@ -444,7 +451,7 @@ describe.skipIf(!EMULATORS)("auto-confirm materialisation (P3-42..P3-50, O-28)",
   })
 })
 
-describe("auto-confirm merge event id (P3-55), fixed vector", () => {
+describe("auto-confirm merge event id (P3-57), fixed vector", () => {
   it("auto_ + the first 32 hex of SHA-256(firmId NUL pairId NUL sorted link ids joined by commas), checked against a hard-coded digest", () => {
     // Computed independently (Python hashlib) from b"firm-1\x00aaa_bbb\x00l1,l2"; the link ids are given unsorted on purpose.
     expect(mergeEventIdOf("firm-1", "aaa_bbb", ["l2", "l1"])).toBe("auto_75edbd70e2bf68a6bf4f13bf1fdaa5b7")

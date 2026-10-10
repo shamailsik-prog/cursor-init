@@ -172,7 +172,7 @@ export const confirmMergeOp: FirmOperation<DecisionResult> = {
  * (409 link_not_candidate) and not yet disputed (409 already_disputed). A late dispute, after day
  * 30, works only until the daily auto-confirm job (`autoConfirmJob.ts`) writes the pair's merge
  * event and confirms its rows: until then the rows are still candidates in storage. After that
- * this answers 409 link_not_candidate and the remedy is `unmergeEntity` (E-45, P3-53). Sets
+ * this answers 409 link_not_candidate and the remedy is `unmergeEntity` (P3-46, E-45(c)). Sets
  * `disputed: true` and `dispute` on every row. No event (P2-33).
  */
 export const disputeLinkOp: FirmOperation<DecisionResult> = {

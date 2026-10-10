@@ -11,7 +11,7 @@ Phase 3c (PR #17, `9b78e2f`) shipped the first scheduled job type, `d1AutoConfir
 | Id | Ruling | Basis | Cost if wrong |
 | --- | --- | --- | --- |
 | P3-51 | **O-43: scheduled ticks retry.** `scheduledJobFunction` passes `SCHEDULE_RETRY = { retryCount: 3, minBackoffSeconds: 60, maxBackoffSeconds: 600 }` to `onSchedule`. The sweeper is unchanged (its next minute is its retry). | O-43 states `retryCount: 3` with a backoff is safe because runs are idempotent per run key (E-42(h), P3-16). The tick throws `ScheduledRunsFailedError` only after trying every firm, so a retry re-reads the firms and reuses every job already created. | A persistent failure runs the tick four times in about 11 minutes, each logging per failing firm; no data effect. |
-| P3-52 | **CI.** `gate-g0.yml` should run `npm run gate:g4:phase3c` after the Phase 3b step (`- name: Gate G-4 Phase 3c`, `if: ${{ !cancelled() }}`, `run: npm run gate:g4:phase3c`); the edit is NOT in this PR because the autopilot token lacks `workflows` permission, so it is a follow-up for a maintainer. The boot test in that gate (`p2.boot.test.ts`) pins the retry config, so the gate covers P3-51 and no new gate script is added. | Same pattern as the earlier gates (P3-41). | None. |
+| P3-52 | **CI.** `gate-g0.yml` should run `npm run gate:g4:phase3c` after the Phase 3b step (`- name: Gate G-4 Phase 3c`, `if: ${{ !cancelled() }}`, `run: npm run gate:g4:phase3c`); the edit is NOT in this PR because the autopilot token lacks `workflows` permission, so it is a follow-up for a maintainer. #20 (`5d888ce`) made that edit. The boot test in that gate (`p2.boot.test.ts`) pins the retry config, so the gate covers P3-51 and no new gate script is added. | Same pattern as the earlier gates (P3-41). | None. |
 
 ## Testing
 
