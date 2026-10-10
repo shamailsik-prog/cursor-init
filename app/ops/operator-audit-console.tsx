@@ -7273,7 +7273,7 @@ export function OperatorAuditConsole() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-none">
+        <Card className="rounded-none lg:sticky lg:top-4 lg:self-start">
           <CardHeader>
             <CardTitle>API call logs</CardTitle>
             <CardDescription>
@@ -7281,7 +7281,7 @@ export function OperatorAuditConsole() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ScrollArea className="h-[740px] border border-border p-3">
+            <ScrollArea className="h-[min(740px,calc(100svh-12rem))] border border-border p-3">
               <div className="space-y-3">
                 {logs.length === 0 ? (
                   <p className="text-muted-foreground text-sm">No calls yet.</p>
