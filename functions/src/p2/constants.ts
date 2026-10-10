@@ -34,6 +34,12 @@ export const MAX_CLOCK_SKEW_MS = 300_000
 export const SWEEP_LIMIT = 100
 /** Pages each sweeper query may run in one sweep (P3-36): at most 500 rows per query per sweep. */
 export const SWEEP_MAX_PAGES = 5
+/**
+ * One sweep's wall-clock budget (final review): measured on the real clock, checked before each
+ * page and each row; once spent the sweep stops and the next minute's sweep continues. It ends
+ * the sweep well inside the sweeper function's 45 s timeout (asserted in `functions.ts`).
+ */
+export const SWEEP_BUDGET_MS = 30_000
 /** The longest wait between two sweeper re-dispatches of one row: one lease (P3-35). */
 export const MAX_REDISPATCH_BACKOFF_MS = 600_000
 

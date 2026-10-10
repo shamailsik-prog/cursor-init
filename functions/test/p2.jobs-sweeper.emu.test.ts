@@ -2,7 +2,7 @@ import { Timestamp } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { adminDb } from "../src/admin"
-import { MAX_REDISPATCH_BACKOFF_MS, SWEEP_LIMIT, SWEEP_MAX_PAGES, redispatchBackoffMs } from "../src/p2/constants"
+import { MAX_REDISPATCH_BACKOFF_MS, SWEEP_BUDGET_MS, SWEEP_LIMIT, SWEEP_MAX_PAGES, redispatchBackoffMs } from "../src/p2/constants"
 import { enqueueJobs, jobsRef } from "../src/p2/enqueue"
 import { sweep, sweepTestSeam } from "../src/p2/sweeper"
 import { EMULATORS } from "./emu"
@@ -47,6 +47,7 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
 
   afterEach(() => {
     delete sweepTestSeam.beforeQuery
+    delete sweepTestSeam.wallClock
     vi.restoreAllMocks()
   })
 
@@ -204,6 +205,84 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     expect(error).toHaveBeenCalledWith("job sweep failed", { code: "grpc_9" })
   })
 
+  it("a failed query B is logged and queries A and A' still run in the same sweep", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const [due, leased] = [await seed(), await seed()]
+    await jobsRef()
+      .doc(leased)
+      .update({ status: "running", attempts: 1, totalAttempts: 1, lease: { owner: "dead", expiresAt: Timestamp.fromMillis(T0 + 600_000) } })
+    const pages: string[] = []
+    sweepTestSeam.beforeQuery = async (name) => {
+      pages.push(name)
+      if (name === "B") throw Object.assign(new Error("index building"), { code: 9 })
+    }
+    const r = await sweepAt(T0 + 600_000)
+    expect(r.dispatched).toEqual([due])
+    expect(pages).toEqual(["B", "A", "skew"])
+    expect((await readJob(leased)).dispatchSeq).toBe(0)
+    expect(error).toHaveBeenCalledWith("job sweep failed", { code: "grpc_9" })
+  })
+
+  it("query B runs first, then query A, then A' (final review): an expired lease is re-dispatched before a lost dispatch", async () => {
+    const [due, leased] = [await seed(), await seed()]
+    await jobsRef()
+      .doc(leased)
+      .update({ status: "running", attempts: 1, totalAttempts: 1, lease: { owner: "dead", expiresAt: Timestamp.fromMillis(T0 + 600_000) } })
+    const pages: string[] = []
+    sweepTestSeam.beforeQuery = async (name) => void pages.push(name)
+    const r = await sweepAt(T0 + 600_000)
+    expect(pages).toEqual(["B", "A", "skew"])
+    expect(r.dispatched).toEqual([leased, due])
+    expect(d.dispatcher.tasks.map((t) => t.jobId)).toEqual([leased, due])
+  })
+
+  it("budget (final review): a sweep whose wall clock passes SWEEP_BUDGET_MS partway through query A stops; the rows it did not reach are untouched and the next sweep takes them", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    const leased = await seed()
+    await jobsRef()
+      .doc(leased)
+      .update({ status: "running", attempts: 1, totalAttempts: 1, lease: { owner: "dead", expiresAt: Timestamp.fromMillis(T0 + 600_000) } })
+    const ids = await seedMany(5, T0)
+    const batch = adminDb().batch()
+    ids.forEach((id, i) => batch.update(jobsRef().doc(id), { sweepAt: Timestamp.fromMillis(T0 + 30_000 + i) }))
+    await batch.commit()
+    const now = T0 + 600_000
+    // The fake wall clock: each dispatch takes 10 s of real time, so the third leaves 30 s spent.
+    sweepTestSeam.wallClock = () => d.dispatcher.tasks.length * 10_000
+    const pages: string[] = []
+    sweepTestSeam.beforeQuery = async (name) => void pages.push(name)
+    const before = await Promise.all(ids.map((id) => readJob(id)))
+    const first = await sweepAt(now)
+    expect(SWEEP_BUDGET_MS).toBe(30_000)
+    // B re-dispatches the lease (10 s), A two rows (30 s); the check before A's third row stops the whole sweep: no A'.
+    expect(first.dispatched).toEqual([leased, ids[0], ids[1]])
+    expect(pages).toEqual(["B", "A"])
+    const after = await Promise.all(ids.map((id) => readJob(id)))
+    expect(after.map((row, i) => row.updateTime.isEqual(before[i].updateTime))).toEqual([false, false, true, true, true])
+    expect(warn).toHaveBeenCalledWith("job.sweep_budget_spent", { dispatched: 3, deadLettered: 0 })
+    // The next minute's sweep, on the real clock, continues where it stopped.
+    delete sweepTestSeam.wallClock
+    expect((await sweepAt(now + 1)).dispatched).toEqual(ids.slice(2))
+    expect(d.dispatcher.tasks.map((t) => t.jobId)).toEqual([leased, ...ids])
+  })
+
+  it("budget (final review): a budget spent by query B is checked before query A's first page, which is not read", async () => {
+    vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    const [due, leased] = [await seed(), await seed()]
+    await jobsRef()
+      .doc(leased)
+      .update({ status: "running", attempts: 1, totalAttempts: 1, lease: { owner: "dead", expiresAt: Timestamp.fromMillis(T0 + 600_000) } })
+    sweepTestSeam.wallClock = () => d.dispatcher.tasks.length * 30_000
+    const pages: string[] = []
+    sweepTestSeam.beforeQuery = async (name) => void pages.push(name)
+    const before = await readJob(due)
+    expect((await sweepAt(T0 + 600_000)).dispatched).toEqual([leased])
+    expect(pages).toEqual(["B"])
+    expect((await readJob(due)).updateTime.isEqual(before.updateTime)).toBe(true)
+    delete sweepTestSeam.wallClock
+    expect((await sweepAt(T0 + 600_001)).dispatched).toEqual([due])
+  })
+
   it("rows are swept oldest sweepAt first, across pages of SWEEP_LIMIT (P3-34, P3-36)", async () => {
     const n = SWEEP_LIMIT + 1
     const ids = await seedMany(n, T0)
@@ -288,6 +367,33 @@ describe.skipIf(!EMULATORS)("P2 sweeper (P3-8)", () => {
     expect([row.dispatchSeq, row.dispatchedAt.toMillis(), row.redispatches, row.sweepAt?.toMillis()]).toEqual([2, now, 2, now + 120_000])
     expect((await readJob(trusted)).updateTime.isEqual(before.updateTime)).toBe(true)
   })
+
+  it("query A' takes its bound from a clock read after query A: 100 rows A re-dispatches at the 600 s cap do not fill A's page, and a skewed row is still reset (final review)", async () => {
+    const ids = await seedMany(SWEEP_LIMIT, T0)
+    const skewed = await seed()
+    const now = T0 + 1_000_000
+    const batch = adminDb().batch()
+    // 100 rows at the cap: their re-dispatch stamps sweepAt one capped backoff (600 s) after the transaction's clock.
+    ids.forEach((id, i) =>
+      batch.update(jobsRef().doc(id), { dispatchSeq: 5, redispatches: 5, dispatchedAt: Timestamp.fromMillis(now - 600_000), sweepAt: Timestamp.fromMillis(now - 1_000 + i) })
+    )
+    // A stamp from a sweep 1 h ahead: sweepAt far beyond now + 600 s, dispatchedAt untrusted (more than 300 s ahead).
+    batch.update(jobsRef().doc(skewed), { dispatchSeq: 5, redispatches: 5, dispatchedAt: Timestamp.fromMillis(now + 3_600_000), sweepAt: Timestamp.fromMillis(now + 4_200_000) })
+    await batch.commit()
+    // Query A's page takes 1 s of the sweep's clock, as a real page does: its rows are stamped at now + 1 s + 600 s.
+    // Read from the sweep's start, A''s bound (now + 600 s) would match all 100; they sort ahead of the skewed row,
+    // are already settled, and so make a page that acts on no row, which ends A' before it reaches the skewed row.
+    let aPages = 0
+    sweepTestSeam.beforeQuery = async (name) => {
+      if (name === "A" && ++aPages === 1) clock.advance(1_000)
+    }
+    const r = await sweepAt(now)
+    expect(r.dispatched.filter((id) => id !== skewed).sort()).toEqual([...ids].sort())
+    expect((await readJob(ids[0])).sweepAt?.toMillis()).toBe(now + 1_000 + MAX_REDISPATCH_BACKOFF_MS)
+    expect(r.dispatched).toContain(skewed)
+    const row = await readJob(skewed)
+    expect([row.dispatchSeq, row.dispatchedAt.toMillis(), row.redispatches]).toEqual([6, now + 1_000, 6])
+  }, 60_000)
 
   it("head-of-line (O-36): 120 rows dispatched 10 s ago do not hide the 30 eligible rows behind them", async () => {
     const ids = await seedMany(150, T0)
