@@ -1,0 +1,42 @@
+# Phase 3b close-out: engine back-pressure, job keys, contention and the un-merge window
+
+Date: 2026-10-10. Status: rulings made under the owner's standing autonomy instruction (7 October 2026); pending the partner's signature with Erratum Set No. 2.
+
+## Why this slice exists
+
+Phase 3b (PR #12, `a730c55`) shipped the un-merge saga, but four items that the 3a and 3b rulings made its preconditions are still open, and its own CI gate never reached the workflow:
+
+| Item | Precondition stated | State on `main` |
+| --- | --- | --- |
+| O-36 sweeper back-pressure | "before 3b ships long-running jobs" (ERRATUM_SET_2_PROPOSED.md line 127) | open; `d1.unmerge.checks` scans up to 9,600 checks per run |
+| O-44 `jobKey` collisions | "before 3b's first caller of `jobKey`" | open; no caller yet (the saga uses `mergeEventId:collection`), so cheap to close before one appears |
+| O-45 `registerClient` contention 500 | "before load testing (with O-36)" | open |
+| O-46 window before the checks job | "before the first firm relies on un-merge" | open; a conflict check that relied on the reverted link can still open a matter |
+| `gate:g4:phase3b` in CI | PR #12 follow-up (the bot could not push workflows) | script and npm script exist; not run by `.github/workflows/gate-g0.yml` |
+
+## Rulings
+
+| Id | Ruling | Basis | Cost if wrong |
+| --- | --- | --- | --- |
+| P3-34 | **`sweepAt`: the sweeper queries only rows it can act on.** Every engine row carries `sweepAt` (Timestamp or null), the earliest time the sweeper may act on it. It is written in the same update as the state change that makes it true: enqueue (`queued`) `now + DISPATCH_GRACE_MS`; a scheduled retry (`failed`) `nextAttemptAt + DISPATCH_GRACE_MS`; a claim (`running`) the lease's `expiresAt`; a manual requeue (`retryFailedJob`) `now + DISPATCH_GRACE_MS`; a sweeper re-dispatch `now + backoff(redispatches)` (P3-35); a terminal state (`done`, `dead_lettered`, `cancelled`) null. Query A becomes `status in [queued, failed] and sweepAt <= now order by sweepAt`; query B becomes `status == running and sweepAt <= now order by sweepAt`. The per-row re-read checks (`lostDispatch`, `expiredLease`, `redispatchable`) stay as the authority; `sweepAt` only decides what the query returns. Two composite indexes `(status, sweepAt)` replace `(status, nextAttemptAt)` and `(status, lease.expiresAt)`. | O-36's head-of-line block exists because query A returns rows it then declines (re-dispatched within the grace) and they fill `SWEEP_LIMIT`. With `sweepAt`, a declined row is the rare race, and an acted-on row moves its `sweepAt` past `now`, so the next page holds new rows. | A writer that forgets `sweepAt` hides a row from the sweeper. Mitigated by an assertion in the shared row writers and a test per state transition. No deployed engine rows exist (P3-1: nothing scheduled is deployed), so no backfill is needed; a later deploy needs none either. |
+| P3-35 | **Re-dispatch backoff.** A row gains `redispatches` (int, 0 at enqueue, at claim, at a scheduled retry and at a manual requeue). Each sweeper re-dispatch increments it and sets `sweepAt = now + min(DISPATCH_GRACE_MS * 2^redispatches, MAX_REDISPATCH_BACKOFF_MS)`, where `MAX_REDISPATCH_BACKOFF_MS = 600_000` (one lease). `redispatchable` uses the same backoff from `dispatchedAt`. | O-36: with a fixed 30 s grace, a row waiting behind `maxConcurrentDispatches: 10` while saga handlers hold slots for up to 240 s gets a new task every sweep, and the queue grows without bound. With the backoff a waiting row gets at most about 7 tasks in its first hour instead of 120. A truly lost dispatch is still recovered: within 30 s the first time, and within 10 minutes at worst. | A row whose dispatch is lost after several re-dispatches waits up to 10 minutes. Acceptable: tasks persist in Cloud Tasks, so loss is rare, and the lease (600 s) bounds a crash the same way. |
+| P3-36 | **The sweeper pages.** Each query runs up to `SWEEP_MAX_PAGES = 5` pages of `SWEEP_LIMIT` (100) per sweep, stopping early on a short page. A page is re-queried, not cursored, because acted-on rows leave the result set (P3-34). A safety stop ends the page loop when a page acts on no row (every row lost its race), so a sweep cannot spin. | 500 rows per query per minute is above any plausible Phase 0 backlog; one sweep stays well inside the scheduler's timeout. | A backlog above 500 due rows drains over several minutes, not one; the backoff still bounds tasks. |
+| P3-37 | **Load test.** A deterministic emulator test drives the real `sweep()` and the real worker against a virtual clock: 250 queued jobs of a test job type whose handler occupies its slot for 240 virtual seconds, a fake dispatcher that models a queue with 10 concurrent slots and FIFO delivery, and a sweep every 60 virtual seconds. It asserts: every job reaches `done`; no job is starved (every due row is re-dispatched or claimed within one backoff period once eligible); the number of tasks ever enqueued is at most 8 per job; and with the backoff disabled (backoff constant forced to the fixed grace) the same scenario exceeds that bound, so the test proves the fix rather than the scenario. | O-36 asks for "a load test using long handlers"; a real 240 s wall-clock run in CI is impractical, so the clock is virtual and the store, sweeper and worker are real. | A virtual-clock model can miss a timing bug that only a real queue shows. The queue model is deliberately pessimistic (strict FIFO, all slots busy). |
+| P3-38 | **O-44: per-caller job keys.** `jobKey(session, suffix)` returns `` `${session.uid}:${session.route}:${key.toLowerCase()}:${suffix}` ``, where `session.route` is the operation's route (already known to the router) and `key` is the Idempotency-Key. The router passes `route` on the session for POST/PUT operations. | `withIdempotency` scopes a key per uid and route; the job id must scope the same way, or two users sending one key share a job or get 409 `job_key_conflict`. Lower-casing makes the case variants of one UUID one job (`isUuidV4` accepts both cases). | None at present: no caller exists. |
+| P3-39 | **O-45: `registerClient` retries contention.** The registration transaction runs in a round loop of `REGISTER_CLIENT_ROUNDS = 10`; a round that ends in `isContentionAbort` is retried; after the last round the call answers 409 `registry_contended`, writing nothing, as `openMatter` does (PR #9, `f6f5db2`). | Same failure, same cure, same response code, so callers handle both routes alike. | A genuinely hot registry answers 409 instead of 500, which is the intended contract. |
+| P3-40 | **O-46: `openMatter` refuses a check that relies on a link being un-merged.** When `openMatter` loads the stored check, if any hit's `reliedOnLinkIds` names a link whose row reads `unmerging` (E-43(c)), the call answers 409 `unmerge_in_progress` and writes nothing (one deny audit row, as other 409s). Once the checks job has marked the check stale, the existing 409 `check_stale` applies instead. | Closes the window O-46 describes without waiting on the checks job: the stored check's clearance relied on an identity that is being reversed. The read uses the link ids already on the hits, so no new index is needed. | A matter cannot be opened during an un-merge of a link its check relied on (seconds normally, longer after a dead letter). This is the conservative direction for a conflicts check. |
+| P3-41 | **CI.** `.github/workflows/gate-g0.yml` runs `npm run gate:g4:phase3b` after the Phase 3a step, in the same job. | PR #12's follow-up. | None. |
+
+## Out of scope
+
+O-47 (top-level `reliedOnLinkIds` index), O-48 (saga visibility), O-30 (dead-letter worklist), priority queues and per-type concurrency, raising `maxConcurrentDispatches`. Phase 3c (O-28 auto-confirm job) follows this slice.
+
+## Testing
+
+- Each `sweepAt` transition (enqueue, retry, claim, manual requeue, re-dispatch, terminal) has an emulator test asserting the stored value.
+- The P3-37 load test, with its control run.
+- Existing engine suites (`p2.*`) pass unchanged except where they assert the replaced index or query shape.
+- `jobKey` unit tests: two uids, two routes, upper- and lower-case keys.
+- `registerClient` contention: the existing `openMatter` contention test pattern (10 parallel calls against one emulator) applied to `registerClient`, no 500.
+- `openMatter` during un-merge: a check that relied on the link answers 409 `unmerge_in_progress` before the checks job runs, and `check_stale` after it.
+- `gate:g4:phase3b` runs in CI.
