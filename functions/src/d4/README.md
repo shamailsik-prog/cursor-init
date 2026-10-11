@@ -1,0 +1,155 @@
+# D4 drafting and the citation gate
+
+The gated draft in Cloud Functions (spec `docs/superpowers/specs/2026-10-11-phase4a-gated-draft-design.md`, rulings P4-1 to P4-15; errata E-50 and E-51 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`). It is the D4-1 draft store (versions, restore, lock) and the D4-2 citation and temporal gate, with an audited partner override and a partner approval stand-in. The safety property is L1716's: no unverified or overruled authority reaches a partner's approval unflagged, and every court-facing draft passes the gate and a human approval (R-3, L6713-6714).
+
+Phase 4a has no AI generation. A partner pastes or types the text; generation through P1 is Phase 4b. In production the authority port is empty (below), so every citation is UNVERIFIED and every temporal check unavailable until the corpus connector exists (O-59), and the partner override carries the load.
+
+The pure gate code is shared with the Next.js tree through the `@/` alias: `services/d4-2/citations.ts` (the extractor), `draftCharset.ts` (the charset and size rule) and `citationVerdict.ts` (the verdict rule, `verdictFromTreatments`). The Next.js `/api/d4/drafts` route and the filing-package stand-in stay as the transitional path (E-23) until the app calls Functions (O-67).
+
+## Routes
+
+On the existing HTTP `api` (E-37: no onCall). Every POST needs an `Idempotency-Key`. Every route is rate kind `general` (no provider call). Lists paginate with `?limit=` (1 to 100, default 20) and `?cursor=`.
+
+| Route | Method | Who | Notes |
+| --- | --- | --- | --- |
+| `/api/d4/drafting/createDraft` | POST | partner, associate, clerk on the matter (`draft.create`) | `{ matterId, documentTypeId, title, body, classification? }`; writes version 1 (kind `create`) |
+| `/api/d4/drafting/saveDraftVersion` | POST | same (`draft.edit`) | `{ draftId, baseVersion, title, body }` → `{ saved, draft }`; an identical save is `saved: false` and writes nothing |
+| `/api/d4/drafting/restoreDraftVersion` | POST | same (`draft.edit`) | `{ draftId, baseVersion, fromVersion }`; the old text becomes a new version (kind `restore`, `restoredFrom`) |
+| `/api/d4/drafting/getDraft` | GET | same (`draft.read`) | `?draftId=&version=`; the draft view with the title and body of that version (default the current one) |
+| `/api/d4/drafting/listDrafts` | GET | same (`draft.read`) | `?matterId=`; the matter's drafts the caller is cleared for, newest `updatedAt` first, no body |
+| `/api/d4/drafting/listDraftVersions` | GET | same (`draft.read`) | `?draftId=`; metadata only (version, hash, kind, author, time), newest first |
+| `/api/d4/drafting/overrideGate` | POST | partner who is a member of the matter (`draft.override`) | `{ draftId, version, resultId, reason }` → `{ override, draft }` |
+| `/api/d4/drafting/approveDraft` | POST | partner who is a member of the matter (`draft.approve`) | `{ draftId, version }` → `{ draft, gateResult }` |
+| `/api/d4/intelligence/listDocumentTypes` | GET | partner, associate, clerk (`doctype.read`, firm-level) | `?category=&courtId=&q=`; the verified seed, summary rows, sorted by id |
+| `/api/d4/intelligence/getTypeProfile` | GET | same | `?typeId=`; the whole seed row |
+| `/api/d4/intelligence/gateDraft` | POST | partner, associate, clerk on the matter (`draft.gate`) | `{ draftId, version, temporalChecks? }` → the gate result |
+| `/api/d4/intelligence/getVerificationReport` | GET | partner, associate, clerk (`draft.read`) | `?draftId=` → `{ gateResult, override, current }` |
+
+Interns, clients and accounts users are refused (an intern is `intern_channel_denied`). The permission is decided on the draft's own matter: a draft that is absent, in another firm or above the caller's clearance is 404 `not_found`, so its existence never leaks; a same-firm caller who is not a cleared member of the matter is refused 403. R-2 holds for every action: no role is exempt from matter membership.
+
+## Collections and shapes
+
+All writes are by Cloud Functions, in transactions. `firestore.rules` denies every client write (P4-11). A cleared member of the matter can still read `drafts` and `draft_versions` through the client SDK, an intern included (O-68). `draft_gate_results` and `draft_gate_overrides` are unreadable by any client.
+
+| Path | Holds |
+| --- | --- |
+| `drafts/{auto id}` | `firmId`, `matterId`, `documentTypeId`, `title`, `classification`, `status` (`draft` or `approved`), `currentVersion`, `currentBodySha256`, `locked`, `masterVersion` (null until P6, O-62), `gateResult` (the summary: `version`, `bodySha256`, `status`, `gatedAt`, `overridden`, `resultId`; null until the current version has been gated), `lastGatedVersion`, `approvedBy`, `approvedAt`, `approvedVersion`, `createdBy`, `createdAt`, `updatedAt`. Never the body. |
+| `draft_versions/{draftId}_{n}` | one immutable row per stored version, n dense from 1: `firmId`, `matterId`, `draftId`, `version`, `title`, `body` (inline), `bodySha256`, `classification`, `kind` (`create`, `save` or `restore`), `restoredFrom?`, `createdBy`, `createdAt` |
+| `draft_gate_results/{draftId}_{n}` | the latest gate run of version n: `resultId`, `firmId`, `matterId`, `draftId`, `version`, `bodySha256`, `classification`, `status`, `citations`, `temporal`, `gatedBy`, `gatedAt`, `gateRuns` (the count of `gateDraft` runs of n) |
+| `draft_gate_overrides/{draftId}_{n}` | the one immutable override of version n: `firmId`, `matterId`, `draftId`, `version`, `bodySha256`, `resultId`, `by`, `at`, `reason`, `cleared` |
+| `events/{draftId}_{n}_{suffix}` | see Events and audit |
+
+The body hash is the SHA-256 of the stored body in UTF-8 (the title is not part of it). A body is stored NFC-normalised, inline (the content pointer of L8287); R2 object storage is O-2. A body is at most 500,000 characters and at most 900,000 UTF-8 bytes (422 `draft_too_large`, never truncated: Firestore limits a document to 1 MiB). A title is one line of 1 to 500 characters with no control character (400 `invalid_title`; 422 `title_too_long`). Text with bidirectional or invisible characters or confusables is 422 `unsupported_characters` before anything is stored or gated.
+
+Two indexes back the list routes (`firestore.indexes.json`): `drafts` by `firmId`, `matterId`, `updatedAt` descending, and `draft_versions` by `firmId`, `draftId`, `version` descending. The `draft_versions.body` field is exempt from indexing.
+
+### Saves and versions
+
+A save names the version it edits (`baseVersion`). If another save landed first it is 409 `draft_changed`, so two editors never silently overwrite each other; two or four saves racing on one base give exactly one new version and the numbers stay dense. A locked draft is 409 `draft_locked` (checked first). A save whose title and body equal the current version's writes nothing but its audit row. A new version is not gated: the draft's gate summary is reset (the old result stays in `draft_gate_results`).
+
+### Classification
+
+A draft's label is the strictest of the matter's label, the caller's label and `internal` (monotonic, L17.3 #20; the `internal` floor is ruling R3, the one P1 applies to caller-authored free text). A caller label below the matter's own is 422 `classification_below_matter`; the caller's clearance must reach the result (403 `clearance`). A version carries the draft's label. A closed matter takes no new draft (409 `matter_closed`, R4); saves and restores on an existing draft of a closed matter are still allowed (O-70).
+
+### Document types
+
+`documentTypeId` must be a `VERIFIED` row of `data/documentTypes.json` (159 types; E-15). When the matter has a `courtId`, the type must list it exactly, list a family `X_*` that admits it (`X` itself and any `X_…`), or list `NON_FORUM` (notices, contracts and affidavits, 74 types, suit a matter in any court; R2); otherwise 422 `court_mismatch`. Eleven seed types name only courts that `data/courts.json` does not list (O-69).
+
+## The gate
+
+`gateDraft` gates exactly the named version, which must be the current one (409 `draft_changed`). The gate is a pure function of the draft and an authority store (`gate.ts`: `runGate`). It reports and blocks; it never edits the body. Marking with `[CITATION REQUIRED — PARTNER REVIEW]` is Phase 4d (O-65).
+
+**Citations** are `extractCitations(title + "\n" + body)`, de-duplicated by judgment id (or by canonical ref when unknown). Each authority is `VERIFIED`, `UNVERIFIED` or `OVERRULED`. A known judgment is VERIFIED unless an `overruled` treatment exists; it is OVERRULED when the treating bench outranks the treated one (or the recorded treating bench is `larger`), and UNVERIFIED when there are overrulings but none qualifies. Anything the store does not know is UNVERIFIED. Anything authority-like that the extractor cannot read exactly becomes an `UNRECOGNISED:` suspect, which is UNVERIFIED and is never looked up.
+
+**Temporal checks** are caller-supplied (`temporalChecks`, at most 20) until Phase 4c extracts statute references from the body (O-64): each is `{ sectionId, asAtDate (a real YYYY-MM-DD date), jurisdiction (1 to 50 characters), usedText (1 to 10,000 characters) }`, and all `usedText` together at most 200,000 UTF-8 bytes (400 `invalid_temporal_checks`, R8). A caller who supplies none gets no temporal check.
+
+| Temporal status | Meaning |
+| --- | --- |
+| `OK` | the text in force on that date in that jurisdiction equals `usedText` exactly, after NFC on both sides |
+| `TEMPORAL_MISMATCH` | it differs; the finding carries the in-force text so both can be shown side by side (L8499) |
+| `TEMPORAL_UNAVAILABLE` | the store has no history for that section, date or jurisdiction: "temporal check unavailable — verify manually", never a silent pass (L6900). A date before the first version, after a closed last one, or another jurisdiction's section is this too |
+
+The overall status is the most severe across all findings, in this order, and anything but `OK` blocks approval (E-22):
+
+| Overall | Arises from |
+| --- | --- |
+| `OVERRULED` | a citation OVERRULED |
+| `TEMPORAL_MISMATCH` | a check TEMPORAL_MISMATCH |
+| `UNVERIFIED` | a citation UNVERIFIED |
+| `TEMPORAL_UNAVAILABLE` | a check TEMPORAL_UNAVAILABLE |
+| `OK` | every citation VERIFIED and every check OK, or nothing to gate |
+
+The gate fails closed. A status outside its domain counts as UNVERIFIED (a citation or the overall status) or TEMPORAL_UNAVAILABLE (a check), never OK, and the stored overall status is never lower than the runner's own.
+
+The caller's text the gate stores (a `usedText`, a `jurisdiction`) passes the draft charset rule (422 `unsupported_characters`, R7) and is stored NFC-normalised with paste artefacts removed and no dash or digit folding, because it is compared exactly with statute text, which keeps its em dashes. A run whose findings would exceed 900,000 bytes is 422 `gate_result_too_large` (R8): nothing is stored or approved and the in-force text is never truncated.
+
+`gateDraft` writes the result to `draft_gate_results/{draftId}_{n}` with a fresh `resultId` (replacing an earlier run of that version), the draft's summary, the `draft.gated` event and the audit row, in one transaction. A locked draft is 409 `draft_locked`.
+
+`getVerificationReport` returns the stored result of the draft's last gated version, that version's override if any, and `current`: whether that result is for the draft's current version and body (after a save it is not).
+
+## The override and approval rules
+
+**Override** (`overrideGate`, P4-7). The caller must be a partner and a member of the matter (R-2); the author-partner may override their own draft (the audit row names them). The reason is 20 to 2,000 characters once trimmed (400 `invalid_reason`) and passes the charset rule (422). The override clears all four non-OK states: OVERRULED, TEMPORAL_MISMATCH, UNVERIFIED and TEMPORAL_UNAVAILABLE (E-31). It is written once, immutably, and records the authenticated caller (`by`, never a body field), the reason, the body hash, the `resultId` and every item it cleared with its status. Refusals, in the order checked: 409 `draft_locked`, 409 `draft_changed` (the version is not the current one), 409 `not_gated` (no stored result for this body), 409 `gate_result_changed` (R6), 409 `nothing_to_override` (the result is OK), 409 `already_overridden`. An override never survives a body change: a new version, a restored old text included, needs its own gate and its own override.
+
+**R5, frozen checks.** Once a version has an override, `gateDraft` on it is 409 `already_overridden`. The check set the partner cleared cannot be narrowed or swapped by a later re-gate (a re-gate with fewer or different checks would change what approval re-checks).
+
+**R6, result binding.** Every write of a gate result carries a fresh `resultId`. `overrideGate` requires the `resultId` of the result the partner reviewed (400 `invalid_result_id` if it is not a string) and refuses with 409 `gate_result_changed` if another run has replaced it since, so a partner clears what was shown, never a later result. The `resultId` is on the gate result the routes return and on `getVerificationReport`.
+
+**Approval** (`approveDraft`, P4-8; the stand-in for D2-3 routing, O-61). Partner only, a member of the matter, on the current version (409 `draft_changed`); a locked draft is 409 `draft_locked`; a version that was never gated is 409 `not_gated`. It re-runs the gate on that version against the authority store as it is now, with the temporal checks recorded in the version's result. It approves only if the fresh result is OK, or if the override bound to that version and body hash cleared every item that is still non-OK with the same status. A cleared UNVERIFIED that has since become OVERRULED is not cleared, nor is a cleared TEMPORAL_UNAVAILABLE that is now a mismatch (an item is matched by its kind, its reference or section key, and its status; O-71). Otherwise it refuses with 409 `gate_blocked`; it stores the fresh result and summary first, so `getVerificationReport` shows why (ruling R1: the router carries `{ error: { code } }` only). A re-gate that lands during the approval's re-run makes the approval 409 `draft_changed`. On success it sets `status: "approved"`, `locked: true`, `approvedBy`, `approvedAt` and `approvedVersion`, and writes `draft.approved`. Two approvals at once give one approval and one `draft_locked`. An approved draft refuses saves, restores, gates, overrides and approvals (409 `draft_locked`).
+
+After an override, a worsened status needs a body edit, because the override is immutable and the version is not re-gated (O-72).
+
+## The authority port
+
+`authority.ts` defines `AuthorityStore`, the only thing the gate knows about the corpus:
+
+- `findJudgment(canonical)` → `{ judgmentId, benchType } | null`
+- `listTreatments(judgmentId)` → the recorded treatments (`kind`, treating bench)
+- `getSectionAsAt(sectionId, asAtDate, jurisdiction)` → `{ text } | "no_history"`
+
+A call carries only a canonical citation, a judgment id or a section key (with a date and a jurisdiction), never a matter id or party data (L9633). The production adapter is `EMPTY_AUTHORITY_STORE`: no judgment, no treatment, no history. Until the corpus connector exists (O-59) every draft that cites an authority is UNVERIFIED and every temporal check is `TEMPORAL_UNAVAILABLE`, so approving such a draft needs a partner override (a draft that cites nothing and checks nothing approves without one). That is honest and fails closed. `activeAuthorityStore()` returns the empty store unless a test has set another with `setAuthorityStoreForTests`, which throws when `NODE_ENV` is `production`. `InMemoryAuthorityStore` is for tests; its fixtures use the year 2099 and `test_act_s1`-style ids so they never look like real authority (P4-13).
+
+## Events and audit
+
+Events (payload `{ draftId, matterId, documentTypeId, version, gateResult: status | null, masterVersion: null }`, the draft's classification, id `<draftId>_<version>_<suffix>`):
+
+- `draft.autosaved` once per stored version (create, save and restore; an identical save writes none), suffix `autosaved`.
+- `draft.gated` per `gateDraft` run, suffix `gated_<n>` with n the version's run count, so a re-gate never collides. An approval's re-run writes no `draft.gated`.
+- `draft.approved`, suffix `approved`.
+
+One `audit_log` row per decision, in the decision's transaction: `draft.create`, `draft.edit`, `draft.gate`, `draft.gate_override` (target the override document), `draft.approve` and `draft.read`. A refusal is audited as a deny. `draft.generated` is 4b; `draft.finalised` comes with D2-3 (O-61).
+
+## Error codes
+
+| Status | Codes |
+| --- | --- |
+| 400 | `matter_required`, `invalid_document_type`, `invalid_title`, `invalid_body`, `invalid_classification`, `invalid_version`, `invalid_temporal_checks`, `invalid_reason`, `invalid_result_id`, `invalid_query`, `invalid_cursor`, `invalid_limit` |
+| 403 | `clearance`, and the permission refusals (`not_member`, `intern_channel_denied`, role) |
+| 404 | `not_found`, `document_type_not_found`, `version_not_found` |
+| 409 | `draft_changed`, `draft_locked`, `not_gated`, `nothing_to_override`, `already_overridden`, `gate_blocked`, `gate_result_changed`, `matter_closed` |
+| 422 | `court_mismatch`, `classification_below_matter`, `unsupported_characters` (no code-point details, O-73), `draft_too_large`, `title_too_long`, `gate_result_too_large` |
+
+The shape of a request (the 400 codes) is checked before the permission, in a stated order, and the first failure wins. The text rules (the 422 codes) are applied only after the permission, so a caller who is not allowed is refused for the permission and learns nothing about a body (no oracle).
+
+## Test seams
+
+`setAuthorityStoreForTests` (`authority.ts`) is the only seam. It is test-only and throws when `NODE_ENV` is `production`. Production code never references it.
+
+## Tests and gate
+
+`functions/test/d4.gate.test.ts` and `d4.doctypes.test.ts` need no emulator. `d4.drafts.emu.test.ts` and `d4.gate.emu.test.ts` run under the Auth and Firestore emulators. The rules are covered by `tests/firestore.rules.d4-phase4a.test.ts`, the verdict rule by `tests/citationVerdict.test.ts`, the new permission actions by `tests/p5.permission-draft-actions.test.ts`, and the routes by `functions/test/g2.cross-firm.test.ts` (Gate G-2). The G-1 forensic test 4 and test 5 equivalents are in `d4.gate.emu.test.ts`. `npm run gate:g4:phase4a` (`ci_gates/gate_g4_phase4a.sh`) checks route coverage (8 + 4 routes), runs the named tests by exact full name, lints `functions` at zero warnings and runs G-2; it runs in CI after the Phase 3d gate. Renaming a named test fails the gate until the name in the script is changed with it.
+
+## Not in this phase
+
+- Generation through P1 (`startDraft`, `generateOutline`, `approveOutline`, `generateDraft`), the deterministic-first path (L16.1) and mask re-hydration: 4b. P1's citation guardrail (L960-961) will be implemented in the D4 caller after `callP1` returns, not as a hook inside P1 (P4-15).
+- Statute-reference extraction from the body and `relevant_law_dates`: 4c (O-64).
+- The L5.4 checklist (`requiredFields`, `annexureRule`) and `[CITATION REQUIRED]` marking: 4d (O-65).
+- Treatment refinements (L17.11): `doubted`, `per_incuriam`, warn levels and the confidence score (O-60).
+- The own-case exemption (E-32(a)): matters have no `caseNumber` yet, so a pleading that cites its own case number is UNVERIFIED and needs an override (O-66).
+- Export (DOCX and PDF), letterhead and signature, propositions (L17.4), the style and knowledge learners, `verifyStatuteSource` (the Gazette lock), D3 annexure sync and Opik measurement of the gate.
+- Version retention and caps (O-63), and master versions (P6, O-62).
+- Retiring the Next.js `/api/d4/drafts` route (O-67).
+
+## Open items
+
+O-59 the corpus connector: a production `AuthorityStore` over the Annex A read views, a producer for `citation`, `treatment` and `statute_section_version`, and a parity test with the extractor's canonical form; until then every citation is UNVERIFIED. O-60 L17.11 treatment coverage. O-61 D2-3 routing replaces `approveDraft`. O-62 P6 master versions. O-63 version retention and caps. O-64 4c statute extraction. O-65 4d checklist and marking. O-66 the own-case exemption. O-67 retire the Next.js drafts route. O-68 intern members can read drafts through the client SDK; narrow the read rules when O-67 closes. O-69 eleven seed types name courts absent from `data/courts.json`. O-70 saves and restores on drafts of a closed matter. O-71 approval's match keys ignore the in-force text; add a text hash with 4c. O-72 an immutable override: a worsened status needs a body edit. O-73 `unsupported_characters` carries no code-point details. E-39(1) and E-39(2) are closed for this gate. All are in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`, ES2-4.
