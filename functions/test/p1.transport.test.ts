@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { MAX_OUTPUT_TOKENS } from "../src/p1/costTable"
 import { OPIK_TIMEOUT_MS, exportTrace, setOpikFetchForTests, type OpikConfig, type TraceRecord } from "../src/p1/opik"
-import { GATEWAY_URL, TRANSPORT_TIMEOUT_MS, activeTransport, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import { GATEWAY_URL, P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 
 type Seen = { method: string | undefined; url: string | undefined; headers: IncomingMessage["headers"]; body: string }
 
@@ -57,6 +57,20 @@ const rejection = (p: Promise<unknown>): Promise<string> =>
     },
     (e: unknown) => (e as Error).message,
   )
+/** The error a promise rejects with; fails the test if it resolves. */
+const failure = (p: Promise<unknown>): Promise<unknown> =>
+  p.then(
+    () => {
+      throw new Error("expected a rejection")
+    },
+    (e: unknown) => e,
+  )
+/** The P1TransportError fields that decide the charge and the log line (I1). */
+const fields = (e: unknown) => {
+  expect(e).toBeInstanceOf(P1TransportError)
+  const t = e as P1TransportError
+  return { name: t.name, code: t.code, billable: t.billable, inputTokens: t.inputTokens, outputTokens: t.outputTokens }
+}
 const request = { model: "anthropic/claude-opus-5.5", body: "hello ک", maxTokens: MAX_OUTPUT_TOKENS }
 
 describe("P1 Gateway transport (P3-68)", () => {
@@ -164,6 +178,89 @@ describe("P1 Gateway transport (P3-68)", () => {
 
   it("rejects when the connection is refused", async () => {
     expect(await rejection(gatewayTransport("k", "http://127.0.0.1:1/v1/chat/completions").send(request))).toBe("gateway request failed")
+  })
+})
+
+describe("P1 Gateway transport errors (I1: billed failures are charged)", () => {
+  const P1 = { name: "P1TransportError", inputTokens: null, outputTokens: null }
+
+  it("a non-2xx is gateway_status, not billable", async () => {
+    for (const status of [400, 401, 429, 500, 503]) {
+      respond = json(status, { error: "SECRET provider detail" })
+      const e = await failure(gatewayTransport("k", base).send(request))
+      expect(fields(e), String(status)).toEqual({ ...P1, code: "gateway_status", billable: false })
+      expect((e as Error).message).toBe(`gateway status ${status}`)
+    }
+  })
+
+  it("a refused connection is gateway_request_failed, not billable", async () => {
+    const e = await failure(gatewayTransport("k", "http://127.0.0.1:1/v1/chat/completions").send(request))
+    expect(fields(e)).toEqual({ ...P1, code: "gateway_request_failed", billable: false })
+    expect((e as Error).message).toBe("gateway request failed")
+  })
+
+  it("a timeout, before the headers or while the body streams, is gateway_timeout and billable", async () => {
+    respond = never
+    const before = await failure(gatewayTransport("k", base, { timeoutMs: 100 }).send(request))
+    expect(fields(before)).toEqual({ ...P1, code: "gateway_timeout", billable: true })
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.write('{"choices":[{"message":')
+    }
+    const during = await failure(gatewayTransport("k", base, { timeoutMs: 100 }).send(request))
+    expect(fields(during)).toEqual({ ...P1, code: "gateway_timeout", billable: true })
+    expect((during as Error).message).toBe("gateway timeout")
+  })
+
+  it("a 2xx whose body is not JSON is gateway_not_json and billable, with no usage", async () => {
+    respond = (_req, res) => res.writeHead(200).end("SECRET not json")
+    const e = await failure(gatewayTransport("k", base).send(request))
+    expect(fields(e)).toEqual({ ...P1, code: "gateway_not_json", billable: true })
+    expect((e as Error).message).toBe("gateway response is not JSON")
+  })
+
+  it("a 2xx without usable content is gateway_no_text and billable, carrying the usage figures that are valid counts", async () => {
+    respond = json(200, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3 } })
+    const e = await failure(gatewayTransport("k", base).send(request))
+    expect(fields(e)).toEqual({ ...P1, code: "gateway_no_text", billable: true, inputTokens: 7, outputTokens: 3 })
+    expect((e as Error).message).toBe("gateway response has no message content")
+    respond = json(200, { choices: [{ message: { content: null } }], usage: { prompt_tokens: 7, completion_tokens: -3 } })
+    expect(fields(await failure(gatewayTransport("k", base).send(request)))).toEqual({ ...P1, code: "gateway_no_text", billable: true, inputTokens: 7, outputTokens: null })
+    respond = json(200, { detail: "SECRET" })
+    expect(fields(await failure(gatewayTransport("k", base).send(request)))).toEqual({ ...P1, code: "gateway_no_text", billable: true })
+  })
+
+  it("a redirect is refused: gateway_request_failed, not billable, and the redirect target receives nothing", async () => {
+    const reached: string[] = []
+    const target = createServer((req, res) => {
+      reached.push(String(req.url))
+      res.setHeader("connection", "close")
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ choices: [{ message: { content: "redirected" } }] }))
+    })
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve))
+    try {
+      const to = `http://127.0.0.1:${(target.address() as AddressInfo).port}/elsewhere`
+      for (const status of [301, 302, 303, 307, 308]) {
+        respond = (_req, res) => res.writeHead(status, { location: to }).end()
+        const e = await failure(gatewayTransport("k", `${base}/v1/chat/completions`).send(request))
+        expect(fields(e), String(status)).toEqual({ ...P1, code: "gateway_request_failed", billable: false })
+      }
+      expect(reached).toEqual([])
+      expect(seen).toHaveLength(5)
+    } finally {
+      target.closeAllConnections()
+      await new Promise<void>((resolve) => target.close(() => resolve()))
+    }
+  })
+
+  it("passes redirect: error to fetch", async () => {
+    const inits: (RequestInit | undefined)[] = []
+    vi.stubGlobal("fetch", async (_url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init)
+      return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), { status: 200 })
+    })
+    await gatewayTransport("k", base).send(request)
+    expect(inits[0]?.redirect).toBe("error")
   })
 })
 
@@ -341,6 +438,38 @@ describe("P1 Opik exporter (P3-67)", () => {
     expect(await exportTrace(record, enabled(), { timeoutMs: 250 })).toBe("exported")
     expect(timeout).toHaveBeenCalledTimes(2)
     expect(timeout).toHaveBeenLastCalledWith(250)
+  })
+
+  it("a redirect is refused: failed, and the redirect target receives nothing", async () => {
+    const reached: string[] = []
+    const target = createServer((req, res) => {
+      reached.push(String(req.url))
+      res.setHeader("connection", "close")
+      res.writeHead(204).end()
+    })
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve))
+    try {
+      const to = `http://127.0.0.1:${(target.address() as AddressInfo).port}/elsewhere`
+      for (const status of [301, 302, 303, 307, 308]) {
+        respond = (_req, res) => res.writeHead(status, { location: to }).end()
+        expect(await exportTrace(record, enabled()), String(status)).toBe("failed")
+      }
+      expect(reached).toEqual([])
+      expect(seen).toHaveLength(5)
+    } finally {
+      target.closeAllConnections()
+      await new Promise<void>((resolve) => target.close(() => resolve()))
+    }
+  })
+
+  it("passes redirect: error to fetch", async () => {
+    const inits: (RequestInit | undefined)[] = []
+    setOpikFetchForTests((async (_url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init)
+      return new Response(null, { status: 204 })
+    }) as typeof fetch)
+    expect(await exportTrace(record, enabled())).toBe("exported")
+    expect(inits[0]?.redirect).toBe("error")
   })
 
   it("refuses the fetch seam in production", () => {

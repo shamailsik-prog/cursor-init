@@ -587,6 +587,61 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         expect((await auditOf(f.P.uid, "ai.call")).filter((r) => r.decision === "deny" && r.reason === "internal")).toHaveLength(1)
       })
 
+      it("an ambiguous commit (the first attempt commits, its answer is lost, the retry's create hits ALREADY_EXISTS) is a success: 200, one output row, one route allow row and no deny row, one provider call", async () => {
+        const f = await newFirm()
+        const sent = fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        // A retryable gRPC code (DEADLINE_EXCEEDED) thrown after the first attempt's transaction has committed.
+        p1OpsTestSeam.lostCommitAnswers = [Object.assign(new Error("deadline exceeded"), { code: 4 })]
+        const r = (await ask(f)) as Out
+        expect(Object.keys(r).sort()).toEqual(["blocked", "classification", "outputId", "text", "traceId", "usage"])
+        expect(r).toMatchObject({ blocked: false, text: "REPLY", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
+        expect(waits).toEqual([100])
+        expect(p1OpsTestSeam.lostCommitAnswers).toEqual([])
+        expect(sent).toHaveLength(1)
+        const outputs = await outputsOf(f.firmId)
+        expect(outputs.map((o) => o.id)).toEqual([r.outputId])
+        expect(outputs[0]!.data.usageLogId).toBe((await usageRowsOf(f.firmId))[0]!.id)
+        // The permission check's allow row and the route's allow row (from the attempt that committed), and no deny row.
+        const rows = (await auditOf(f.P.uid, "ai.call")).filter((row) => row.target === `matters/${f.matterId}`)
+        expect(rows.map((row) => [row.decision, row.reason])).toEqual([
+          ["allow", "ok"],
+          ["allow", "ok"],
+        ])
+        expect(await docs("audit_log", f.firmId).then((all) => all.filter((a) => a.data.action === "ai.gateway.decision"))).toHaveLength(1)
+      })
+
+      it("an ALREADY_EXISTS while no output row of this call exists is not taken as a commit: it is retried like any failure", async () => {
+        const f = await newFirm()
+        fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        p1OpsTestSeam.outputWriteFailures = [Object.assign(new Error("already exists"), { code: 6 })]
+        const r = (await ask(f)) as Out
+        expect(waits).toEqual([100])
+        expect((await outputsOf(f.firmId)).map((o) => o.id)).toEqual([r.outputId])
+        expect((await auditOf(f.P.uid, "ai.call")).filter((row) => row.decision === "deny")).toHaveLength(0)
+      })
+
+      it("with NODE_ENV production every p1OpsTestSeam field is inert: no injected failure, no lost answer, no wait", async () => {
+        const f = await newFirm()
+        const sent = fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        p1OpsTestSeam.outputWriteFailures = [new Error("injected"), new Error("injected"), new Error("injected")]
+        p1OpsTestSeam.lostCommitAnswers = [Object.assign(new Error("lost"), { code: 4 })]
+        vi.stubEnv("NODE_ENV", "production")
+        const r = (await ask(f)) as Out
+        expect(r).toMatchObject({ blocked: false, text: "REPLY" })
+        expect(waits).toEqual([])
+        expect(p1OpsTestSeam.outputWriteFailures).toHaveLength(3)
+        expect(p1OpsTestSeam.lostCommitAnswers).toHaveLength(1)
+        expect(sent).toHaveLength(1)
+        expect((await outputsOf(f.firmId)).map((o) => o.id)).toEqual([r.outputId])
+        expect((await auditOf(f.P.uid, "ai.call")).filter((row) => row.decision === "deny")).toHaveLength(0)
+      })
+
       it("an HttpError is a decision, not a transient fault: it is not retried", async () => {
         const f = await newFirm()
         fakeTransport()

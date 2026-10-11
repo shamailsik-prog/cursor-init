@@ -5,13 +5,14 @@ import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolic
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { isContentionAbort } from "../d1/contention"
+import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { errorCode } from "../log"
 import { stageAudit } from "../p5/audit"
 import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, killSwitchBlocks, monthRef, pkrRateOf, platformConfigRef, spentOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens } from "./costTable"
 import { monthKeyPkt } from "./month"
-import { exportTrace } from "./opik"
-import { activeTransport } from "./transport"
+import { OPIK_TIMEOUT_MS, exportTrace } from "./opik"
+import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, type TransportCode } from "./transport"
 import { TRANSPORT_ERROR, type BlockReason, type P1Outcome, type TaskType } from "./types"
 import { uuidv7 } from "./uuidv7"
 
@@ -56,21 +57,71 @@ export type P1Result = {
 /**
  * Test seam only; production code never sets it, and it is inert when `NODE_ENV` is "production".
  * `beforeCommit` runs after the trace and before the commit transaction; `failCommit` makes that transaction
- * fail; `modelOverride` routes the call to that model id (ruling R2).
+ * fail; `modelOverride` routes the call to that model id (ruling R2). `wallClock` replaces `Date.now` as the
+ * commit deadline's clock; `commitAttemptFailures` is a queue: each commit transaction attempt takes the next
+ * error from it and throws it before staging anything; `lostCommitAnswers` is a queue too: each commit attempt
+ * whose transaction committed takes the next error from it and throws it, as if the commit's answer were lost.
  */
-export const p1TestSeam: { beforeCommit?: () => Promise<void>; failCommit?: boolean; modelOverride?: string } = {}
+export const p1TestSeam: {
+  beforeCommit?: () => Promise<void>
+  failCommit?: boolean
+  modelOverride?: string
+  wallClock?: () => number
+  commitAttemptFailures?: Error[]
+  lostCommitAnswers?: Error[]
+} = {}
 
 function seam(): typeof p1TestSeam {
   return process.env.NODE_ENV === "production" ? {} : p1TestSeam
 }
 
-/** Parallel calls in one firm contend on the month total: more attempts than the SDK default of 5, like registerClient. */
-const COMMIT_TX_ATTEMPTS = 10
-/** Fresh transactions after one gives up under contention; the usage row's fixed id makes a re-run safe. */
-const COMMIT_ROUNDS = 3
+/**
+ * How long the commit may go on retrying, on the real clock from the start of the commit phase (M3), like
+ * `CONTENTION_DEADLINE_MS` in d1/contention.ts. Once it has passed, no new attempt starts: the commit fails
+ * with `commit_deadline`, and unless the usage row turns out to exist, the call logs `p1.usage_log_failed` and
+ * returns its result.
+ *
+ * P1 paces the retries itself: each attempt is one SDK transaction (`maxAttempts: 1`), so the SDK never waits
+ * before a retry. Its own back-off waits up to about 25 s before a tenth attempt and resets to 60 s (±50 %) after
+ * RESOURCE_EXHAUSTED, either of which would carry a commit past any deadline and, after a 60 s transport call
+ * and a 2 s trace export, past the 120 s function timeout with no record at all. P1's waits never run past the
+ * deadline, so the worst case is the deadline plus one attempt in flight (COMMIT_ATTEMPT_SLACK_MS).
+ */
+export const COMMIT_DEADLINE_MS = 30_000
+/** The longest one commit attempt (two reads and a commit) is allowed for in the timeout budget. */
+export const COMMIT_ATTEMPT_SLACK_MS = 10_000
+/** Back-off between attempts: 100 ms doubling to this cap, with ±50 % jitter, and never past the deadline. */
+export const COMMIT_BACKOFF_CAP_MS = 2_000
+const COMMIT_BACKOFF_BASE_MS = 100
+/** Parallel calls in one firm contend on the month total; the deadline, not this count, normally ends a retry run. */
+const COMMIT_MAX_ATTEMPTS = 30
 
-/** The fixed messages `transport.ts` throws carry no provider text; they are logged as a code, anything else as "unknown". */
-const TRANSPORT_CODES = /^gateway (?:status \d{3}|timeout|request failed|response is not JSON|response has no message content)$/
+if (!(TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS + COMMIT_ATTEMPT_SLACK_MS < FUNCTION_TIMEOUT_SECONDS * 1000)) {
+  throw new Error(
+    `transport (${TRANSPORT_TIMEOUT_MS} ms), trace (${OPIK_TIMEOUT_MS} ms), commit (${COMMIT_DEADLINE_MS} ms) and one attempt (${COMMIT_ATTEMPT_SLACK_MS} ms) must fit in the function timeout (${FUNCTION_TIMEOUT_SECONDS} s)`
+  )
+}
+
+/** The codes the SDK itself retries a transaction on (ABORTED, CANCELLED, UNKNOWN, DEADLINE_EXCEEDED, INTERNAL, UNAVAILABLE, UNAUTHENTICATED, RESOURCE_EXHAUSTED), plus an expired or dead transaction. */
+const RETRYABLE_COMMIT_CODES: ReadonlySet<number> = new Set([10, 1, 2, 4, 13, 14, 16, 8])
+
+function isRetryableCommitError(err: unknown): boolean {
+  if (isContentionAbort(err)) return true
+  if (!(err instanceof Error)) return false
+  const code = (err as { code?: unknown }).code
+  if (typeof code === "number") return RETRYABLE_COMMIT_CODES.has(code) || (code === 3 && /transaction has expired/.test(err.message))
+  return false
+}
+
+function commitBackoffMs(attempt: number): number {
+  const base = Math.min(COMMIT_BACKOFF_BASE_MS * 2 ** (attempt - 1), COMMIT_BACKOFF_CAP_MS)
+  return Math.round(base * (0.5 + Math.random()))
+}
+
+/** The commit ran out of time (COMMIT_DEADLINE_MS): logged with this fixed code. */
+function commitDeadlineError(): Error {
+  return Object.assign(new Error("P1 commit deadline passed"), { code: "commit_deadline" })
+}
 
 const EVENT_SUFFIX: Readonly<Record<P1Outcome, string>> = { ok: "completed", failed: "failed", blocked: "blocked" }
 
@@ -82,9 +133,15 @@ function tokenCount(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
 }
 
-function transportCode(err: unknown): string {
-  const message = err instanceof Error ? err.message : ""
-  return TRANSPORT_CODES.test(message) ? message : "unknown"
+/** gRPC ALREADY_EXISTS (6), or its string form: a `create` found its document already there. */
+export function isAlreadyExists(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  return code === 6 || (typeof code === "string" && code.toLowerCase() === "already-exists")
+}
+
+/** A P1TransportError's fixed code; anything else (another transport's own error) is logged as "unknown", never its message. */
+function transportCode(err: unknown): TransportCode | "unknown" {
+  return err instanceof P1TransportError && isTransportCode(err.code) ? err.code : "unknown"
 }
 
 export async function callP1(req: P1Request, opts?: { now?: () => number }): Promise<P1Result> {
@@ -143,18 +200,41 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
     // 9. The transport call, then the response mask (P3-68).
     try {
       const res = await transport.send({ model, body: outbound.body, maxTokens: MAX_OUTPUT_TOKENS })
-      if (typeof res?.text !== "string") throw new Error("transport returned no text")
+      // A response came back without text: billed like the Gateway's own gateway_no_text, on the usage it reported.
+      if (typeof res?.text !== "string") {
+        throw new P1TransportError("gateway_no_text", { billable: true, inputTokens: tokenCount(res?.inputTokens), outputTokens: tokenCount(res?.outputTokens) })
+      }
       const masked = maskOutboundPII(res.text, { partyNames }).masked
       const reportedIn = tokenCount(res.inputTokens)
       const reportedOut = tokenCount(res.outputTokens)
+      // Each side is estimated from what was billed: the input from the masked body that was sent, the output from
+      // the raw response the provider produced (masking shortens it). The raw text is used for this count only; the
+      // masked text is the only one returned, stored, traced or logged.
       inputTokens = reportedIn ?? estimateTokens(outbound.body)
-      outputTokens = reportedOut ?? estimateTokens(masked)
+      outputTokens = reportedOut ?? estimateTokens(res.text)
       tokensEstimated = reportedIn === null || reportedOut === null
       cost = costMicroUsd(model, inputTokens, outputTokens)! // step 6 refused an unpriced model
       text = masked
       outcome = "ok"
     } catch (err) {
       outcome = "failed"
+      // I1: a failure the provider may have billed is charged, conservatively: the reported usage where the
+      // response gave a valid count, else the estimated input and the MAX_OUTPUT_TOKENS ceiling. A failure that
+      // cannot have been billed (a non-2xx, a request that never left, any error that is not a billable
+      // P1TransportError) is charged 0.
+      if (err instanceof P1TransportError && err.billable) {
+        const reportedIn = tokenCount(err.inputTokens)
+        const reportedOut = tokenCount(err.outputTokens)
+        inputTokens = reportedIn ?? estimateTokens(outbound.body)
+        outputTokens = reportedOut ?? MAX_OUTPUT_TOKENS
+        tokensEstimated = reportedIn === null || reportedOut === null
+        cost = costMicroUsd(model, inputTokens, outputTokens)! // step 6 refused an unpriced model
+      } else {
+        inputTokens = 0
+        outputTokens = 0
+        tokensEstimated = false
+        cost = 0
+      }
       logger.warn("p1.transport_failed", { firmId, usageLogId: usageRef.id, traceId, code: transportCode(err) })
     }
   }
@@ -206,7 +286,7 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
   let crossings: Crossing[] = []
   try {
     await t.beforeCommit?.()
-    crossings = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true })
+    crossings = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t })
   } catch (err) {
     // The spend has happened: the result is still returned, and the log keeps the record (P3-63).
     logger.error("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, code: errorCode(err) })
@@ -249,22 +329,73 @@ type CommitArgs = {
   record: UsageRecord
   traceId: string
   failCommit: boolean
+  seam: typeof p1TestSeam
 }
 
 /**
  * Writes one decision in one transaction (P3-63, P3-65, P3-69) and returns the thresholds it crossed. The
  * transaction reads the month total and the firm's config to decide crossings on its own budget and spend
  * (`before*100 < t*budget <= after*100`), and skips a threshold whose alert already exists, so each fires
- * once per firm per month and a raised budget never re-arms one. A round that gives up under contention is
- * re-run; the usage row's `tx.create` makes a re-run after an unseen commit fail rather than double-count.
+ * once per firm per month and a raised budget never re-arms one. A retryable failure is retried on P1's own
+ * back-off (see COMMIT_DEADLINE_MS) until COMMIT_MAX_ATTEMPTS or the deadline. The usage row's `tx.create`
+ * makes a retry after an unseen commit fail with ALREADY_EXISTS rather than double-count. Before any failure
+ * is reported, the usage row is read: a commit found done returns the crossings its alert docs record, so an
+ * unseen commit is never logged as a failure.
  */
 async function commit(db: Firestore, args: CommitArgs): Promise<Crossing[]> {
-  for (let round = 1; ; round++) {
-    try {
-      return await db.runTransaction((tx) => stage(db, tx, args), { maxAttempts: COMMIT_TX_ATTEMPTS })
-    } catch (err) {
-      if (round >= COMMIT_ROUNDS || !isContentionAbort(err)) throw err
+  const clock = args.seam.wallClock ?? Date.now
+  const started = clock()
+  const remaining = () => COMMIT_DEADLINE_MS - (clock() - started)
+  let failure: unknown = commitDeadlineError()
+  for (let attempt = 1; attempt <= COMMIT_MAX_ATTEMPTS; attempt++) {
+    if (remaining() <= 0) {
+      failure = commitDeadlineError()
+      break
     }
+    try {
+      const crossings = await db.runTransaction(
+        (tx) => {
+          const injected = args.seam.commitAttemptFailures?.shift()
+          if (injected) throw injected
+          return stage(db, tx, args)
+        },
+        { maxAttempts: 1 }
+      )
+      const lost = args.seam.lostCommitAnswers?.shift()
+      if (lost) throw lost
+      return crossings
+    } catch (err) {
+      failure = err
+      if (isAlreadyExists(err) || !isRetryableCommitError(err)) break
+      const wait = Math.min(commitBackoffMs(attempt), remaining())
+      if (wait <= 0) {
+        failure = commitDeadlineError()
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, wait))
+    }
+  }
+  const done = await committedCrossings(db, args)
+  if (done !== null) return done
+  throw failure
+}
+
+/**
+ * After an ALREADY_EXISTS: null unless this call's usage row is there (an earlier attempt's commit landed and
+ * its answer was lost); otherwise the thresholds that commit crossed, read back from the alert docs it wrote.
+ */
+async function committedCrossings(db: Firestore, a: CommitArgs): Promise<Crossing[] | null> {
+  try {
+    const { firmId, monthKey } = a.record
+    const [usage, ...alerts] = await db.getAll(a.usageRef, ...THRESHOLDS.map((t) => alertRef(firmId, monthKey, t)))
+    if (!usage!.exists || usage!.get("trace.id") !== a.traceId) return null
+    return alerts.flatMap((snap, i) =>
+      snap.exists && snap.get("usageLogId") === a.usageRef.id
+        ? [{ threshold: THRESHOLDS[i]!, budgetMicroUsd: snap.get("budgetMicroUsd") as number, spentMicroUsd: snap.get("spentMicroUsd") as number }]
+        : []
+    )
+  } catch {
+    return null
   }
 }
 
@@ -282,7 +413,8 @@ async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Promise<Cro
   const now = FieldValue.serverTimestamp()
   const inc = (n: number) => FieldValue.increment(n)
   tx.create(usageRef, { ...r, createdAt: now })
-  // A blocked or failed call adds 0 to spend and tokens: only its `calls` counter moves.
+  // Spend and tokens move by the record's own figures, by one rule for every outcome: an ok call and a billed
+  // failure add their charge (I1); a blocked call and an unbilled failure add 0, so only their `calls` counter moves.
   tx.set(
     a.totalRef,
     {

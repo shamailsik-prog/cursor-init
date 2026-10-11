@@ -6,10 +6,11 @@ import { logger } from "firebase-functions"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { THRESHOLDS, alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
-import { costMicroUsd, estimateTokens } from "../src/p1/costTable"
-import { callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
-import { setOpikFetchForTests } from "../src/p1/opik"
-import { gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import { MAX_OUTPUT_TOKENS, costMicroUsd, estimateTokens } from "../src/p1/costTable"
+import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
+import { COMMIT_ATTEMPT_SLACK_MS, COMMIT_BACKOFF_CAP_MS, COMMIT_DEADLINE_MS, callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
+import { OPIK_TIMEOUT_MS, setOpikFetchForTests } from "../src/p1/opik"
+import { P1TransportError, TRANSPORT_TIMEOUT_MS, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 import { EMULATORS, uniq } from "./emu"
 
 /**
@@ -115,7 +116,8 @@ function spyLogs(): { all: () => string; warn: ReturnType<typeof vi.spyOn>; erro
 
 /** Enables Opik (self-hosted, confirmed) with a fake fetch that captures each posted body; `status` is its answer. */
 function fakeOpik(status = 204): { bodies: string[] } {
-  vi.stubEnv("OPIK_BASE_URL", "http://opik.internal.test")
+  // A plain-http base must be loopback, a private IPv4 literal, or end in .internal or .local (M4).
+  vi.stubEnv("OPIK_BASE_URL", "http://opik.test.internal")
   vi.stubEnv("OPIK_SELF_HOSTED_CONFIRMED", "true")
   const bodies: string[] = []
   setOpikFetchForTests((async (_url: unknown, init?: RequestInit) => {
@@ -542,10 +544,45 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
 
     it("a transport that resolves without string text is a transport_error", async () => {
       const firmId = await seedFirm()
+      const logs = spyLogs()
       fakeTransport({ text: { not: "text" } })
       const r = await callP1(req(firmId), at)
-      expect(r).toMatchObject({ outcome: "failed", costMicroUsd: 0 })
+      // I1: a response came back, so it is billed like the Gateway's own gateway_no_text, on the usage it reported (1000 in, 500 out).
+      expect(r).toMatchObject({ outcome: "failed", inputTokens: 1000, outputTokens: 500, costMicroUsd: costMicroUsd(OPUS, 1000, 500) })
       expect((await auditsOf(firmId))[0]!.data.reason).toBe("transport_error")
+      // m2: the fixed code, not "unknown".
+      expect(logs.warn.mock.calls.filter((c) => c[0] === "p1.transport_failed").map((c) => (c[1] as { code: string }).code)).toEqual(["gateway_no_text"])
+    })
+
+    it("a billed failure is charged into the month total, crosses the alerts and counts toward budget_exhausted; the next call is blocked", async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: 100_000 })
+      // A 2xx with no text that reported 0 in and 5000 out: 5000 x 20 = 100000 micro-USD, the whole budget.
+      fakeTransport(() => Promise.reject(new P1TransportError("gateway_no_text", { billable: true, inputTokens: 0, outputTokens: 5000 })))
+      const r = await callP1(req(firmId), at)
+      expect(r).toMatchObject({ outcome: "failed", blockReason: null, inputTokens: 0, outputTokens: 5000, costMicroUsd: 100_000 })
+      expect(await rowOf(r.usageLogId)).toMatchObject({ outcome: "failed", costMicroUsd: 100_000, inputTokens: 0, outputTokens: 5000, tokensEstimated: false })
+      expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 100_000, inputTokens: 0, outputTokens: 5000, calls: { ok: 0, failed: 1, blocked: 0 } })
+      expect((await alertsOf(firmId)).map((a) => a.data.threshold).sort()).toEqual([70, 90])
+
+      const sent = fakeTransport()
+      const next = await callP1(req(firmId), at)
+      expect(next).toMatchObject({ outcome: "blocked", blockReason: "budget_exhausted", costMicroUsd: 0 })
+      expect(sent).toHaveLength(0)
+    })
+
+    it("an unbilled P1TransportError is charged nothing, and a billed one with no usage is charged the estimated input and the 4,096-token ceiling", async () => {
+      const firmId = await seedFirm()
+      fakeTransport(() => Promise.reject(new P1TransportError("gateway_status", { billable: false, status: 503 })))
+      const unbilled = await callP1(req(firmId), at)
+      expect(unbilled).toMatchObject({ outcome: "failed", inputTokens: 0, outputTokens: 0, costMicroUsd: 0 })
+      expect(await rowOf(unbilled.usageLogId)).toMatchObject({ costMicroUsd: 0, tokensEstimated: false })
+
+      fakeTransport(() => Promise.reject(new P1TransportError("gateway_not_json", { billable: true })))
+      const billed = await callP1(req(firmId, { body: "Client Ali Raza asks.", partyNames: ["Ali Raza"] }), at)
+      const inTok = estimateTokens("Client [PARTY] asks.")
+      expect(billed).toMatchObject({ outcome: "failed", inputTokens: inTok, outputTokens: MAX_OUTPUT_TOKENS, costMicroUsd: costMicroUsd(OPUS, inTok, 4096) })
+      expect(await rowOf(billed.usageLogId)).toMatchObject({ inputTokens: inTok, outputTokens: 4096, tokensEstimated: true, costMicroUsd: costMicroUsd(OPUS, inTok, 4096) })
+      expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: costMicroUsd(OPUS, inTok, 4096), inputTokens: inTok, outputTokens: 4096, calls: { ok: 0, failed: 2, blocked: 0 } })
     })
 
     describe("through the real Gateway transport against a local server", () => {
@@ -574,27 +611,40 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
         rs.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body))
       }
 
+      // I1: what each failure is charged. The body is "Draft a reply to the notice.", so an estimated input side is
+      // estimateTokens of it; a timeout is charged at the 4,096-token ceiling.
+      const BODY_TOKENS = estimateTokens("Draft a reply to the notice.")
       it.each([
-        ["a non-2xx", json(503, { error: { message: "Ali Raza overloaded quota-xyz" } })],
-        ["a 2xx with no choices[0].message.content", json(200, { choices: [], note: "Ali Raza quota-xyz" })],
-        ["a timeout", () => undefined],
-      ] as const)("%s gives failed, transport_error, cost 0 and stores no provider text", async (_label, handler) => {
+        ["a non-2xx", json(503, { error: { message: "Ali Raza overloaded quota-xyz" } }), "gateway_status", { inputTokens: 0, outputTokens: 0, tokensEstimated: false, costMicroUsd: 0 }],
+        [
+          "a 2xx with no choices[0].message.content",
+          json(200, { choices: [], note: "Ali Raza quota-xyz", usage: { prompt_tokens: 7, completion_tokens: 3 } }),
+          "gateway_no_text",
+          { inputTokens: 7, outputTokens: 3, tokensEstimated: false, costMicroUsd: costMicroUsd(OPUS, 7, 3)! },
+        ],
+        ["a timeout", () => undefined, "gateway_timeout", { inputTokens: BODY_TOKENS, outputTokens: 4096, tokensEstimated: true, costMicroUsd: costMicroUsd(OPUS, BODY_TOKENS, 4096)! }],
+      ] as const)("%s gives failed, transport_error, the charge the I1 rule sets, and stores no provider text", async (_label, handler, code, charge) => {
         respond = handler
         setP1TransportForTests(gatewayTransport("test-key", `${base}/v1/chat/completions`, { timeoutMs: 300 }))
         const firmId = await seedFirm()
         const logs = spyLogs()
         const r = await callP1(req(firmId), at)
-        expect(r).toMatchObject({ outcome: "failed", costMicroUsd: 0 })
+        const { inputTokens, outputTokens, costMicroUsd: cost } = charge
+        expect(r).toMatchObject({ outcome: "failed", blockReason: null, inputTokens, outputTokens, costMicroUsd: cost })
+        expect(await rowOf(r.usageLogId)).toMatchObject({ outcome: "failed", ...charge })
+        expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: cost, inputTokens, outputTokens, calls: { ok: 0, failed: 1, blocked: 0 } })
         const stored = JSON.stringify([await rowOf(r.usageLogId), await eventsOf(firmId), await auditsOf(firmId), r, logs.all()])
         expect(stored).not.toContain("quota-xyz")
         expect((await auditsOf(firmId))[0]!.data.reason).toBe("transport_error")
+        expect(logs.warn.mock.calls.filter((c) => c[0] === "p1.transport_failed").map((c) => (c[1] as { code: string }).code)).toEqual([code])
       })
 
       it("a thrown fetch (connection refused) gives failed", async () => {
         setP1TransportForTests(gatewayTransport("test-key", "http://127.0.0.1:1/v1/chat/completions", { timeoutMs: 300 }))
         const firmId = await seedFirm()
         const r = await callP1(req(firmId), at)
-        expect(r).toMatchObject({ outcome: "failed", blockReason: null, costMicroUsd: 0 })
+        expect(r).toMatchObject({ outcome: "failed", blockReason: null, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 })
+        expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 0, calls: { ok: 0, failed: 1, blocked: 0 } })
       })
 
       it("a 2xx with content but no usage is ok with tokensEstimated", async () => {
@@ -609,14 +659,41 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
   })
 
   describe("usage absent (P3-62)", () => {
-    it("null tokens on both sides: ok, tokensEstimated, each side estimated from the masked text", async () => {
+    it("null tokens on both sides: ok, tokensEstimated, the input estimated from the masked body sent and the output from the raw response", async () => {
       const firmId = await seedFirm()
       fakeTransport({ text: "Reply to Ali Raza at 0300-1234567", inputTokens: null, outputTokens: null })
       const r = await callP1(req(firmId, { body: "Ali Raza's bail ک", partyNames: ["Ali Raza"] }), at)
+      // The input side is what was sent (the masked body); the output side is what the provider produced (the raw text).
       const inTok = estimateTokens("[PARTY]'s bail ک")
-      const outTok = estimateTokens("Reply to [PARTY] at [PHONE]")
+      const outTok = estimateTokens("Reply to Ali Raza at 0300-1234567")
       expect(r).toMatchObject({ outcome: "ok", inputTokens: inTok, outputTokens: outTok, costMicroUsd: costMicroUsd(OPUS, inTok, outTok) })
       expect(await rowOf(r.usageLogId)).toMatchObject({ tokensEstimated: true, inputTokens: inTok, outputTokens: outTok, costMicroUsd: costMicroUsd(OPUS, inTok, outTok) })
+    })
+
+    it("with no output usage the output side is estimated from the raw response, which masking shortens; only the masked text is returned, stored, traced or logged", async () => {
+      const firmId = await seedFirm()
+      const logs = spyLogs()
+      const opik = fakeOpik()
+      const NAME = "Muhammad Abdul Rehman Siddiqui"
+      const raw = `${NAME} `.repeat(20) + "agrees, CNIC 35202-1234567-1."
+      const sent = fakeTransport({ text: raw, inputTokens: 50, outputTokens: null })
+      const r = await callP1(req(firmId, { partyNames: [NAME] }), at)
+
+      expect(r.text).toBe("[PARTY] ".repeat(20) + "agrees, CNIC [CNIC].")
+      const rawTok = estimateTokens(raw)
+      expect(rawTok).toBeGreaterThan(estimateTokens(r.text!))
+      expect(r).toMatchObject({ outcome: "ok", inputTokens: 50, outputTokens: rawTok, costMicroUsd: costMicroUsd(OPUS, 50, rawTok) })
+      const row = (await rowOf(r.usageLogId))!
+      expect(row).toMatchObject({ inputTokens: 50, outputTokens: rawTok, tokensEstimated: true, costMicroUsd: costMicroUsd(OPUS, 50, rawTok) })
+      expect((await monthOf(firmId))!).toMatchObject({ outputTokens: rawTok, spentMicroUsd: costMicroUsd(OPUS, 50, rawTok) })
+      expect(traceOf(opik.bodies).output).toEqual({ text: r.text })
+
+      // The raw text was used for the count only: it reaches no row, event, audit row, trace, log line or result.
+      for (const seen of [JSON.stringify(row), JSON.stringify(await eventsOf(firmId)), JSON.stringify(await auditsOf(firmId)), opik.bodies.join(""), logs.all(), JSON.stringify(r)]) {
+        expect(seen.toLowerCase()).not.toContain("siddiqui")
+        expect(seen).not.toContain("35202-1234567-1")
+      }
+      expect(sent).toHaveLength(1)
     })
 
     it("one side null: only that side is estimated", async () => {
@@ -729,6 +806,35 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect(month.calls).toEqual({ ok: 11, failed: 0, blocked: 0 })
     })
 
+    it("ten parallel calls crossing both 70% and 90% write exactly one alert, audit row and event for each, and the total equals the sum of the rows", { timeout: 60_000 }, async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: BUDGET })
+      costing(60_000)
+      await callP1(req(firmId), at)
+      // 60000 + 10 x 4000 = 100000: the burst passes 70000 and 90000; no call starts at or over the budget (at most 96000).
+      costing(4_000)
+      const results = await Promise.all(Array.from({ length: 10 }, () => callP1(req(firmId), at)))
+      expect(results.every((r) => r.outcome === "ok")).toBe(true)
+
+      expect((await alertsOf(firmId)).map((a) => a.id).sort()).toEqual([`${firmId}_${MONTH}_70`, `${firmId}_${MONTH}_90`])
+      const audits = await auditsOf(firmId, "ai.budget.threshold")
+      expect(audits.map((a) => a.data.reason).sort()).toEqual(["70", "90"])
+      const events = await eventsOf(firmId, "ai.budget.threshold_crossed")
+      expect(events.map((e) => (e.data.payload as { threshold: number }).threshold).sort()).toEqual([70, 90])
+      // Each alert names the call that crossed it, and that call's own event.
+      for (const a of await alertsOf(firmId)) {
+        expect(events.some((e) => e.id === `${a.data.usageLogId}_threshold_${a.data.threshold}`)).toBe(true)
+      }
+
+      const rows = await rowsOf(firmId)
+      expect(rows).toHaveLength(11)
+      const sum = rows.reduce((n, r) => n + (r.data.costMicroUsd as number), 0)
+      const month = (await monthOf(firmId))!
+      expect(sum).toBe(100_000)
+      expect(month.spentMicroUsd).toBe(sum)
+      expect(month.calls).toEqual({ ok: 11, failed: 0, blocked: 0 })
+      expect(await auditsOf(firmId, "ai.gateway.decision")).toHaveLength(11)
+    })
+
     it("decides the crossing on the budget the transaction reads, not the pre-call one", async () => {
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: 1_000_000 })
       costing(60_000)
@@ -761,7 +867,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect((await monthOf(firmId))!.spentMicroUsd).toBe(145_000)
     })
 
-    it("a blocked or failed call writes no alert and adds nothing to spend", async () => {
+    it("a blocked call or an unbilled failed call writes no alert and adds nothing to spend", async () => {
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: BUDGET })
       costing(69_000)
       await callP1(req(firmId), at)
@@ -817,6 +923,123 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect(await monthOf(firmId)).toBeUndefined()
       expect(await auditsOf(firmId)).toHaveLength(0)
       expect(await eventsOf(firmId)).toHaveLength(0)
+    })
+
+    it("a commit still retrying at the deadline gives up: p1.usage_log_failed once (commit_deadline), the result is still returned, nothing is written", async () => {
+      const firmId = await seedFirm()
+      const logs = spyLogs()
+      fakeTransport({ text: "Answer" })
+      // Every attempt aborts under contention (gRPC ABORTED, which the SDK retries), and each read of the deadline's
+      // clock is 10 s later than the last: the commit must stop at COMMIT_DEADLINE_MS, not after 3 rounds of 10 attempts.
+      const aborted = () => Object.assign(new Error("aborted"), { code: 10 })
+      p1TestSeam.commitAttemptFailures = Array.from({ length: 30 }, aborted)
+      let reads = 0
+      p1TestSeam.wallClock = () => 10_000 * reads++
+      const r = await callP1(req(firmId), at)
+
+      expect(COMMIT_DEADLINE_MS).toBe(30_000)
+      expect(r).toMatchObject({ outcome: "ok", text: "Answer", costMicroUsd: 14000 })
+      const remaining = p1TestSeam.commitAttemptFailures.length
+      expect(remaining).toBeGreaterThan(0) // it stopped before the attempts ran out
+      expect(remaining).toBeLessThan(30) // after at least one attempt
+      const failed = logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")
+      expect(failed).toHaveLength(1)
+      expect(failed[0]![1]).toMatchObject({ usageLogId: r.usageLogId, firmId, outcome: "ok", costMicroUsd: 14000, code: "commit_deadline" })
+      expect(await rowsOf(firmId)).toHaveLength(0)
+      expect(await monthOf(firmId)).toBeUndefined()
+      expect(await eventsOf(firmId)).toHaveLength(0)
+    })
+
+    it("an ambiguous commit followed by ALREADY_EXISTS on the usage row is done: no p1.usage_log_failed, exactly one row, and its threshold warning still logged", async () => {
+      // 14000 of a 20000 budget lands exactly on 70%.
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: 20_000 })
+      const logs = spyLogs()
+      fakeTransport()
+      // The first round commits and its answer is lost as a contention abort, so a second round runs and its
+      // tx.create of the same usage row fails with ALREADY_EXISTS.
+      p1TestSeam.lostCommitAnswers = [Object.assign(new Error("aborted"), { code: 10 })]
+      const r = await callP1(req(firmId), at)
+
+      expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })
+      expect(p1TestSeam.lostCommitAnswers).toEqual([])
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
+      expect((await eventsOf(firmId, "ai.call.completed")).map((e) => e.id)).toEqual([`${r.usageLogId}_completed`])
+      expect(await auditsOf(firmId, "ai.gateway.decision")).toHaveLength(1)
+      expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 14000, calls: { ok: 1, failed: 0, blocked: 0 } })
+      expect((await alertsOf(firmId)).map((a) => a.data.threshold)).toEqual([70])
+      const warned = logs.warn.mock.calls.filter((c) => c[0] === "p1.budget_threshold")
+      expect(warned).toHaveLength(1)
+      expect(warned[0]![1]).toMatchObject({ firmId, monthKey: MONTH, threshold: 70, budgetMicroUsd: 20_000, spentMicroUsd: 14000 })
+    })
+
+    it("an unseen commit followed by the deadline is confirmed by its usage row: no p1.usage_log_failed, exactly one row", async () => {
+      const firmId = await seedFirm()
+      const logs = spyLogs()
+      fakeTransport()
+      // The first attempt commits and its answer is lost; by the next attempt the deadline has passed. The row
+      // exists, so the commit is done: no failure is logged for it.
+      p1TestSeam.lostCommitAnswers = [Object.assign(new Error("aborted"), { code: 10 })]
+      let reads = 0
+      p1TestSeam.wallClock = () => 10_000 * reads++
+      const r = await callP1(req(firmId), at)
+
+      expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
+      expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 14000, calls: { ok: 1, failed: 0, blocked: 0 } })
+    })
+
+    it("a RESOURCE_EXHAUSTED commit is retried on P1's own short back-off, never the SDK's 60 s wait", async () => {
+      const firmId = await seedFirm()
+      const logs = spyLogs()
+      fakeTransport()
+      const exhausted = () => Object.assign(new Error("resource exhausted"), { code: 8 })
+      p1TestSeam.commitAttemptFailures = [exhausted(), exhausted()]
+      const t0 = Date.now()
+      const r = await callP1(req(firmId), at)
+
+      expect(Date.now() - t0).toBeLessThan(10_000)
+      expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })
+      expect(p1TestSeam.commitAttemptFailures).toEqual([])
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
+    }, 120_000)
+
+    it("the commit's worst case fits the function timeout: transport, trace, the commit deadline and one attempt in flight", () => {
+      expect(TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS + COMMIT_ATTEMPT_SLACK_MS).toBeLessThan(FUNCTION_TIMEOUT_SECONDS * 1000)
+      expect(COMMIT_BACKOFF_CAP_MS).toBeLessThanOrEqual(2_000)
+    })
+  })
+
+  describe("test seams in production (M7)", () => {
+    it("with NODE_ENV production every p1TestSeam field is inert: the call routes to the real model, commits once and logs no failure", async () => {
+      const firmId = await seedFirm()
+      // The transport seam is set first: it refuses to be set in production (its own test covers that).
+      const sent = fakeTransport()
+      const logs = spyLogs()
+      const ran: string[] = []
+      const aborted = () => Object.assign(new Error("aborted"), { code: 10 })
+      p1TestSeam.modelOverride = "x/unpriced-model"
+      p1TestSeam.failCommit = true
+      p1TestSeam.beforeCommit = async () => void ran.push("beforeCommit")
+      p1TestSeam.wallClock = () => {
+        ran.push("wallClock")
+        return 0
+      }
+      p1TestSeam.commitAttemptFailures = [aborted()]
+      p1TestSeam.lostCommitAnswers = [aborted()]
+      vi.stubEnv("NODE_ENV", "production")
+      const r = await callP1(req(firmId), at)
+
+      expect(r).toMatchObject({ outcome: "ok", model: OPUS, costMicroUsd: 14000 })
+      expect(sent.map((x) => x.model)).toEqual([OPUS])
+      expect(ran).toEqual([])
+      expect(p1TestSeam.commitAttemptFailures).toHaveLength(1)
+      expect(p1TestSeam.lostCommitAnswers).toHaveLength(1)
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
+      expect((await monthOf(firmId))!.calls).toEqual({ ok: 1, failed: 0, blocked: 0 })
     })
   })
 

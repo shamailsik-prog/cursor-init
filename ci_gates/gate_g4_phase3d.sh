@@ -8,25 +8,32 @@
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed).
 #    P1 is CORE and has no layer flag (P3-60), so nothing of P1 can be switched off at boot
 # 3. the named P1 tests, selected by exact full name (the gate counts them from the name arrays below), under
-#    the Auth and Firestore emulators, from p1.units.test.ts, p1.transport.test.ts, p1.gateway.emu.test.ts and
-#    p1.api.emu.test.ts:
+#    the Auth and Firestore emulators, from p1.units.test.ts, p1.transport.test.ts, p1.gateway.emu.test.ts,
+#    p1.api.emu.test.ts and deploy.test.ts:
 #      - callP1: the happy-path decision record (row, month total, event, audit), the PKT month boundary, the
 #        masking test (no party name, CNIC or mobile reaches the transport, a row, an event, an audit row, the
 #        trace, a log line or the result), every P3-61 refusal (all eight block reasons: each row of the refusal
 #        table, the not_minimised case, the first-refusal-wins order, the classification guard), the kill-switch
 #        flips (a switch set between two calls blocks the second), every bad transport result (failed,
-#        transport_error, cost 0, no provider text) and the missing-usage estimate, the alerts at 70 and 90
-#        (exactly once, including ten parallel calls crossing 70% together), the failed trace export, the commit
-#        failure, and the G-1 forensic test 7 equivalent (a privileged call with no DPA is blocked and traced
-#        with classification and no content)
+#        transport_error, no provider text; charged when the provider may have billed it and 0 when it cannot
+#        have; a billed failure counts toward the budget) and the missing-usage estimate (the output side from
+#        the raw response, which reaches nothing else), the alerts at 70 and
+#        90 (exactly once, including ten parallel calls crossing 70%, and both 70% and 90%, together), the
+#        failed trace export, the commit failure (the commit deadline; an ambiguous commit confirmed by its
+#        usage row), every p1TestSeam field inert when NODE_ENV is production, and the G-1 forensic test 7
+#        equivalent (a privileged call with no DPA is blocked and traced with classification and no content)
 #      - the routes: committeeBrain (input order, access, cross-firm 404, the classification that a caller
 #        label may only raise, party-name masking, the output row, the blocked and failed rows, the idempotent
-#        replay, the bounded output-write retry), setBudgetAlerts, setAiKillSwitch (a request replaces the
-#        whole state), setPlatformAiKillSwitch (platformAdmin only; stops every firm; outranks a firm's own
-#        switch) and getAiUsage (the exact response; no firm is shown the operator's uid)
+#        replay, the bounded output-write retry and its ambiguous commit, every p1OpsTestSeam field inert when
+#        NODE_ENV is production), setBudgetAlerts, setAiKillSwitch (a request replaces the whole state),
+#        setPlatformAiKillSwitch (platformAdmin only; stops every firm; outranks a firm's own switch) and
+#        getAiUsage (the exact response; no firm is shown the operator's uid)
 #      - the units behind them: the frozen cost and routing tables, the cost arithmetic, the PKT month key, the
-#        Opik self-hosted guard and trace payload by rank, the Gateway transport's fixed error strings, and the
-#        refusal of every test seam when NODE_ENV is production
+#        Opik self-hosted guard (plain http only to a private host) and trace payload by rank, the Opik export
+#        and the Gateway transport refusing redirects (the target untouched), the transport's fixed error
+#        codes, messages and billable flags, and the transport and Opik fetch seams refusing to be set when
+#        NODE_ENV is production
+#      - the deployable bundle: NODE_ENV pinned to production at build time (no runtime read left)
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -69,12 +76,15 @@ GW_TESTS=(
   # bad transport results (Review Focus 5)
   'transport failures (Review Focus 5) a rejecting transport gives failed, transport_error, cost 0, a failed event, and stores nothing of the error'
   'transport failures (Review Focus 5) a transport that resolves without string text is a transport_error'
-  'transport failures (Review Focus 5) through the real Gateway transport against a local server a non-2xx gives failed, transport_error, cost 0 and stores no provider text'
-  'transport failures (Review Focus 5) through the real Gateway transport against a local server a 2xx with no choices[0].message.content gives failed, transport_error, cost 0 and stores no provider text'
-  'transport failures (Review Focus 5) through the real Gateway transport against a local server a timeout gives failed, transport_error, cost 0 and stores no provider text'
+  'transport failures (Review Focus 5) a billed failure is charged into the month total, crosses the alerts and counts toward budget_exhausted; the next call is blocked'
+  'transport failures (Review Focus 5) an unbilled P1TransportError is charged nothing, and a billed one with no usage is charged the estimated input and the 4,096-token ceiling'
+  'transport failures (Review Focus 5) through the real Gateway transport against a local server a non-2xx gives failed, transport_error, the charge the I1 rule sets, and stores no provider text'
+  'transport failures (Review Focus 5) through the real Gateway transport against a local server a 2xx with no choices[0].message.content gives failed, transport_error, the charge the I1 rule sets, and stores no provider text'
+  'transport failures (Review Focus 5) through the real Gateway transport against a local server a timeout gives failed, transport_error, the charge the I1 rule sets, and stores no provider text'
   'transport failures (Review Focus 5) through the real Gateway transport against a local server a thrown fetch (connection refused) gives failed'
   'transport failures (Review Focus 5) through the real Gateway transport against a local server a 2xx with content but no usage is ok with tokensEstimated'
-  'usage absent (P3-62) null tokens on both sides: ok, tokensEstimated, each side estimated from the masked text'
+  'usage absent (P3-62) null tokens on both sides: ok, tokensEstimated, the input estimated from the masked body sent and the output from the raw response'
+  'usage absent (P3-62) with no output usage the output side is estimated from the raw response, which masking shortens; only the masked text is returned, stored, traced or logged'
   'usage absent (P3-62) one side null: only that side is estimated'
   'PKR (P3-64) with pkrPerUsd 280, a 14000 micro-USD call stores fxPkrPerUsd 280 and costPkr 3.92'
   # alerts at 70 and 90, exactly once (P3-65, Review Focus 2)
@@ -82,13 +92,21 @@ GW_TESTS=(
   'alerts at 70 and 90 (P3-65, Review Focus 2) one call from 60000 to 95000 writes both alerts'
   'alerts at 70 and 90 (P3-65, Review Focus 2) landing exactly on 70% crosses it; stopping just below does not'
   'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing 70% write exactly one 70 alert, and the total equals the sum of the rows'
+  'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing both 70% and 90% write exactly one alert, audit row and event for each, and the total equals the sum of the rows'
   'alerts at 70 and 90 (P3-65, Review Focus 2) decides the crossing on the budget the transaction reads, not the pre-call one'
   'alerts at 70 and 90 (P3-65, Review Focus 2) raising the budget does not re-arm a crossed threshold, and the call still commits'
-  'alerts at 70 and 90 (P3-65, Review Focus 2) a blocked or failed call writes no alert and adds nothing to spend'
+  'alerts at 70 and 90 (P3-65, Review Focus 2) a blocked call or an unbilled failed call writes no alert and adds nothing to spend'
   # trace and commit failure (P3-63, P3-67)
   'trace (P3-67) a failed export records trace.status failed and logs p1.trace_export_failed with ids only'
   'trace (P3-67) the exported trace carries the usage row id and the trace id'
   "commit failure (P3-63) with failCommit the provider call's text is still returned and p1.usage_log_failed keeps the record"
+  'commit failure (P3-63) a commit still retrying at the deadline gives up: p1.usage_log_failed once (commit_deadline), the result is still returned, nothing is written'
+  'commit failure (P3-63) an ambiguous commit followed by ALREADY_EXISTS on the usage row is done: no p1.usage_log_failed, exactly one row, and its threshold warning still logged'
+  'commit failure (P3-63) an unseen commit followed by the deadline is confirmed by its usage row: no p1.usage_log_failed, exactly one row'
+  "commit failure (P3-63) a RESOURCE_EXHAUSTED commit is retried on P1's own short back-off, never the SDK's 60 s wait"
+  "commit failure (P3-63) the commit's worst case fits the function timeout: transport, trace, the commit deadline and one attempt in flight"
+  # the test seams are inert in production (M7)
+  'test seams in production (M7) with NODE_ENV production every p1TestSeam field is inert: the call routes to the real model, commits once and logs no failure'
   # G-1 forensic test 7 (L8505-8506)
   'G-1 forensic 7 equivalent a privileged call with no DPA is blocked, and its exported trace has classification privileged and no input or output'
 )
@@ -143,6 +161,9 @@ API_TESTS=(
   'committeeBrain: output (P3-70) replaying the same Idempotency-Key returns the same answer with no second transport call, usage row or output row'
   'committeeBrain: output (P3-70) the output write is retried a transient failure of the first two attempts still gives one row, one allow audit row, one provider call, after waits of 100 and 200 ms'
   'committeeBrain: output (P3-70) the output write is retried after the third failure it rethrows as before: 500 internal, one provider call and its usage row, no output row, a deny audit row'
+  "committeeBrain: output (P3-70) the output write is retried an ambiguous commit (the first attempt commits, its answer is lost, the retry's create hits ALREADY_EXISTS) is a success: 200, one output row, one route allow row and no deny row, one provider call"
+  'committeeBrain: output (P3-70) the output write is retried an ALREADY_EXISTS while no output row of this call exists is not taken as a commit: it is retried like any failure'
+  'committeeBrain: output (P3-70) the output write is retried with NODE_ENV production every p1OpsTestSeam field is inert: no injected failure, no lost answer, no wait'
   'committeeBrain: output (P3-70) the output write is retried an HttpError is a decision, not a transient fault: it is not retried'
   'committeeBrain: output (P3-70) a different Idempotency-Key is a new call'
   # setBudgetAlerts (P3-71)
@@ -190,6 +211,8 @@ OPIKCFG_SUITE='P1 Opik configuration (P3-67)'
 OPIKCFG_TESTS=(
   'is disabled when unset, unconfirmed, or pointed at Comet'
   'checks unset, then invalid_url, then unconfirmed, then third_party_host'
+  'allows a plain-http base only for loopback, a private IPv4 literal, or a host ending in .internal or .local'
+  'refuses a plain-http base on any other host as invalid_url, before the confirmation is read; https is unaffected'
 )
 TRACE_SUITE='P1 Opik trace payload (P3-67)'
 TRACE_TESTS=(
@@ -202,13 +225,30 @@ TRANSPORT_TESTS=(
   'rejects a non-2xx response with a fixed message that does not echo the provider text'
   'rejects a 200 with no usable choices[0].message.content, with a fixed message'
 )
+TRANSPORT_ERR_SUITE='P1 Gateway transport errors (I1: billed failures are charged)'
+TRANSPORT_ERR_TESTS=(
+  'a non-2xx is gateway_status, not billable'
+  'a refused connection is gateway_request_failed, not billable'
+  'a timeout, before the headers or while the body streams, is gateway_timeout and billable'
+  'a 2xx whose body is not JSON is gateway_not_json and billable, with no usage'
+  'a 2xx without usable content is gateway_no_text and billable, carrying the usage figures that are valid counts'
+  'a redirect is refused: gateway_request_failed, not billable, and the redirect target receives nothing'
+  'passes redirect: error to fetch'
+)
 SEAM_SUITE='P1 active transport and test seam (P3-68)'
 SEAM_TESTS=(
   'refuses the test seam in production'
 )
+# --- the deployable bundle (functions/test/deploy.test.ts) -------------------------------------------------
+DEPLOY_SUITE='deploy config: proxy hops and ingress'
+DEPLOY_TESTS=(
+  'the deployable bundle pins NODE_ENV to production: no runtime NODE_ENV read is left in lib/index.js'
+)
 EXPORTER_SUITE='P1 Opik exporter (P3-67)'
 EXPORTER_TESTS=(
   'returns failed on 500 and on 4xx, and never throws'
+  'a redirect is refused: failed, and the redirect target receives nothing'
+  'passes redirect: error to fetch'
   'refuses the fetch seam in production'
 )
 
@@ -231,10 +271,12 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${OPIKCFG_TESTS[@]}"; do names+=("$OPIKCFG_SUITE $t"); done
   for t in "${TRACE_TESTS[@]}"; do names+=("$TRACE_SUITE $t"); done
   for t in "${TRANSPORT_TESTS[@]}"; do names+=("$TRANSPORT_SUITE $t"); done
+  for t in "${TRANSPORT_ERR_TESTS[@]}"; do names+=("$TRANSPORT_ERR_SUITE $t"); done
   for t in "${SEAM_TESTS[@]}"; do names+=("$SEAM_SUITE $t"); done
   for t in "${EXPORTER_TESTS[@]}"; do names+=("$EXPORTER_SUITE $t"); done
+  for t in "${DEPLOY_TESTS[@]}"; do names+=("$DEPLOY_SUITE $t"); done
   for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
-  npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
+  npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts test/deploy.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
   EXPECTED="$(printf '%s\n' "${names[@]}")" EXPECTED_COUNT="${#names[@]}" node -e '
     const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
     console.log(`P1 gateway, routes and units: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)

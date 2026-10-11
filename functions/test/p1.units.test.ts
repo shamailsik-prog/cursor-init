@@ -210,6 +210,49 @@ describe("P1 Opik configuration (P3-67)", () => {
     expect(opikConfig({ OPIK_BASE_URL: "http://opik.internal/api", OPIK_PROJECT_NAME: "  ", ...confirmed })).toMatchObject({ project: "sikander-p1" })
   })
 
+  it("allows a plain-http base only for loopback, a private IPv4 literal, or a host ending in .internal or .local", () => {
+    for (const url of [
+      "http://localhost:5173/api",
+      "http://LOCALHOST/api",
+      "http://127.0.0.1:5173/api",
+      "http://127.255.0.9/api",
+      "http://[::1]:5173/api",
+      "http://10.0.0.5/api",
+      "http://10.255.255.255/api",
+      "http://172.16.0.1/api",
+      "http://172.31.255.254/api",
+      "http://192.168.1.20:8080/api",
+      "http://opik.internal/api",
+      "http://opik.svc.internal./api",
+      "http://opik.local/api",
+      "http://Opik.LAN.local:5173/api",
+    ]) {
+      expect(opikConfig({ OPIK_BASE_URL: url, ...confirmed }), url).toMatchObject({ enabled: true })
+    }
+  })
+
+  it("refuses a plain-http base on any other host as invalid_url, before the confirmation is read; https is unaffected", () => {
+    const invalid = { enabled: false, reason: "invalid_url" }
+    for (const url of [
+      "http://opik.example.com/api",
+      "http://opik.internal.test/api",
+      "http://opik.local.example.com/api",
+      "http://internal/api",
+      "http://localhost.example.com/api",
+      "http://172.15.255.255/api",
+      "http://172.32.0.1/api",
+      "http://192.169.0.1/api",
+      "http://11.0.0.1/api",
+      "http://8.8.8.8/api",
+      "http://[2001:db8::1]/api",
+      "http://comet.com/x",
+    ]) {
+      expect(opikConfig({ OPIK_BASE_URL: url, ...confirmed }), url).toEqual(invalid)
+    }
+    expect(opikConfig({ OPIK_BASE_URL: "http://opik.example.com/api" })).toEqual(invalid)
+    expect(opikConfig({ OPIK_BASE_URL: "https://opik.example.com/api", ...confirmed })).toEqual({ enabled: true, baseUrl: "https://opik.example.com/api", project: "sikander-p1" })
+  })
+
   it("reads process.env when no environment is passed", () => {
     const keys = ["OPIK_BASE_URL", "OPIK_SELF_HOSTED_CONFIRMED", "OPIK_PROJECT_NAME"] as const
     const saved = keys.map((k) => process.env[k])

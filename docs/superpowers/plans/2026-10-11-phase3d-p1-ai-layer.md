@@ -12,16 +12,16 @@
 
 **Tech Stack:** TypeScript Cloud Functions (`functions/`), Firestore Admin SDK, Node `fetch`, vitest (unit, plus the Auth and Firestore emulators).
 
-**Spec:** `docs/superpowers/specs/2026-10-11-phase3d-p1-ai-layer-design.md` (rulings P3-60 to P3-73, E-48, E-49, O-53 to O-57).
+**Spec:** `docs/superpowers/specs/2026-10-11-phase3d-p1-ai-layer-design.md` (rulings P3-60 to P3-73, E-48, E-49, O-53 to O-57; O-58 opened in the final-review fix round).
 
 ## Global Constraints
 
 - **Routes.** Under `/api/platform/brain/`: `committeeBrain` (POST, kind `p1`), `getAiUsage` (GET), `setBudgetAlerts` (POST), `setAiKillSwitch` (POST) and `setPlatformAiKillSwitch` (POST, firmless, `platformAdmin` claim). Every route except `committeeBrain` has kind `general`.
 - **Task routing.** Task type `committee` goes to model `anthropic/claude-opus-5.5`, provider id `ai-gateway`.
 - **Prices.** In nano-USD per token: input `4000`, output `20000`. Source "Vercel AI Gateway public model list, GET https://ai-gateway.vercel.sh/v1/models", fetched `2026-10-11`.
-- **Cost arithmetic.** `max_tokens` is `4096`. Cost in micro-USD is `ceil((in*pin + out*pout)/1000)`. The token estimate is `ceil(utf8Bytes/3)`.
-- **Gateway transport.** URL `https://ai-gateway.vercel.sh/v1/chat/completions`, key env `AI_GATEWAY_API_KEY`, timeout `60_000` ms. The transport and Opik test seams throw when `NODE_ENV === "production"`.
-- **Opik.** URL `{OPIK_BASE_URL}/v1/private/traces/batch`. Export is enabled only with `OPIK_BASE_URL` set, `OPIK_SELF_HOSTED_CONFIRMED === "true"`, and a host that is not `comet.com` or `*.comet.com`. The project is `OPIK_PROJECT_NAME`, default `sikander-p1`. Timeout `2000` ms. Trace ids are UUIDv7.
+- **Cost arithmetic.** `max_tokens` is `4096`. Cost in micro-USD is `ceil((in*pin + out*pout)/1000)`. The token estimate is `ceil(utf8Bytes/3)`, of the masked body sent (input) and of the raw response (output; for the count only, final-review ruling R13).
+- **Gateway transport.** URL `https://ai-gateway.vercel.sh/v1/chat/completions`, key env `AI_GATEWAY_API_KEY`, timeout `60_000` ms, `redirect: "error"` (a redirect is refused). A failure throws `P1TransportError` with a fixed code (`gateway_timeout`, `gateway_request_failed`, `gateway_status`, `gateway_not_json`, `gateway_no_text`) and a `billable` flag (final-review ruling R9). The transport and Opik test seams throw when `NODE_ENV === "production"`.
+- **Opik.** URL `{OPIK_BASE_URL}/v1/private/traces/batch`. Export is enabled only with `OPIK_BASE_URL` set, `OPIK_SELF_HOSTED_CONFIRMED === "true"`, and a host that is not `comet.com` or `*.comet.com`. A plain-http base must name a loopback host (`localhost`, 127.0.0.0/8, `::1`), a private IPv4 literal (10/8, 172.16/12, 192.168/16) or a name ending in `.internal` or `.local`; anything else over plain http is `invalid_url`. The export sends `redirect: "error"` (a redirect is a failed export). The project is `OPIK_PROJECT_NAME`, default `sikander-p1`. Timeout `2000` ms. Trace ids are UUIDv7 (final-review ruling R11).
 - **Block reasons.** These exact strings: `kill_switch_platform`, `kill_switch_firm`, `policy_denied`, `not_minimised`, `model_unpriced`, `budget_not_set`, `budget_exhausted`, `no_credentials`. The failed reason is `transport_error`.
 - **Collections and docs.**
   - `ai_usage_logs/{auto}`
@@ -52,7 +52,10 @@
    - A switch set between two calls must block the second.
    - The platform switch blocks a firm whose own switch is off.
    - `disabledModels` blocks only the named model.
-5. **Bad transport results.** A timeout, a non-2xx, a 2xx with no `choices[0].message.content`, or a thrown fetch must each give outcome `failed`, reason `transport_error`, cost 0, and no provider text stored. A 2xx with content but no `usage` gives outcome `ok` with `tokensEstimated: true`.
+5. **Bad transport results.** A timeout, a non-2xx, a 2xx with no `choices[0].message.content`, a 2xx that is not JSON, or a thrown fetch must each give outcome `failed`, reason `transport_error`, and no provider text stored, returned or logged. The charge follows whether the provider may have billed the request (final-review ruling R9):
+   - cost 0 for a non-2xx and for a fetch that failed before any response (a refused connection, DNS, a refused redirect);
+   - for a timeout, a 2xx that is not JSON and a 2xx without usable content, `costMicroUsd(model, reported input ?? estimateTokens(masked body), reported output ?? 4096)`, with `tokensEstimated: true` when either side was estimated; the month's spend and token totals move by it, and it counts toward `budget_exhausted`.
+   A 2xx with content but no `usage` gives outcome `ok` with `tokensEstimated: true`.
 
 ---
 
