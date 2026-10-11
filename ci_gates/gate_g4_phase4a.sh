@@ -346,6 +346,7 @@ GATEOPS_TESTS=(
   'gateDraft (P4-6, P4-12) R7: the stored usedText and jurisdiction are the NFC-normalised text, without dash or digit folding (statute text keeps its em dash)'
   'gateDraft (P4-6, P4-12) a check recorded on v1 is carried to v2 when v2 is gated without it'
   "gateDraft (P4-6, P4-12) the caller's usedText replaces a carried check's usedText on the same key"
+  "gateDraft (P4-6, P4-12) a carried result that is missing, malformed or not this draft's is 409 not_gated, so no recorded check is dropped"
   'gateDraft (P4-6, P4-12) a merged set over 20 checks is 400 invalid_temporal_checks'
   'gateDraft (P4-6, P4-12) a merged set over 200,000 UTF-8 bytes of usedText is 400 invalid_temporal_checks'
   'gateDraft (P4-6, P4-12) a CRLF usedText equal to an LF in-force text is OK, not MISMATCH'

@@ -121,8 +121,8 @@ export function parseTemporalChecks(value: unknown): TemporalCheck[] {
 }
 
 /**
- * Caller text the gate stores (R7: a usedText, a jurisdiction, an override reason) is refused with 422
- * `unsupported_characters` on the draft body's charset rule (checkDraftCharset: bidirectional controls, invisible
+ * Caller text the gate stores (R7: a usedText, an override reason; a jurisdiction that is not R11's pattern was already
+ * refused with 400 `invalid_temporal_checks`) is refused with 422 `unsupported_characters` on the draft body's charset rule (checkDraftCharset: bidirectional controls, invisible
  * characters, confusables). What is stored is the text with the rule's paste artefacts removed (a zero-width space
  * inside a word, a soft hyphen), each CRLF turned into LF (a Windows paste is not a mismatch; the body rule does the
  * same), in NFC, and nothing more: no dash or digit folding, because a usedText is compared exactly (after NFC) with
@@ -133,7 +133,7 @@ function requireSupportedText(raw: string): string {
   return cleanPasteArtefacts(raw).replace(/\r\n/g, "\n").normalize("NFC")
 }
 
-/** The charset rule on each check's usedText and jurisdiction (R7), then their lengths again on the stored form (400). */
+/** The charset rule on each check's usedText (R7; a jurisdiction already matched R11's pattern), then the parse again on the stored form (400). */
 function requireSupportedChecks(checks: readonly TemporalCheck[]): TemporalCheck[] {
   const out = checks.map((c) => ({ ...c, jurisdiction: requireSupportedText(c.jurisdiction), usedText: requireSupportedText(c.usedText) }))
   try {
@@ -450,16 +450,19 @@ type Carried = { last: number | null; resultId: string | null; checks: TemporalC
 
 /**
  * The temporal checks recorded on the draft's most recent stored gate result, of any version (R10): the result of its
- * `lastGatedVersion`, read without a query. A draft with no `lastGatedVersion` carries none (drafts created before R10
- * have no results: nothing was deployed), and so does one whose result is absent or not this draft's (it records none
- * of this draft's checks). A result whose record is not well formed is 409 `not_gated` (`recordedChecks`), so no
- * recorded check is ever dropped silently.
+ * `lastGatedVersion`, read without a query. Only a draft with no `lastGatedVersion` field carries none (drafts created
+ * before R10 have no results: nothing was deployed). A field that is not a version number, a result that is absent
+ * (a retention job or a manual clean-up removed it) or not this draft's, and a result whose record is not well formed
+ * (`recordedChecks`) are 409 `not_gated`, so no recorded check is ever dropped silently.
  */
 async function carriedChecks(caller: Caller, draftId: string, draft: DocumentData): Promise<Carried> {
   const last = lastGatedVersionOf(draft)
-  if (last === null) return { last, resultId: null, checks: [] }
+  if (last === null) {
+    if (draft.lastGatedVersion !== undefined) throw conflict("not_gated")
+    return { last, resultId: null, checks: [] }
+  }
   const stored = (await results().doc(versionId(draftId, last)).get()).data()
-  if (!stored || stored.firmId !== caller.firmId || stored.draftId !== draftId) return { last, resultId: null, checks: [] }
+  if (!stored || stored.firmId !== caller.firmId || stored.draftId !== draftId) throw conflict("not_gated")
   return { last, resultId: idOf(stored.resultId), checks: recordedChecks(stored) }
 }
 
@@ -489,9 +492,10 @@ async function requireCarriedUnchanged(tx: Transaction, draft: DocumentData, dra
  * `invalid_temporal_checks`), then `draft.gate` on the draft's matter; a locked draft is 409 `draft_locked` (an approved
  * draft is not re-gated) and a version that is not the current one 409 `draft_changed`; a version with an override is
  * 409 `already_overridden` (R5: the checks its partner cleared are frozen). Then the charset rule on each check's
- * usedText and jurisdiction (422 `unsupported_characters`, R7). The run's checks are the caller's merged with those
+ * usedText (422 `unsupported_characters`, R7; a jurisdiction outside R11's pattern was already 400). The run's checks are the caller's merged with those
  * recorded on the draft's most recent stored result (R10, `mergeChecks`: a check, once recorded, is re-checked on every
- * later run and version; the merged caps are 400 `invalid_temporal_checks`). The gate runs on the stored version's
+ * later run and version; a missing or malformed carried result is 409 `not_gated`; the merged caps are 400
+ * `invalid_temporal_checks`, the one 400 decided after the permission, because it needs the draft's recorded checks). The gate runs on the stored version's
  * title and body against the active authority store; it reports and never edits the text. Findings over 900,000 bytes
  * are 422 `gate_result_too_large` (R8). One transaction, which checks the lock, the version, the override and the
  * carried result again (409 `draft_changed` if another run replaced it), sets the version's result with a fresh

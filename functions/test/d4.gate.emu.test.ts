@@ -770,6 +770,31 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
     ])
   })
 
+  it("a carried result that is missing, malformed or not this draft's is 409 not_gated, so no recorded check is dropped", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])
+    const drafts = adminDb().collection("drafts").doc(d.draftId)
+    const result1 = adminDb().collection("draft_gate_results").doc(`${d.draftId}_1`)
+    const stored = (await result1.get()).data()!
+    // The result lastGatedVersion points at is gone (a retention job, a manual clean-up): refused, not an empty set.
+    await result1.delete()
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1)), 409, "not_gated")
+    // It points at another draft's result.
+    await result1.set({ ...stored, draftId: "another-draft" })
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1)), 409, "not_gated")
+    await result1.set(stored)
+    // lastGatedVersion is present but not a version number.
+    for (const bad of [0, -1, 1.5, "1", null]) {
+      await drafts.update({ lastGatedVersion: bad })
+      expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1)), 409, "not_gated")
+    }
+    // Restored, the recorded check is still carried.
+    await drafts.update({ lastGatedVersion: 1 })
+    expect((await gate(f, f.A, d.draftId, 1)).temporal.map((t) => t.status)).toEqual(["TEMPORAL_MISMATCH"])
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(2)
+  })
+
   it("a merged set over 20 checks is 400 invalid_temporal_checks", async () => {
     const f = await newFirm()
     const d = await create(f, f.A, BODY_PLAIN)

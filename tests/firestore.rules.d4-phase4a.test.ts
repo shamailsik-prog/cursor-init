@@ -165,7 +165,11 @@ describe("drafts and draft_versions: readable by a cleared member, writable by n
     const db = await as(INTERN)
     await assertFails(getDoc(doc(db, "drafts", "d1")))
     await assertFails(getDoc(doc(db, "draft_versions", "d1_1")))
-    await assertFails(getDocs(query(collection(db, "draft_versions"), where("firmId", "==", FIRM), where("draftId", "==", "d1"))))
+    // A list query constrained to the matter and a cleared label: a clerk member may run it, an intern member may not.
+    const listing = (d: Awaited<ReturnType<typeof as>>) =>
+      getDocs(query(collection(d, "draft_versions"), where("firmId", "==", FIRM), where("matterId", "==", MATTER), where("classification", "==", "internal")))
+    await assertSucceeds(listing(await as(CLERK)))
+    await assertFails(listing(db))
   })
 
   it("PROBE-5: an internal-cleared member cannot read a draft or a version of a matter whose label was raised to privileged, even when the stored labels are internal", async () => {
