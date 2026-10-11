@@ -7,7 +7,7 @@ import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { THRESHOLDS, alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
 import { MAX_OUTPUT_TOKENS, costMicroUsd, estimateTokens } from "../src/p1/costTable"
-import { callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
+import { COMMIT_DEADLINE_MS, callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
 import { P1TransportError, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 import { EMULATORS, uniq } from "./emu"
@@ -894,6 +894,54 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect(await monthOf(firmId)).toBeUndefined()
       expect(await auditsOf(firmId)).toHaveLength(0)
       expect(await eventsOf(firmId)).toHaveLength(0)
+    })
+
+    it("a commit still retrying at the deadline gives up: p1.usage_log_failed once (commit_deadline), the result is still returned, nothing is written", async () => {
+      const firmId = await seedFirm()
+      const logs = spyLogs()
+      fakeTransport({ text: "Answer" })
+      // Every attempt aborts under contention (gRPC ABORTED, which the SDK retries), and each read of the deadline's
+      // clock is 10 s later than the last: the commit must stop at COMMIT_DEADLINE_MS, not after 3 rounds of 10 attempts.
+      const aborted = () => Object.assign(new Error("aborted"), { code: 10 })
+      p1TestSeam.commitAttemptFailures = Array.from({ length: 30 }, aborted)
+      let reads = 0
+      p1TestSeam.wallClock = () => 10_000 * reads++
+      const r = await callP1(req(firmId), at)
+
+      expect(COMMIT_DEADLINE_MS).toBe(30_000)
+      expect(r).toMatchObject({ outcome: "ok", text: "Answer", costMicroUsd: 14000 })
+      const remaining = p1TestSeam.commitAttemptFailures.length
+      expect(remaining).toBeGreaterThan(0) // it stopped before the attempts ran out
+      expect(remaining).toBeLessThan(30) // after at least one attempt
+      const failed = logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")
+      expect(failed).toHaveLength(1)
+      expect(failed[0]![1]).toMatchObject({ usageLogId: r.usageLogId, firmId, outcome: "ok", costMicroUsd: 14000, code: "commit_deadline" })
+      expect(await rowsOf(firmId)).toHaveLength(0)
+      expect(await monthOf(firmId)).toBeUndefined()
+      expect(await eventsOf(firmId)).toHaveLength(0)
+    })
+
+    it("an ambiguous commit followed by ALREADY_EXISTS on the usage row is done: no p1.usage_log_failed, exactly one row, and its threshold warning still logged", async () => {
+      // 14000 of a 20000 budget lands exactly on 70%.
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: 20_000 })
+      const logs = spyLogs()
+      fakeTransport()
+      // The first round commits and its answer is lost as a contention abort, so a second round runs and its
+      // tx.create of the same usage row fails with ALREADY_EXISTS.
+      p1TestSeam.lostCommitAnswers = [Object.assign(new Error("aborted"), { code: 10 })]
+      const r = await callP1(req(firmId), at)
+
+      expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })
+      expect(p1TestSeam.lostCommitAnswers).toEqual([])
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
+      expect((await eventsOf(firmId, "ai.call.completed")).map((e) => e.id)).toEqual([`${r.usageLogId}_completed`])
+      expect(await auditsOf(firmId, "ai.gateway.decision")).toHaveLength(1)
+      expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 14000, calls: { ok: 1, failed: 0, blocked: 0 } })
+      expect((await alertsOf(firmId)).map((a) => a.data.threshold)).toEqual([70])
+      const warned = logs.warn.mock.calls.filter((c) => c[0] === "p1.budget_threshold")
+      expect(warned).toHaveLength(1)
+      expect(warned[0]![1]).toMatchObject({ firmId, monthKey: MONTH, threshold: 70, budgetMicroUsd: 20_000, spentMicroUsd: 14000 })
     })
   })
 

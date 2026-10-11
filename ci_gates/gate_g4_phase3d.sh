@@ -18,8 +18,8 @@
 #        transport_error, no provider text, charged when the provider may have billed it and 0 when it cannot
 #        have, a billed failure counting toward the budget) and the missing-usage estimate, the alerts at 70 and 90
 #        (exactly once, including ten parallel calls crossing 70%, and both 70% and 90%, together), the failed
-#        trace export, the commit
-#        failure, and the G-1 forensic test 7 equivalent (a privileged call with no DPA is blocked and traced
+#        trace export, the commit failure (the commit deadline; an ambiguous commit confirmed by its usage row),
+#        and the G-1 forensic test 7 equivalent (a privileged call with no DPA is blocked and traced
 #        with classification and no content)
 #      - the routes: committeeBrain (input order, access, cross-firm 404, the classification that a caller
 #        label may only raise, party-name masking, the output row, the blocked and failed rows, the idempotent
@@ -95,6 +95,8 @@ GW_TESTS=(
   'trace (P3-67) a failed export records trace.status failed and logs p1.trace_export_failed with ids only'
   'trace (P3-67) the exported trace carries the usage row id and the trace id'
   "commit failure (P3-63) with failCommit the provider call's text is still returned and p1.usage_log_failed keeps the record"
+  'commit failure (P3-63) a commit still retrying at the deadline gives up: p1.usage_log_failed once (commit_deadline), the result is still returned, nothing is written'
+  'commit failure (P3-63) an ambiguous commit followed by ALREADY_EXISTS on the usage row is done: no p1.usage_log_failed, exactly one row, and its threshold warning still logged'
   # G-1 forensic test 7 (L8505-8506)
   'G-1 forensic 7 equivalent a privileged call with no DPA is blocked, and its exported trace has classification privileged and no input or output'
 )
