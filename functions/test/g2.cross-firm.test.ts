@@ -76,6 +76,8 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
  * aimed at firm A. `firmless`: the op takes no firm (onboarding, platform).
  */
 type Probe = { data: (a: FirmA) => Record<string, unknown>; target: boolean; firmless?: boolean }
+/** The id of firm A's seeded gate result (R6): the override probe names it, as a same-firm partner would. */
+const G2_RESULT_ID = "g2-alpha-gate-result-1"
 const PROBES: Record<string, Probe> = {
   onboardFirm: { data: () => ({ name: "G2 probe firm" }), target: false, firmless: true },
   recordGatePass: { data: () => ({ gate: "G-2", evidence: { summary: "forged by a firm user", commitSha: "6e66bf1", runUrl: "https://example.test/run/1", counts: { tested: 1, notBuilt: 0, outOfScope: 0, global: 0, allowed: 0 } } }), target: false, firmless: true },
@@ -131,7 +133,7 @@ const PROBES: Record<string, Probe> = {
   // P4-6..P4-8: the gate, the report, the override and the approval, aimed at firm A's gated draft.
   gateDraft: { data: (a) => ({ draftId: a.draftId, version: 1 }), target: true },
   getVerificationReport: { data: (a) => ({ draftId: a.draftId }), target: true },
-  overrideGate: { data: (a) => ({ draftId: a.draftId, version: 1, reason: "G2 probe override reason, long enough to pass" }), target: true },
+  overrideGate: { data: (a) => ({ draftId: a.draftId, version: 1, resultId: G2_RESULT_ID, reason: "G2 probe override reason, long enough to pass" }), target: true },
   approveDraft: { data: (a) => ({ draftId: a.draftId, version: 1 }), target: true },
 }
 
@@ -219,7 +221,7 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
 function firmATokens(a: FirmA): string[] {
-  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, a.draftId, "G2 Alpha Draft Title", "G2 ALPHA DRAFT BODY", "G2 ALPHA USED TEXT", "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, a.draftId, "G2 Alpha Draft Title", "G2 ALPHA DRAFT BODY", "G2 ALPHA USED TEXT", G2_RESULT_ID, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
 }
 
 function leaked(body: unknown, tokens: string[]): string[] {
@@ -288,7 +290,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       locked: false,
       masterVersion: null,
       // P4-6: version 1 is gated (a temporal check with no history), so the override and approval probes aim at a real result.
-      gateResult: { version: 1, bodySha256: bodySha, status: "TEMPORAL_UNAVAILABLE", gatedAt: Timestamp.now(), overridden: false },
+      gateResult: { version: 1, bodySha256: bodySha, status: "TEMPORAL_UNAVAILABLE", gatedAt: Timestamp.now(), overridden: false, resultId: G2_RESULT_ID },
       lastGatedVersion: 1,
       createdBy: aMembers.partner.uid,
       updatedAt: Timestamp.now(),
@@ -319,6 +321,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
         gatedBy: aMembers.partner.uid,
         gatedAt: Timestamp.now(),
         gateRuns: 1,
+        resultId: G2_RESULT_ID,
       })
     A = {
       firmId: firmA,

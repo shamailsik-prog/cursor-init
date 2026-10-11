@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto"
 import { Timestamp, type DocumentData, type DocumentReference, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
+import { checkDraftCharset, cleanPasteArtefacts } from "@/services/d4-2/draftCharset"
 import { adminDb } from "../admin"
-import { isContentionAbort } from "../d1/contention"
+import { contentionDeadline, isContentionAbort } from "../d1/contention"
 import { HttpError } from "../http/errors"
 import type { Caller } from "../p5/auth"
 import type { FirmOperation } from "../p5/common"
@@ -37,8 +39,11 @@ import {
  *
  * Collections (server-only, firestore.rules P4-11):
  * - `draft_gate_results/{draftId}_{n}`: the latest gate run of version n (replaced by a re-gate of n, and by the run an
- *   approval makes), with `gateRuns`, the count of gateDraft runs of n (the `draft.gated` event ids).
- * - `draft_gate_overrides/{draftId}_{n}`: the one immutable partner override of version n, bound to its body hash.
+ *   approval makes), with a fresh `resultId` per run (R6) and `gateRuns`, the count of gateDraft runs of n (the
+ *   `draft.gated` event ids).
+ * - `draft_gate_overrides/{draftId}_{n}`: the one immutable partner override of version n, bound to its body hash and
+ *   to the `resultId` of the result the partner reviewed (R6). Once it exists the version is not re-gated (R5): the
+ *   check set the partner cleared is frozen, and only approval runs, which reuse those checks, replace the result.
  * The draft holds the summary of its current version's latest run (`gateResult`, P4-4) and `lastGatedVersion`, the
  * version whose result the verification report shows.
  *
@@ -67,6 +72,10 @@ const SECTION_ID = /^[A-Za-z0-9_.:-]{1,200}$/
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
 const MAX_JURISDICTION = 50
 const MAX_USED_TEXT = 10_000
+/** The usedText of all checks together, in UTF-8 bytes (R8): bounds the stored result. */
+const MAX_USED_TEXT_BYTES = 200_000
+/** The most a stored gate result's findings may take, as JSON in UTF-8 (R8); Firestore limits a document to 1 MiB. */
+export const MAX_RESULT_BYTES = 900_000
 const MIN_REASON = 20
 const MAX_REASON = 2_000
 
@@ -91,7 +100,7 @@ export function parseTemporalChecks(value: unknown): TemporalCheck[] {
   if (value === undefined) return []
   const invalid = () => new HttpError(400, "invalid_temporal_checks")
   if (!Array.isArray(value) || value.length > MAX_TEMPORAL_CHECKS) throw invalid()
-  return value.map((entry: unknown): TemporalCheck => {
+  const checks = value.map((entry: unknown): TemporalCheck => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw invalid()
     const { sectionId, asAtDate, jurisdiction, usedText } = entry as Record<string, unknown>
     if (typeof sectionId !== "string" || !SECTION_ID.test(sectionId)) throw invalid()
@@ -100,6 +109,30 @@ export function parseTemporalChecks(value: unknown): TemporalCheck[] {
     if (typeof usedText !== "string" || chars(usedText) < 1 || chars(usedText) > MAX_USED_TEXT) throw invalid()
     return { sectionId, asAtDate, jurisdiction, usedText }
   })
+  if (checks.reduce((sum, c) => sum + Buffer.byteLength(c.usedText, "utf8"), 0) > MAX_USED_TEXT_BYTES) throw invalid()
+  return checks
+}
+
+/**
+ * Caller text the gate stores (R7: a usedText, a jurisdiction, an override reason) is refused with 422
+ * `unsupported_characters` on the draft body's charset rule (checkDraftCharset: bidirectional controls, invisible
+ * characters, confusables). What is stored is the NFC form of the text with the rule's paste artefacts removed (a
+ * zero-width space inside a word, a soft hyphen), and nothing more: no dash or digit folding, because a usedText is
+ * compared exactly (after NFC) with the statute text in force, and statute text carries its em dashes.
+ */
+function requireSupportedText(raw: string): string {
+  if (!checkDraftCharset(raw).ok) throw new HttpError(422, "unsupported_characters")
+  return cleanPasteArtefacts(raw).normalize("NFC")
+}
+
+/** The charset rule on each check's usedText and jurisdiction (R7), then their lengths again on the stored form (400). */
+function requireSupportedChecks(checks: readonly TemporalCheck[]): TemporalCheck[] {
+  const out = checks.map((c) => ({ ...c, jurisdiction: requireSupportedText(c.jurisdiction), usedText: requireSupportedText(c.usedText) }))
+  try {
+    return parseTemporalChecks(out)
+  } catch {
+    throw new HttpError(400, "invalid_temporal_checks")
+  }
 }
 
 /** An override's reason: a string of 20 to 2,000 characters once trimmed (400 `invalid_reason`); the trimmed text is kept. */
@@ -108,6 +141,17 @@ function parseReason(value: unknown): string {
   const reason = value.trim()
   if (chars(reason) < MIN_REASON || chars(reason) > MAX_REASON) throw new HttpError(400, "invalid_reason")
   return reason
+}
+
+/** The reason as stored (R7): the charset rule (422), then the length again on the stored form (400 `invalid_reason`). */
+function supportedReason(reason: string): string {
+  return parseReason(requireSupportedText(reason))
+}
+
+/** The id of the gate result the partner reviewed (R6): a string (400 `invalid_result_id`). */
+function parseResultId(value: unknown): string {
+  if (typeof value !== "string") throw new HttpError(400, "invalid_result_id")
+  return value
 }
 
 // ---------------------------------------------------------------------------
@@ -219,10 +263,23 @@ export type GateResultView = {
   temporal: TemporalFinding[]
   gatedBy: string
   gatedAt: string | null
+  /** This run's id (R6): an override names the result its partner reviewed. */
+  resultId: string | null
 }
 
 /** A partner override as the routes return it (P4-7), without its firm and matter ids. */
-export type OverrideView = { draftId: string; version: number; bodySha256: string; by: string; at: string | null; reason: string; cleared: ClearedItem[] }
+export type OverrideView = {
+  draftId: string
+  version: number
+  bodySha256: string
+  resultId: string | null
+  by: string
+  at: string | null
+  reason: string
+  cleared: ClearedItem[]
+}
+
+const idOf = (value: unknown): string | null => (typeof value === "string" ? value : null)
 
 const storedEvaluation = (d: DocumentData): GateEvaluation =>
   normaliseEvaluation({
@@ -233,7 +290,17 @@ const storedEvaluation = (d: DocumentData): GateEvaluation =>
 
 function resultView(d: DocumentData): GateResultView {
   const e = storedEvaluation(d)
-  return { draftId: d.draftId, version: d.version, bodySha256: d.bodySha256, status: e.status, citations: e.citations, temporal: e.temporal, gatedBy: d.gatedBy, gatedAt: iso(d.gatedAt) }
+  return {
+    draftId: d.draftId,
+    version: d.version,
+    bodySha256: d.bodySha256,
+    status: e.status,
+    citations: e.citations,
+    temporal: e.temporal,
+    gatedBy: d.gatedBy,
+    gatedAt: iso(d.gatedAt),
+    resultId: idOf(d.resultId),
+  }
 }
 
 /** A stored cleared item by its named fields only. */
@@ -247,7 +314,7 @@ function clearedView(item: unknown): ClearedItem[] {
 
 function overrideView(d: DocumentData): OverrideView {
   const cleared = Array.isArray(d.cleared) ? d.cleared.flatMap(clearedView) : []
-  return { draftId: d.draftId, version: d.version, bodySha256: d.bodySha256, by: d.by, at: iso(d.at), reason: d.reason, cleared }
+  return { draftId: d.draftId, version: d.version, bodySha256: d.bodySha256, resultId: idOf(d.resultId), by: d.by, at: iso(d.at), reason: d.reason, cleared }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,17 +323,40 @@ function overrideView(d: DocumentData): OverrideView {
 
 type DraftRecord = { firmId: string; matterId: string; documentTypeId: string; classification: Classification }
 
-/** Attempts at a gate, override or approval transaction under lock contention. */
+/** Attempts at a gate, override or approval transaction under lock contention, per round. */
 const DECISION_TX_ATTEMPTS = 10
+/** Rounds of a decision's transaction: a round that gave up under contention is run again, re-reading everything. */
+const DECISION_TX_ROUNDS = 3
 
-/** Runs a decision's transaction; one that gives up under contention wrote nothing and the draft is changing: 409 `draft_changed`. */
+/**
+ * Runs a decision's transaction. A round that gives up under lock contention wrote nothing; the next round re-reads
+ * the draft, the result and the override, so a caller who lost a race gets the answer the winner's commit gives
+ * (`already_overridden`, `draft_locked`), not a timing artefact. The SDK does not retry every abort itself: the
+ * emulator's lock timeout can close the transaction (see isContentionAbort). Once the rounds or the contention
+ * deadline run out, the draft is changing under the caller: 409 `draft_changed`.
+ */
 async function inTransaction<T>(body: (tx: Transaction) => Promise<T>): Promise<T> {
-  try {
-    return await adminDb().runTransaction(body, { maxAttempts: DECISION_TX_ATTEMPTS })
-  } catch (err) {
-    if (isContentionAbort(err)) throw conflict("draft_changed")
-    throw err
+  const pastDeadline = contentionDeadline()
+  for (let round = 1; ; round++) {
+    try {
+      return await adminDb().runTransaction(body, { maxAttempts: DECISION_TX_ATTEMPTS })
+    } catch (err) {
+      if (!isContentionAbort(err)) throw err
+      if (round >= DECISION_TX_ROUNDS || pastDeadline()) throw conflict("draft_changed")
+    }
   }
+}
+
+/** The findings of a run must fit a stored result (R8): 422 `gate_result_too_large` otherwise, before anything is written. */
+function requireStorable(e: GateEvaluation): void {
+  if (Buffer.byteLength(JSON.stringify({ citations: e.citations, temporal: e.temporal }), "utf8") > MAX_RESULT_BYTES) {
+    throw new HttpError(422, "gate_result_too_large")
+  }
+}
+
+/** A version that has an override is not re-gated (R5): 409 `already_overridden`. */
+function refuseOverridden(exists: boolean): void {
+  if (exists) throw conflict("already_overridden")
 }
 
 /** The refusals a draft's state gives a decision on `version`, locked first: 409 `draft_locked`, then 409 `draft_changed`. */
@@ -309,7 +399,9 @@ function resultDocument(
   gatedAt: Timestamp,
   gateRuns: number
 ): DocumentData {
+  // Every write of a result is a new run with a new id (R6), whether gateDraft or an approval wrote it.
   return {
+    resultId: randomUUID(),
     firmId: draft.firmId,
     matterId: draft.matterId,
     draftId,
@@ -325,8 +417,15 @@ function resultDocument(
   }
 }
 
-/** The draft's gate summary (P4-4) for a run. */
-const summaryOf = (version: number, bodySha256: string, status: GateStatus, gatedAt: unknown, overridden: boolean) => ({ version, bodySha256, status, gatedAt, overridden })
+/** The draft's gate summary (P4-4) for a run, with that run's id (R6). */
+const summaryOf = (version: number, bodySha256: string, status: GateStatus, gatedAt: unknown, overridden: boolean, resultId: unknown) => ({
+  version,
+  bodySha256,
+  status,
+  gatedAt,
+  overridden,
+  resultId: idOf(resultId),
+})
 
 // ---------------------------------------------------------------------------
 // gateDraft
@@ -335,11 +434,14 @@ const summaryOf = (version: number, bodySha256: string, status: GateStatus, gate
 /**
  * gateDraft({ draftId, version, temporalChecks? }) → the GateResult (P4-6). Checks the request (400 `invalid_version`,
  * `invalid_temporal_checks`), then `draft.gate` on the draft's matter; a locked draft is 409 `draft_locked` (an approved
- * draft is not re-gated) and a version that is not the current one 409 `draft_changed`. The gate runs on the stored
- * version's title and body against the active authority store; it reports and never edits the text. One transaction,
- * which checks the lock and the version again, sets the version's result (replacing an earlier run of that version),
- * the draft's summary (`overridden` only while the override on file for this version and hash clears this result), the
- * `draft.gated` event `<draftId>_<version>_gated_<n>` (n = this version's gate run count) and the audit row.
+ * draft is not re-gated) and a version that is not the current one 409 `draft_changed`; a version with an override is
+ * 409 `already_overridden` (R5: the checks its partner cleared are frozen). Then the charset rule on each check's
+ * usedText and jurisdiction (422 `unsupported_characters`, R7). The gate runs on the stored version's title and body
+ * against the active authority store; it reports and never edits the text. Findings over 900,000 bytes are 422
+ * `gate_result_too_large` (R8). One transaction, which checks the lock, the version and the override again, sets the
+ * version's result with a fresh `resultId` (replacing an earlier run of that version), the draft's summary
+ * (`overridden: false`), the `draft.gated` event `<draftId>_<version>_gated_<n>` (n = this version's gate run count)
+ * and the audit row.
  */
 export const gateDraftOp: FirmOperation<GateResultView> = {
   auth: "firm",
@@ -355,23 +457,25 @@ export const gateDraftOp: FirmOperation<GateResultView> = {
     audit.target = `drafts/${draftId}`
     const { ref, draft } = await loadDraftForCaller(caller, draftId, "draft.gate")
     refuseStale(draft, version)
-    const text = await loadVersionText(caller, draftId, version, draft)
-    const evaluation = normaliseEvaluation(await runGate({ title: text.title, body: text.body, temporalChecks }, activeAuthorityStore()))
-
     const resultRef = results().doc(versionId(draftId, version))
     const overrideRef = overrides().doc(versionId(draftId, version))
+    refuseOverridden((await overrideRef.get()).exists)
+    const checks = requireSupportedChecks(temporalChecks)
+    const text = await loadVersionText(caller, draftId, version, draft)
+    const evaluation = normaliseEvaluation(await runGate({ title: text.title, body: text.body, temporalChecks: checks }, activeAuthorityStore()))
+    requireStorable(evaluation)
+
     const view = await inTransaction(async (tx) => {
       // The stamp is taken in the attempt that commits.
       const gatedAt = Timestamp.now()
       const current = await rereadDraft(tx, ref, caller, version, text.bodySha256)
       const prior = (await tx.get(resultRef)).data()
-      const override = (await tx.get(overrideRef)).data() ?? null
+      refuseOverridden((await tx.get(overrideRef)).exists)
       const gateRuns = (typeof prior?.gateRuns === "number" ? prior.gateRuns : 0) + 1
-      const overridden = approvalPasses(evaluation, override, text.bodySha256).overrideUsed
       await audit.stage(tx, "allow", "ok")
       const doc = resultDocument(current, draftId, version, text.bodySha256, evaluation, caller.uid, gatedAt, gateRuns)
       tx.set(resultRef, doc)
-      tx.update(ref, { gateResult: summaryOf(version, text.bodySha256, evaluation.status, gatedAt, overridden), lastGatedVersion: version, updatedAt: gatedAt })
+      tx.update(ref, { gateResult: summaryOf(version, text.bodySha256, evaluation.status, gatedAt, false, doc.resultId), lastGatedVersion: version, updatedAt: gatedAt })
       stageDraftEvent(tx, "draft.gated", `gated_${gateRuns}`, draftId, version, current as DraftRecord, evaluation.status)
       return resultView(doc)
     })
@@ -427,14 +531,17 @@ export const getVerificationReportOp: FirmOperation<VerificationReport> = {
 export type OverrideResult = { override: OverrideView; draft: DraftView }
 
 /**
- * overrideGate({ draftId, version, reason }) → `{ override, draft }` (P4-7). Checks the request (400 `invalid_version`,
- * `invalid_reason`: 20 to 2,000 characters once trimmed), then `draft.override` on the draft's matter (a partner who is
- * a member: R-2, no role exempt). In one transaction: a locked draft is 409 `draft_locked`; a version that is not the
- * current one 409 `draft_changed`; no stored result for it (or one for another body) 409 `not_gated`; an OK result 409
- * `nothing_to_override`; an existing override 409 `already_overridden`. Otherwise it creates the immutable override
- * `{ firmId, matterId, draftId, version, bodySha256, by, at, reason, cleared }` (`by` is the authenticated caller, never
- * a body field; `cleared` lists every non-OK item of the stored result with its status), sets the summary's
- * `overridden: true` and writes the audit row (`draft.gate_override`, targeting the override document). No event.
+ * overrideGate({ draftId, version, resultId, reason }) → `{ override, draft }` (P4-7). Checks the request (400
+ * `invalid_version`; `invalid_reason`: 20 to 2,000 characters once trimmed; `invalid_result_id`: not a string), then
+ * `draft.override` on the draft's matter (a partner who is a member: R-2, no role exempt), then the charset rule on
+ * the reason (422 `unsupported_characters`, R7). In one transaction: a locked draft is 409 `draft_locked`; a version
+ * that is not the current one 409 `draft_changed`; no stored result for it (or one for another body) 409 `not_gated`;
+ * a stored result that is not the one the partner reviewed (another `resultId`) 409 `gate_result_changed` (R6); an OK
+ * result 409 `nothing_to_override`; an existing override 409 `already_overridden`. Otherwise it creates the immutable
+ * override `{ firmId, matterId, draftId, version, bodySha256, resultId, by, at, reason, cleared }` (`by` is the
+ * authenticated caller, never a body field; `cleared` lists every non-OK item of the reviewed result with its status),
+ * sets the summary's `overridden: true` and writes the audit row (`draft.gate_override`, targeting the override
+ * document). No event.
  */
 export const overrideGateOp: FirmOperation<OverrideResult> = {
   auth: "firm",
@@ -446,10 +553,12 @@ export const overrideGateOp: FirmOperation<OverrideResult> = {
     audit.target = `firms/${caller.firmId}`
     const draftId = parseDraftId(data.draftId)
     const version = parseVersionNumber(data.version)
-    const reason = parseReason(data.reason)
+    const parsedReason = parseReason(data.reason)
+    const resultId = parseResultId(data.resultId)
     audit.target = `draft_gate_overrides/${versionId(draftId, version)}`
     const { ref, draft } = await loadDraftForCaller(caller, draftId, "draft.override")
     refuseStale(draft, version)
+    const reason = supportedReason(parsedReason)
 
     const resultRef = results().doc(versionId(draftId, version))
     const overrideRef = overrides().doc(versionId(draftId, version))
@@ -462,6 +571,8 @@ export const overrideGateOp: FirmOperation<OverrideResult> = {
       if (!stored || stored.firmId !== caller.firmId || stored.draftId !== draftId || stored.version !== version || stored.bodySha256 !== current.currentBodySha256) {
         throw conflict("not_gated")
       }
+      // The partner reviewed one run; a re-gate or an approval run since then may show other statuses (R6).
+      if (stored.resultId !== resultId) throw conflict("gate_result_changed")
       const evaluation = storedEvaluation(stored)
       if (evaluation.status === "OK") throw conflict("nothing_to_override")
       if ((await tx.get(overrideRef)).exists) throw conflict("already_overridden")
@@ -472,13 +583,14 @@ export const overrideGateOp: FirmOperation<OverrideResult> = {
         draftId,
         version,
         bodySha256: stored.bodySha256,
+        resultId,
         by: caller.uid,
         at,
         reason,
         cleared: clearedItemsOf(evaluation),
       }
       tx.create(overrideRef, doc)
-      const summary = summaryOf(version, stored.bodySha256, evaluation.status, stored.gatedAt, approvalPasses(evaluation, doc, stored.bodySha256).overrideUsed)
+      const summary = summaryOf(version, stored.bodySha256, evaluation.status, stored.gatedAt, approvalPasses(evaluation, doc, stored.bodySha256).overrideUsed, resultId)
       tx.update(ref, { gateResult: summary, lastGatedVersion: version, updatedAt: at })
       return { override: overrideView(doc), draft: draftView(draftId, { ...current, gateResult: summary, lastGatedVersion: version, updatedAt: at }) }
     })
@@ -515,8 +627,9 @@ function recordedChecks(stored: DocumentData): TemporalCheck[] {
  * a version with no stored result (or a summary that is null or for another version) 409 `not_gated`. It re-runs the
  * gate on that version with the temporal checks recorded in its result, against the authority store as it is now, and
  * passes when the fresh result is OK or the override bound to this version and hash cleared every non-OK item with the
- * same status (`approvalPasses`). One transaction, which re-reads the draft (lock, version, summary) and refuses with
- * 409 `draft_changed` if the stored result changed since it was read, stores the fresh result and summary, then:
+ * same status (`approvalPasses`). Findings over 900,000 bytes are 422 `gate_result_too_large` (R8), with nothing
+ * stored. One transaction, which re-reads the draft (lock, version, summary) and refuses with 409 `draft_changed` if
+ * the stored result changed since it was read, stores the fresh result (with a fresh `resultId`) and summary, then:
  * - on a pass, sets `status: "approved"`, `locked: true`, `approvedBy` (the caller), `approvedAt`, `approvedVersion`,
  *   writes the `draft.approved` event `<draftId>_<version>_approved` and the allow row;
  * - otherwise writes the deny row (`gate_blocked`), and the call answers 409 `gate_blocked` once that has committed, so
@@ -548,6 +661,7 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
     const temporalChecks = recordedChecks(stored)
     const text = await loadVersionText(caller, draftId, version, draft)
     const fresh = normaliseEvaluation(await runGate({ title: text.title, body: text.body, temporalChecks }, activeAuthorityStore()))
+    requireStorable(fresh)
 
     const outcome = await inTransaction(async (tx) => {
       const at = Timestamp.now()
@@ -560,7 +674,7 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
       const decision = approvalPasses(fresh, override, text.bodySha256)
       const prior = now.data() as DocumentData
       const doc = resultDocument(current, draftId, version, text.bodySha256, fresh, caller.uid, at, typeof prior.gateRuns === "number" ? prior.gateRuns : 1)
-      const summary = summaryOf(version, text.bodySha256, fresh.status, at, decision.overrideUsed)
+      const summary = summaryOf(version, text.bodySha256, fresh.status, at, decision.overrideUsed, doc.resultId)
       tx.set(resultRef, doc)
       if (!decision.pass) {
         await audit.stage(tx, "deny", "gate_blocked")

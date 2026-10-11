@@ -43,8 +43,9 @@ type GateResult = {
   temporal: TemporalFinding[]
   gatedBy: string
   gatedAt: string
+  resultId: string
 }
-type OverrideView = { draftId: string; version: number; bodySha256: string; by: string; at: string; reason: string; cleared: Array<Record<string, unknown>> }
+type OverrideView = { draftId: string; version: number; bodySha256: string; resultId: string; by: string; at: string; reason: string; cleared: Array<Record<string, unknown>> }
 type Report = { gateResult: GateResult | null; override: OverrideView | null; current: boolean }
 type Overridden = { override: OverrideView; draft: View }
 type Approved = { draft: View; gateResult: GateResult }
@@ -163,9 +164,17 @@ const restore = (f: Firm, m: Member, draftId: string, baseVersion: number, fromV
 const gate = (f: Firm, m: Member, draftId: string, version: unknown, temporalChecks?: unknown) =>
   send(gateApi, f, m, { draftId, version, ...(temporalChecks === undefined ? {} : { temporalChecks }) })
 const report = (f: Firm, m: Member, draftId: string) => send(reportApi, f, m, { draftId })
-const override = (f: Firm, m: Member, draftId: string, version: unknown, reason: unknown = REASON, extra: Record<string, unknown> = {}) =>
-  send(overrideApi, f, m, { draftId, version, reason, ...extra })
+/** The id of the stored result of a version (what the partner reviewed), or a placeholder when there is none. */
+const currentResultId = async (draftId: string, version: unknown): Promise<string> =>
+  typeof version === "number" && Number.isSafeInteger(version) && version >= 1
+    ? (((await adminDb().collection("draft_gate_results").doc(`${draftId}_${version}`).get()).data()?.resultId as string | undefined) ?? "no-result")
+    : "no-result"
+/** An override of the result the partner reviewed: the stored result's id unless `extra` names one (R6). */
+const override = async (f: Firm, m: Member, draftId: string, version: unknown, reason: unknown = REASON, extra: Record<string, unknown> = {}) =>
+  send(overrideApi, f, m, { draftId, version, reason, resultId: await currentResultId(draftId, version), ...extra })
 const approve = (f: Firm, m: Member, draftId: string, version: unknown) => send(approveApi, f, m, { draftId, version })
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function expectErr(err: ApiError, status: number, code: string): void {
   expect({ status: err.status, code: err.code }).toEqual({ status, code })
@@ -334,6 +343,13 @@ describe("parseTemporalChecks (P4-6): 400 invalid_temporal_checks", () => {
     expect(bad([{ ...check(TEXT_2015), usedText: ["x"] }])).toBe(true)
   })
 
+  it("the usedText of all entries together is at most 200,000 UTF-8 bytes (R8)", () => {
+    expect(parseTemporalChecks(Array.from({ length: 20 }, () => check("u".repeat(10_000))))).toHaveLength(20)
+    // Arabic alef: 2 bytes. Ten entries of 10,000 letters is 200,000 bytes, eleven is 220,000, each entry within its own cap.
+    expect(parseTemporalChecks(Array.from({ length: 10 }, () => check("\u0627".repeat(10_000))))).toHaveLength(10)
+    expect(bad(Array.from({ length: 11 }, () => check("\u0627".repeat(10_000))))).toBe(true)
+  })
+
   it("returns only the four fields of each entry (anything else the caller sent is dropped)", () => {
     expect(parseTemporalChecks([{ ...check(TEXT_2015), status: "OK", inForceText: TEXT_2015 }])).toEqual([check(TEXT_2015)])
   })
@@ -376,11 +392,13 @@ describe.skipIf(!EMULATORS)("G-1 equivalents (P4-14)", () => {
       draftId: d.draftId,
       version: 1,
       bodySha256: sha(BODY_OVERRULED),
+      resultId: (await resultDoc(d.draftId, 1))?.resultId,
       by: f.P.uid,
       at: stored?.at,
       reason: REASON,
       cleared: [{ kind: "citation", ref: "PLD 2099 SC 101", status: "OVERRULED" }],
     })
+    expect(stored?.resultId).toMatch(UUID)
     expect(stored?.at).toBeInstanceOf(Timestamp)
     expect(o.override.by).toBe(f.P.uid)
     expect(o.draft.gateResult?.overridden).toBe(true)
@@ -405,6 +423,7 @@ describe.skipIf(!EMULATORS)("G-1 equivalents (P4-14)", () => {
     const mismatch = await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])
     expect(mismatch.status).toBe("TEMPORAL_MISMATCH")
     expect(mismatch.temporal).toEqual([{ sectionId: "test_act_s1", asAtDate: "2015-03-01", jurisdiction: "PK", usedText: TEXT_2018, status: "TEMPORAL_MISMATCH", inForceText: TEXT_2015 }])
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1)), 409, "gate_blocked")
     expect((await resultDoc(d.draftId, 1))?.temporal).toEqual(mismatch.temporal)
     expect((await report(f, f.A, d.draftId)).gateResult?.temporal).toEqual(mismatch.temporal)
 
@@ -445,8 +464,10 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
       temporal: [{ ...check(TEXT_2018), status: "TEMPORAL_MISMATCH", inForceText: TEXT_2015 }],
       gatedBy: f.C.uid,
       gatedAt: r.gatedAt,
+      resultId: r.resultId,
     })
     expect(new Date(r.gatedAt).toISOString()).toBe(r.gatedAt)
+    expect(r.resultId).toMatch(UUID)
 
     const stored = await resultDoc(d.draftId, 1)
     expect(stored).toMatchObject({
@@ -460,11 +481,12 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
       temporal: r.temporal,
       gatedBy: f.C.uid,
       gateRuns: 1,
+      resultId: r.resultId,
     })
     expect((stored?.gatedAt as Timestamp).toDate().toISOString()).toBe(r.gatedAt)
 
     const draft = await draftDoc(d.draftId)
-    expect(draft?.gateResult).toEqual({ version: 1, bodySha256: sha(body), status: "OVERRULED", gatedAt: stored?.gatedAt, overridden: false })
+    expect(draft?.gateResult).toEqual({ version: 1, bodySha256: sha(body), status: "OVERRULED", gatedAt: stored?.gatedAt, overridden: false, resultId: r.resultId })
     expect(draft).toMatchObject({ status: "draft", locked: false, currentVersion: 1 })
 
     const events = await eventsNamed(f.firmId, d.draftId, "draft.gated")
@@ -504,6 +526,8 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
     store.addJudgment("j_202", "PLD 2099 SC 202", "division")
     const second = await gate(f, f.A, d.draftId, 1)
     expect(second.status).toBe("OK")
+    expect(second.resultId).toMatch(UUID)
+    expect(second.resultId).not.toBe(first.resultId)
     const stored = await resultDoc(d.draftId, 1)
     expect(stored).toMatchObject({ status: "OK", gatedBy: f.A.uid, gateRuns: 2, citations: [{ ref: "PLD 2099 SC 202", judgmentId: "j_202", status: "VERIFIED" }] })
     expect(await byFirm("draft_gate_results", f.firmId)).toHaveLength(1)
@@ -590,18 +614,103 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
     expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(3)
   })
 
-  it("a summary written by a re-gate shows overridden: true while an override for that version and hash clears the result", async () => {
+  it("R5: once a version is overridden it is not re-gated (409 already_overridden): the cleared check set is frozen, nothing is written", async () => {
     const f = await newFirm()
     const d = await create(f, f.A, BODY_UNKNOWN)
     await gate(f, f.A, d.draftId, 1)
     await override(f, f.P, d.draftId, 1)
-    await gate(f, f.A, d.draftId, 1)
-    expect((await draftDoc(d.draftId))?.gateResult).toMatchObject({ version: 1, status: "UNVERIFIED", overridden: true })
-    // The corpus now overrules it: the override no longer covers the result, so the summary does not claim it.
-    store.addJudgment("j_202", "PLD 2099 SC 202", "division")
-    store.addTreatment("j_900", "j_202", "overruled", "larger")
-    await gate(f, f.A, d.draftId, 1)
-    expect((await draftDoc(d.draftId))?.gateResult).toMatchObject({ version: 1, status: "OVERRULED", overridden: false })
+    const draftBefore = await draftDoc(d.draftId)
+    const resultBefore = await resultDoc(d.draftId, 1)
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1)), 409, "already_overridden")
+    expectErr(await apiErrorOf(gate(f, f.P, d.draftId, 1, [check(TEXT_2015)])), 409, "already_overridden")
+    expect(await draftDoc(d.draftId)).toEqual(draftBefore)
+    expect(await resultDoc(d.draftId, 1)).toEqual(resultBefore)
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(1)
+    // Rows come back in document-id order, so they are compared as a sorted list.
+    expect((await auditRows("draft.gate", `drafts/${d.draftId}`)).map((r) => `${r.decision}:${r.reason}`).sort()).toEqual([
+      "allow:ok",
+      "deny:already_overridden",
+      "deny:already_overridden",
+    ])
+    // Only an approval run replaces the result now, and it reuses the frozen checks.
+    expect((await approve(f, f.P, d.draftId, 1)).draft).toMatchObject({ status: "approved", locked: true })
+  })
+
+  it("R5 Probe A: after the override the store gains a differing history for the cleared section; a re-gate with no checks is refused, and approval is blocked", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    expect((await gate(f, f.A, d.draftId, 1, [check(TEXT_2015, "2015-03-01", "test_act_s9")])).status).toBe("TEMPORAL_UNAVAILABLE")
+    await override(f, f.P, d.draftId, 1)
+    store.addSectionVersion("test_act_s9", "PK", "2010-01-01", null, "Test Act s.9 text that differs from the pleaded text.")
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1)), 409, "already_overridden")
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1)), 409, "gate_blocked")
+    expect((await resultDoc(d.draftId, 1))?.temporal.map((t: { status: string }) => t.status)).toEqual(["TEMPORAL_MISMATCH"])
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+  })
+
+  it("R5 Probe C: after the override a re-gate with another usedText under the same key is refused (409 already_overridden)", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    expect((await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])).status).toBe("TEMPORAL_MISMATCH")
+    await override(f, f.P, d.draftId, 1)
+    // Same sectionId, asAtDate, jurisdiction and status, another pleaded text: the key would still match the cleared item.
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, [check("Some other pleaded text for the section.")])), 409, "already_overridden")
+    expect((await resultDoc(d.draftId, 1))?.temporal.map((t: { usedText: string }) => t.usedText)).toEqual([TEXT_2018])
+  })
+
+  it("R7: a usedText or jurisdiction with a bidi control or a zero-width space is 422 unsupported_characters; nothing is stored", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    for (const bad of [
+      [check("Test Act s.1 \u202eas it stood in 2015.")],
+      [check("Test Act s.1 limit:\u200bthirty days.")],
+      [check(TEXT_2015, "2015-03-01", "test_act_s1", "PK\u202e")],
+      [check(TEXT_2015, "2015-03-01", "test_act_s1", "PK:\u200bPB")],
+    ]) {
+      expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, bad)), 422, "unsupported_characters")
+    }
+    expect(await byFirm("draft_gate_results", f.firmId)).toHaveLength(0)
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(0)
+    // The text checks come after the permission (the Task 2 precedent): an intern with hostile text is refused 403.
+    expectErr(await apiErrorOf(gate(f, f.intern, d.draftId, 1, [check("Test Act \u202es.1")])), 403, "intern_channel_denied")
+  })
+
+  it("R7: the stored usedText and jurisdiction are the NFC-normalised text, without dash or digit folding (statute text keeps its em dash)", async () => {
+    const f = await newFirm()
+    const dashed = "Short title.\u2014(1) This Act may be called the Test Act, 2099."
+    store.addSectionVersion("test_act_s2", "PK", "2010-01-01", null, dashed)
+    store.addSectionVersion("test_act_s3", "PK", "2010-01-01", null, "The fee is caf\u00e9 rate.")
+    const d = await create(f, f.A, BODY_PLAIN)
+    const r = await gate(f, f.A, d.draftId, 1, [
+      check(dashed, "2015-03-01", "test_act_s2"),
+      check("The fee is cafe\u0301 rate.", "2015-03-01", "test_act_s3"),
+    ])
+    expect(r.temporal.map((t) => t.status)).toEqual(["OK", "OK"])
+    expect(r.temporal[0].usedText).toBe(dashed)
+    expect(r.temporal[1].usedText).toBe("The fee is caf\u00e9 rate.")
+    expect((await resultDoc(d.draftId, 1))?.temporal[1].usedText).toBe("The fee is caf\u00e9 rate.")
+    // A usedText that is nothing once paste artefacts are cleaned is 400 invalid_temporal_checks.
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, [check("\u200b")])), 400, "invalid_temporal_checks")
+  })
+
+  it("R8: temporal checks over 200,000 UTF-8 bytes in all are 400 invalid_temporal_checks, before the permission", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    const big = Array.from({ length: 11 }, () => check("\u0627".repeat(10_000)))
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, big)), 400, "invalid_temporal_checks")
+    expectErr(await apiErrorOf(gate(f, f.intern, d.draftId, 1, big)), 400, "invalid_temporal_checks")
+    expect(await byFirm("draft_gate_results", f.firmId)).toHaveLength(0)
+  })
+
+  it("R8: a result over 900,000 bytes is 422 gate_result_too_large; nothing is stored, the in-force text is never truncated", async () => {
+    const f = await newFirm()
+    store.addSectionVersion("test_act_big", "PK", "2010-01-01", null, "x".repeat(950_000))
+    const d = await create(f, f.A, BODY_PLAIN)
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, [check(TEXT_2015, "2015-03-01", "test_act_big")])), 422, "gate_result_too_large")
+    expect(await byFirm("draft_gate_results", f.firmId)).toHaveLength(0)
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(0)
+    expect((await draftDoc(d.draftId))?.gateResult).toBeNull()
+    expect((await auditRows("draft.gate", `drafts/${d.draftId}`)).map((r) => [r.decision, r.reason])).toEqual([["deny", "gate_result_too_large"]])
   })
 })
 
@@ -620,6 +729,7 @@ describe.skipIf(!EMULATORS)("overrideGate (P4-7)", () => {
       draftId: d.draftId,
       version: 1,
       bodySha256: sha(body),
+      resultId: (await resultDoc(d.draftId, 1))?.resultId,
       by: f.P.uid,
       at: o.override.at,
       reason: REASON,
@@ -704,6 +814,69 @@ describe.skipIf(!EMULATORS)("overrideGate (P4-7)", () => {
     for (const v of [undefined, 0, "1", 2.5]) expectErr(await apiErrorOf(override(f, f.P, d.draftId, v)), 400, "invalid_version")
   })
 
+  it("R6: a missing or non-string resultId is 400 invalid_result_id, before the permission", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.P, BODY_UNKNOWN)
+    await gate(f, f.P, d.draftId, 1)
+    expectErr(await apiErrorOf(send(overrideApi, f, f.P, { draftId: d.draftId, version: 1, reason: REASON })), 400, "invalid_result_id")
+    for (const bad of [null, 42, ["x"], { id: "x" }]) expectErr(await apiErrorOf(override(f, f.P, d.draftId, 1, REASON, { resultId: bad })), 400, "invalid_result_id")
+    expectErr(await apiErrorOf(override(f, f.intern, d.draftId, 1, REASON, { resultId: 7 })), 400, "invalid_result_id")
+    expect(await overrideDoc(d.draftId, 1)).toBeUndefined()
+  })
+
+  it("R6 Probe B: an override of a result the partner did not review is 409 gate_result_changed; on the reviewed one it clears what was shown", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_UNKNOWN)
+    const r1 = await gate(f, f.A, d.draftId, 1)
+    expect(r1.status).toBe("UNVERIFIED")
+    // The partner reads the report: UNVERIFIED, result r1.
+    expect((await report(f, f.P, d.draftId)).gateResult?.resultId).toBe(r1.resultId)
+    // The corpus now overrules the authority, and a blocked approval attempt rewrites the result (r2).
+    store.addJudgment("j_202", "PLD 2099 SC 202", "division")
+    store.addTreatment("j_900", "j_202", "overruled", "larger")
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1)), 409, "gate_blocked")
+    const r2 = (await report(f, f.P, d.draftId)).gateResult
+    expect(r2?.status).toBe("OVERRULED")
+    expect(r2?.resultId).toMatch(UUID)
+    expect(r2?.resultId).not.toBe(r1.resultId)
+    // Submitted against r1, the override would clear an OVERRULED the partner never saw.
+    expectErr(await apiErrorOf(override(f, f.P, d.draftId, 1, REASON, { resultId: r1.resultId })), 409, "gate_result_changed")
+    expectErr(await apiErrorOf(override(f, f.P, d.draftId, 1, REASON, { resultId: "" })), 409, "gate_result_changed")
+    expect(await overrideDoc(d.draftId, 1)).toBeUndefined()
+    // After reading the report showing OVERRULED, the partner overrides r2.
+    const o = await override(f, f.P, d.draftId, 1, REASON, { resultId: r2?.resultId })
+    expect(o.override.resultId).toBe(r2?.resultId)
+    expect(o.override.cleared).toEqual([{ kind: "citation", ref: "PLD 2099 SC 202", status: "OVERRULED" }])
+    expect((await overrideDoc(d.draftId, 1))?.resultId).toBe(r2?.resultId)
+    expect((await approve(f, f.P, d.draftId, 1)).draft).toMatchObject({ status: "approved", locked: true })
+  })
+
+  it("R6 Probe B, re-gate variant: a re-gate before the override changes the result id too", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_UNKNOWN)
+    const r1 = await gate(f, f.A, d.draftId, 1)
+    store.addJudgment("j_202", "PLD 2099 SC 202", "division")
+    store.addTreatment("j_900", "j_202", "overruled", "larger")
+    const r2 = await gate(f, f.A, d.draftId, 1)
+    expect(r2.status).toBe("OVERRULED")
+    expectErr(await apiErrorOf(override(f, f.P, d.draftId, 1, REASON, { resultId: r1.resultId })), 409, "gate_result_changed")
+    expect((await override(f, f.P, d.draftId, 1, REASON, { resultId: r2.resultId })).override.cleared).toEqual([{ kind: "citation", ref: "PLD 2099 SC 202", status: "OVERRULED" }])
+  })
+
+  it("R7: a reason with a bidi control or a zero-width space is 422 unsupported_characters; the stored reason is NFC-normalised", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.P, BODY_UNKNOWN)
+    await gate(f, f.P, d.draftId, 1)
+    expectErr(await apiErrorOf(override(f, f.P, d.draftId, 1, `${REASON} \u202eksir eht`)), 422, "unsupported_characters")
+    // A zero-width space between punctuation and a letter is refused (one beside a space, or inside a word, is a paste artefact the rule removes).
+    expectErr(await apiErrorOf(override(f, f.P, d.draftId, 1, `Partner's view:\u200b${REASON}`)), 422, "unsupported_characters")
+    expect(await overrideDoc(d.draftId, 1)).toBeUndefined()
+    // The permission comes first: an intern with a hostile reason is refused 403.
+    expectErr(await apiErrorOf(override(f, f.intern, d.draftId, 1, `${REASON} \u202e`)), 403, "intern_channel_denied")
+    await override(f, f.P, d.draftId, 1, `${REASON} Cafe\u0301 rule applies.`)
+    expect((await overrideDoc(d.draftId, 1))?.reason).toBe(`${REASON} Caf\u00e9 rule applies.`)
+  })
+
   it("access: a clerk, a client, accounts and an associate are refused; refusals are audited as denies on the override doc", async () => {
     const f = await newFirm()
     const d = await create(f, f.P, BODY_UNKNOWN)
@@ -730,7 +903,8 @@ describe.skipIf(!EMULATORS)("overrideGate (P4-7)", () => {
     expect(ok).toHaveLength(1)
     expect(failed.map((r) => (r.reason as ApiError).code)).toEqual(["already_overridden"])
     expect(await byFirm("draft_gate_overrides", f.firmId)).toHaveLength(1)
-  })
+    // Emulator lock waits: a contended round can take seconds (the d1 contention tests' precedent).
+  }, 60_000)
 })
 
 // ---------------------------------------------------------------------------
@@ -741,8 +915,9 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
   it("an OK draft is approved without an override: status, lock, approver, version, the event and the audit row", async () => {
     const f = await newFirm()
     const d = await create(f, f.A, BODY_VERIFIED)
-    await gate(f, f.A, d.draftId, 1)
+    const g = await gate(f, f.A, d.draftId, 1)
     const a = await approve(f, f.P, d.draftId, 1)
+    expect(a.gateResult.resultId).not.toBe(g.resultId)
     expect(a.gateResult).toMatchObject({ draftId: d.draftId, version: 1, status: "OK", gatedBy: f.P.uid })
     expect(a.draft).toMatchObject({ status: "approved", locked: true, approvedBy: f.P.uid, approvedVersion: 1, currentVersion: 1 })
     expect(a.draft.gateResult).toMatchObject({ version: 1, status: "OK", overridden: false })
@@ -758,8 +933,10 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
       data: { name: "draft.approved", classification: "internal", payload: { draftId: d.draftId, matterId: f.matterId, documentTypeId: TYPE, version: 1, gateResult: "OK", masterVersion: null } },
     })
     expect(await auditRows("draft.approve", `drafts/${d.draftId}`)).toEqual([expect.objectContaining({ actorId: f.P.uid, decision: "allow", reason: "ok" })])
-    // The approval's gate run is stored as the version's result; it is not a gateDraft run, so no draft.gated event is added.
-    expect(await resultDoc(d.draftId, 1)).toMatchObject({ gatedBy: f.P.uid, gateRuns: 1, status: "OK" })
+    // The approval's gate run is stored as the version's result, with a fresh id; it is not a gateDraft run, so no draft.gated event is added.
+    expect(await resultDoc(d.draftId, 1)).toMatchObject({ gatedBy: f.P.uid, gateRuns: 1, status: "OK", resultId: a.gateResult.resultId })
+    expect(a.gateResult.resultId).toMatch(UUID)
+    expect(stored?.gateResult.resultId).toBe(a.gateResult.resultId)
     expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(1)
   })
 
@@ -769,7 +946,12 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
     await gate(f, f.A, d.draftId, 1)
     store.addJudgment("j_202", "PLD 2099 SC 202", "division")
     store.addTreatment("j_900", "j_202", "overruled", "larger")
+    const gatedId = (await resultDoc(d.draftId, 1))?.resultId
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1)), 409, "gate_blocked")
+    const blockedId = (await resultDoc(d.draftId, 1))?.resultId
+    expect(blockedId).toMatch(UUID)
+    expect(blockedId).not.toBe(gatedId)
+    expect((await draftDoc(d.draftId))?.gateResult.resultId).toBe(blockedId)
     expect(await resultDoc(d.draftId, 1)).toMatchObject({
       status: "OVERRULED",
       gatedBy: f.P.uid,
@@ -840,6 +1022,19 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
     expect((await resultDoc(d.draftId, 1))?.temporal).toEqual([{ ...check(TEXT_2015, "2015-03-01", "test_act_s9"), status: "TEMPORAL_MISMATCH", inForceText: "Test Act s.9 in force text." }])
   })
 
+  it("R8: an approval run whose result would exceed 900,000 bytes is 422 gate_result_too_large; nothing stored, nothing approved", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    await gate(f, f.A, d.draftId, 1, [check(TEXT_2015, "2015-03-01", "test_act_s9")])
+    await override(f, f.P, d.draftId, 1)
+    const resultBefore = await resultDoc(d.draftId, 1)
+    store.addSectionVersion("test_act_s9", "PK", "2010-01-01", null, "y".repeat(950_000))
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1)), 422, "gate_result_too_large")
+    expect(await resultDoc(d.draftId, 1)).toEqual(resultBefore)
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
+  })
+
   it("an override bound to another body hash clears nothing", async () => {
     const f = await newFirm()
     const d = await create(f, f.A, BODY_UNKNOWN)
@@ -900,7 +1095,8 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1)
     expect(results.filter((r): r is PromiseRejectedResult => r.status === "rejected").map((r) => (r.reason as ApiError).code)).toEqual(["draft_locked"])
     expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(1)
-  })
+    // Emulator lock waits: a contended round can take seconds (the d1 contention tests' precedent).
+  }, 60_000)
 })
 
 // ---------------------------------------------------------------------------
