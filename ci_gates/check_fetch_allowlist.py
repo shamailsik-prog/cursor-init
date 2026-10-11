@@ -11,7 +11,7 @@ allowed |= {"localhost", "127.0.0.1"}
 
 # corpus_service is the separate harvest tree (FINAL_2 / L17.12). Not scanned.
 SKIP_PARTS = {"node_modules", ".git", ".next", "ci_gates", "_superseded", "tests", "corpus_service", ".eve"}
-P1_PREFIXES = ("platform/p1/", "platform/committeeBrain/")
+P1_PREFIXES = ("platform/p1/", "platform/committeeBrain/", "functions/src/p1/")
 # Cloud Functions tests talk only to the local Firebase emulators (FIREBASE_*_EMULATOR_HOST); like tests/, not a scraper.
 TEST_PREFIXES = ("functions/test/",)
 FETCH = re.compile(

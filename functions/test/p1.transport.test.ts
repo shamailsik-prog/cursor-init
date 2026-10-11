@@ -1,0 +1,307 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+import type { AddressInfo } from "node:net"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { MAX_OUTPUT_TOKENS } from "../src/p1/costTable"
+import { OPIK_TIMEOUT_MS, exportTrace, setOpikFetchForTests, type OpikConfig, type TraceRecord } from "../src/p1/opik"
+import { GATEWAY_URL, TRANSPORT_TIMEOUT_MS, activeTransport, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+
+type Seen = { method: string | undefined; url: string | undefined; headers: IncomingMessage["headers"]; body: string }
+
+let server: Server
+let base: string
+let seen: Seen[]
+let respond: (req: IncomingMessage, res: ServerResponse) => void
+
+beforeAll(async () => {
+  server = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on("data", (c: Buffer) => chunks.push(c))
+    req.on("end", () => {
+      seen.push({ method: req.method, url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") })
+      // One request per socket, so fetch's connection pool never reuses a socket this test file has torn down.
+      res.setHeader("connection", "close")
+      respond(req, res)
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+})
+
+afterAll(async () => {
+  server.closeAllConnections()
+  await new Promise<void>((resolve) => server.close(() => resolve()))
+})
+
+beforeEach(() => {
+  seen = []
+  respond = (_req, res) => res.writeHead(404).end()
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs() // first: the seams refuse to be set while NODE_ENV is "production"
+  setP1TransportForTests(null)
+  setOpikFetchForTests(null)
+})
+
+const json = (status: number, body: unknown) => (_req: IncomingMessage, res: ServerResponse) => {
+  res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body))
+}
+const never = () => {}
+const request = { model: "anthropic/claude-opus-5.5", body: "hello ک", maxTokens: MAX_OUTPUT_TOKENS }
+
+describe("P1 Gateway transport (P3-68)", () => {
+  it("pins the Gateway endpoint and a 60 second timeout", () => {
+    expect(GATEWAY_URL).toBe("https://ai-gateway.vercel.sh/v1/chat/completions")
+    expect(TRANSPORT_TIMEOUT_MS).toBe(60_000)
+  })
+
+  it("posts the OpenAI-compatible body with the bearer key and parses text and usage", async () => {
+    respond = json(200, { choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 7, completion_tokens: 3 } })
+    const out = await gatewayTransport("k", `${base}/v1/chat/completions`).send(request)
+    expect(out).toEqual({ text: "hi", inputTokens: 7, outputTokens: 3 })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.method).toBe("POST")
+    expect(seen[0]?.url).toBe("/v1/chat/completions")
+    expect(seen[0]?.headers.authorization).toBe("Bearer k")
+    expect(seen[0]?.headers["content-type"]).toMatch(/^application\/json/)
+    expect(JSON.parse(seen[0]?.body ?? "")).toEqual({
+      model: "anthropic/claude-opus-5.5",
+      messages: [{ role: "user", content: "hello ک" }],
+      max_tokens: 4096,
+    })
+  })
+
+  it("sends the max_tokens it is given", async () => {
+    respond = json(200, { choices: [{ message: { content: "x" } }] })
+    await gatewayTransport("k", base).send({ ...request, maxTokens: 17 })
+    expect((JSON.parse(seen[0]?.body ?? "") as { max_tokens: number }).max_tokens).toBe(17)
+  })
+
+  it("gives null tokens when the response carries no usage", async () => {
+    respond = json(200, { choices: [{ message: { content: "hi" } }] })
+    expect(await gatewayTransport("k", base).send(request)).toEqual({ text: "hi", inputTokens: null, outputTokens: null })
+  })
+
+  it("treats each side of usage on its own and nulls anything that is not a count", async () => {
+    respond = json(200, { choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 7 } })
+    expect(await gatewayTransport("k", base).send(request)).toMatchObject({ inputTokens: 7, outputTokens: null })
+    for (const bad of [-1, 1.5, "7", null, Number.MAX_SAFE_INTEGER + 2]) {
+      respond = json(200, { choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: bad, completion_tokens: bad } })
+      expect(await gatewayTransport("k", base).send(request), String(bad)).toMatchObject({ inputTokens: null, outputTokens: null })
+    }
+    respond = json(200, { choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 0, completion_tokens: 0 } })
+    expect(await gatewayTransport("k", base).send(request)).toMatchObject({ inputTokens: 0, outputTokens: 0 })
+  })
+
+  it("rejects a non-2xx response without echoing the provider text", async () => {
+    respond = json(500, { error: { message: "SECRET provider detail" } })
+    const err = await gatewayTransport("k", base).send(request).then(
+      () => null,
+      (e: unknown) => e as Error,
+    )
+    expect(err).toBeInstanceOf(Error)
+    expect(err?.message).not.toContain("SECRET")
+    for (const status of [401, 429, 502]) {
+      respond = json(status, { choices: [{ message: { content: "should not be used" } }] })
+      await expect(gatewayTransport("k", base).send(request), String(status)).rejects.toThrow()
+    }
+  })
+
+  it("rejects a 200 with no usable choices[0].message.content", async () => {
+    const bodies: unknown[] = [
+      { choices: [] },
+      {},
+      { choices: [{}] },
+      { choices: [{ message: {} }] },
+      { choices: [{ message: { content: null } }] },
+      { choices: [{ message: { content: 42 } }] },
+      { choices: "x" },
+      null,
+    ]
+    for (const b of bodies) {
+      respond = json(200, b)
+      await expect(gatewayTransport("k", base).send(request), JSON.stringify(b)).rejects.toThrow()
+    }
+    respond = (_req, res) => res.writeHead(200).end("not json")
+    await expect(gatewayTransport("k", base).send(request)).rejects.toThrow()
+  })
+
+  it("accepts an empty-string completion", async () => {
+    respond = json(200, { choices: [{ message: { content: "" } }] })
+    expect(await gatewayTransport("k", base).send(request)).toMatchObject({ text: "" })
+  })
+
+  it("rejects when the server never answers within the timeout", async () => {
+    respond = never
+    const started = Date.now()
+    await expect(gatewayTransport("k", base, { timeoutMs: 100 }).send(request)).rejects.toThrow()
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it("rejects when the server sends headers and then stalls the body", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.write('{"choices":[{"message":')
+    }
+    await expect(gatewayTransport("k", base, { timeoutMs: 100 }).send(request)).rejects.toThrow()
+  })
+
+  it("rejects when the connection is refused", async () => {
+    await expect(gatewayTransport("k", "http://127.0.0.1:1/v1/chat/completions").send(request)).rejects.toThrow()
+  })
+})
+
+describe("P1 active transport and test seam (P3-68)", () => {
+  const fake: P1Transport = { send: async () => ({ text: "t", inputTokens: 1, outputTokens: 1 }) }
+
+  it("is null with no key and no seam", () => {
+    vi.stubEnv("AI_GATEWAY_API_KEY", "")
+    expect(activeTransport()).toBeNull()
+    vi.stubEnv("AI_GATEWAY_API_KEY", "   ")
+    expect(activeTransport()).toBeNull()
+  })
+
+  it("is the Gateway transport when AI_GATEWAY_API_KEY is set", () => {
+    vi.stubEnv("AI_GATEWAY_API_KEY", "key-1")
+    const t = activeTransport()
+    expect(t).not.toBeNull()
+    expect(typeof t?.send).toBe("function")
+  })
+
+  it("is the test transport when one is set, whatever the key", () => {
+    vi.stubEnv("AI_GATEWAY_API_KEY", "key-1")
+    setP1TransportForTests(fake)
+    expect(activeTransport()).toBe(fake)
+    vi.stubEnv("AI_GATEWAY_API_KEY", "")
+    expect(activeTransport()).toBe(fake)
+    setP1TransportForTests(null)
+    expect(activeTransport()).toBeNull()
+  })
+
+  it("refuses the test seam in production", () => {
+    vi.stubEnv("NODE_ENV", "production")
+    expect(() => setP1TransportForTests(fake)).toThrow(/test-only/)
+    expect(() => setP1TransportForTests(null)).toThrow(/test-only/)
+  })
+})
+
+describe("P1 Opik exporter (P3-67)", () => {
+  const T0 = Date.parse("2026-10-11T10:00:00.000Z")
+  const record: TraceRecord = {
+    traceId: "0199c3a0-0000-7000-8000-000000000001",
+    startMs: T0,
+    endMs: T0 + 10,
+    taskType: "committee",
+    classification: "internal",
+    outcome: "ok",
+    blockReason: null,
+    model: "anthropic/claude-opus-5.5",
+    provider: "ai-gateway",
+    inputTokens: 1,
+    outputTokens: 2,
+    costMicroUsd: 3,
+    firmId: "firm-1",
+    matterId: null,
+    usageLogId: "usage-1",
+    maskedBody: "MASKED",
+    maskedResponse: "REPLY",
+  }
+  const enabled = (): OpikConfig => ({ enabled: true, baseUrl: base, project: "sikander-p1" })
+
+  it("pins the 2 second timeout", () => {
+    expect(OPIK_TIMEOUT_MS).toBe(2000)
+  })
+
+  it("posts {traces:[...]} to the batch endpoint and returns exported on 204", async () => {
+    respond = (_req, res) => res.writeHead(204).end()
+    expect(await exportTrace(record, enabled())).toBe("exported")
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.method).toBe("POST")
+    expect(seen[0]?.url).toBe("/v1/private/traces/batch")
+    expect(seen[0]?.headers["content-type"]).toMatch(/^application\/json/)
+    const body = JSON.parse(seen[0]?.body ?? "") as { traces: Record<string, unknown>[] }
+    expect(Object.keys(body)).toEqual(["traces"])
+    expect(body.traces).toHaveLength(1)
+    expect(body.traces[0]).toMatchObject({
+      id: record.traceId,
+      project_name: "sikander-p1",
+      name: "p1.committee",
+      input: { prompt: "MASKED" },
+      output: { text: "REPLY" },
+      tags: ["internal", "ok"],
+    })
+  })
+
+  it("returns exported on any 2xx", async () => {
+    respond = json(200, {})
+    expect(await exportTrace(record, enabled())).toBe("exported")
+  })
+
+  it("returns failed on 500 and on 4xx, and never throws", async () => {
+    for (const status of [500, 400, 404]) {
+      respond = (_req, res) => res.writeHead(status).end("provider text")
+      expect(await exportTrace(record, enabled()), String(status)).toBe("failed")
+    }
+  })
+
+  it("returns failed when Opik hangs past the timeout", async () => {
+    respond = never
+    const started = Date.now()
+    expect(await exportTrace(record, enabled(), { timeoutMs: 100 })).toBe("failed")
+    expect(Date.now() - started).toBeLessThan(2_000)
+  })
+
+  it("returns failed when the connection is refused", async () => {
+    expect(await exportTrace(record, { enabled: true, baseUrl: "http://127.0.0.1:1", project: "p" })).toBe("failed")
+  })
+
+  it("returns failed, not a throw, when the trace cannot be built", async () => {
+    respond = (_req, res) => res.writeHead(204).end()
+    expect(await exportTrace({ ...record, classification: "constructor" as never }, enabled())).toBe("failed")
+    expect(await exportTrace({ ...record, startMs: Number.NaN }, enabled())).toBe("failed")
+    expect(seen).toHaveLength(0)
+  })
+
+  it("returns disabled, and makes no request, when the config is disabled", async () => {
+    for (const reason of ["unset", "unconfirmed", "third_party_host"] as const) {
+      expect(await exportTrace(record, { enabled: false, reason }), reason).toBe("disabled")
+    }
+    expect(seen).toHaveLength(0)
+  })
+
+  it("reads its config from the environment when none is passed", async () => {
+    vi.stubEnv("OPIK_BASE_URL", base)
+    vi.stubEnv("OPIK_SELF_HOSTED_CONFIRMED", "true")
+    vi.stubEnv("OPIK_PROJECT_NAME", "env-project")
+    respond = (_req, res) => res.writeHead(204).end()
+    expect(await exportTrace(record)).toBe("exported")
+    expect((JSON.parse(seen[0]?.body ?? "") as { traces: { project_name: string }[] }).traces[0]?.project_name).toBe("env-project")
+    vi.stubEnv("OPIK_SELF_HOSTED_CONFIRMED", "")
+    expect(await exportTrace(record)).toBe("disabled")
+    expect(seen).toHaveLength(1)
+  })
+
+  it("uses the fetch set for tests in place of the global one", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = []
+    setOpikFetchForTests((async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init })
+      return new Response(null, { status: 204 })
+    }) as typeof fetch)
+    expect(await exportTrace(record, { enabled: true, baseUrl: "http://opik.invalid/api", project: "p" })).toBe("exported")
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.url).toBe("http://opik.invalid/api/v1/private/traces/batch")
+    expect(calls[0]?.init?.method).toBe("POST")
+    expect(calls[0]?.init?.signal).toBeInstanceOf(AbortSignal)
+    expect(seen).toHaveLength(0)
+    setOpikFetchForTests((async () => {
+      throw new Error("boom")
+    }) as typeof fetch)
+    expect(await exportTrace(record, enabled())).toBe("failed")
+  })
+
+  it("refuses the fetch seam in production", () => {
+    vi.stubEnv("NODE_ENV", "production")
+    expect(() => setOpikFetchForTests(fetch)).toThrow(/test-only/)
+    expect(() => setOpikFetchForTests(null)).toThrow(/test-only/)
+  })
+})
