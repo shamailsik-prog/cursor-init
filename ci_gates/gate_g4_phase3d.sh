@@ -17,7 +17,8 @@
 #        flips (a switch set between two calls blocks the second), every bad transport result (failed,
 #        transport_error, no provider text, charged when the provider may have billed it and 0 when it cannot
 #        have, a billed failure counting toward the budget) and the missing-usage estimate, the alerts at 70 and 90
-#        (exactly once, including ten parallel calls crossing 70% together), the failed trace export, the commit
+#        (exactly once, including ten parallel calls crossing 70%, and both 70% and 90%, together), the failed
+#        trace export, the commit
 #        failure, and the G-1 forensic test 7 equivalent (a privileged call with no DPA is blocked and traced
 #        with classification and no content)
 #      - the routes: committeeBrain (input order, access, cross-firm 404, the classification that a caller
@@ -86,6 +87,7 @@ GW_TESTS=(
   'alerts at 70 and 90 (P3-65, Review Focus 2) one call from 60000 to 95000 writes both alerts'
   'alerts at 70 and 90 (P3-65, Review Focus 2) landing exactly on 70% crosses it; stopping just below does not'
   'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing 70% write exactly one 70 alert, and the total equals the sum of the rows'
+  'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing both 70% and 90% write exactly one alert, audit row and event for each, and the total equals the sum of the rows'
   'alerts at 70 and 90 (P3-65, Review Focus 2) decides the crossing on the budget the transaction reads, not the pre-call one'
   'alerts at 70 and 90 (P3-65, Review Focus 2) raising the budget does not re-arm a crossed threshold, and the call still commits'
   'alerts at 70 and 90 (P3-65, Review Focus 2) a blocked call or an unbilled failed call writes no alert and adds nothing to spend'

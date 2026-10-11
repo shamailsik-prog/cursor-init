@@ -777,6 +777,35 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect(month.calls).toEqual({ ok: 11, failed: 0, blocked: 0 })
     })
 
+    it("ten parallel calls crossing both 70% and 90% write exactly one alert, audit row and event for each, and the total equals the sum of the rows", { timeout: 60_000 }, async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: BUDGET })
+      costing(60_000)
+      await callP1(req(firmId), at)
+      // 60000 + 10 x 4000 = 100000: the burst passes 70000 and 90000; no call starts at or over the budget (at most 96000).
+      costing(4_000)
+      const results = await Promise.all(Array.from({ length: 10 }, () => callP1(req(firmId), at)))
+      expect(results.every((r) => r.outcome === "ok")).toBe(true)
+
+      expect((await alertsOf(firmId)).map((a) => a.id).sort()).toEqual([`${firmId}_${MONTH}_70`, `${firmId}_${MONTH}_90`])
+      const audits = await auditsOf(firmId, "ai.budget.threshold")
+      expect(audits.map((a) => a.data.reason).sort()).toEqual(["70", "90"])
+      const events = await eventsOf(firmId, "ai.budget.threshold_crossed")
+      expect(events.map((e) => (e.data.payload as { threshold: number }).threshold).sort()).toEqual([70, 90])
+      // Each alert names the call that crossed it, and that call's own event.
+      for (const a of await alertsOf(firmId)) {
+        expect(events.some((e) => e.id === `${a.data.usageLogId}_threshold_${a.data.threshold}`)).toBe(true)
+      }
+
+      const rows = await rowsOf(firmId)
+      expect(rows).toHaveLength(11)
+      const sum = rows.reduce((n, r) => n + (r.data.costMicroUsd as number), 0)
+      const month = (await monthOf(firmId))!
+      expect(sum).toBe(100_000)
+      expect(month.spentMicroUsd).toBe(sum)
+      expect(month.calls).toEqual({ ok: 11, failed: 0, blocked: 0 })
+      expect(await auditsOf(firmId, "ai.gateway.decision")).toHaveLength(11)
+    })
+
     it("decides the crossing on the budget the transaction reads, not the pre-call one", async () => {
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: 1_000_000 })
       costing(60_000)
