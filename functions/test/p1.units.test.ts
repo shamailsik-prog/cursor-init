@@ -159,12 +159,11 @@ describe("P1 Opik configuration (P3-67)", () => {
     expect(opikConfig({ OPIK_BASE_URL: "https://comet.com/x", ...confirmed })).toEqual({ enabled: false, reason: "third_party_host" })
   })
 
-  it("refuses comet.com whatever the case, a trailing dot, a port or userinfo", () => {
+  it("refuses comet.com whatever the case, a trailing dot or a port", () => {
     const comet = (url: string) => opikConfig({ OPIK_BASE_URL: url, ...confirmed })
     expect(comet("https://API.Comet.COM/x")).toEqual({ enabled: false, reason: "third_party_host" })
     expect(comet("https://comet.com./x")).toEqual({ enabled: false, reason: "third_party_host" })
     expect(comet("https://comet.com:8443/x")).toEqual({ enabled: false, reason: "third_party_host" })
-    expect(comet("https://user:pw@comet.com/x")).toEqual({ enabled: false, reason: "third_party_host" })
   })
 
   it("reports an unparseable, non-http(s) or query/fragment-bearing URL as invalid_url", () => {
@@ -179,6 +178,12 @@ describe("P1 Opik configuration (P3-67)", () => {
       "https://h/api?",
       "https://h/api#",
       "https://h/api?x=1#f",
+      // fetch refuses a URL with credentials, so export could never succeed: fail it at config time.
+      "https://user:pw@host/api",
+      "https://user@host/api",
+      "https://:pw@host/api",
+      "http://user:pw@127.0.0.1:5173/api",
+      "https://user:pw@comet.com/x",
     ]) {
       expect(opikConfig({ OPIK_BASE_URL: url, ...confirmed }), url).toEqual(invalid)
     }

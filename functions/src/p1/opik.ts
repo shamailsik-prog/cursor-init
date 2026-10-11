@@ -13,10 +13,11 @@ export type OpikConfig =
   | { enabled: true; baseUrl: string; project: string }
   | { enabled: false; reason: "unset" | "invalid_url" | "unconfirmed" | "third_party_host" }
 
-/** The host of an http(s) URL, lower-cased and without a trailing dot; null for anything else. */
+/** The host of an http(s) URL without credentials, lower-cased and without a trailing dot; null for anything else. */
 function httpHost(raw: string): string | null {
   try {
     const u = new URL(raw)
+    if (u.username !== "" || u.password !== "") return null // fetch refuses a URL with credentials
     return u.protocol === "http:" || u.protocol === "https:" ? u.hostname.replace(/\.+$/, "") : null
   } catch {
     return null
@@ -26,8 +27,8 @@ function httpHost(raw: string): string | null {
 /**
  * Enabled only when `OPIK_BASE_URL` is a usable http(s) base, `OPIK_SELF_HOSTED_CONFIRMED` is exactly "true", and
  * the host is not `comet.com` or a subdomain of it (never a third-party cloud). Checked in that order: unset, then
- * invalid_url (unparseable, not http(s), or carrying a query or fragment, which would swallow the path appended to
- * it), then unconfirmed, then third_party_host.
+ * invalid_url (unparseable, not http(s), carrying credentials, which fetch refuses, or carrying a query or
+ * fragment, which would swallow the path appended to it), then unconfirmed, then third_party_host.
  */
 export function opikConfig(env: NodeJS.ProcessEnv = process.env): OpikConfig {
   const raw = env.OPIK_BASE_URL?.trim()
