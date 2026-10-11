@@ -90,7 +90,7 @@
   - `setP1TransportForTests(t: P1Transport | null): void`
   - `send` throws on a non-2xx response, a timeout, or a missing `choices[0].message.content`.
 - `opik.ts`:
-  - `type OpikConfig = { enabled: true; baseUrl: string; project: string } | { enabled: false; reason: "unset" | "unconfirmed" | "third_party_host" }`
+  - `type OpikConfig = { enabled: true; baseUrl: string; project: string } | { enabled: false; reason: "unset" | "invalid_url" | "unconfirmed" | "third_party_host" }`, checked in that order; `invalid_url` covers an unparseable URL, a non-http(s) scheme, a query or fragment, and credentials (ruling R4)
   - `opikConfig(env?: NodeJS.ProcessEnv): OpikConfig`
   - `type TraceRecord = { traceId: string; startMs: number; endMs: number; taskType: string; classification: Classification; outcome: P1Outcome; blockReason: string | null; model: string; provider: string; inputTokens: number; outputTokens: number; costMicroUsd: number; firmId: string; matterId: string | null; usageLogId: string; maskedBody: string | null; maskedResponse: string | null }`
   - `buildTrace(r: TraceRecord, project: string): Record<string, unknown>`, with `input`/`output` only when the rank is 3 or less and the outcome is not `blocked`
