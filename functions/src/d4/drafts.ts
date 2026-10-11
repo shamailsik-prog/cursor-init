@@ -199,8 +199,16 @@ function parseVersionParam(value: unknown): number {
   return Number(value)
 }
 
+/** C0 controls (LF, CR and TAB among them), DEL and the C1 controls: a title is one line of text. */
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/
+
+/**
+ * A title is a string with something in it, and no control character anywhere (400 `invalid_title`): not a line break,
+ * a tab, any other C0 or C1 control or DEL. It is judged as sent, before the trim and before the charset functions.
+ */
 function parseTitle(value: unknown): string {
   if (typeof value !== "string") throw badRequest("invalid_title")
+  if (CONTROL_CHARACTER.test(value)) throw badRequest("invalid_title")
   if (value.trim() === "") throw badRequest("invalid_title")
   return value
 }
@@ -250,10 +258,23 @@ function parseCreateInput(data: Data): CreateInput {
 }
 
 /**
- * What the matter allows the draft to be (P4-5): the court check (422 `court_mismatch`), then the classification: a
- * caller label below the matter's is 422 `classification_below_matter`, the result is the stricter of the two (monotonic,
- * L17.3 #20), and the caller's clearance must reach it (403 `clearance`). A matter whose label is unreadable fails closed
- * (403 `clearance`). Returns the draft's classification.
+ * Caller-authored free text is never rank 0 (ruling R3, N1: anyone can open a `public` matter), so a draft is at least
+ * `internal`, as committeeBrain's caller-authored text is (`FREE_TEXT_FLOOR` in p1/ops.ts).
+ */
+const FREE_TEXT_FLOOR: Classification = "internal"
+
+/** The strictest label by rank, never by string comparison. */
+function strictest(labels: Classification[]): Classification {
+  return labels.reduce((a, b) => (rankOf(b) > rankOf(a) ? b : a))
+}
+
+/**
+ * What the matter allows a new draft to be (P4-5, R3, R4): a matter whose label is unreadable fails closed (403
+ * `clearance`); a closed matter takes no new draft (409 `matter_closed`: the `status` that closeMatter writes); the
+ * court check (422 `court_mismatch`); then the classification: a caller label below the matter's own is 422
+ * `classification_below_matter`, the result is the strictest of the matter's label, the `internal` floor and the caller's
+ * label (monotonic, L17.3 #20), and the caller's clearance must reach that result (403 `clearance`). Returns the draft's
+ * classification.
  */
 function classifyForMatter(
   caller: Caller,
@@ -263,11 +284,12 @@ function classifyForMatter(
 ): Classification {
   const label: unknown = matter.classification
   if (!isKnownClassification(label)) throw new HttpError(403, "clearance")
+  if (matter.status === "closed") throw new HttpError(409, "matter_closed")
   const courtId = typeof matter.courtId === "string" && matter.courtId !== "" ? matter.courtId : undefined
   const type = getDocumentType(documentTypeId)
   if (type === null || !courtAllowed(type, courtId)) throw new HttpError(422, "court_mismatch")
   if (requested !== undefined && rankOf(requested) < rankOf(label)) throw new HttpError(422, "classification_below_matter")
-  const result = requested !== undefined && rankOf(requested) > rankOf(label) ? requested : label
+  const result = strictest(requested === undefined ? [label, FREE_TEXT_FLOOR] : [label, FREE_TEXT_FLOOR, requested])
   if (rankOf(caller.clearanceLevel) < rankOf(result)) throw new HttpError(403, "clearance")
   return result
 }
@@ -275,7 +297,8 @@ function classifyForMatter(
 /**
  * createDraft({ matterId, documentTypeId, title, body, classification? }) → the DraftView (P4-4, P4-5). Checks the
  * request, then `draft.create` on the matter (same firm, member, cleared; partner, associate, clerk), then reads the
- * matter (404), the court and classification checks, and the text checks. One transaction writes the draft, version 1
+ * matter (404), the open, court and classification checks (a closed matter is 409 `matter_closed`; a draft is at least
+ * `internal`), and the text checks. One transaction writes the draft, version 1
  * (kind `create`), the `draft.autosaved` event and the call's audit row. The matter is read again in the
  * transaction, so a label raised in between is judged too.
  */
@@ -300,9 +323,10 @@ export const createDraftOp: FirmOperation<DraftView> = {
     const draftRef = drafts().doc()
     const draftId = draftRef.id
     audit.target = `drafts/${draftId}`
-    const stamp = Timestamp.now()
     const bodySha256 = sha256Hex(text.body)
     const view = await adminDb().runTransaction(async (tx) => {
+      // The stamp is taken in the attempt that commits, so createdAt and updatedAt are that attempt's clock.
+      const stamp = Timestamp.now()
       const current = (await tx.get(matterRef)).data()
       if (!current || current.firmId !== caller.firmId) throw notFound()
       const classification = classifyForMatter(caller, current, input.documentTypeId, input.classification)
@@ -380,11 +404,12 @@ async function storeVersion(
   resolve: (tx: Transaction) => Promise<{ title: string; body: string; restoredFrom?: number }>
 ): Promise<SavedDraft> {
   const draftId = ref.id
-  const stamp = Timestamp.now()
   let out: SavedDraft
   try {
     out = await adminDb().runTransaction(
       async (tx) => {
+        // The stamp is taken in the attempt that commits, so createdAt and updatedAt are that attempt's clock.
+        const stamp = Timestamp.now()
         const draft = (await tx.get(ref)).data()
         if (!draft || draft.firmId !== caller.firmId || !withinClearance(draft.classification, caller.clearanceLevel)) throw notFound()
         refuseStaleEdit(draft, baseVersion)

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
 import { getDocumentType, listDocumentTypes } from "../src/d4/doctypes"
@@ -142,6 +142,9 @@ const draftEvents = async (firmId: string, draftId: string) =>
 /** The route's own CallAudit rows for the draft (the decision rows: target drafts/<id>). */
 const callAudit = async (actorId: string, action: string, draftId: string) =>
   (await adminDb().collection("audit_log").where("actorId", "==", actorId).where("action", "==", action).where("target", "==", `drafts/${draftId}`).get()).docs.map((d) => d.data())
+/** Every audit row whose target is the draft (the route's own CallAudit rows, whatever the action and decision). */
+const draftAudit = async (draftId: string) =>
+  (await adminDb().collection("audit_log").where("target", "==", `drafts/${draftId}`).get()).docs.map((d) => d.data())
 const nothingStored = async (f: Firm) => {
   expect(await byFirm("drafts", f.firmId)).toHaveLength(0)
   expect(await byFirm("draft_versions", f.firmId)).toHaveLength(0)
@@ -236,9 +239,9 @@ describe.skipIf(!EMULATORS)("createDraft (P4-4, P4-5, P4-12)", () => {
 
   it("stores the NFC-normalised text and hashes that stored text; the title is trimmed", async () => {
     const f = await newFirm()
-    const body = "Café term.\r\nSecond line."
+    const body = "Cafe\u0301 term.\r\nSecond line."
     const view = await create(f, f.P, { title: "  Reply to the notice  ", body })
-    const stored = "Café term.\nSecond line."
+    const stored = "Caf\u00e9 term.\nSecond line."
     expect(view.title).toBe("Reply to the notice")
     expect(view.currentBodySha256).toBe(sha(stored))
     expect((await versionDoc(view.draftId, 1))?.body).toBe(stored)
@@ -295,6 +298,48 @@ describe.skipIf(!EMULATORS)("createDraft (P4-4, P4-5, P4-12)", () => {
       }
       bad.classification = "internal"
       expect(await create(f, f.P, bad)).toMatchObject({ classification: "internal" })
+    })
+
+    // R-ruling: a title is one line of text. Any C0 or C1 control (the whitespace ones \n, \r, \t included), DEL too, is
+    // 400 invalid_title, judged on the raw title (before it is trimmed) and before the charset functions.
+    const CONTROLS: Array<[string, string]> = [
+      ["LF", "\n"],
+      ["CR", "\r"],
+      ["TAB", "\t"],
+      ["NUL", "\u0000"],
+      ["BEL", "\u0007"],
+      ["VT", "\u000b"],
+      ["FF", "\u000c"],
+      ["ESC", "\u001b"],
+      ["US", "\u001f"],
+      ["DEL", "\u007f"],
+      ["PAD (C1)", "\u0080"],
+      ["NEL (C1)", "\u0085"],
+      ["APC (C1)", "\u009f"],
+    ]
+    it.each(CONTROLS)("a title with %s inside is 400 invalid_title, nothing stored", async (_name, ch) => {
+      const f = await newFirm()
+      expectErr(await apiErrorOf(create(f, f.P, { title: `Petition${ch}against the order` })), 400, "invalid_title")
+      await nothingStored(f)
+    })
+
+    it("a title with a control at either end is refused too (it is judged before the trim)", async () => {
+      const f = await newFirm()
+      for (const title of ["Petition\n", "\tPetition", "\r\nPetition", "Petition\u0085"]) {
+        expectErr(await apiErrorOf(create(f, f.P, { title })), 400, "invalid_title")
+      }
+      await nothingStored(f)
+    })
+
+    it("a control in the title is invalid_title, not unsupported_characters, when the title also has a hostile character", async () => {
+      const f = await newFirm()
+      expectErr(await apiErrorOf(create(f, f.P, { title: "Petition\n\u202e" })), 400, "invalid_title")
+    })
+
+    it("ordinary spaces are fine, trimmed at the ends; a control in the body is not a title problem", async () => {
+      const f = await newFirm()
+      const view = await create(f, f.P, { title: "  Petition against  the order  ", body: "Line one.\nLine two.\tTabbed." })
+      expect(view.title).toBe("Petition against  the order")
     })
 
     it("the checks come before the permission: an intern with a bad title gets 400, not 403", async () => {
@@ -398,19 +443,104 @@ describe.skipIf(!EMULATORS)("createDraft (P4-4, P4-5, P4-12)", () => {
       expectErr(await apiErrorOf(create(f, low, { classification: "privileged" })), 403, "clearance")
       expect(await create(f, low, { classification: "confidential" })).toMatchObject({ classification: "confidential" })
     })
+
+    describe("the internal floor (R3: caller-authored text is never rank 0, as committeeBrain)", () => {
+      it("a public matter gives an internal draft: the draft, version 1 and the event are labelled internal", async () => {
+        const f = await newFirm({ classification: "public" })
+        const view = await create(f)
+        expect(view.classification).toBe("internal")
+        expect((await draftDoc(view.draftId))?.classification).toBe("internal")
+        expect((await versionDoc(view.draftId, 1))?.classification).toBe("internal")
+        expect((await eventDoc(view.draftId, 1))?.classification).toBe("internal")
+      })
+
+      it("a public request on a public matter is floored to internal, not refused", async () => {
+        const f = await newFirm({ classification: "public" })
+        const view = await create(f, f.P, { classification: "public" })
+        expect(view.classification).toBe("internal")
+        expect((await versionDoc(view.draftId, 1))?.classification).toBe("internal")
+      })
+
+      it("a higher request on a public matter is the stricter, as before", async () => {
+        const f = await newFirm({ classification: "public" })
+        expect((await create(f, f.P, { classification: "confidential" })).classification).toBe("confidential")
+        expect((await create(f, f.P, { classification: "internal" })).classification).toBe("internal")
+      })
+
+      it("classification_below_matter stays relative to the matter's own label: an internal matter refuses public", async () => {
+        const f = await newFirm({ classification: "internal" })
+        expectErr(await apiErrorOf(create(f, f.P, { classification: "public" })), 422, "classification_below_matter")
+        await nothingStored(f)
+      })
+
+      it("a caller cleared only to public gets 403 clearance on a public matter (the floor is the result the clearance must reach)", async () => {
+        const f = await newFirm({ classification: "public" })
+        const publicOnly = await memberOf(f, "associate", "public")
+        expectErr(await apiErrorOf(create(f, publicOnly)), 403, "clearance")
+        expectErr(await apiErrorOf(create(f, publicOnly, { classification: "public" })), 403, "clearance")
+        await nothingStored(f)
+        const internal = await memberOf(f, "associate", "internal")
+        expect(await create(f, internal)).toMatchObject({ classification: "internal" })
+      })
+
+      it("saves and restores on a floored draft carry its internal label on the versions and the events", async () => {
+        const f = await newFirm({ classification: "public" })
+        const v1 = await create(f)
+        await save(f, f.P, v1.draftId, 1, "Second title", "Second body.")
+        await restore(f, f.P, v1.draftId, 2, 1)
+        for (const n of [1, 2, 3]) {
+          expect([n, (await versionDoc(v1.draftId, n))?.classification]).toEqual([n, "internal"])
+          expect([n, (await eventDoc(v1.draftId, n))?.classification]).toEqual([n, "internal"])
+        }
+        expect((await draftDoc(v1.draftId))?.classification).toBe("internal")
+      })
+    })
+  })
+
+  describe("a closed matter (R4)", () => {
+    it("createDraft on a closed matter is 409 matter_closed, nothing stored", async () => {
+      const f = await newFirm()
+      await adminDb().collection("matters").doc(f.matterId).update({ status: "closed", closedBy: f.P.uid })
+      expectErr(await apiErrorOf(create(f, f.P)), 409, "matter_closed")
+      expectErr(await apiErrorOf(create(f, f.A)), 409, "matter_closed")
+      await nothingStored(f)
+    })
+
+    it("the permission still comes first: an intern or a non-member on a closed matter is refused 403, not told it is closed", async () => {
+      const f = await newFirm()
+      await adminDb().collection("matters").doc(f.matterId).update({ status: "closed" })
+      expectErr(await apiErrorOf(create(f, f.intern)), 403, "intern_channel_denied")
+      expectErr(await apiErrorOf(create(f, f.outsider)), 403, "not_member")
+    })
+
+    it("a matter that is open (or has no status) still takes new drafts", async () => {
+      const f = await newFirm()
+      expect(await create(f)).toMatchObject({ currentVersion: 1 })
+      await adminDb().collection("matters").doc(f.matterId).update({ status: FieldValue.delete() })
+      expect(await create(f)).toMatchObject({ currentVersion: 1 })
+    })
+
+    it("saves and restores on an existing draft of a closed matter stay allowed (recorded for later)", async () => {
+      const f = await newFirm()
+      const v1 = await create(f, f.P, { title: "Original title", body: "Original body." })
+      await adminDb().collection("matters").doc(f.matterId).update({ status: "closed", closedBy: f.P.uid })
+      expect(await save(f, f.P, v1.draftId, 1, "Edited title", "Edited body.")).toMatchObject({ saved: true, draft: { currentVersion: 2 } })
+      expect(await restore(f, f.P, v1.draftId, 2, 1)).toMatchObject({ saved: true, draft: { currentVersion: 3, title: "Original title" } })
+      expect(await send(getApi, f, f.P, { draftId: v1.draftId })).toMatchObject({ version: 3 })
+    })
   })
 
   describe("text checks (SEC-1, R3): refused, never stored", () => {
     it("a body with a bidirectional control is 422 unsupported_characters", async () => {
       const f = await newFirm()
-      expectErr(await apiErrorOf(create(f, f.P, { body: "The respondent‮ paid." })), 422, "unsupported_characters")
+      expectErr(await apiErrorOf(create(f, f.P, { body: "The respondent\u202e paid." })), 422, "unsupported_characters")
       await nothingStored(f)
     })
 
     it("a title with an invisible character, or a body with a confusable Cyrillic letter in a Latin word, is 422 unsupported_characters", async () => {
       const f = await newFirm()
-      expectErr(await apiErrorOf(create(f, f.P, { title: "Petition⁦" })), 422, "unsupported_characters")
-      expectErr(await apiErrorOf(create(f, f.P, { body: "The сourt held" })), 422, "unsupported_characters")
+      expectErr(await apiErrorOf(create(f, f.P, { title: "Petition\u2066" })), 422, "unsupported_characters")
+      expectErr(await apiErrorOf(create(f, f.P, { body: "The \u0441ourt held" })), 422, "unsupported_characters")
       await nothingStored(f)
     })
 
@@ -429,12 +559,12 @@ describe.skipIf(!EMULATORS)("createDraft (P4-4, P4-5, P4-12)", () => {
 
     it("an Urdu body over 900,000 UTF-8 bytes but under 500,000 characters is 422 draft_too_large, not truncated; 900,000 bytes is accepted", async () => {
       const f = await newFirm()
-      const over = "ا".repeat(450_001) // 450,001 characters, 900,002 bytes
+      const over = "\u0627".repeat(450_001) // 450,001 characters, 900,002 bytes
       expect(over.length).toBeLessThan(500_000)
       expect(Buffer.byteLength(over, "utf8")).toBeGreaterThan(900_000)
       expectErr(await apiErrorOf(create(f, f.P, { body: over })), 422, "draft_too_large")
       await nothingStored(f)
-      const atCap = "ا".repeat(450_000) // exactly 900,000 bytes
+      const atCap = "\u0627".repeat(450_000) // exactly 900,000 bytes
       const view = await create(f, f.P, { body: atCap })
       expect(view.currentBodySha256).toBe(sha(atCap))
       expect((await versionDoc(view.draftId, 1))?.body).toHaveLength(450_000)
@@ -442,7 +572,7 @@ describe.skipIf(!EMULATORS)("createDraft (P4-4, P4-5, P4-12)", () => {
 
     it("a hostile body from a caller who is not allowed is refused for the permission first (no oracle)", async () => {
       const f = await newFirm()
-      expectErr(await apiErrorOf(create(f, f.intern, { body: "x‮" })), 403, "intern_channel_denied")
+      expectErr(await apiErrorOf(create(f, f.intern, { body: "x\u202e" })), 403, "intern_channel_denied")
     })
   })
 
@@ -552,6 +682,30 @@ describe.skipIf(!EMULATORS)("saveDraftVersion (P4-4, P4-12)", () => {
       expect(await draftEvents(f.firmId, v1.draftId)).toHaveLength(2)
     })
 
+    it("a refused stale save writes a deny row on the route's audit (draft.edit, drafts/<id>, reason draft_changed), and no event or version", async () => {
+      const f = await newFirm()
+      const v1 = await create(f)
+      await save(f, f.P, v1.draftId, 1, "Second title", "Second body.")
+      const before = await callAudit(f.A.uid, "draft.edit", v1.draftId)
+      expect(before).toHaveLength(0)
+      expectErr(await apiErrorOf(save(f, f.A, v1.draftId, 1, "Third", "Third body.")), 409, "draft_changed")
+      const rows = await callAudit(f.A.uid, "draft.edit", v1.draftId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ firmId: f.firmId, decision: "deny", reason: "draft_changed", action: "draft.edit", target: `drafts/${v1.draftId}` })
+      expect(await versionDoc(v1.draftId, 3)).toBeUndefined()
+      expect(await draftEvents(f.firmId, v1.draftId)).toHaveLength(2)
+    })
+
+    it("a refused save on a locked draft writes a deny row with reason draft_locked", async () => {
+      const f = await newFirm()
+      const v1 = await create(f)
+      await adminDb().collection("drafts").doc(v1.draftId).update({ locked: true })
+      expectErr(await apiErrorOf(save(f, f.A, v1.draftId, 1, "Edited", "Edited body.")), 409, "draft_locked")
+      const rows = await callAudit(f.A.uid, "draft.edit", v1.draftId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ firmId: f.firmId, decision: "deny", reason: "draft_locked", target: `drafts/${v1.draftId}` })
+    })
+
     it("a baseVersion that is not a positive integer is 400 invalid_version", async () => {
       const f = await newFirm()
       const v1 = await create(f)
@@ -599,6 +753,9 @@ describe.skipIf(!EMULATORS)("saveDraftVersion (P4-4, P4-12)", () => {
       expect(versions).toEqual([`${v1.draftId}_1`, `${v1.draftId}_2`])
       expect(stored?.currentBodySha256).toBe((await versionDoc(v1.draftId, 2))?.bodySha256)
       expect((await draftEvents(f.firmId, v1.draftId)).map((e) => e.id).sort()).toEqual([`${v1.draftId}_1_autosaved`, `${v1.draftId}_2_autosaved`])
+      // the winner has its allow row, the loser a deny row with the reason draft_changed (both on the route's audit)
+      const rows = [...(await callAudit(f.P.uid, "draft.edit", v1.draftId)), ...(await callAudit(f.A.uid, "draft.edit", v1.draftId))]
+      expect(rows.map((r) => `${r.decision}:${r.reason}`).sort()).toEqual(["allow:ok", "deny:draft_changed"])
     })
 
     it("four saves racing on one base: exactly one wins, the rest are draft_changed, nothing is skipped", async () => {
@@ -658,14 +815,25 @@ describe.skipIf(!EMULATORS)("saveDraftVersion (P4-4, P4-12)", () => {
       expect((await draftDoc(v1.draftId))?.currentVersion).toBe(1)
     })
 
+    it("a title with a control character (LF, CR, TAB, any C0 or C1, DEL) is 400 invalid_title and stores nothing", async () => {
+      const f = await newFirm()
+      const v1 = await create(f)
+      for (const ch of ["\n", "\r", "\t", "\u0000", "\u001f", "\u007f", "\u0085", "\u009f"]) {
+        expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, `Revised${ch}title`, "B")), 400, "invalid_title")
+      }
+      expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "Revised title\n", "B")), 400, "invalid_title")
+      expect((await draftDoc(v1.draftId))?.currentVersion).toBe(1)
+      expect(await versionDoc(v1.draftId, 2)).toBeUndefined()
+    })
+
     it("a hostile body or title is 422 unsupported_characters and stores nothing; an oversize title or body is 422 too", async () => {
       const f = await newFirm()
       const v1 = await create(f)
-      expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "T", "The respondent‮ paid.")), 422, "unsupported_characters")
-      expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "Petition⁦", "B")), 422, "unsupported_characters")
+      expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "T", "The respondent\u202e paid.")), 422, "unsupported_characters")
+      expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "Petition\u2066", "B")), 422, "unsupported_characters")
       expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "T".repeat(501), "B")), 422, "title_too_long")
       expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "T", "a".repeat(500_001))), 422, "draft_too_large")
-      expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "T", "ا".repeat(450_001))), 422, "draft_too_large")
+      expectErr(await apiErrorOf(save(f, f.P, v1.draftId, 1, "T", "\u0627".repeat(450_001))), 422, "draft_too_large")
       expect((await draftDoc(v1.draftId))?.currentVersion).toBe(1)
       expect(await versionDoc(v1.draftId, 2)).toBeUndefined()
       expect(await draftEvents(f.firmId, v1.draftId)).toHaveLength(1)
@@ -751,12 +919,25 @@ describe.skipIf(!EMULATORS)("restoreDraftVersion (P4-4)", () => {
     const v2 = await save(f, f.P, v1.draftId, 1, "Changed", "Changed body.")
     await save(f, f.P, v1.draftId, 2, "Same title", "Same body.") // v3 == v1's content
     const before = (await byFirm("draft_versions", f.firmId)).filter((v) => v.data.draftId === v1.draftId).length
+    const eventsBefore = (await draftEvents(f.firmId, v1.draftId)).length
+    const auditBefore = (await draftAudit(v1.draftId)).length
+    const allowBefore = (await callAudit(f.P.uid, "draft.edit", v1.draftId)).filter((r) => r.decision === "allow").length
+    const storedBefore = await draftDoc(v1.draftId)
     const out = await restore(f, f.P, v1.draftId, 3, 1)
     expect(out.saved).toBe(false)
     expect(out.draft.currentVersion).toBe(3)
     expect((await byFirm("draft_versions", f.firmId)).filter((v) => v.data.draftId === v1.draftId)).toHaveLength(before)
+    // nothing but the call's own allow row: no event, no draft update, one more audit row on drafts/<id>
+    expect(await draftEvents(f.firmId, v1.draftId)).toHaveLength(eventsBefore)
+    expect(await draftDoc(v1.draftId)).toEqual(storedBefore)
+    const auditAfter = await draftAudit(v1.draftId)
+    expect(auditAfter).toHaveLength(auditBefore + 1)
+    expect(auditAfter.filter((r) => r.decision === "allow" && r.action === "draft.edit" && r.actorId === f.P.uid)).toHaveLength(allowBefore + 1)
+    expect(auditAfter.filter((r) => r.decision === "deny")).toHaveLength(0)
     // and the current version restored onto itself is identical too
     expect((await restore(f, f.P, v1.draftId, 3, 3)).saved).toBe(false)
+    expect(await draftEvents(f.firmId, v1.draftId)).toHaveLength(eventsBefore)
+    expect(await draftAudit(v1.draftId)).toHaveLength(auditBefore + 2)
     expect(v2.draft.currentVersion).toBe(2)
   })
 
@@ -867,7 +1048,7 @@ describe.skipIf(!EMULATORS)("getDraft (P4-4, P4-10)", () => {
 
   it("returns the stored text exactly, including a body at the byte cap", async () => {
     const f = await newFirm()
-    const big = "ا".repeat(450_000)
+    const big = "\u0627".repeat(450_000)
     const v1 = await create(f, f.P, { body: big })
     const out = await send(getApi, f, f.P, { draftId: v1.draftId })
     expect(out.body).toBe(big)
@@ -977,6 +1158,38 @@ describe.skipIf(!EMULATORS)("listDrafts (P4-4, P4-10)", () => {
     const ids = [a.draftId, b.draftId]
     for (const id of ids) await adminDb().collection("drafts").doc(id).update({ updatedAt: stamp })
     expect((await send(listApi, f, f.P, { matterId: f.matterId })).items.map((d) => d.draftId)).toEqual([...ids].sort().reverse())
+  })
+
+  it("pages through drafts that share one updatedAt without a gap or a repeat (the id breaks the tie)", async () => {
+    const f = await newFirm()
+    const ids: string[] = []
+    for (const title of ["Tie A", "Tie B", "Tie C"]) ids.push((await create(f, f.P, { title })).draftId)
+    const stamp = Timestamp.fromMillis(Date.parse("2026-10-11T09:00:00.000Z"))
+    for (const id of ids) await adminDb().collection("drafts").doc(id).update({ updatedAt: stamp })
+    const seen: string[] = []
+    let cursor: string | null = null
+    let pages = 0
+    do {
+      const page: Page<View> = await send(listApi, f, f.P, { matterId: f.matterId, limit: "1", ...(cursor === null ? {} : { cursor }) })
+      expect(page.items).toHaveLength(1)
+      seen.push(page.items[0]!.draftId)
+      cursor = page.nextCursor
+      pages++
+    } while (cursor !== null && pages < 10)
+    expect(pages).toBe(3)
+    expect(new Set(seen).size).toBe(3)
+    expect(seen).toEqual([...ids].sort().reverse())
+    // a second timestamp tie among a larger set, at limit 2: still every draft once
+    const extra = (await create(f, f.P, { title: "Tie D" })).draftId
+    await adminDb().collection("drafts").doc(extra).update({ updatedAt: stamp })
+    const again: string[] = []
+    cursor = null
+    do {
+      const page: Page<View> = await send(listApi, f, f.P, { matterId: f.matterId, limit: "2", ...(cursor === null ? {} : { cursor }) })
+      again.push(...page.items.map((d) => d.draftId))
+      cursor = page.nextCursor
+    } while (cursor !== null)
+    expect(again).toEqual([...ids, extra].sort().reverse())
   })
 
   it("paginates with limit and cursor without gaps or repeats", async () => {
