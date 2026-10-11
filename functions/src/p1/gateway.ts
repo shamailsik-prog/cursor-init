@@ -183,8 +183,11 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
       const masked = maskOutboundPII(res.text, { partyNames }).masked
       const reportedIn = tokenCount(res.inputTokens)
       const reportedOut = tokenCount(res.outputTokens)
+      // Each side is estimated from what was billed: the input from the masked body that was sent, the output from
+      // the raw response the provider produced (masking shortens it). The raw text is used for this count only; the
+      // masked text is the only one returned, stored, traced or logged.
       inputTokens = reportedIn ?? estimateTokens(outbound.body)
-      outputTokens = reportedOut ?? estimateTokens(masked)
+      outputTokens = reportedOut ?? estimateTokens(res.text)
       tokensEstimated = reportedIn === null || reportedOut === null
       cost = costMicroUsd(model, inputTokens, outputTokens)! // step 6 refused an unpriced model
       text = masked

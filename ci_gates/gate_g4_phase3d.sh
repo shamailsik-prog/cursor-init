@@ -16,7 +16,8 @@
 #        table, the not_minimised case, the first-refusal-wins order, the classification guard), the kill-switch
 #        flips (a switch set between two calls blocks the second), every bad transport result (failed,
 #        transport_error, no provider text; charged when the provider may have billed it and 0 when it cannot
-#        have; a billed failure counts toward the budget) and the missing-usage estimate, the alerts at 70 and
+#        have; a billed failure counts toward the budget) and the missing-usage estimate (the output side from
+#        the raw response, which reaches nothing else), the alerts at 70 and
 #        90 (exactly once, including ten parallel calls crossing 70%, and both 70% and 90%, together), the
 #        failed trace export, the commit failure (the commit deadline; an ambiguous commit confirmed by its
 #        usage row), every p1TestSeam field inert when NODE_ENV is production, and the G-1 forensic test 7
@@ -82,7 +83,8 @@ GW_TESTS=(
   'transport failures (Review Focus 5) through the real Gateway transport against a local server a timeout gives failed, transport_error, the charge the I1 rule sets, and stores no provider text'
   'transport failures (Review Focus 5) through the real Gateway transport against a local server a thrown fetch (connection refused) gives failed'
   'transport failures (Review Focus 5) through the real Gateway transport against a local server a 2xx with content but no usage is ok with tokensEstimated'
-  'usage absent (P3-62) null tokens on both sides: ok, tokensEstimated, each side estimated from the masked text'
+  'usage absent (P3-62) null tokens on both sides: ok, tokensEstimated, the input estimated from the masked body sent and the output from the raw response'
+  'usage absent (P3-62) with no output usage the output side is estimated from the raw response, which masking shortens; only the masked text is returned, stored, traced or logged'
   'usage absent (P3-62) one side null: only that side is estimated'
   'PKR (P3-64) with pkrPerUsd 280, a 14000 micro-USD call stores fxPkrPerUsd 280 and costPkr 3.92'
   # alerts at 70 and 90, exactly once (P3-65, Review Focus 2)

@@ -658,14 +658,41 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
   })
 
   describe("usage absent (P3-62)", () => {
-    it("null tokens on both sides: ok, tokensEstimated, each side estimated from the masked text", async () => {
+    it("null tokens on both sides: ok, tokensEstimated, the input estimated from the masked body sent and the output from the raw response", async () => {
       const firmId = await seedFirm()
       fakeTransport({ text: "Reply to Ali Raza at 0300-1234567", inputTokens: null, outputTokens: null })
       const r = await callP1(req(firmId, { body: "Ali Raza's bail ک", partyNames: ["Ali Raza"] }), at)
+      // The input side is what was sent (the masked body); the output side is what the provider produced (the raw text).
       const inTok = estimateTokens("[PARTY]'s bail ک")
-      const outTok = estimateTokens("Reply to [PARTY] at [PHONE]")
+      const outTok = estimateTokens("Reply to Ali Raza at 0300-1234567")
       expect(r).toMatchObject({ outcome: "ok", inputTokens: inTok, outputTokens: outTok, costMicroUsd: costMicroUsd(OPUS, inTok, outTok) })
       expect(await rowOf(r.usageLogId)).toMatchObject({ tokensEstimated: true, inputTokens: inTok, outputTokens: outTok, costMicroUsd: costMicroUsd(OPUS, inTok, outTok) })
+    })
+
+    it("with no output usage the output side is estimated from the raw response, which masking shortens; only the masked text is returned, stored, traced or logged", async () => {
+      const firmId = await seedFirm()
+      const logs = spyLogs()
+      const opik = fakeOpik()
+      const NAME = "Muhammad Abdul Rehman Siddiqui"
+      const raw = `${NAME} `.repeat(20) + "agrees, CNIC 35202-1234567-1."
+      const sent = fakeTransport({ text: raw, inputTokens: 50, outputTokens: null })
+      const r = await callP1(req(firmId, { partyNames: [NAME] }), at)
+
+      expect(r.text).toBe("[PARTY] ".repeat(20) + "agrees, CNIC [CNIC].")
+      const rawTok = estimateTokens(raw)
+      expect(rawTok).toBeGreaterThan(estimateTokens(r.text!))
+      expect(r).toMatchObject({ outcome: "ok", inputTokens: 50, outputTokens: rawTok, costMicroUsd: costMicroUsd(OPUS, 50, rawTok) })
+      const row = (await rowOf(r.usageLogId))!
+      expect(row).toMatchObject({ inputTokens: 50, outputTokens: rawTok, tokensEstimated: true, costMicroUsd: costMicroUsd(OPUS, 50, rawTok) })
+      expect((await monthOf(firmId))!).toMatchObject({ outputTokens: rawTok, spentMicroUsd: costMicroUsd(OPUS, 50, rawTok) })
+      expect(traceOf(opik.bodies).output).toEqual({ text: r.text })
+
+      // The raw text was used for the count only: it reaches no row, event, audit row, trace, log line or result.
+      for (const seen of [JSON.stringify(row), JSON.stringify(await eventsOf(firmId)), JSON.stringify(await auditsOf(firmId)), opik.bodies.join(""), logs.all(), JSON.stringify(r)]) {
+        expect(seen.toLowerCase()).not.toContain("siddiqui")
+        expect(seen).not.toContain("35202-1234567-1")
+      }
+      expect(sent).toHaveLength(1)
     })
 
     it("one side null: only that side is estimated", async () => {
