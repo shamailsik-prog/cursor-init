@@ -257,27 +257,28 @@ describe.skipIf(!EMULATORS)("createDraft (P4-4, P4-5, P4-12)", () => {
   })
 
   describe("input checks, in order, before the permission", () => {
-    const cases: Array<[string, Record<string, unknown>, number, string]> = [
-      ["matterId missing", { matterId: undefined }, 400, "matter_required"],
-      ["matterId empty", { matterId: "" }, 400, "matter_required"],
-      ["matterId not a string", { matterId: 5 }, 400, "matter_required"],
-      ["documentTypeId missing", { documentTypeId: undefined }, 400, "invalid_document_type"],
-      ["documentTypeId empty", { documentTypeId: "" }, 400, "invalid_document_type"],
-      ["documentTypeId not a string", { documentTypeId: 7 }, 400, "invalid_document_type"],
-      ["documentTypeId unknown", { documentTypeId: "no_such_type" }, 404, "document_type_not_found"],
-      ["documentTypeId an Object.prototype key", { documentTypeId: "constructor" }, 404, "document_type_not_found"],
-      ["title missing", { title: undefined }, 400, "invalid_title"],
-      ["title blank", { title: "   " }, 400, "invalid_title"],
-      ["title not a string", { title: 3 }, 400, "invalid_title"],
-      ["body missing", { body: undefined }, 400, "invalid_body"],
-      ["body null", { body: null }, 400, "invalid_body"],
-      ["body not a string", { body: 12 }, 400, "invalid_body"],
-      ["classification not a label", { classification: "secret" }, 400, "invalid_classification"],
-      ["classification not a string", { classification: 3 }, 400, "invalid_classification"],
-      ["classification an Object.prototype key", { classification: "constructor" }, 400, "invalid_classification"],
-      ["classification null", { classification: null }, 400, "invalid_classification"],
+    // [name, status, code, patch]: the title reads the first three in order, so every row has its own readable title.
+    const cases: Array<[string, number, string, Record<string, unknown>]> = [
+      ["matterId missing", 400, "matter_required", { matterId: undefined }],
+      ["matterId empty", 400, "matter_required", { matterId: "" }],
+      ["matterId not a string", 400, "matter_required", { matterId: 5 }],
+      ["documentTypeId missing", 400, "invalid_document_type", { documentTypeId: undefined }],
+      ["documentTypeId empty", 400, "invalid_document_type", { documentTypeId: "" }],
+      ["documentTypeId not a string", 400, "invalid_document_type", { documentTypeId: 7 }],
+      ["documentTypeId unknown", 404, "document_type_not_found", { documentTypeId: "no_such_type" }],
+      ["documentTypeId an Object.prototype key", 404, "document_type_not_found", { documentTypeId: "constructor" }],
+      ["title missing", 400, "invalid_title", { title: undefined }],
+      ["title blank", 400, "invalid_title", { title: "   " }],
+      ["title not a string", 400, "invalid_title", { title: 3 }],
+      ["body missing", 400, "invalid_body", { body: undefined }],
+      ["body null", 400, "invalid_body", { body: null }],
+      ["body not a string", 400, "invalid_body", { body: 12 }],
+      ["classification not a label", 400, "invalid_classification", { classification: "secret" }],
+      ["classification not a string", 400, "invalid_classification", { classification: 3 }],
+      ["classification an Object.prototype key", 400, "invalid_classification", { classification: "constructor" }],
+      ["classification null", 400, "invalid_classification", { classification: null }],
     ]
-    it.each(cases)("%s → %i %s, nothing stored", async (_name, patch, status, code) => {
+    it.each(cases)("%s → %i %s, nothing stored", async (_name, status, code, patch) => {
       const f = await newFirm()
       expectErr(await apiErrorOf(create(f, f.P, patch)), status, code)
       await nothingStored(f)

@@ -415,6 +415,7 @@ describe.skipIf(!EMULATORS)("G-1 equivalents (P4-14)", () => {
       version: 1,
       bodySha256: sha(BODY_OVERRULED),
       resultId: (await resultDoc(d.draftId, 1))?.resultId,
+      classification: "internal",
       by: f.P.uid,
       at: stored?.at,
       reason: REASON,

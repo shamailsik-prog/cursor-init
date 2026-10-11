@@ -597,10 +597,10 @@ export type OverrideResult = { override: OverrideView; draft: DraftView }
  * that is not the current one 409 `draft_changed`; no stored result for it (or one for another body) 409 `not_gated`;
  * a stored result that is not the one the partner reviewed (another `resultId`) 409 `gate_result_changed` (R6); an OK
  * result 409 `nothing_to_override`; an existing override 409 `already_overridden`. Otherwise it creates the immutable
- * override `{ firmId, matterId, draftId, version, bodySha256, resultId, by, at, reason, cleared }` (`by` is the
- * authenticated caller, never a body field; `cleared` lists every non-OK item of the reviewed result with its status),
- * sets the summary's `overridden: true` and writes the audit row (`draft.gate_override`, targeting the override
- * document). No event.
+ * override `{ firmId, matterId, draftId, version, bodySha256, resultId, classification, by, at, reason, cleared }`
+ * (`classification` is the draft's label; `by` is the authenticated caller, never a body field; `cleared` lists every
+ * non-OK item of the reviewed result with its status), sets the summary's `overridden: true` and writes the audit row
+ * (`draft.gate_override`, targeting the override document). No event.
  */
 export const overrideGateOp: FirmOperation<OverrideResult> = {
   auth: "firm",
@@ -643,6 +643,8 @@ export const overrideGateOp: FirmOperation<OverrideResult> = {
         version,
         bodySha256: stored.bodySha256,
         resultId,
+        // The reason is the partner's free text about the matter: it carries the draft's label, as results and events do.
+        classification: current.classification,
         by: caller.uid,
         at,
         reason,

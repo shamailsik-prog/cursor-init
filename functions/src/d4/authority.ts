@@ -9,10 +9,19 @@
 import { normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
 
+/**
+ * The port's contract, which every adapter (the O-59 corpus connector included) must meet; the O-59 parity test asserts
+ * it against the adapter's real rows:
+ * - a bench (`benchType`, `treatingJudgmentBench`, `recordedTreatingBench`) is one of the lowercase `Bench` values
+ *   `"single"`, `"division"`, `"full"`, `"larger"` (or null where the type allows it);
+ * - a treatment `kind` is lowercase, as the corpus records it: `"overruled"`, `"followed"`, `"applied"`, ... The verdict
+ *   rule (`verdictFromTreatments`) counts only a kind that is exactly `"overruled"`, so an adapter that returned
+ *   `"Overruled"` would turn an overruled judgment VERIFIED. The adapter normalises; the rule does not.
+ */
 export interface AuthorityStore {
   /** The judgment whose citation normalises to `canonical`, or null. */
   findJudgment(canonical: string): Promise<{ judgmentId: string; benchType: Bench } | null>
-  /** Every recorded treatment of the judgment (overruled, followed, ...). */
+  /** Every recorded treatment of the judgment, each with its lowercase `kind` (`"overruled"`, `"followed"`, ...). */
   listTreatments(judgmentId: string): Promise<TreatmentFact[]>
   /** The text of the section in force on `asAtDate` in `jurisdiction`, or "no_history" when the store has none. */
   getSectionAsAt(sectionId: string, asAtDate: string, jurisdiction: string): Promise<{ text: string } | "no_history">

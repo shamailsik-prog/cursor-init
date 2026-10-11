@@ -236,6 +236,26 @@
       "collectionGroup": "draft_versions",
       "fieldPath": "body",
       "indexes": []
+    },
+    {
+      "collectionGroup": "draft_gate_results",
+      "fieldPath": "citations",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_gate_results",
+      "fieldPath": "temporal",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_gate_overrides",
+      "fieldPath": "cleared",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_gate_overrides",
+      "fieldPath": "reason",
+      "indexes": []
     }
   ]
 }

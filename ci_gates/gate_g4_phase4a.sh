@@ -7,10 +7,12 @@
 #    /api/platform/brain routes, 8 /api/d4/drafting routes and 4 /api/d4/intelligence routes, each exercised by a
 #    viaApi test
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed).
-#    D4 has no layer flag in Cloud Functions (like P1, P3-60), so nothing of D4 can be switched off at boot
+#    D4 has no layer flag in Cloud Functions (like P1, P3-60), so nothing of D4 can be switched off at boot; the D4
+#    boot assertion (functions/test/d4.boot.test.ts: the twelve D4 routes, the production EMPTY_AUTHORITY_STORE and
+#    the index exemptions) is a named test in step 3
 # 3. the named Phase 4a tests, selected by exact full name (the gate counts them from the name arrays below), under
 #    the Auth and Firestore emulators:
-#    a. functions/test: d4.gate.test.ts, d4.doctypes.test.ts, d4.drafts.emu.test.ts, d4.gate.emu.test.ts
+#    a. functions/test: d4.boot.test.ts, d4.gate.test.ts, d4.doctypes.test.ts, d4.drafts.emu.test.ts, d4.gate.emu.test.ts
 #      - the pure gate (P4-6): the severity order, an out-of-domain status failing closed, the G-1 test 4 and test 5
 #        cores (an overruling by a larger bench is OVERRULED; a 2015 check against a 2018 amendment is
 #        TEMPORAL_MISMATCH with the text in force; no history is TEMPORAL_UNAVAILABLE, never a silent pass), the
@@ -41,10 +43,6 @@
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
-# The it.each rows of createDraft's input checks are not named: vitest titles them with "NaN" in place of the status
-# (the patch object reaches %i), so they stay in the full suite (`npm --prefix functions run test:emu`) and out of the
-# exact-name set.
-#
 # Emulator ports follow gate_g2.sh: in CI the repo firebase.json and demo-sikander; a local run
 # gets a temporary config with ephemeral ports and its own demo project.
 set -euo pipefail
@@ -55,6 +53,13 @@ cd "$ROOT"
 # The names below are the full names vitest reports: the describe titles, then the test title, joined by single
 # spaces (copied from `vitest list --json=<file>`; every one exists exactly once). Renaming a test fails this gate
 # until the name here is changed with it.
+
+# --- functions/test/d4.boot.test.ts (the D4 routes at boot, the production store, the index exemptions; no emulator)
+D4_BOOT_TESTS=(
+  'D4 boot (P4-3, P4-10) the entry point exports api, and the router built with every layer flag off serves exactly the twelve D4 routes, each kind general'
+  "D4 boot (P4-3, P4-10) the production authority store is EMPTY_AUTHORITY_STORE: a fresh load of the gate's modules runs on it"
+  'D4 boot (P4-3, P4-10) firestore.indexes.json exempts the stored text and findings from single-field indexing'
+)
 
 # --- functions/test/d4.gate.test.ts (the pure gate and the authority port; no emulator) --------------------
 GATE_UNIT_TESTS=(
@@ -162,7 +167,38 @@ DRAFT_TESTS=(
   'createDraft (P4-4, P4-5, P4-12) partner, associate and clerk members can create; the creator is the authenticated caller'
   'createDraft (P4-4, P4-5, P4-12) stores the NFC-normalised text and hashes that stored text; the title is trimmed'
   'createDraft (P4-4, P4-5, P4-12) an empty body is a draft (the editor starts blank)'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission matterId missing → 400 matter_required, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission matterId empty → 400 matter_required, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission matterId not a string → 400 matter_required, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission documentTypeId missing → 400 invalid_document_type, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission documentTypeId empty → 400 invalid_document_type, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission documentTypeId not a string → 400 invalid_document_type, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission documentTypeId unknown → 404 document_type_not_found, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission documentTypeId an Object.prototype key → 404 document_type_not_found, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission title missing → 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission title blank → 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission title not a string → 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission body missing → 400 invalid_body, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission body null → 400 invalid_body, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission body not a string → 400 invalid_body, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission classification not a label → 400 invalid_classification, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission classification not a string → 400 invalid_classification, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission classification an Object.prototype key → 400 invalid_classification, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission classification null → 400 invalid_classification, nothing stored'
   'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission the checks run in the stated order: matter, type, title, body, classification'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with LF inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with CR inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with TAB inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with NUL inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with BEL inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with VT inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with FF inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with ESC inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with US inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with DEL inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with PAD (C1) inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with NEL (C1) inside is 400 invalid_title, nothing stored'
+  'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with APC (C1) inside is 400 invalid_title, nothing stored'
   'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a title with a control at either end is refused too (it is judged before the trim)'
   'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission a control in the title is invalid_title, not unsupported_characters, when the title also has a hostile character'
   'createDraft (P4-4, P4-5, P4-12) input checks, in order, before the permission ordinary spaces are fine, trimmed at the ends; a control in the body is not a title problem'
@@ -428,9 +464,9 @@ if [ "${1:-}" = "--inner" ]; then
   out="$2"
   rc=0
 
-  fn_names=("${GATE_UNIT_TESTS[@]}" "${DOCTYPE_TESTS[@]}" "${DRAFT_TESTS[@]}" "${GATEOPS_TESTS[@]}")
+  fn_names=("${D4_BOOT_TESTS[@]}" "${GATE_UNIT_TESTS[@]}" "${DOCTYPE_TESTS[@]}" "${DRAFT_TESTS[@]}" "${GATEOPS_TESTS[@]}")
   fn_filter="$(filter_of "${fn_names[@]}")"
-  (cd "$ROOT/functions" && npx vitest run test/d4.gate.test.ts test/d4.doctypes.test.ts test/d4.drafts.emu.test.ts test/d4.gate.emu.test.ts -t "${G4A_FILTER:-$fn_filter}" --reporter=json --outputFile="$out/d4.fn.json") || true
+  (cd "$ROOT/functions" && npx vitest run test/d4.boot.test.ts test/d4.gate.test.ts test/d4.doctypes.test.ts test/d4.drafts.emu.test.ts test/d4.gate.emu.test.ts -t "${G4A_FILTER:-$fn_filter}" --reporter=json --outputFile="$out/d4.fn.json") || true
   verify "$out/d4.fn.json" "D4 gate, store and routes (functions)" "${fn_names[@]}" || rc=1
 
   root_names=("${RULES_TESTS[@]}" "${VERDICT_TESTS[@]}")
