@@ -45,12 +45,18 @@ export function getDocumentType(id: string): DocumentType | null {
 }
 
 /**
- * Whether a matter in `courtId` may use the type: true when the matter has no court. The seed lists a family of
- * courts as `<court>_*` (for example `DSJ_KHI_*`), which admits the court itself (`DSJ_KHI`) and any court under
- * it (`DSJ_KHI_EAST`). Every other entry, including a `*` anywhere else, is an exact court id.
+ * Whether a matter in `courtId` may use the type. True when:
+ * - the matter has no court (`courtId` undefined);
+ * - the type lists NON_FORUM, as the seed's notices, contracts and affidavits do (R2): it is not filed in a court, so it
+ *   suits a matter in any court (including a made-up one), and no court check applies;
+ * - the type lists the court exactly;
+ * - the type lists a family `<court>_*` (for example `DSJ_KHI_*`) that admits the court itself (`DSJ_KHI`) and any
+ *   court under it (`DSJ_KHI_EAST`).
+ * Every other entry, including a `*` anywhere else and a `_*` with no court before it, is an exact court id.
  */
 export function courtAllowed(type: DocumentType, courtId: string | undefined): boolean {
   if (courtId === undefined) return true
+  if (type.courtIds.includes("NON_FORUM")) return true
   return type.courtIds.some((entry) => {
     if (entry === courtId) return true
     if (!entry.endsWith("_*")) return false

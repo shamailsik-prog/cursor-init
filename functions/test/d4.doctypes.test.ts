@@ -100,6 +100,37 @@ describe("courtAllowed (P4-5)", () => {
     expect(courtAllowed(odd, "SHC")).toBe(false)
   })
 
+  it("a _* entry with an empty family admits nothing", () => {
+    const empty = { ...petition(), courtIds: ["_*"] }
+    expect(courtAllowed(empty, "_x")).toBe(false)
+    expect(courtAllowed(empty, "_")).toBe(false)
+    expect(courtAllowed(empty, "")).toBe(false)
+    expect(courtAllowed(empty, "SHC")).toBe(false)
+    expect(courtAllowed(empty, "_*")).toBe(true) // the entry as an exact court id, like any other
+  })
+
+  it("a NON_FORUM type (notice, contract, affidavit) is allowed whatever the matter's court (R2)", () => {
+    const nda = byId("nda_mutual") // lists only NON_FORUM
+    expect(nda.courtIds).toEqual(["NON_FORUM"])
+    for (const court of ["SHC", "SC_PK", "DSJ_KHI", "FAMILY_KHI", "MADE_UP_COURT_9", ""]) expect(courtAllowed(nda, court)).toBe(true)
+    expect(courtAllowed(nda, undefined)).toBe(true)
+  })
+
+  it("a mixed type that lists NON_FORUM beside a court family is allowed for any court", () => {
+    const heirship = byId("heirship_affidavit") // CIVIL_KHI_* and NON_FORUM
+    expect(heirship.courtIds).toEqual(["CIVIL_KHI_*", "NON_FORUM"])
+    expect(courtAllowed(heirship, "SHC")).toBe(true)
+    expect(courtAllowed(heirship, "CIVIL_KHI")).toBe(true)
+    expect(courtAllowed(heirship, "MADE_UP_COURT_9")).toBe(true)
+  })
+
+  it("NON_FORUM is an entry, not a court: a type without it stays restricted", () => {
+    const restricted = { ...petition(), courtIds: ["SHC"] }
+    expect(courtAllowed(restricted, "NON_FORUM")).toBe(false)
+    expect(courtAllowed({ ...restricted, courtIds: ["SHC", "NON_FORUM"] }, "MADE_UP_COURT_9")).toBe(true)
+    expect(courtAllowed({ ...restricted, courtIds: ["non_forum"] }, "MADE_UP_COURT_9")).toBe(false)
+  })
+
   it("a type that lists no court allows none, but still allows a matter with no court", () => {
     const none = { ...petition(), courtIds: [] }
     expect(courtAllowed(none, "SHC")).toBe(false)
@@ -123,11 +154,13 @@ describe("listDocumentTypes (P4-5)", () => {
     expect(listDocumentTypes({ category: "no_such_category" })).toEqual([])
   })
 
-  it("filters by courtId with the same rule as courtAllowed, sorted", () => {
+  it("filters by courtId with the same rule as courtAllowed (the court listed, or NON_FORUM), sorted", () => {
     const list = listDocumentTypes({ courtId: "SC_PK" })
-    const expected = rows.filter((t) => t.courtIds.includes("SC_PK")).map((t) => t.id)
+    const expected = rows.filter((t) => t.courtIds.includes("SC_PK") || t.courtIds.includes("NON_FORUM")).map((t) => t.id)
     expect(list.map((t) => t.id)).toEqual([...expected].sort())
     expect(list.map((t) => t.id)).toContain("condonation_of_delay")
+    expect(list.map((t) => t.id)).toContain("nda_mutual") // NON_FORUM
+    expect(list.map((t) => t.id)).toContain("heirship_affidavit") // mixed
     expect(list.map((t) => t.id)).not.toContain("constitutional_petition_199")
     expect(listDocumentTypes({ courtId: "SHC" }).map((t) => t.id)).toContain("constitutional_petition_199")
   })
@@ -163,10 +196,12 @@ describe("listDocumentTypes (P4-5)", () => {
 
   it("combines courtId and q", () => {
     const list = listDocumentTypes({ courtId: "SHC", q: "BAIL" })
-    const expected = rows.filter((t) => t.courtIds.includes("SHC") && t.name.toLowerCase().includes("bail")).map((t) => t.id)
+    const expected = rows
+      .filter((t) => (t.courtIds.includes("SHC") || t.courtIds.includes("NON_FORUM")) && t.name.toLowerCase().includes("bail"))
+      .map((t) => t.id)
     expect(list.map((t) => t.id)).toEqual([...expected].sort())
     expect(list.map((t) => t.id)).toContain("bail_application_497")
-    // NAB Bail Application is the only bail type listed for the Accountability Court, and the family entry DSJ_KHI_* excludes it.
+    // No NON_FORUM type is a bail type, so NAB Bail Application is the only one for the Accountability Court, and the family entry DSJ_KHI_* excludes it.
     expect(listDocumentTypes({ courtId: "NAB_ACC_KHI", q: "bail" }).map((t) => t.id)).toEqual(["nab_bail_application"])
     expect(listDocumentTypes({ courtId: "DSJ_KHI", q: "bail" }).map((t) => t.id)).toEqual(["bail_application_497", "bail_cancellation", "pre_arrest_bail_498"])
   })
@@ -174,7 +209,7 @@ describe("listDocumentTypes (P4-5)", () => {
   it("combines category with the other filters", () => {
     const list = listDocumentTypes({ courtId: "SHC", q: "bail", category: "criminal" })
     expect(list.length).toBeGreaterThan(0)
-    expect(list.every((t) => t.category === "criminal" && t.courtIds.includes("SHC") && /bail/i.test(t.name))).toBe(true)
+    expect(list.every((t) => t.category === "criminal" && (t.courtIds.includes("SHC") || t.courtIds.includes("NON_FORUM")) && /bail/i.test(t.name))).toBe(true)
     expect(listDocumentTypes({ courtId: "SHC", q: "bail", category: "constitutional" })).toEqual([])
   })
 

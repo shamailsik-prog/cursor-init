@@ -55,6 +55,8 @@ afterEach(() => {
   // Restore NODE_ENV first: the seam refuses to run while it is "production".
   vi.unstubAllEnvs()
   setAuthorityStoreForTests(null)
+  vi.doUnmock("@/services/d4-2/citationVerdict")
+  vi.resetModules()
 })
 
 describe("GATE_SEVERITY (P4-6)", () => {
@@ -237,6 +239,45 @@ describe("runGate: severity order (P4-6)", () => {
   })
 })
 
+describe("runGate: an out-of-domain status fails closed", () => {
+  // The verdict function cannot return one today; a future change or a bad cast could. The gate must not read it as OK.
+  async function gateWithVerdicts(verdict: (bench: string) => string) {
+    vi.resetModules()
+    vi.doMock("@/services/d4-2/citationVerdict", () => ({ verdictFromTreatments: verdict }))
+    const { runGate: freshRunGate } = await import("../src/d4/gate")
+    const { InMemoryAuthorityStore: FreshStore } = await import("../src/d4/authority")
+    const store = new FreshStore()
+    store.addJudgment("j_single", "PLD 2099 SC 101", "single")
+    store.addJudgment("j_division", "PLD 2099 SC 102", "division")
+    store.addJudgment("j_full", "PLD 2099 SC 103", "full")
+    return (body: string) => freshRunGate({ title: "T", body, temporalChecks: [] }, store)
+  }
+
+  it("a status outside the domain alone is UNVERIFIED overall, not OK", async () => {
+    const gate = await gateWithVerdicts(() => "SURPRISE")
+    const out = await gate("PLD 2099 SC 101")
+    expect(out.status).toBe("UNVERIFIED")
+  })
+
+  it("beside a VERIFIED citation it still decides UNVERIFIED, never OK", async () => {
+    const gate = await gateWithVerdicts((bench) => (bench === "single" ? "SURPRISE" : "VERIFIED"))
+    const out = await gate("PLD 2099 SC 101 and PLD 2099 SC 102")
+    expect(out.citations.map((c) => c.status)).toEqual(["SURPRISE", "VERIFIED"])
+    expect(out.status).toBe("UNVERIFIED")
+  })
+
+  it("does not hide a more severe status", async () => {
+    const gate = await gateWithVerdicts((bench) => (bench === "single" ? "SURPRISE" : bench === "full" ? "OVERRULED" : "VERIFIED"))
+    const out = await gate("PLD 2099 SC 101 and PLD 2099 SC 103")
+    expect(out.status).toBe("OVERRULED")
+  })
+
+  it("an empty list is still OK", async () => {
+    const gate = await gateWithVerdicts(() => "SURPRISE")
+    expect((await gate("No authority cited.")).status).toBe("OK")
+  })
+})
+
 describe("runGate: temporal checks (P4-6, E-39)", () => {
   it("G-1 test 5 core: a 2015 check using the 2018 text is TEMPORAL_MISMATCH and carries the text in force", async () => {
     const out = await runGate({ title: "T", body: "", temporalChecks: [check(TEXT_B)] }, sectionStore())
@@ -331,6 +372,23 @@ describe("runGate: temporal checks (P4-6, E-39)", () => {
     const out = await runGate({ title: "T", body: "", temporalChecks: [check(TEXT_A), check(TEXT_A), check(TEXT_B)] }, sectionStore())
     expect(out.temporal).toHaveLength(3)
     expect(out.temporal.map((t) => t.status)).toEqual(["OK", "OK", "TEMPORAL_MISMATCH"])
+  })
+
+  it("builds each finding from the four check fields only: an extra property on the input does not reach the result", async () => {
+    const hostile = { ...check(TEXT_A), extra: "must not be stored", status: "OK", inForceText: "forged", __note: { nested: true } } as unknown as TemporalCheck
+    const out = await runGate({ title: "T", body: "", temporalChecks: [hostile] }, sectionStore())
+    const finding = out.temporal[0]!
+    expect(Object.keys(finding).sort()).toEqual(["asAtDate", "inForceText", "jurisdiction", "sectionId", "status", "usedText"])
+    expect(finding).toEqual({ ...check(TEXT_A), status: "OK", inForceText: TEXT_A })
+    // The outcome is the store's, whatever the input claimed.
+    const forged = { ...check(TEXT_B), status: "OK", inForceText: TEXT_B } as unknown as TemporalCheck
+    const second = await runGate({ title: "T", body: "", temporalChecks: [forged] }, sectionStore())
+    expect(second.temporal[0]).toEqual({ ...check(TEXT_B), status: "TEMPORAL_MISMATCH", inForceText: TEXT_A })
+    // The same on the unavailable path.
+    const unknown = { ...check(TEXT_A, "2015-03-01", "test_act_s9"), extra: "must not be stored", status: "OK", inForceText: "forged" } as unknown as TemporalCheck
+    const third = await runGate({ title: "T", body: "", temporalChecks: [unknown] }, sectionStore())
+    expect(third.temporal[0]).toEqual({ ...check(TEXT_A, "2015-03-01", "test_act_s9"), status: "TEMPORAL_UNAVAILABLE", inForceText: null })
+    expect(Object.keys(third.temporal[0]!).sort()).toEqual(["asAtDate", "inForceText", "jurisdiction", "sectionId", "status", "usedText"])
   })
 
   it("sends the store only the section key, the date and the jurisdiction", async () => {

@@ -43,17 +43,25 @@ async function checkCitations(text: string, store: AuthorityStore): Promise<Cita
 async function checkTemporal(check: TemporalCheck, store: AuthorityStore): Promise<TemporalFinding> {
   const inForce = await store.getSectionAsAt(check.sectionId, check.asAtDate, check.jurisdiction)
   // No history is "verify manually", never a silent pass (L6900, E-39(2)). A null from an adapter reads the same way.
-  if (inForce === "no_history" || !inForce) return { ...check, status: "TEMPORAL_UNAVAILABLE", inForceText: null }
+  // The finding is built from the four check fields and the outcome only, never by spreading the input: nothing
+  // else a caller sent (an extra property, a forged status) can reach the stored result.
+  const asked = { sectionId: check.sectionId, asAtDate: check.asAtDate, jurisdiction: check.jurisdiction, usedText: check.usedText }
+  if (inForce === "no_history" || !inForce) return { ...asked, status: "TEMPORAL_UNAVAILABLE", inForceText: null }
   // Exact after NFC on both sides, so the same text typed in a decomposed form still matches (P4-6).
   const same = inForce.text.normalize("NFC") === check.usedText.normalize("NFC")
-  return { ...check, status: same ? "OK" : "TEMPORAL_MISMATCH", inForceText: inForce.text }
+  return { ...asked, status: same ? "OK" : "TEMPORAL_MISMATCH", inForceText: inForce.text }
 }
 
-/** The most severe status across the findings; a VERIFIED citation and an OK check both count as OK. */
+/**
+ * The most severe status across the findings; a VERIFIED citation and an OK check both count as OK, and an empty
+ * list is OK. It fails closed: a status outside the domain (which the typed code cannot produce today) counts as
+ * UNVERIFIED, so it can never pass as OK, and it never hides a more severe status.
+ */
 function overall(citations: readonly CitationFinding[], temporal: readonly TemporalFinding[]): GateStatus {
-  const present = new Set<GateStatus>()
+  const present = new Set<string>()
   for (const c of citations) present.add(c.status === "VERIFIED" ? "OK" : c.status)
   for (const t of temporal) present.add(t.status)
+  if ([...present].some((s) => !GATE_SEVERITY.includes(s as GateStatus))) present.add("UNVERIFIED")
   return GATE_SEVERITY.find((s) => present.has(s)) ?? "OK"
 }
 
