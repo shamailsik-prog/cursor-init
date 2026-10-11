@@ -9,7 +9,9 @@ import { TRANSPORT_ERROR, type P1Outcome } from "./types"
 export const OPIK_TIMEOUT_MS = 2000
 const DEFAULT_PROJECT = "sikander-p1"
 
-export type OpikConfig = { enabled: true; baseUrl: string; project: string } | { enabled: false; reason: "unset" | "unconfirmed" | "third_party_host" }
+export type OpikConfig =
+  | { enabled: true; baseUrl: string; project: string }
+  | { enabled: false; reason: "unset" | "invalid_url" | "unconfirmed" | "third_party_host" }
 
 /** The host of an http(s) URL, lower-cased and without a trailing dot; null for anything else. */
 function httpHost(raw: string): string | null {
@@ -22,16 +24,18 @@ function httpHost(raw: string): string | null {
 }
 
 /**
- * Enabled only when `OPIK_BASE_URL` is set, `OPIK_SELF_HOSTED_CONFIRMED` is exactly "true", and the host is not
- * `comet.com` or a subdomain of it (never a third-party cloud). A URL that cannot be parsed cannot be confirmed.
+ * Enabled only when `OPIK_BASE_URL` is a usable http(s) base, `OPIK_SELF_HOSTED_CONFIRMED` is exactly "true", and
+ * the host is not `comet.com` or a subdomain of it (never a third-party cloud). Checked in that order: unset, then
+ * invalid_url (unparseable, not http(s), or carrying a query or fragment, which would swallow the path appended to
+ * it), then unconfirmed, then third_party_host.
  */
 export function opikConfig(env: NodeJS.ProcessEnv = process.env): OpikConfig {
   const raw = env.OPIK_BASE_URL?.trim()
   if (!raw) return { enabled: false, reason: "unset" }
   const host = httpHost(raw)
-  if (host === null) return { enabled: false, reason: "unconfirmed" }
-  if (host === "comet.com" || host.endsWith(".comet.com")) return { enabled: false, reason: "third_party_host" }
+  if (host === null || /[?#]/.test(raw)) return { enabled: false, reason: "invalid_url" }
   if (env.OPIK_SELF_HOSTED_CONFIRMED !== "true") return { enabled: false, reason: "unconfirmed" }
+  if (host === "comet.com" || host.endsWith(".comet.com")) return { enabled: false, reason: "third_party_host" }
   return { enabled: true, baseUrl: raw.replace(/\/+$/, ""), project: env.OPIK_PROJECT_NAME?.trim() || DEFAULT_PROJECT }
 }
 

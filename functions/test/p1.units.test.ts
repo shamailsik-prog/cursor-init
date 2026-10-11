@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { MAX_OUTPUT_TOKENS, MODEL_PRICES, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens } from "../src/p1/costTable"
+import { MAX_OUTPUT_TOKENS, MODEL_PRICES, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens, priceMicroUsd } from "../src/p1/costTable"
 import { isMonthKey, monthKeyPkt } from "../src/p1/month"
 import { buildTrace, opikConfig, type TraceRecord } from "../src/p1/opik"
 import { TRANSPORT_ERROR } from "../src/p1/types"
@@ -10,8 +10,12 @@ const OPUS = "anthropic/claude-opus-5.5"
 describe("P1 cost table (P3-62)", () => {
   it("routes the committee task to Opus at the pinned list price", () => {
     expect(TASK_MODEL.committee).toBe(OPUS)
-    expect(MODEL_PRICES[OPUS]).toMatchObject({ inputNanoUsdPerToken: 4000, outputNanoUsdPerToken: 20000, fetchedAt: "2026-10-11" })
-    expect(MODEL_PRICES[OPUS]?.source).toMatch(/\S/)
+    expect(MODEL_PRICES[OPUS]).toEqual({
+      inputNanoUsdPerToken: 4000,
+      outputNanoUsdPerToken: 20000,
+      source: "Vercel AI Gateway public model list, GET https://ai-gateway.vercel.sh/v1/models",
+      fetchedAt: "2026-10-11",
+    })
     expect(MAX_OUTPUT_TOKENS).toBe(4096)
     expect(PROVIDER_ID).toBe("ai-gateway")
   })
@@ -26,16 +30,27 @@ describe("P1 cost table (P3-62)", () => {
     expect(costMicroUsd(OPUS, 3, 0)).toBe(12)
   })
 
-  it("costMicroUsd rounds a fractional micro-USD up, never down", () => {
-    const prices = MODEL_PRICES as Record<string, unknown>
-    prices["test/odd-price"] = { inputNanoUsdPerToken: 1, outputNanoUsdPerToken: 1, source: "test", fetchedAt: "2026-10-11" }
-    try {
-      expect(costMicroUsd("test/odd-price", 1, 0)).toBe(1)
-      expect(costMicroUsd("test/odd-price", 1000, 0)).toBe(1)
-      expect(costMicroUsd("test/odd-price", 1001, 0)).toBe(2)
-    } finally {
-      delete prices["test/odd-price"]
-    }
+  it("priceMicroUsd rounds a fractional micro-USD up, never down", () => {
+    const odd = { inputNanoUsdPerToken: 1, outputNanoUsdPerToken: 1 }
+    expect(priceMicroUsd(odd, 0, 0)).toBe(0)
+    expect(priceMicroUsd(odd, 1, 0)).toBe(1)
+    expect(priceMicroUsd(odd, 1000, 0)).toBe(1)
+    expect(priceMicroUsd(odd, 1001, 0)).toBe(2)
+    expect(priceMicroUsd(odd, 500, 501)).toBe(2) // 1001 nano-USD
+    expect(priceMicroUsd({ inputNanoUsdPerToken: 4000, outputNanoUsdPerToken: 20000 }, 1000, 500)).toBe(14000)
+    expect(priceMicroUsd({ inputNanoUsdPerToken: 3, outputNanoUsdPerToken: 7 }, 100, 100)).toBe(1) // 1000 nano-USD exactly
+    expect(priceMicroUsd({ inputNanoUsdPerToken: 3, outputNanoUsdPerToken: 7 }, 101, 100)).toBe(2) // 1003 nano-USD
+  })
+
+  it("costMicroUsd prices through priceMicroUsd", () => {
+    expect(costMicroUsd(OPUS, 123, 456)).toBe(priceMicroUsd(MODEL_PRICES[OPUS]!, 123, 456))
+  })
+
+  it("the price and routing tables are frozen, so nothing can change a price at run time", () => {
+    expect(Object.isFrozen(MODEL_PRICES)).toBe(true)
+    expect(Object.isFrozen(MODEL_PRICES[OPUS])).toBe(true)
+    expect(Object.values(MODEL_PRICES).every((row) => Object.isFrozen(row))).toBe(true)
+    expect(Object.isFrozen(TASK_MODEL)).toBe(true)
   })
 
   it("costMicroUsd returns null for an unpriced model, including inherited object keys", () => {
@@ -67,6 +82,13 @@ describe("P1 PKT month key (P3-64)", () => {
     expect(monthKeyPkt(Date.parse("2026-02-28T19:00:00Z"))).toBe("2026-03")
     expect(monthKeyPkt(Date.parse("2028-02-28T19:00:00Z"))).toBe("2028-02")
     expect(monthKeyPkt(Date.parse("2028-02-29T19:00:00Z"))).toBe("2028-03")
+  })
+
+  it("monthKeyPkt refuses a time it cannot place in a month", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 8.64e15, -8.64e15 - 5 * 3_600_000 - 1, undefined as never]) {
+      expect(() => monthKeyPkt(bad), String(bad)).toThrow(RangeError)
+    }
+    expect(monthKeyPkt(0)).toBe("1970-01")
   })
 
   it("isMonthKey accepts YYYY-MM with months 01 to 12 only", () => {
@@ -137,14 +159,39 @@ describe("P1 Opik configuration (P3-67)", () => {
     expect(opikConfig({ OPIK_BASE_URL: "https://comet.com/x", ...confirmed })).toEqual({ enabled: false, reason: "third_party_host" })
   })
 
-  it("refuses comet.com whatever the case, a trailing dot, a port or userinfo, and a malformed URL", () => {
+  it("refuses comet.com whatever the case, a trailing dot, a port or userinfo", () => {
     const comet = (url: string) => opikConfig({ OPIK_BASE_URL: url, ...confirmed })
     expect(comet("https://API.Comet.COM/x")).toEqual({ enabled: false, reason: "third_party_host" })
     expect(comet("https://comet.com./x")).toEqual({ enabled: false, reason: "third_party_host" })
     expect(comet("https://comet.com:8443/x")).toEqual({ enabled: false, reason: "third_party_host" })
     expect(comet("https://user:pw@comet.com/x")).toEqual({ enabled: false, reason: "third_party_host" })
-    expect(comet("not a url")).toEqual({ enabled: false, reason: "unconfirmed" })
-    expect(comet("ftp://opik.internal/api")).toEqual({ enabled: false, reason: "unconfirmed" })
+  })
+
+  it("reports an unparseable, non-http(s) or query/fragment-bearing URL as invalid_url", () => {
+    const invalid = { enabled: false, reason: "invalid_url" }
+    for (const url of [
+      "not a url",
+      "ftp://opik.internal/api",
+      "file:///etc/passwd",
+      "opik.internal/api",
+      "https://h/api?x=1",
+      "https://h/api#f",
+      "https://h/api?",
+      "https://h/api#",
+      "https://h/api?x=1#f",
+    ]) {
+      expect(opikConfig({ OPIK_BASE_URL: url, ...confirmed }), url).toEqual(invalid)
+    }
+  })
+
+  it("checks unset, then invalid_url, then unconfirmed, then third_party_host", () => {
+    // An invalid URL is reported as invalid even when it is also unconfirmed.
+    expect(opikConfig({ OPIK_BASE_URL: "https://h/api?x=1" })).toEqual({ enabled: false, reason: "invalid_url" })
+    expect(opikConfig({ OPIK_BASE_URL: "ftp://h/api", OPIK_SELF_HOSTED_CONFIRMED: "false" })).toEqual({ enabled: false, reason: "invalid_url" })
+    expect(opikConfig({ OPIK_BASE_URL: "https://comet.com/x?y=1", ...confirmed })).toEqual({ enabled: false, reason: "invalid_url" })
+    // A valid but unconfirmed URL is unconfirmed even when its host is Comet.
+    expect(opikConfig({ OPIK_BASE_URL: "https://comet.com/x" })).toEqual({ enabled: false, reason: "unconfirmed" })
+    expect(opikConfig({ OPIK_BASE_URL: "https://comet.com/x", OPIK_SELF_HOSTED_CONFIRMED: "yes" })).toEqual({ enabled: false, reason: "unconfirmed" })
   })
 
   it("enables a confirmed self-hosted URL with the default or named project", () => {

@@ -39,6 +39,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs() // first: the seams refuse to be set while NODE_ENV is "production"
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   setP1TransportForTests(null)
   setOpikFetchForTests(null)
 })
@@ -47,6 +49,14 @@ const json = (status: number, body: unknown) => (_req: IncomingMessage, res: Ser
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body))
 }
 const never = () => {}
+/** The message a promise rejects with; fails the test if it resolves. */
+const rejection = (p: Promise<unknown>): Promise<string> =>
+  p.then(
+    () => {
+      throw new Error("expected a rejection")
+    },
+    (e: unknown) => (e as Error).message,
+  )
 const request = { model: "anthropic/claude-opus-5.5", body: "hello ک", maxTokens: MAX_OUTPUT_TOKENS }
 
 describe("P1 Gateway transport (P3-68)", () => {
@@ -93,37 +103,43 @@ describe("P1 Gateway transport (P3-68)", () => {
     expect(await gatewayTransport("k", base).send(request)).toMatchObject({ inputTokens: 0, outputTokens: 0 })
   })
 
-  it("rejects a non-2xx response without echoing the provider text", async () => {
+  it("rejects a non-2xx response with a fixed message that does not echo the provider text", async () => {
     respond = json(500, { error: { message: "SECRET provider detail" } })
-    const err = await gatewayTransport("k", base).send(request).then(
-      () => null,
-      (e: unknown) => e as Error,
-    )
-    expect(err).toBeInstanceOf(Error)
-    expect(err?.message).not.toContain("SECRET")
+    expect(await rejection(gatewayTransport("k", base).send(request))).toBe("gateway status 500")
     for (const status of [401, 429, 502]) {
-      respond = json(status, { choices: [{ message: { content: "should not be used" } }] })
-      await expect(gatewayTransport("k", base).send(request), String(status)).rejects.toThrow()
+      respond = json(status, { error: "SECRET provider detail", choices: [{ message: { content: "should not be used" } }] })
+      const message = await rejection(gatewayTransport("k", base).send(request))
+      expect(message, String(status)).toBe(`gateway status ${status}`)
+      expect(message).not.toContain("SECRET")
     }
   })
 
-  it("rejects a 200 with no usable choices[0].message.content", async () => {
+  it("rejects a 200 with no usable choices[0].message.content, with a fixed message", async () => {
     const bodies: unknown[] = [
-      { choices: [] },
-      {},
-      { choices: [{}] },
-      { choices: [{ message: {} }] },
-      { choices: [{ message: { content: null } }] },
-      { choices: [{ message: { content: 42 } }] },
-      { choices: "x" },
+      { choices: [], detail: "SECRET provider detail" },
+      { detail: "SECRET provider detail" },
+      { choices: [{ detail: "SECRET provider detail" }] },
+      { choices: [{ message: { detail: "SECRET provider detail" } }] },
+      { choices: [{ message: { content: null, detail: "SECRET provider detail" } }] },
+      { choices: [{ message: { content: 42, detail: "SECRET provider detail" } }] },
+      { choices: "SECRET provider detail" },
       null,
     ]
     for (const b of bodies) {
       respond = json(200, b)
-      await expect(gatewayTransport("k", base).send(request), JSON.stringify(b)).rejects.toThrow()
+      const message = await rejection(gatewayTransport("k", base).send(request))
+      expect(message, JSON.stringify(b)).toBe("gateway response has no message content")
+      expect(message).not.toContain("SECRET")
     }
-    respond = (_req, res) => res.writeHead(200).end("not json")
-    await expect(gatewayTransport("k", base).send(request)).rejects.toThrow()
+  })
+
+  it("rejects a 2xx body that is not JSON with a fixed message that does not quote the body", async () => {
+    for (const text of ["SECRETPROV not json", "", "<html>SECRET</html>", '{"choices":[{"message":{"content":"SECRET"']) {
+      respond = (_req, res) => res.writeHead(200).end(text)
+      const message = await rejection(gatewayTransport("k", base).send(request))
+      expect(message, text).toBe("gateway response is not JSON")
+      expect(message).not.toContain("SECRET")
+    }
   })
 
   it("accepts an empty-string completion", async () => {
@@ -134,7 +150,7 @@ describe("P1 Gateway transport (P3-68)", () => {
   it("rejects when the server never answers within the timeout", async () => {
     respond = never
     const started = Date.now()
-    await expect(gatewayTransport("k", base, { timeoutMs: 100 }).send(request)).rejects.toThrow()
+    expect(await rejection(gatewayTransport("k", base, { timeoutMs: 100 }).send(request))).toBe("gateway timeout")
     expect(Date.now() - started).toBeLessThan(5_000)
   })
 
@@ -143,11 +159,11 @@ describe("P1 Gateway transport (P3-68)", () => {
       res.writeHead(200, { "content-type": "application/json" })
       res.write('{"choices":[{"message":')
     }
-    await expect(gatewayTransport("k", base, { timeoutMs: 100 }).send(request)).rejects.toThrow()
+    expect(await rejection(gatewayTransport("k", base, { timeoutMs: 100 }).send(request))).toBe("gateway timeout")
   })
 
   it("rejects when the connection is refused", async () => {
-    await expect(gatewayTransport("k", "http://127.0.0.1:1/v1/chat/completions").send(request)).rejects.toThrow()
+    expect(await rejection(gatewayTransport("k", "http://127.0.0.1:1/v1/chat/completions").send(request))).toBe("gateway request failed")
   })
 })
 
@@ -176,6 +192,23 @@ describe("P1 active transport and test seam (P3-68)", () => {
     expect(activeTransport()).toBe(fake)
     setP1TransportForTests(null)
     expect(activeTransport()).toBeNull()
+  })
+
+  it("the transport made from the key sends to the Gateway URL with the trimmed bearer key and a 60 s timeout", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = []
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init })
+      return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 1, completion_tokens: 2 } }), { status: 200 })
+    })
+    const timeout = vi.spyOn(AbortSignal, "timeout")
+    vi.stubEnv("AI_GATEWAY_API_KEY", "  k  ")
+    expect(await activeTransport()?.send(request)).toEqual({ text: "hi", inputTokens: 1, outputTokens: 2 })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.url).toBe("https://ai-gateway.vercel.sh/v1/chat/completions")
+    expect(calls[0]?.init?.method).toBe("POST")
+    expect((calls[0]?.init?.headers as Record<string, string>).authorization).toBe("Bearer k")
+    expect(timeout).toHaveBeenCalledTimes(1)
+    expect(timeout).toHaveBeenCalledWith(60_000)
   })
 
   it("refuses the test seam in production", () => {
@@ -297,6 +330,17 @@ describe("P1 Opik exporter (P3-67)", () => {
       throw new Error("boom")
     }) as typeof fetch)
     expect(await exportTrace(record, enabled())).toBe("failed")
+  })
+
+  it("passes the 2 s default timeout, or the one it is given, to AbortSignal.timeout", async () => {
+    setOpikFetchForTests((async () => new Response(null, { status: 204 })) as typeof fetch)
+    const timeout = vi.spyOn(AbortSignal, "timeout")
+    expect(await exportTrace(record, enabled())).toBe("exported")
+    expect(timeout).toHaveBeenCalledTimes(1)
+    expect(timeout).toHaveBeenLastCalledWith(2000)
+    expect(await exportTrace(record, enabled(), { timeoutMs: 250 })).toBe("exported")
+    expect(timeout).toHaveBeenCalledTimes(2)
+    expect(timeout).toHaveBeenLastCalledWith(250)
   })
 
   it("refuses the fetch seam in production", () => {

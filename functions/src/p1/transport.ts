@@ -1,6 +1,7 @@
 /**
  * The Vercel AI Gateway's OpenAI-compatible endpoint, called by plain `fetch` (spec P3-68): no SDK, no new
- * dependency. Failures throw errors that carry no provider text; the caller records the fixed `transport_error`.
+ * dependency. Every error `send` throws has a fixed message that carries no provider text (not a parse error that
+ * quotes the body, not a runtime message about the socket); the caller records the fixed `transport_error`.
  */
 
 export type P1Transport = {
@@ -11,29 +12,47 @@ export const GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
 /** The function timeout is 120 s (P3-68). */
 export const TRANSPORT_TIMEOUT_MS = 60_000
 
+type GatewayBody = {
+  choices?: { message?: { content?: unknown } }[]
+  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown }
+} | null
+
 /** A usage figure only when it is a non-negative integer: anything else is "no usage" and gets estimated (P3-62). */
 function tokenCount(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
 }
 
+/** Aborts, from `AbortSignal.timeout` or otherwise, become one fixed timeout error; anything else gets the fixed `message`. */
+function fixedError(err: unknown, message: string): Error {
+  const name = (err as { name?: unknown } | null)?.name
+  return new Error(name === "TimeoutError" || name === "AbortError" ? "gateway timeout" : message)
+}
+
 export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts?: { timeoutMs?: number }): P1Transport {
   return {
     async send(req) {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: req.model, messages: [{ role: "user", content: req.body }], max_tokens: req.maxTokens }),
-        // Covers the response body too, so a server that stalls after its headers also times out.
-        signal: AbortSignal.timeout(opts?.timeoutMs ?? TRANSPORT_TIMEOUT_MS),
-      })
+      let res: Response
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+          body: JSON.stringify({ model: req.model, messages: [{ role: "user", content: req.body }], max_tokens: req.maxTokens }),
+          // Covers the response body too, so a server that stalls after its headers also times out.
+          signal: AbortSignal.timeout(opts?.timeoutMs ?? TRANSPORT_TIMEOUT_MS),
+        })
+      } catch (err) {
+        throw fixedError(err, "gateway request failed")
+      }
       if (!res.ok) {
         await res.body?.cancel().catch(() => undefined)
         throw new Error(`gateway status ${res.status}`)
       }
-      const json = (await res.json()) as {
-        choices?: { message?: { content?: unknown } }[]
-        usage?: { prompt_tokens?: unknown; completion_tokens?: unknown }
-      } | null
+      let json: GatewayBody
+      try {
+        json = (await res.json()) as GatewayBody
+      } catch (err) {
+        throw fixedError(err, "gateway response is not JSON")
+      }
       const text = json?.choices?.[0]?.message?.content
       if (typeof text !== "string") throw new Error("gateway response has no message content")
       return { text, inputTokens: tokenCount(json?.usage?.prompt_tokens), outputTokens: tokenCount(json?.usage?.completion_tokens) }
