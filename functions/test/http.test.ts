@@ -82,7 +82,7 @@ describe("route table", () => {
     expect(() => buildRouteTable([route("/api/x/y/z", op), route("/api/x/y/z", op, "general", "PUT")])).not.toThrow()
   })
 
-  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, setFirmNumbering, registerClient (POST), getClient and listClients (GET) under /api/d1/client, kind general; runConflictCheck (POST, kind p1), getConflictResult (GET), resolveReviewItem and recordPartnerWaiver (POST) and getConflictTrail (GET) under /api/d1/conflict; unmergeEntity (POST) under /api/d1/entity; openMatter, advanceStage and closeMatter (POST), getMatter and listMatters (GET) under /api/d1/matter; listJobs and getJob (GET), retryFailedJob and cancelJob (POST) under /api/platform/jobs", () => {
+  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, setFirmNumbering, registerClient (POST), getClient and listClients (GET) under /api/d1/client, kind general; runConflictCheck (POST, kind p1), getConflictResult (GET), resolveReviewItem and recordPartnerWaiver (POST) and getConflictTrail (GET) under /api/d1/conflict; unmergeEntity (POST) under /api/d1/entity; openMatter, advanceStage and closeMatter (POST), getMatter and listMatters (GET) under /api/d1/matter; listJobs and getJob (GET), retryFailedJob and cancelJob (POST) under /api/platform/jobs; committeeBrain (POST, kind p1), getAiUsage (GET), setBudgetAlerts, setAiKillSwitch and setPlatformAiKillSwitch (POST) under /api/platform/brain", () => {
     const fns = [
       "onboardFirm",
       "createFirmUser",
@@ -123,6 +123,11 @@ describe("route table", () => {
         "GET /api/platform/jobs/getJob general",
         "POST /api/platform/jobs/retryFailedJob general",
         "POST /api/platform/jobs/cancelJob general",
+        "POST /api/platform/brain/committeeBrain p1",
+        "GET /api/platform/brain/getAiUsage general",
+        "POST /api/platform/brain/setBudgetAlerts general",
+        "POST /api/platform/brain/setAiKillSwitch general",
+        "POST /api/platform/brain/setPlatformAiKillSwitch general",
       ].sort()
     )
     expect(() => buildRouteTable(ROUTES)).not.toThrow()

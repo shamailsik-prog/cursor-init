@@ -1,5 +1,5 @@
 import type { Classification } from "@/platform/p1/types"
-import { decide, type D1Action, type FirmAdminAction, type JobAction, type PermissionDecision } from "@/platform/p5/permissionDecision"
+import { decide, type AiAction, type D1Action, type FirmAdminAction, type JobAction, type PermissionDecision } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
 import { appendAudit } from "./audit"
@@ -51,7 +51,8 @@ export async function checkPermission(
 }
 
 /**
- * Authorises a firm-administration action (identity and MFA administration: partner only), a D1 action (matter-level ones take the matterId) or a job action (P3-11; job.read takes an optional matterId)
+ * Authorises a firm-administration action (identity and MFA administration: partner only), a D1 action (matter-level ones take the matterId), a job action (P3-11; job.read takes an optional matterId)
+ * or an AI action (P3-70, P3-71, P3-66; ai.call takes the matterId)
  * through checkPermission, so it is decided by the shared table and audited like every other
  * decision. Deny → 403 partner_only (the operations' existing error code); an audit failure →
  * 503 audit_unavailable. The operations keep their own extra guards (self-change, clearance
@@ -59,7 +60,7 @@ export async function checkPermission(
  */
 export async function requirePermission(
   caller: Caller,
-  action: FirmAdminAction | D1Action | JobAction,
+  action: FirmAdminAction | D1Action | JobAction | AiAction,
   matterId?: string
 ): Promise<void> {
   const decision = await checkPermission(caller, action, matterId)
