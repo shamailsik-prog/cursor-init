@@ -23,6 +23,7 @@ import * as entityRead from "../src/d1/entity/read"
 import * as entityOps from "../src/d1/entity/ops"
 import * as entityUnmerge from "../src/d1/entity/unmerge"
 import * as jobOps from "../src/p2/ops"
+import * as p1Ops from "../src/p1/ops"
 import { enqueueJob } from "../src/p2/enqueue"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
@@ -108,9 +109,16 @@ const PROBES: Record<string, Probe> = {
   getJob: { data: (a) => ({ jobId: a.deadJobId }), target: true },
   retryFailedJob: { data: (a) => ({ jobId: a.deadJobId, note: "G2 probe requeue note, long enough" }), target: true },
   cancelJob: { data: (a) => ({ jobId: a.queuedJobId, note: "G2 probe cancel note, long enough" }), target: true },
+  // P3-60, P3-70..P3-72: the five P1 routes. committeeBrain names firm A's matter; the rest take no target. The platform
+  // kill switch is firmless (platformAdmin claim), like recordGatePass: no firm-B role holds the claim.
+  committeeBrain: { data: (a) => ({ matterId: a.matterId, body: "G2 probe: draft a reply to the notice." }), target: true },
+  getAiUsage: { data: () => ({ month: "2026-10" }), target: false },
+  setBudgetAlerts: { data: () => ({ monthlyBudgetUsd: 999, pkrPerUsd: 1 }), target: false },
+  setAiKillSwitch: { data: () => ({ disableAll: true, disabledModels: [], reason: "G2 probe stop" }), target: false },
+  setPlatformAiKillSwitch: { data: () => ({ disableAll: true, disabledModels: [], reason: "G2 probe stop" }), target: false, firmless: true },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
@@ -175,7 +183,12 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
       }
     })
   )
-  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs }
+  // P3-60..P3-72: a cross-firm budget, kill switch or AI call that wrote anything fails "unchanged".
+  const aiConfig = (await adminDb().collection("ai_config").doc(a.firmId).get()).data()
+  const aiOutputs = (await adminDb().collection("committee_outputs").where("firmId", "==", a.firmId).count().get()).data().count
+  const aiUsageRows = (await adminDb().collection("ai_usage_logs").where("firmId", "==", a.firmId).count().get()).data().count
+  const aiPlatform = (await adminDb().collection("platform").doc("p1").get()).data()
+  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs, ai: { config: aiConfig, outputs: aiOutputs, usageRows: aiUsageRows, platform: aiPlatform } }
 }
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
@@ -216,6 +229,8 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
     await adminDb().collection("matters").doc(matterId).set({ ...stamp, title: "G2 Alpha Matter", clientId, stage: "intake", status: "open" })
     await adminDb().collection("matter_members").doc(`${matterId}_${aMembers.partner.uid}`).set({ ...stamp, matterId, userId: aMembers.partner.uid })
     await adminDb().collection("conflict_checks").doc(checkId).set({ ...stamp, status: "CLEAR", subjects: [{ role: "client", name: "G2 Alpha Client" }] })
+    // P3-64: firm A holds a budget and a rate, so a cross-firm budget write or AI call would have something to change or spend.
+    await adminDb().collection("ai_config").doc(firmA).set({ monthlyBudgetMicroUsd: 1_000_000_000, pkrPerUsd: 280 })
     // L17.2 (Phase 2b-A): two firm-A entities and the candidate link between them, aimed at by the entity probes.
     const entityId = uniq("g2entityA")
     const entityId2 = uniq("g2entityB")
@@ -323,6 +338,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       ["/api/d1/entity/listAliases", { entityId: A.entityId }, "G2 Alpha Entity"],
       ["/api/platform/jobs/getJob", { jobId: A.deadJobId }, A.deadJobId],
       ["/api/platform/jobs/listJobs", { matterId: A.matterId }, A.deadJobId],
+      ["/api/platform/brain/getAiUsage", { month: "2026-10" }, "killSwitch"],
     ]
     for (const [i, [path, query, token]] of reads.entries()) {
       const { res, out } = mockRes()

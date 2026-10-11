@@ -186,6 +186,9 @@ jobs:
       - name: Gate G-4 Phase 3c close (auto-confirm job, schedule, registry, G-2)
         if: ${{ !cancelled() }}
         run: npm run gate:g4:phase3c
+      - name: Gate G-4 Phase 3d close (P1 gateway, cost log, alerts, kill switches, trace, routes, G-2)
+        if: ${{ !cancelled() }}
+        run: npm run gate:g4:phase3d
 
   next-build:
     name: Next.js build

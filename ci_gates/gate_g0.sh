@@ -18,8 +18,8 @@ if [ -n "$existing_dirs" ] && grep -R -n -i -E "playwright|puppeteer" --include=
   echo "FAIL: scraper library in the app repository (N1 / L17.12 — corpus harvest is a separate repo)"; fail=1; else echo "PASS"; fi
 python3 ci_gates/check_fetch_allowlist.py || fail=1
 
-echo "[3] provider-guard (AI/OCR/STT/TTS SDK imports only under platform/committeeBrain or platform/p1)"
-if [ -n "$existing_dirs" ] && grep -R -n -E "from ['\"](openai|@anthropic-ai/sdk|@google/generative-ai|groq-sdk|elevenlabs|@google-cloud/vision|@google-cloud/translate|@google-cloud/speech|@ai-sdk/openai|@ai-sdk/anthropic|@ai-sdk/google|deepl-node)['\"]|import (openai|anthropic|google\.generativeai|groq|elevenlabs)|from ['\"](whisper|@perplexity-ai/sdk|together-ai)['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' $existing_dirs 2>/dev/null | grep -v node_modules | grep -v -E "platform/(committeeBrain|p1)"; then
+echo "[3] provider-guard (AI/OCR/STT/TTS SDK imports only under platform/committeeBrain, platform/p1 or functions/src/p1)"
+if [ -n "$existing_dirs" ] && grep -R -n -E "from ['\"](openai|@anthropic-ai/sdk|@google/generative-ai|groq-sdk|elevenlabs|@google-cloud/vision|@google-cloud/translate|@google-cloud/speech|@ai-sdk/openai|@ai-sdk/anthropic|@ai-sdk/google|deepl-node)['\"]|import (openai|anthropic|google\.generativeai|groq|elevenlabs)|from ['\"](whisper|@perplexity-ai/sdk|together-ai)['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' $existing_dirs 2>/dev/null | grep -v node_modules | grep -v -E "platform/(committeeBrain|p1)|functions/src/p1"; then
   echo "FAIL: provider SDK imported outside P1"; fail=1; else echo "PASS"; fi
 
 echo "[4] duplicate-route guard"

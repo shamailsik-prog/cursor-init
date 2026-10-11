@@ -15,6 +15,8 @@
  *     (cross-firm / not-member / clearance); then the role table -> role-not-permitted
  *   - a job action (JOB_ACTIONS): client or own_matters -> client-denied; job.read naming a
  *     matter -> cross-firm / not-member / clearance; then the role table -> role-not-permitted
+ *   - an AI action (AI_ACTIONS): client or own_matters -> client-denied; ai.call is matter-level
+ *     (must name a matter: cross-firm / not-member / clearance); then the role table -> role-not-permitted
  *   - intern: no research / draft                -> deny intern-channel-denied
  *   - a staff-only action (STAFF_ONLY_ACTIONS) by a client or under an own_matters scope
  *                                                -> deny staff-only
@@ -139,6 +141,30 @@ const JOB_ROLES: Record<JobAction, readonly string[]> = {
   "job.cancel": ["partner"],
 }
 
+/**
+ * P1 AI gateway (Phase 3d, P3-70, P3-71, P3-66): make a committee-brain call on a matter (`ai.call`:
+ * partner, associate, clerk; matter-level, so it must name a matter the caller is a cleared member of),
+ * read the firm's AI usage (`ai.usage.read`), set its budget (`ai.budget.set`) and set its kill switch
+ * (`ai.kill_switch.set`): partner only. Staff only; a client or an own_matters scope is denied
+ * (client-denied) and accounts hit accounts-register-only before this table. The platform kill switch
+ * is not a table action: it needs the `platformAdmin` claim, checked by its operation.
+ */
+export const AI_ACTIONS = ["ai.call", "ai.usage.read", "ai.budget.set", "ai.kill_switch.set"] as const
+export type AiAction = (typeof AI_ACTIONS)[number]
+const AI_ACTION_SET: ReadonlySet<string> = new Set(AI_ACTIONS)
+
+export function isAiAction(action: string): action is AiAction {
+  return AI_ACTION_SET.has(action)
+}
+
+const AI_ROLES: Record<AiAction, readonly string[]> = {
+  "ai.call": ["partner", "associate", "clerk"],
+  "ai.usage.read": ["partner"],
+  "ai.budget.set": ["partner"],
+  "ai.kill_switch.set": ["partner"],
+}
+const AI_MATTER_LEVEL: ReadonlySet<string> = new Set(["ai.call"])
+
 const deny = (reason: string): PermissionDecision => ({ allow: false, reason })
 const allow = (reason: string): PermissionDecision => ({ allow: true, reason })
 
@@ -197,6 +223,16 @@ export function decide(
       if (refused) return refused
     }
     return JOB_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
+  }
+
+  if (isAiAction(action)) {
+    if (caller.role === "client" || extra?.scope === "own_matters") return deny("client-denied")
+    // A matter-level action must name a matter; none given fails closed.
+    if (AI_MATTER_LEVEL.has(action)) {
+      const refused = matterGate(caller, matter, isMember)
+      if (refused) return refused
+    }
+    return AI_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
   }
 
   if (caller.role === "intern" && (action === "research" || action === "draft")) {

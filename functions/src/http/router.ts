@@ -22,6 +22,7 @@ import { getEntityOp, listAliasesOp, listReviewQueueOp } from "../d1/entity/read
 import { confirmMergeOp, disputeLinkOp, rejectLinkOp } from "../d1/entity/ops"
 import { unmergeEntityOp } from "../d1/entity/unmerge"
 import { cancelJobOp, getJobOp, listJobsOp, retryFailedJobOp } from "../p2/ops"
+import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, setPlatformAiKillSwitchOp } from "../p1/ops"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -67,6 +68,8 @@ const D1_MATTER = "/api/d1/matter"
 const D1_ENTITY = "/api/d1/entity"
 /** P2 job engine (P3-10): CORE, no layer flag. */
 const PLATFORM_JOBS = "/api/platform/jobs"
+/** P1 AI gateway (P3-60): CORE, no layer flag. */
+const PLATFORM_BRAIN = "/api/platform/brain"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
@@ -117,6 +120,12 @@ export const ROUTES: readonly Route[] = [
   get(`${PLATFORM_JOBS}/getJob`, getJobOp),
   post(`${PLATFORM_JOBS}/retryFailedJob`, retryFailedJobOp),
   post(`${PLATFORM_JOBS}/cancelJob`, cancelJobOp),
+  post(`${PLATFORM_BRAIN}/committeeBrain`, committeeBrainOp),
+  get(`${PLATFORM_BRAIN}/getAiUsage`, getAiUsageOp),
+  post(`${PLATFORM_BRAIN}/setBudgetAlerts`, setBudgetAlertsOp),
+  post(`${PLATFORM_BRAIN}/setAiKillSwitch`, setAiKillSwitchOp),
+  // firmless (platformAdmin): the operator's kill switch across firms; no X-Firm-Id, like recordGatePass
+  post(`${PLATFORM_BRAIN}/setPlatformAiKillSwitch`, setPlatformAiKillSwitchOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
