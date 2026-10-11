@@ -1,13 +1,18 @@
 import type { Judgment, SpineStore } from "@/platform/spine/store"
 import { isUnrecognisedRef, normaliseCitation } from "@/services/d4-2/citations"
+import {
+  verdictFromTreatments,
+  type CitationVerdict,
+  type TreatmentFact,
+} from "@/services/d4-2/citationVerdict"
 import { isEffectivePartnerOverride, type PartnerOverride } from "@/services/d4-2/partnerOverride"
 
 export type GateResult =
   | { status: "OK" }
   | { status: "TEMPORAL-MISMATCH"; blocked: true }
 
-/** Module 33 per-authority states (v6 M33: "VERIFIED / UNVERIFIED / OVERRULED"). */
-export type CitationVerdict = "VERIFIED" | "UNVERIFIED" | "OVERRULED"
+/** Module 33 per-authority states (v6 M33: "VERIFIED / UNVERIFIED / OVERRULED"); the rule is in citationVerdict.ts. */
+export type { CitationVerdict }
 
 export type CitationFinding = {
   /** The judgment id or canonical citation as first referenced. */
@@ -60,19 +65,14 @@ function resolveJudgment(store: SpineStore, ref: string): Judgment | null {
 }
 
 function verdictFor(store: SpineStore, judgment: Judgment): CitationVerdict {
-  const overrulings = store.treatments.filter(
-    (t) => t.treatedId === judgment.id && t.treatment === "overruled"
-  )
-  if (overrulings.length === 0) return "VERIFIED"
-  for (const hit of overrulings) {
-    const treating = store.judgments.get(hit.treatingId)
-    const larger =
-      (treating && benchRank(treating.benchType) > benchRank(judgment.benchType)) ||
-      hit.treatingBenchType === "larger"
-    if (larger) return "OVERRULED"
-  }
-  // An overruling is recorded but bench precedence cannot be established: currency is unverified.
-  return "UNVERIFIED"
+  const treatments: TreatmentFact[] = store.treatments
+    .filter((t) => t.treatedId === judgment.id)
+    .map((t) => ({
+      kind: t.treatment,
+      treatingJudgmentBench: store.judgments.get(t.treatingId)?.benchType ?? null,
+      recordedTreatingBench: t.treatingBenchType,
+    }))
+  return verdictFromTreatments(judgment.benchType, treatments)
 }
 
 /**
@@ -122,10 +122,6 @@ export function verifyCitations(
     return { status: "OK", blocked: false, overridden: true, findings }
   }
   return { status: worst, blocked: true, overridden: false, findings }
-}
-
-function benchRank(b: "single" | "division" | "full" | "larger"): number {
-  return { single: 1, division: 2, full: 3, larger: 4 }[b]
 }
 
 export function seedSection(
