@@ -59,7 +59,7 @@ export type P1Result = {
  * `beforeCommit` runs after the trace and before the commit transaction; `failCommit` makes that transaction
  * fail; `modelOverride` routes the call to that model id (ruling R2). `wallClock` replaces `Date.now` as the
  * commit deadline's clock; `commitAttemptFailures` is a queue: each commit transaction attempt takes the next
- * error from it and throws it before staging anything; `lostCommitAnswers` is a queue too: each commit round
+ * error from it and throws it before staging anything; `lostCommitAnswers` is a queue too: each commit attempt
  * whose transaction committed takes the next error from it and throws it, as if the commit's answer were lost.
  */
 export const p1TestSeam: {
@@ -75,23 +75,47 @@ function seam(): typeof p1TestSeam {
   return process.env.NODE_ENV === "production" ? {} : p1TestSeam
 }
 
-/** Parallel calls in one firm contend on the month total: more attempts than the SDK default of 5, like registerClient. */
-const COMMIT_TX_ATTEMPTS = 10
-/** Fresh transactions after one gives up under contention; the usage row's fixed id makes a re-run safe. */
-const COMMIT_ROUNDS = 3
-
 /**
  * How long the commit may go on retrying, on the real clock from the start of the commit phase (M3), like
- * `CONTENTION_DEADLINE_MS` in d1/contention.ts. Once it has passed, no new round and no new transaction attempt
- * starts: the commit fails with `commit_deadline` and the call logs `p1.usage_log_failed` and returns its result.
- * Three rounds of ten attempts with the SDK's backoff could otherwise outlast the 120 s function timeout after a
- * 60 s transport call and a 2 s trace export, and the call would end in a timeout with no record at all. The
- * attempt in flight at the deadline (and the SDK's backoff wait before it) still runs to its end.
+ * `CONTENTION_DEADLINE_MS` in d1/contention.ts. Once it has passed, no new attempt starts: the commit fails
+ * with `commit_deadline`, and unless the usage row turns out to exist, the call logs `p1.usage_log_failed` and
+ * returns its result.
+ *
+ * P1 paces the retries itself: each attempt is one SDK transaction (`maxAttempts: 1`), so the SDK never waits
+ * before a retry. Its own back-off waits up to about 25 s before a tenth attempt and resets to 60 s (±50 %) after
+ * RESOURCE_EXHAUSTED, either of which would carry a commit past any deadline and, after a 60 s transport call
+ * and a 2 s trace export, past the 120 s function timeout with no record at all. P1's waits never run past the
+ * deadline, so the worst case is the deadline plus one attempt in flight (COMMIT_ATTEMPT_SLACK_MS).
  */
 export const COMMIT_DEADLINE_MS = 30_000
+/** The longest one commit attempt (two reads and a commit) is allowed for in the timeout budget. */
+export const COMMIT_ATTEMPT_SLACK_MS = 10_000
+/** Back-off between attempts: 100 ms doubling to this cap, with ±50 % jitter, and never past the deadline. */
+export const COMMIT_BACKOFF_CAP_MS = 2_000
+const COMMIT_BACKOFF_BASE_MS = 100
+/** Parallel calls in one firm contend on the month total; the deadline, not this count, normally ends a retry run. */
+const COMMIT_MAX_ATTEMPTS = 30
 
-if (!(TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS < FUNCTION_TIMEOUT_SECONDS * 1000)) {
-  throw new Error(`transport (${TRANSPORT_TIMEOUT_MS} ms), trace (${OPIK_TIMEOUT_MS} ms) and commit (${COMMIT_DEADLINE_MS} ms) budgets must fit in the function timeout (${FUNCTION_TIMEOUT_SECONDS} s)`)
+if (!(TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS + COMMIT_ATTEMPT_SLACK_MS < FUNCTION_TIMEOUT_SECONDS * 1000)) {
+  throw new Error(
+    `transport (${TRANSPORT_TIMEOUT_MS} ms), trace (${OPIK_TIMEOUT_MS} ms), commit (${COMMIT_DEADLINE_MS} ms) and one attempt (${COMMIT_ATTEMPT_SLACK_MS} ms) must fit in the function timeout (${FUNCTION_TIMEOUT_SECONDS} s)`
+  )
+}
+
+/** The codes the SDK itself retries a transaction on (ABORTED, CANCELLED, UNKNOWN, DEADLINE_EXCEEDED, INTERNAL, UNAVAILABLE, UNAUTHENTICATED, RESOURCE_EXHAUSTED), plus an expired or dead transaction. */
+const RETRYABLE_COMMIT_CODES: ReadonlySet<number> = new Set([10, 1, 2, 4, 13, 14, 16, 8])
+
+function isRetryableCommitError(err: unknown): boolean {
+  if (isContentionAbort(err)) return true
+  if (!(err instanceof Error)) return false
+  const code = (err as { code?: unknown }).code
+  if (typeof code === "number") return RETRYABLE_COMMIT_CODES.has(code) || (code === 3 && /transaction has expired/.test(err.message))
+  return false
+}
+
+function commitBackoffMs(attempt: number): number {
+  const base = Math.min(COMMIT_BACKOFF_BASE_MS * 2 ** (attempt - 1), COMMIT_BACKOFF_CAP_MS)
+  return Math.round(base * (0.5 + Math.random()))
 }
 
 /** The commit ran out of time (COMMIT_DEADLINE_MS): logged with this fixed code. */
@@ -312,39 +336,48 @@ type CommitArgs = {
  * Writes one decision in one transaction (P3-63, P3-65, P3-69) and returns the thresholds it crossed. The
  * transaction reads the month total and the firm's config to decide crossings on its own budget and spend
  * (`before*100 < t*budget <= after*100`), and skips a threshold whose alert already exists, so each fires
- * once per firm per month and a raised budget never re-arms one. A round that gives up under contention is
- * re-run, until COMMIT_ROUNDS or COMMIT_DEADLINE_MS. The usage row's `tx.create` makes a re-run after an
- * unseen commit fail with ALREADY_EXISTS rather than double-count; that failure is then confirmed by reading
- * the row, and a commit found done returns the crossings its alert docs record.
+ * once per firm per month and a raised budget never re-arms one. A retryable failure is retried on P1's own
+ * back-off (see COMMIT_DEADLINE_MS) until COMMIT_MAX_ATTEMPTS or the deadline. The usage row's `tx.create`
+ * makes a retry after an unseen commit fail with ALREADY_EXISTS rather than double-count. Before any failure
+ * is reported, the usage row is read: a commit found done returns the crossings its alert docs record, so an
+ * unseen commit is never logged as a failure.
  */
 async function commit(db: Firestore, args: CommitArgs): Promise<Crossing[]> {
   const clock = args.seam.wallClock ?? Date.now
   const started = clock()
-  const expired = () => clock() - started >= COMMIT_DEADLINE_MS
-  for (let round = 1; ; round++) {
+  const remaining = () => COMMIT_DEADLINE_MS - (clock() - started)
+  let failure: unknown = commitDeadlineError()
+  for (let attempt = 1; attempt <= COMMIT_MAX_ATTEMPTS; attempt++) {
+    if (remaining() <= 0) {
+      failure = commitDeadlineError()
+      break
+    }
     try {
-      if (expired()) throw commitDeadlineError()
       const crossings = await db.runTransaction(
         (tx) => {
-          // Checked again on every attempt: the SDK's own retries and backoff can outlast a round check.
-          if (expired()) throw commitDeadlineError()
           const injected = args.seam.commitAttemptFailures?.shift()
           if (injected) throw injected
           return stage(db, tx, args)
         },
-        { maxAttempts: COMMIT_TX_ATTEMPTS }
+        { maxAttempts: 1 }
       )
       const lost = args.seam.lostCommitAnswers?.shift()
       if (lost) throw lost
       return crossings
     } catch (err) {
-      if (isAlreadyExists(err)) {
-        const done = await committedCrossings(db, args)
-        if (done !== null) return done
+      failure = err
+      if (isAlreadyExists(err) || !isRetryableCommitError(err)) break
+      const wait = Math.min(commitBackoffMs(attempt), remaining())
+      if (wait <= 0) {
+        failure = commitDeadlineError()
+        break
       }
-      if (round >= COMMIT_ROUNDS || !isContentionAbort(err)) throw err
+      await new Promise((resolve) => setTimeout(resolve, wait))
     }
   }
+  const done = await committedCrossings(db, args)
+  if (done !== null) return done
+  throw failure
 }
 
 /**

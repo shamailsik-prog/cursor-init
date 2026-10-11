@@ -102,6 +102,9 @@ GW_TESTS=(
   "commit failure (P3-63) with failCommit the provider call's text is still returned and p1.usage_log_failed keeps the record"
   'commit failure (P3-63) a commit still retrying at the deadline gives up: p1.usage_log_failed once (commit_deadline), the result is still returned, nothing is written'
   'commit failure (P3-63) an ambiguous commit followed by ALREADY_EXISTS on the usage row is done: no p1.usage_log_failed, exactly one row, and its threshold warning still logged'
+  'commit failure (P3-63) an unseen commit followed by the deadline is confirmed by its usage row: no p1.usage_log_failed, exactly one row'
+  "commit failure (P3-63) a RESOURCE_EXHAUSTED commit is retried on P1's own short back-off, never the SDK's 60 s wait"
+  "commit failure (P3-63) the commit's worst case fits the function timeout: transport, trace, the commit deadline and one attempt in flight"
   # the test seams are inert in production (M7)
   'test seams in production (M7) with NODE_ENV production every p1TestSeam field is inert: the call routes to the real model, commits once and logs no failure'
   # G-1 forensic test 7 (L8505-8506)

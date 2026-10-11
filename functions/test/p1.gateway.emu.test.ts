@@ -7,9 +7,10 @@ import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { THRESHOLDS, alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
 import { MAX_OUTPUT_TOKENS, costMicroUsd, estimateTokens } from "../src/p1/costTable"
-import { COMMIT_DEADLINE_MS, callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
-import { setOpikFetchForTests } from "../src/p1/opik"
-import { P1TransportError, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
+import { COMMIT_ATTEMPT_SLACK_MS, COMMIT_BACKOFF_CAP_MS, COMMIT_DEADLINE_MS, callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
+import { OPIK_TIMEOUT_MS, setOpikFetchForTests } from "../src/p1/opik"
+import { P1TransportError, TRANSPORT_TIMEOUT_MS, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 import { EMULATORS, uniq } from "./emu"
 
 /**
@@ -970,6 +971,44 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       const warned = logs.warn.mock.calls.filter((c) => c[0] === "p1.budget_threshold")
       expect(warned).toHaveLength(1)
       expect(warned[0]![1]).toMatchObject({ firmId, monthKey: MONTH, threshold: 70, budgetMicroUsd: 20_000, spentMicroUsd: 14000 })
+    })
+
+    it("an unseen commit followed by the deadline is confirmed by its usage row: no p1.usage_log_failed, exactly one row", async () => {
+      const firmId = await seedFirm()
+      const logs = spyLogs()
+      fakeTransport()
+      // The first attempt commits and its answer is lost; by the next attempt the deadline has passed. The row
+      // exists, so the commit is done: no failure is logged for it.
+      p1TestSeam.lostCommitAnswers = [Object.assign(new Error("aborted"), { code: 10 })]
+      let reads = 0
+      p1TestSeam.wallClock = () => 10_000 * reads++
+      const r = await callP1(req(firmId), at)
+
+      expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
+      expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 14000, calls: { ok: 1, failed: 0, blocked: 0 } })
+    })
+
+    it("a RESOURCE_EXHAUSTED commit is retried on P1's own short back-off, never the SDK's 60 s wait", async () => {
+      const firmId = await seedFirm()
+      const logs = spyLogs()
+      fakeTransport()
+      const exhausted = () => Object.assign(new Error("resource exhausted"), { code: 8 })
+      p1TestSeam.commitAttemptFailures = [exhausted(), exhausted()]
+      const t0 = Date.now()
+      const r = await callP1(req(firmId), at)
+
+      expect(Date.now() - t0).toBeLessThan(10_000)
+      expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })
+      expect(p1TestSeam.commitAttemptFailures).toEqual([])
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
+    }, 120_000)
+
+    it("the commit's worst case fits the function timeout: transport, trace, the commit deadline and one attempt in flight", () => {
+      expect(TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS + COMMIT_ATTEMPT_SLACK_MS).toBeLessThan(FUNCTION_TIMEOUT_SECONDS * 1000)
+      expect(COMMIT_BACKOFF_CAP_MS).toBeLessThanOrEqual(2_000)
     })
   })
 
