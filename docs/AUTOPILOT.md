@@ -47,3 +47,10 @@ cannot authenticate to GitHub to push its branch and open its PR, so the build s
 - One slice per run, `--max-turns 200` by default (override on a manual run).
 - No run while a `claude/*` PR is open.
 - The watchdog runs at most every 6 hours.
+
+## Diagnosing a failed run
+
+The Claude action hides its output by default, so a failure shows only `is_error: true`.
+A run that fails in under a second with `num_turns: 1` and `total_cost_usd: 0` means the API
+rejected the very first call (key, credit or model access). To read the actual error, start
+the workflow by hand with `debug` set to `true` and `max_turns` set to `3`.

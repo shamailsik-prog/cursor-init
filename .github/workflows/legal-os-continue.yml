@@ -24,6 +24,10 @@ on:
         description: "Max Claude turns for this run (usage cap)"
         required: false
         default: "200"
+      debug:
+        description: "Print the Claude action's full output (diagnose API/auth failures; repo is private)"
+        required: false
+        default: "false"
 
 permissions:
   contents: read
@@ -161,6 +165,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The watchdog dispatches this workflow with GITHUB_TOKEN (actor github-actions[bot]).
           allowed_bots: "github-actions[bot]"
+          # Off unless a run is dispatched with debug=true; the action hides its output by default.
+          show_full_output: ${{ github.event.inputs.debug == 'true' }}
           plugins: |
             superpowers@claude-plugins-official
           plugin_marketplaces: |
