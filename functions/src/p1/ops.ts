@@ -37,6 +37,42 @@ const MAX_REASON_CHARS = 500
 
 const badRequest = (code: string) => new HttpError(400, code)
 
+/** Attempts at the `committee_outputs` write; after a failed attempt the wait is 100 ms, then 200 ms (doubling). */
+const OUTPUT_WRITE_ATTEMPTS = 3
+const OUTPUT_WRITE_BACKOFF_MS = 100
+
+/**
+ * Test seam only; production code never sets it, and it is inert when `NODE_ENV` is "production".
+ * `outputWriteFailures` is a queue: each attempt at the `committee_outputs` write takes the next error from it
+ * and throws it instead of writing. `sleep` replaces the back-off wait.
+ */
+export const p1OpsTestSeam: { outputWriteFailures?: Error[]; sleep?: (ms: number) => Promise<void> } = {}
+
+function seam(): typeof p1OpsTestSeam {
+  return process.env.NODE_ENV === "production" ? {} : p1OpsTestSeam
+}
+
+/**
+ * Runs `write` up to OUTPUT_WRITE_ATTEMPTS times. The provider call and its usage row are already committed
+ * by then, so a transient failure of the output row's transaction is retried rather than lost; an HttpError
+ * (e.g. 503 audit_unavailable) is a decision, not a transient fault, and is never retried. The last failure is
+ * rethrown as it was.
+ */
+async function withOutputWriteRetry(write: () => Promise<void>): Promise<void> {
+  const t = seam()
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const injected = t.outputWriteFailures?.shift()
+      if (injected) throw injected
+      return await write()
+    } catch (err) {
+      if (err instanceof HttpError || attempt >= OUTPUT_WRITE_ATTEMPTS) throw err
+      const wait = OUTPUT_WRITE_BACKOFF_MS * 2 ** (attempt - 1)
+      await (t.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(wait)
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // committeeBrain
 // ---------------------------------------------------------------------------
@@ -60,7 +96,7 @@ function parseCommitteeInput(data: Data): CommitteeInput {
   if (documentIds !== undefined) throw badRequest("documents_not_supported")
   if (
     partyNames !== undefined &&
-    !(Array.isArray(partyNames) && partyNames.length <= MAX_PARTY_NAMES && partyNames.every((n) => typeof n === "string" && n !== ""))
+    !(Array.isArray(partyNames) && partyNames.length <= MAX_PARTY_NAMES && partyNames.every((n) => typeof n === "string" && n.trim() !== ""))
   ) {
     throw badRequest("invalid_party_names")
   }
@@ -162,9 +198,12 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     const blocked = result.outcome !== "ok"
     const reason = result.blockReason ?? (result.outcome === "failed" ? TRANSPORT_ERROR : undefined)
     const outputRef = adminDb().collection("committee_outputs").doc()
-    await adminDb().runTransaction(async (tx) => {
+    // The Next.js row shape (CommitteeBrainOutput): `id` in the row, `createdAt` in epoch milliseconds from the op's clock.
+    const createdAt = Math.floor(clock())
+    await withOutputWriteRetry(() => adminDb().runTransaction(async (tx) => {
       await audit.stage(tx, "allow", "ok")
       tx.create(outputRef, {
+        id: outputRef.id,
         firmId: caller.firmId,
         actorId: caller.uid,
         matterId,
@@ -180,9 +219,9 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
         },
         usageLogId: result.usageLogId,
         traceId: result.traceId,
-        createdAt: FieldValue.serverTimestamp(),
+        createdAt,
       })
-    })
+    }))
     audit.committed()
 
     return {
@@ -222,17 +261,20 @@ const count = (value: unknown): number => (typeof value === "number" && Number.i
 const isoOf = (value: unknown): string | null => (value instanceof Timestamp ? value.toDate().toISOString() : null)
 
 /** What the switch enforces (`killSwitchBlocks` in config.ts: only `disableAll === true` and exact model ids count). */
-function killSwitchView(raw: unknown): KillSwitchView | null {
+function killSwitchView(raw: unknown, setBy?: string): KillSwitchView | null {
   if (raw === null || typeof raw !== "object") return null
   const ks = raw as Record<string, unknown>
   return {
     disableAll: ks.disableAll === true,
     disabledModels: Array.isArray(ks.disabledModels) ? ks.disabledModels.filter((m): m is string => typeof m === "string") : [],
     reason: typeof ks.reason === "string" ? ks.reason : "",
-    setBy: typeof ks.setBy === "string" ? ks.setBy : "",
+    setBy: setBy ?? (typeof ks.setBy === "string" ? ks.setBy : ""),
     setAt: isoOf(ks.setAt),
   }
 }
+
+/** What a firm's partner is told of who set the platform switch: never the operator's uid. */
+const PLATFORM_SETTER = "platform"
 
 /**
  * getAiUsage(?month=YYYY-MM) (P3-71), partner only (`ai.usage.read`). Reads the month total, the firm's config,
@@ -277,7 +319,7 @@ export const getAiUsageOp: FirmOperation<AiUsageResponse> = {
         const at = snap.exists ? isoOf(snap.get("createdAt")) ?? isoOf(snap.createTime) : null
         return at === null ? [] : [{ threshold: THRESHOLDS[i]!, at }]
       }),
-      killSwitch: { firm: killSwitchView(config.get("killSwitch")), platform: killSwitchView(platform.get("killSwitch")) },
+      killSwitch: { firm: killSwitchView(config.get("killSwitch")), platform: killSwitchView(platform.get("killSwitch"), PLATFORM_SETTER) },
     }
   },
 }

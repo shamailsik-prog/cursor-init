@@ -7,7 +7,9 @@ import { adminDb } from "../src/admin"
 import { alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
 import { p1TestSeam } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
+import { p1OpsTestSeam } from "../src/p1/ops"
 import { setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import { HttpError } from "../src/http/errors"
 import { apiErrorOf, expectKind, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
@@ -156,6 +158,7 @@ function spyLogs(): () => string {
 
 function resetSeam() {
   for (const k of Object.keys(p1TestSeam)) delete (p1TestSeam as Record<string, unknown>)[k]
+  for (const k of Object.keys(p1OpsTestSeam)) delete (p1OpsTestSeam as Record<string, unknown>)[k]
 }
 
 describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70..P3-72)", () => {
@@ -202,6 +205,8 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       ["partyNames over 50 entries", { partyNames: Array.from({ length: 51 }, (_, i) => `Party ${i}`) }, "invalid_party_names"],
       ["partyNames with a non-string", { partyNames: ["Ali", 5] }, "invalid_party_names"],
       ["partyNames with an empty string", { partyNames: ["Ali", ""] }, "invalid_party_names"],
+      ["partyNames with a whitespace-only entry", { partyNames: ["Ali", "   "] }, "invalid_party_names"],
+      ["partyNames with a tab-and-newline entry", { partyNames: ["\t\n"] }, "invalid_party_names"],
       ["partyNames not an array", { partyNames: "Ali Raza" }, "invalid_party_names"],
       ["partyNames null", { partyNames: null }, "invalid_party_names"],
     ]
@@ -457,9 +462,10 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect(outputs[0]!.id).toBe(r.outputId)
       const row = outputs[0]!.data
       expect(Object.keys(row).sort()).toEqual(
-        ["actorId", "blocked", "classification", "createdAt", "documentIds", "firmId", "matterId", "outbound", "purpose", "text", "traceId", "usageLogId"].sort()
+        ["actorId", "blocked", "classification", "createdAt", "documentIds", "firmId", "id", "matterId", "outbound", "purpose", "text", "traceId", "usageLogId"].sort()
       )
       expect(row).toMatchObject({
+        id: r.outputId,
         firmId: f.firmId,
         actorId: f.P.uid,
         matterId: f.matterId,
@@ -474,7 +480,11 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect(row.outbound.metadata.redactionCounts).toEqual({ cnic: 0, phone: 1, party: 1, email: 0, iban: 0, ntn: 0, passport: 0 })
       expect(Object.keys(row.outbound).sort()).toEqual(["body", "metadata"])
       expect(Object.keys(row.outbound.metadata).sort()).toEqual(["classification", "provider", "purpose", "redactionCounts"])
-      expect(row.createdAt).toBeInstanceOf(Timestamp)
+      // The Next.js CommitteeBrainOutput shape: epoch milliseconds from the op's clock (T plus the time the call took).
+      expect(typeof row.createdAt).toBe("number")
+      expect(Number.isInteger(row.createdAt)).toBe(true)
+      expect(row.createdAt).toBeGreaterThanOrEqual(T)
+      expect(row.createdAt).toBeLessThan(T + 60_000)
 
       const [usage] = await usageRowsOf(f.firmId)
       expect(usage!.id).toBe(row.usageLogId)
@@ -532,6 +542,63 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect(await outputsOf(f.firmId)).toHaveLength(1)
       const month = (await monthRef(f.firmId, MONTH).get()).data()
       expect(month).toMatchObject({ spentMicroUsd: 14000, calls: { ok: 1, failed: 0, blocked: 0 } })
+    })
+
+    describe("the output write is retried", () => {
+      const ask = (f: Firm) => send(brainAt, f.P, { firmId: f.firmId, matterId: f.matterId, body: "Draft a reply to the notice." })
+      const permissionAndCallRows = async (f: Firm) =>
+        (await auditOf(f.P.uid, "ai.call")).filter((r) => r.target === `matters/${f.matterId}` && r.decision === "allow")
+
+      it("a transient failure of the first two attempts still gives one row, one allow audit row, one provider call, after waits of 100 and 200 ms", async () => {
+        const baseline = await newFirm()
+        fakeTransport()
+        await ask(baseline)
+        const normalRows = (await permissionAndCallRows(baseline)).length
+
+        const f = await newFirm()
+        const sent = fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        p1OpsTestSeam.outputWriteFailures = [new Error("transient one"), new Error("transient two")]
+        const r = (await ask(f)) as Out
+        expect(waits).toEqual([100, 200])
+        expect(p1OpsTestSeam.outputWriteFailures).toEqual([])
+        expect(sent).toHaveLength(1)
+        const outputs = await outputsOf(f.firmId)
+        expect(outputs.map((o) => o.id)).toEqual([r.outputId])
+        expect(await usageRowsOf(f.firmId)).toHaveLength(1)
+        // The same audit rows as a call that needed no retry: the failed attempts staged nothing.
+        expect((await permissionAndCallRows(f)).length).toBe(normalRows)
+        expect(await docs("audit_log", f.firmId).then((rows) => rows.filter((a) => a.data.action === "ai.gateway.decision"))).toHaveLength(1)
+      })
+
+      it("after the third failure it rethrows as before: 500 internal, one provider call and its usage row, no output row, a deny audit row", async () => {
+        const f = await newFirm()
+        const sent = fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        p1OpsTestSeam.outputWriteFailures = [new Error("down"), new Error("down"), new Error("down")]
+        const err = await apiErrorOf(ask(f))
+        expect({ status: err.status, code: err.code }).toEqual({ status: 500, code: "internal" })
+        expect(waits).toEqual([100, 200])
+        expect(sent).toHaveLength(1)
+        expect(await usageRowsOf(f.firmId)).toHaveLength(1)
+        expect(await outputsOf(f.firmId)).toHaveLength(0)
+        expect((await auditOf(f.P.uid, "ai.call")).filter((r) => r.decision === "deny" && r.reason === "internal")).toHaveLength(1)
+      })
+
+      it("an HttpError is a decision, not a transient fault: it is not retried", async () => {
+        const f = await newFirm()
+        fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        p1OpsTestSeam.outputWriteFailures = [new HttpError(503, "audit_unavailable")]
+        const err = await apiErrorOf(ask(f))
+        expect({ status: err.status, code: err.code }).toEqual({ status: 503, code: "audit_unavailable" })
+        expect(waits).toEqual([])
+        expect(p1OpsTestSeam.outputWriteFailures).toEqual([])
+        expect(await outputsOf(f.firmId)).toHaveLength(0)
+      })
     })
 
     it("a different Idempotency-Key is a new call", async () => {
@@ -787,6 +854,13 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect((await platformConfigRef().get()).exists).toBe(false)
     })
 
+    it("a refusal is audited as a deny under ai.platform_kill_switch.set with reason platform_admin_only", async () => {
+      const f = await newFirm()
+      await apiErrorOf(killPlatform(f.P, OK))
+      const rows = (await auditOf(f.P.uid, "ai.platform_kill_switch.set")).filter((r) => r.target === "platform/p1")
+      expect(rows.map((r) => [r.decision, r.reason])).toEqual([["deny", "platform_admin_only"]])
+    })
+
     it("the claim is checked before the body: a bad body from a non-admin is still 403", async () => {
       const f = await newFirm()
       expectKind(await apiErrorOf(killPlatform(f.P, { disableAll: "x" })), "permission-denied", "platform_admin_only")
@@ -968,7 +1042,25 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       await send(setPlatformKillApi, a, { disableAll: true, disabledModels: [], reason: "Platform stop" })
       const u = await usage(f, f.P)
       expect(u.killSwitch.firm).toEqual({ disableAll: false, disabledModels: [OPUS], reason: "Firm stop", setBy: f.P.uid, setAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/) })
-      expect(u.killSwitch.platform).toEqual({ disableAll: true, disabledModels: [], reason: "Platform stop", setBy: a.uid, setAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/) })
+      expect(u.killSwitch.platform).toEqual({ disableAll: true, disabledModels: [], reason: "Platform stop", setBy: "platform", setAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/) })
+    })
+
+    it("never shows a firm the operator's identity: the platform view says setBy \"platform\", whoever set it, in any firm's response", async () => {
+      const a = await newFirm()
+      const b = await newFirm()
+      const operator = await mintIdToken({ ...claims(a.firmId, "partner"), platformAdmin: true })
+      await send(setPlatformKillApi, operator, { disableAll: true, disabledModels: [OPUS], reason: "Operator stop" })
+      await send(setFirmKillApi, b.P, { firmId: b.firmId, disableAll: false, disabledModels: [], reason: "Firm B note" })
+      for (const [firm, partner] of [[b, b.P], [a, a.P]] as const) {
+        const u = await usage(firm, partner)
+        expect(u.killSwitch.platform).toEqual({ disableAll: true, disabledModels: [OPUS], reason: "Operator stop", setBy: "platform", setAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) })
+        expect(JSON.stringify(u)).not.toContain(operator.uid)
+        if (firm === b) expect(JSON.stringify(u)).not.toContain(a.firmId)
+      }
+      // The stored switch keeps the real uid (audit trail); only the firm-facing view hides it.
+      expect((await platformConfigRef().get()).get("killSwitch.setBy")).toBe(operator.uid)
+      // A firm's own switch still names its partner.
+      expect((await usage(b, b.P)).killSwitch.firm).toMatchObject({ setBy: b.P.uid })
     })
 
     it("counts what committeeBrain did, per firm: an ok call, a blocked call and a failed call", async () => {
