@@ -11,7 +11,7 @@ import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, killSwitchBlocks, monthR
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens } from "./costTable"
 import { monthKeyPkt } from "./month"
 import { exportTrace } from "./opik"
-import { activeTransport } from "./transport"
+import { P1TransportError, activeTransport, isTransportCode, type TransportCode } from "./transport"
 import { TRANSPORT_ERROR, type BlockReason, type P1Outcome, type TaskType } from "./types"
 import { uuidv7 } from "./uuidv7"
 
@@ -69,9 +69,6 @@ const COMMIT_TX_ATTEMPTS = 10
 /** Fresh transactions after one gives up under contention; the usage row's fixed id makes a re-run safe. */
 const COMMIT_ROUNDS = 3
 
-/** The fixed messages `transport.ts` throws carry no provider text; they are logged as a code, anything else as "unknown". */
-const TRANSPORT_CODES = /^gateway (?:status \d{3}|timeout|request failed|response is not JSON|response has no message content)$/
-
 const EVENT_SUFFIX: Readonly<Record<P1Outcome, string>> = { ok: "completed", failed: "failed", blocked: "blocked" }
 
 type Threshold = (typeof THRESHOLDS)[number]
@@ -88,9 +85,9 @@ export function isAlreadyExists(err: unknown): boolean {
   return code === 6 || (typeof code === "string" && code.toLowerCase() === "already-exists")
 }
 
-function transportCode(err: unknown): string {
-  const message = err instanceof Error ? err.message : ""
-  return TRANSPORT_CODES.test(message) ? message : "unknown"
+/** A P1TransportError's fixed code; anything else (another transport's own error) is logged as "unknown", never its message. */
+function transportCode(err: unknown): TransportCode | "unknown" {
+  return err instanceof P1TransportError && isTransportCode(err.code) ? err.code : "unknown"
 }
 
 export async function callP1(req: P1Request, opts?: { now?: () => number }): Promise<P1Result> {
@@ -149,7 +146,10 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
     // 9. The transport call, then the response mask (P3-68).
     try {
       const res = await transport.send({ model, body: outbound.body, maxTokens: MAX_OUTPUT_TOKENS })
-      if (typeof res?.text !== "string") throw new Error("transport returned no text")
+      // A response came back without text: billed like the Gateway's own gateway_no_text, on the usage it reported.
+      if (typeof res?.text !== "string") {
+        throw new P1TransportError("gateway_no_text", { billable: true, inputTokens: tokenCount(res?.inputTokens), outputTokens: tokenCount(res?.outputTokens) })
+      }
       const masked = maskOutboundPII(res.text, { partyNames }).masked
       const reportedIn = tokenCount(res.inputTokens)
       const reportedOut = tokenCount(res.outputTokens)
@@ -161,6 +161,23 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
       outcome = "ok"
     } catch (err) {
       outcome = "failed"
+      // I1: a failure the provider may have billed is charged, conservatively: the reported usage where the
+      // response gave a valid count, else the estimated input and the MAX_OUTPUT_TOKENS ceiling. A failure that
+      // cannot have been billed (a non-2xx, a request that never left, any error that is not a billable
+      // P1TransportError) is charged 0.
+      if (err instanceof P1TransportError && err.billable) {
+        const reportedIn = tokenCount(err.inputTokens)
+        const reportedOut = tokenCount(err.outputTokens)
+        inputTokens = reportedIn ?? estimateTokens(outbound.body)
+        outputTokens = reportedOut ?? MAX_OUTPUT_TOKENS
+        tokensEstimated = reportedIn === null || reportedOut === null
+        cost = costMicroUsd(model, inputTokens, outputTokens)! // step 6 refused an unpriced model
+      } else {
+        inputTokens = 0
+        outputTokens = 0
+        tokensEstimated = false
+        cost = 0
+      }
       logger.warn("p1.transport_failed", { firmId, usageLogId: usageRef.id, traceId, code: transportCode(err) })
     }
   }
@@ -288,7 +305,8 @@ async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Promise<Cro
   const now = FieldValue.serverTimestamp()
   const inc = (n: number) => FieldValue.increment(n)
   tx.create(usageRef, { ...r, createdAt: now })
-  // A blocked or failed call adds 0 to spend and tokens: only its `calls` counter moves.
+  // Spend and tokens move by the record's own figures, by one rule for every outcome: an ok call and a billed
+  // failure add their charge (I1); a blocked call and an unbilled failure add 0, so only their `calls` counter moves.
   tx.set(
     a.totalRef,
     {

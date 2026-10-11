@@ -6,10 +6,10 @@ import { logger } from "firebase-functions"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { THRESHOLDS, alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
-import { costMicroUsd, estimateTokens } from "../src/p1/costTable"
+import { MAX_OUTPUT_TOKENS, costMicroUsd, estimateTokens } from "../src/p1/costTable"
 import { callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
-import { gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import { P1TransportError, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 import { EMULATORS, uniq } from "./emu"
 
 /**
@@ -542,10 +542,45 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
 
     it("a transport that resolves without string text is a transport_error", async () => {
       const firmId = await seedFirm()
+      const logs = spyLogs()
       fakeTransport({ text: { not: "text" } })
       const r = await callP1(req(firmId), at)
-      expect(r).toMatchObject({ outcome: "failed", costMicroUsd: 0 })
+      // I1: a response came back, so it is billed like the Gateway's own gateway_no_text, on the usage it reported (1000 in, 500 out).
+      expect(r).toMatchObject({ outcome: "failed", inputTokens: 1000, outputTokens: 500, costMicroUsd: costMicroUsd(OPUS, 1000, 500) })
       expect((await auditsOf(firmId))[0]!.data.reason).toBe("transport_error")
+      // m2: the fixed code, not "unknown".
+      expect(logs.warn.mock.calls.filter((c) => c[0] === "p1.transport_failed").map((c) => (c[1] as { code: string }).code)).toEqual(["gateway_no_text"])
+    })
+
+    it("a billed failure is charged into the month total, crosses the alerts and counts toward budget_exhausted; the next call is blocked", async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: 100_000 })
+      // A 2xx with no text that reported 0 in and 5000 out: 5000 x 20 = 100000 micro-USD, the whole budget.
+      fakeTransport(() => Promise.reject(new P1TransportError("gateway_no_text", { billable: true, inputTokens: 0, outputTokens: 5000 })))
+      const r = await callP1(req(firmId), at)
+      expect(r).toMatchObject({ outcome: "failed", blockReason: null, inputTokens: 0, outputTokens: 5000, costMicroUsd: 100_000 })
+      expect(await rowOf(r.usageLogId)).toMatchObject({ outcome: "failed", costMicroUsd: 100_000, inputTokens: 0, outputTokens: 5000, tokensEstimated: false })
+      expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 100_000, inputTokens: 0, outputTokens: 5000, calls: { ok: 0, failed: 1, blocked: 0 } })
+      expect((await alertsOf(firmId)).map((a) => a.data.threshold).sort()).toEqual([70, 90])
+
+      const sent = fakeTransport()
+      const next = await callP1(req(firmId), at)
+      expect(next).toMatchObject({ outcome: "blocked", blockReason: "budget_exhausted", costMicroUsd: 0 })
+      expect(sent).toHaveLength(0)
+    })
+
+    it("an unbilled P1TransportError is charged nothing, and a billed one with no usage is charged the estimated input and the 4,096-token ceiling", async () => {
+      const firmId = await seedFirm()
+      fakeTransport(() => Promise.reject(new P1TransportError("gateway_status", { billable: false, status: 503 })))
+      const unbilled = await callP1(req(firmId), at)
+      expect(unbilled).toMatchObject({ outcome: "failed", inputTokens: 0, outputTokens: 0, costMicroUsd: 0 })
+      expect(await rowOf(unbilled.usageLogId)).toMatchObject({ costMicroUsd: 0, tokensEstimated: false })
+
+      fakeTransport(() => Promise.reject(new P1TransportError("gateway_not_json", { billable: true })))
+      const billed = await callP1(req(firmId, { body: "Client Ali Raza asks.", partyNames: ["Ali Raza"] }), at)
+      const inTok = estimateTokens("Client [PARTY] asks.")
+      expect(billed).toMatchObject({ outcome: "failed", inputTokens: inTok, outputTokens: MAX_OUTPUT_TOKENS, costMicroUsd: costMicroUsd(OPUS, inTok, 4096) })
+      expect(await rowOf(billed.usageLogId)).toMatchObject({ inputTokens: inTok, outputTokens: 4096, tokensEstimated: true, costMicroUsd: costMicroUsd(OPUS, inTok, 4096) })
+      expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: costMicroUsd(OPUS, inTok, 4096), inputTokens: inTok, outputTokens: 4096, calls: { ok: 0, failed: 2, blocked: 0 } })
     })
 
     describe("through the real Gateway transport against a local server", () => {
@@ -574,27 +609,40 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
         rs.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body))
       }
 
+      // I1: what each failure is charged. The body is "Draft a reply to the notice.", so an estimated input side is
+      // estimateTokens of it; a timeout is charged at the 4,096-token ceiling.
+      const BODY_TOKENS = estimateTokens("Draft a reply to the notice.")
       it.each([
-        ["a non-2xx", json(503, { error: { message: "Ali Raza overloaded quota-xyz" } })],
-        ["a 2xx with no choices[0].message.content", json(200, { choices: [], note: "Ali Raza quota-xyz" })],
-        ["a timeout", () => undefined],
-      ] as const)("%s gives failed, transport_error, cost 0 and stores no provider text", async (_label, handler) => {
+        ["a non-2xx", json(503, { error: { message: "Ali Raza overloaded quota-xyz" } }), "gateway_status", { inputTokens: 0, outputTokens: 0, tokensEstimated: false, costMicroUsd: 0 }],
+        [
+          "a 2xx with no choices[0].message.content",
+          json(200, { choices: [], note: "Ali Raza quota-xyz", usage: { prompt_tokens: 7, completion_tokens: 3 } }),
+          "gateway_no_text",
+          { inputTokens: 7, outputTokens: 3, tokensEstimated: false, costMicroUsd: costMicroUsd(OPUS, 7, 3)! },
+        ],
+        ["a timeout", () => undefined, "gateway_timeout", { inputTokens: BODY_TOKENS, outputTokens: 4096, tokensEstimated: true, costMicroUsd: costMicroUsd(OPUS, BODY_TOKENS, 4096)! }],
+      ] as const)("%s gives failed, transport_error, the charge the I1 rule sets, and stores no provider text", async (_label, handler, code, charge) => {
         respond = handler
         setP1TransportForTests(gatewayTransport("test-key", `${base}/v1/chat/completions`, { timeoutMs: 300 }))
         const firmId = await seedFirm()
         const logs = spyLogs()
         const r = await callP1(req(firmId), at)
-        expect(r).toMatchObject({ outcome: "failed", costMicroUsd: 0 })
+        const { inputTokens, outputTokens, costMicroUsd: cost } = charge
+        expect(r).toMatchObject({ outcome: "failed", blockReason: null, inputTokens, outputTokens, costMicroUsd: cost })
+        expect(await rowOf(r.usageLogId)).toMatchObject({ outcome: "failed", ...charge })
+        expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: cost, inputTokens, outputTokens, calls: { ok: 0, failed: 1, blocked: 0 } })
         const stored = JSON.stringify([await rowOf(r.usageLogId), await eventsOf(firmId), await auditsOf(firmId), r, logs.all()])
         expect(stored).not.toContain("quota-xyz")
         expect((await auditsOf(firmId))[0]!.data.reason).toBe("transport_error")
+        expect(logs.warn.mock.calls.filter((c) => c[0] === "p1.transport_failed").map((c) => (c[1] as { code: string }).code)).toEqual([code])
       })
 
       it("a thrown fetch (connection refused) gives failed", async () => {
         setP1TransportForTests(gatewayTransport("test-key", "http://127.0.0.1:1/v1/chat/completions", { timeoutMs: 300 }))
         const firmId = await seedFirm()
         const r = await callP1(req(firmId), at)
-        expect(r).toMatchObject({ outcome: "failed", blockReason: null, costMicroUsd: 0 })
+        expect(r).toMatchObject({ outcome: "failed", blockReason: null, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 })
+        expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 0, calls: { ok: 0, failed: 1, blocked: 0 } })
       })
 
       it("a 2xx with content but no usage is ok with tokensEstimated", async () => {
@@ -761,7 +809,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect((await monthOf(firmId))!.spentMicroUsd).toBe(145_000)
     })
 
-    it("a blocked or failed call writes no alert and adds nothing to spend", async () => {
+    it("a blocked call or an unbilled failed call writes no alert and adds nothing to spend", async () => {
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: BUDGET })
       costing(69_000)
       await callP1(req(firmId), at)

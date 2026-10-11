@@ -15,7 +15,8 @@
 #        trace, a log line or the result), every P3-61 refusal (all eight block reasons: each row of the refusal
 #        table, the not_minimised case, the first-refusal-wins order, the classification guard), the kill-switch
 #        flips (a switch set between two calls blocks the second), every bad transport result (failed,
-#        transport_error, cost 0, no provider text) and the missing-usage estimate, the alerts at 70 and 90
+#        transport_error, no provider text, charged when the provider may have billed it and 0 when it cannot
+#        have, a billed failure counting toward the budget) and the missing-usage estimate, the alerts at 70 and 90
 #        (exactly once, including ten parallel calls crossing 70% together), the failed trace export, the commit
 #        failure, and the G-1 forensic test 7 equivalent (a privileged call with no DPA is blocked and traced
 #        with classification and no content)
@@ -25,7 +26,8 @@
 #        (a request replaces the whole state), setPlatformAiKillSwitch (platformAdmin only; stops every firm;
 #        outranks a firm's own switch) and getAiUsage (the exact response; no firm is shown the operator's uid)
 #      - the units behind them: the frozen cost and routing tables, the cost arithmetic, the PKT month key, the
-#        Opik self-hosted guard and trace payload by rank, the Gateway transport's fixed error strings, and the
+#        Opik self-hosted guard and trace payload by rank, the Gateway transport's fixed error codes, messages and
+#        billable flags (a redirect refused, its target untouched), and the
 #        refusal of every test seam when NODE_ENV is production
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
@@ -69,9 +71,11 @@ GW_TESTS=(
   # bad transport results (Review Focus 5)
   'transport failures (Review Focus 5) a rejecting transport gives failed, transport_error, cost 0, a failed event, and stores nothing of the error'
   'transport failures (Review Focus 5) a transport that resolves without string text is a transport_error'
-  'transport failures (Review Focus 5) through the real Gateway transport against a local server a non-2xx gives failed, transport_error, cost 0 and stores no provider text'
-  'transport failures (Review Focus 5) through the real Gateway transport against a local server a 2xx with no choices[0].message.content gives failed, transport_error, cost 0 and stores no provider text'
-  'transport failures (Review Focus 5) through the real Gateway transport against a local server a timeout gives failed, transport_error, cost 0 and stores no provider text'
+  'transport failures (Review Focus 5) a billed failure is charged into the month total, crosses the alerts and counts toward budget_exhausted; the next call is blocked'
+  'transport failures (Review Focus 5) an unbilled P1TransportError is charged nothing, and a billed one with no usage is charged the estimated input and the 4,096-token ceiling'
+  'transport failures (Review Focus 5) through the real Gateway transport against a local server a non-2xx gives failed, transport_error, the charge the I1 rule sets, and stores no provider text'
+  'transport failures (Review Focus 5) through the real Gateway transport against a local server a 2xx with no choices[0].message.content gives failed, transport_error, the charge the I1 rule sets, and stores no provider text'
+  'transport failures (Review Focus 5) through the real Gateway transport against a local server a timeout gives failed, transport_error, the charge the I1 rule sets, and stores no provider text'
   'transport failures (Review Focus 5) through the real Gateway transport against a local server a thrown fetch (connection refused) gives failed'
   'transport failures (Review Focus 5) through the real Gateway transport against a local server a 2xx with content but no usage is ok with tokensEstimated'
   'usage absent (P3-62) null tokens on both sides: ok, tokensEstimated, each side estimated from the masked text'
@@ -84,7 +88,7 @@ GW_TESTS=(
   'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing 70% write exactly one 70 alert, and the total equals the sum of the rows'
   'alerts at 70 and 90 (P3-65, Review Focus 2) decides the crossing on the budget the transaction reads, not the pre-call one'
   'alerts at 70 and 90 (P3-65, Review Focus 2) raising the budget does not re-arm a crossed threshold, and the call still commits'
-  'alerts at 70 and 90 (P3-65, Review Focus 2) a blocked or failed call writes no alert and adds nothing to spend'
+  'alerts at 70 and 90 (P3-65, Review Focus 2) a blocked call or an unbilled failed call writes no alert and adds nothing to spend'
   # trace and commit failure (P3-63, P3-67)
   'trace (P3-67) a failed export records trace.status failed and logs p1.trace_export_failed with ids only'
   'trace (P3-67) the exported trace carries the usage row id and the trace id'
@@ -204,6 +208,16 @@ TRANSPORT_TESTS=(
   'rejects a non-2xx response with a fixed message that does not echo the provider text'
   'rejects a 200 with no usable choices[0].message.content, with a fixed message'
 )
+TRANSPORT_ERR_SUITE='P1 Gateway transport errors (I1: billed failures are charged)'
+TRANSPORT_ERR_TESTS=(
+  'a non-2xx is gateway_status, not billable'
+  'a refused connection is gateway_request_failed, not billable'
+  'a timeout, before the headers or while the body streams, is gateway_timeout and billable'
+  'a 2xx whose body is not JSON is gateway_not_json and billable, with no usage'
+  'a 2xx without usable content is gateway_no_text and billable, carrying the usage figures that are valid counts'
+  'a redirect is refused: gateway_request_failed, not billable, and the redirect target receives nothing'
+  'passes redirect: error to fetch'
+)
 SEAM_SUITE='P1 active transport and test seam (P3-68)'
 SEAM_TESTS=(
   'refuses the test seam in production'
@@ -233,6 +247,7 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${OPIKCFG_TESTS[@]}"; do names+=("$OPIKCFG_SUITE $t"); done
   for t in "${TRACE_TESTS[@]}"; do names+=("$TRACE_SUITE $t"); done
   for t in "${TRANSPORT_TESTS[@]}"; do names+=("$TRANSPORT_SUITE $t"); done
+  for t in "${TRANSPORT_ERR_TESTS[@]}"; do names+=("$TRANSPORT_ERR_SUITE $t"); done
   for t in "${SEAM_TESTS[@]}"; do names+=("$SEAM_SUITE $t"); done
   for t in "${EXPORTER_TESTS[@]}"; do names+=("$EXPORTER_SUITE $t"); done
   for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
