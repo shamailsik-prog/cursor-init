@@ -15,21 +15,23 @@
 #        trace, a log line or the result), every P3-61 refusal (all eight block reasons: each row of the refusal
 #        table, the not_minimised case, the first-refusal-wins order, the classification guard), the kill-switch
 #        flips (a switch set between two calls blocks the second), every bad transport result (failed,
-#        transport_error, no provider text, charged when the provider may have billed it and 0 when it cannot
-#        have, a billed failure counting toward the budget) and the missing-usage estimate, the alerts at 70 and 90
-#        (exactly once, including ten parallel calls crossing 70%, and both 70% and 90%, together), the failed
-#        trace export, the commit failure (the commit deadline; an ambiguous commit confirmed by its usage row),
-#        and the G-1 forensic test 7 equivalent (a privileged call with no DPA is blocked and traced
-#        with classification and no content)
+#        transport_error, no provider text; charged when the provider may have billed it and 0 when it cannot
+#        have; a billed failure counts toward the budget) and the missing-usage estimate, the alerts at 70 and
+#        90 (exactly once, including ten parallel calls crossing 70%, and both 70% and 90%, together), the
+#        failed trace export, the commit failure (the commit deadline; an ambiguous commit confirmed by its
+#        usage row), every p1TestSeam field inert when NODE_ENV is production, and the G-1 forensic test 7
+#        equivalent (a privileged call with no DPA is blocked and traced with classification and no content)
 #      - the routes: committeeBrain (input order, access, cross-firm 404, the classification that a caller
 #        label may only raise, party-name masking, the output row, the blocked and failed rows, the idempotent
-#        replay, the bounded output-write retry and its ambiguous commit), setBudgetAlerts, setAiKillSwitch
-#        (a request replaces the whole state), setPlatformAiKillSwitch (platformAdmin only; stops every firm;
-#        outranks a firm's own switch) and getAiUsage (the exact response; no firm is shown the operator's uid)
+#        replay, the bounded output-write retry and its ambiguous commit, every p1OpsTestSeam field inert when
+#        NODE_ENV is production), setBudgetAlerts, setAiKillSwitch (a request replaces the whole state),
+#        setPlatformAiKillSwitch (platformAdmin only; stops every firm; outranks a firm's own switch) and
+#        getAiUsage (the exact response; no firm is shown the operator's uid)
 #      - the units behind them: the frozen cost and routing tables, the cost arithmetic, the PKT month key, the
-#        Opik self-hosted guard (plain http only to a private host; a redirect refused) and trace payload by rank, the Gateway transport's fixed error codes, messages and
-#        billable flags (a redirect refused, its target untouched), and the
-#        refusal of every test seam when NODE_ENV is production
+#        Opik self-hosted guard (plain http only to a private host) and trace payload by rank, the Opik export
+#        and the Gateway transport refusing redirects (the target untouched), the transport's fixed error
+#        codes, messages and billable flags, and the transport and Opik fetch seams refusing to be set when
+#        NODE_ENV is production
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -97,6 +99,8 @@ GW_TESTS=(
   "commit failure (P3-63) with failCommit the provider call's text is still returned and p1.usage_log_failed keeps the record"
   'commit failure (P3-63) a commit still retrying at the deadline gives up: p1.usage_log_failed once (commit_deadline), the result is still returned, nothing is written'
   'commit failure (P3-63) an ambiguous commit followed by ALREADY_EXISTS on the usage row is done: no p1.usage_log_failed, exactly one row, and its threshold warning still logged'
+  # the test seams are inert in production (M7)
+  'test seams in production (M7) with NODE_ENV production every p1TestSeam field is inert: the call routes to the real model, commits once and logs no failure'
   # G-1 forensic test 7 (L8505-8506)
   'G-1 forensic 7 equivalent a privileged call with no DPA is blocked, and its exported trace has classification privileged and no input or output'
 )
@@ -153,6 +157,7 @@ API_TESTS=(
   'committeeBrain: output (P3-70) the output write is retried after the third failure it rethrows as before: 500 internal, one provider call and its usage row, no output row, a deny audit row'
   "committeeBrain: output (P3-70) the output write is retried an ambiguous commit (the first attempt commits, its answer is lost, the retry's create hits ALREADY_EXISTS) is a success: 200, one output row, one route allow row and no deny row, one provider call"
   'committeeBrain: output (P3-70) the output write is retried an ALREADY_EXISTS while no output row of this call exists is not taken as a commit: it is retried like any failure'
+  'committeeBrain: output (P3-70) the output write is retried with NODE_ENV production every p1OpsTestSeam field is inert: no injected failure, no lost answer, no wait'
   'committeeBrain: output (P3-70) the output write is retried an HttpError is a decision, not a transient fault: it is not retried'
   'committeeBrain: output (P3-70) a different Idempotency-Key is a new call'
   # setBudgetAlerts (P3-71)

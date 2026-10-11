@@ -946,6 +946,37 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
     })
   })
 
+  describe("test seams in production (M7)", () => {
+    it("with NODE_ENV production every p1TestSeam field is inert: the call routes to the real model, commits once and logs no failure", async () => {
+      const firmId = await seedFirm()
+      // The transport seam is set first: it refuses to be set in production (its own test covers that).
+      const sent = fakeTransport()
+      const logs = spyLogs()
+      const ran: string[] = []
+      const aborted = () => Object.assign(new Error("aborted"), { code: 10 })
+      p1TestSeam.modelOverride = "x/unpriced-model"
+      p1TestSeam.failCommit = true
+      p1TestSeam.beforeCommit = async () => void ran.push("beforeCommit")
+      p1TestSeam.wallClock = () => {
+        ran.push("wallClock")
+        return 0
+      }
+      p1TestSeam.commitAttemptFailures = [aborted()]
+      p1TestSeam.lostCommitAnswers = [aborted()]
+      vi.stubEnv("NODE_ENV", "production")
+      const r = await callP1(req(firmId), at)
+
+      expect(r).toMatchObject({ outcome: "ok", model: OPUS, costMicroUsd: 14000 })
+      expect(sent.map((x) => x.model)).toEqual([OPUS])
+      expect(ran).toEqual([])
+      expect(p1TestSeam.commitAttemptFailures).toHaveLength(1)
+      expect(p1TestSeam.lostCommitAnswers).toHaveLength(1)
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
+      expect((await monthOf(firmId))!.calls).toEqual({ ok: 1, failed: 0, blocked: 0 })
+    })
+  })
+
   describe("G-1 forensic 7 equivalent", () => {
     it("a privileged call with no DPA is blocked, and its exported trace has classification privileged and no input or output", async () => {
       const firmId = await seedFirm()

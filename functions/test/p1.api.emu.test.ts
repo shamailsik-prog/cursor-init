@@ -624,6 +624,24 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         expect((await auditOf(f.P.uid, "ai.call")).filter((row) => row.decision === "deny")).toHaveLength(0)
       })
 
+      it("with NODE_ENV production every p1OpsTestSeam field is inert: no injected failure, no lost answer, no wait", async () => {
+        const f = await newFirm()
+        const sent = fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        p1OpsTestSeam.outputWriteFailures = [new Error("injected"), new Error("injected"), new Error("injected")]
+        p1OpsTestSeam.lostCommitAnswers = [Object.assign(new Error("lost"), { code: 4 })]
+        vi.stubEnv("NODE_ENV", "production")
+        const r = (await ask(f)) as Out
+        expect(r).toMatchObject({ blocked: false, text: "REPLY" })
+        expect(waits).toEqual([])
+        expect(p1OpsTestSeam.outputWriteFailures).toHaveLength(3)
+        expect(p1OpsTestSeam.lostCommitAnswers).toHaveLength(1)
+        expect(sent).toHaveLength(1)
+        expect((await outputsOf(f.firmId)).map((o) => o.id)).toEqual([r.outputId])
+        expect((await auditOf(f.P.uid, "ai.call")).filter((row) => row.decision === "deny")).toHaveLength(0)
+      })
+
       it("an HttpError is a decision, not a transient fault: it is not retried", async () => {
         const f = await newFirm()
         fakeTransport()
