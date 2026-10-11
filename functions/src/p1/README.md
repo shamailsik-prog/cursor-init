@@ -18,7 +18,7 @@ The first refusal wins. A refusal at steps 2 to 8 makes no provider call, costs 
 2. Kill switch: the platform's, then the firm's (P3-66). Both are read fresh on every call.
 3. Route: task type to model (P3-62).
 4. Outbound mask of the body and the purpose, with the party names (`maskOutboundPII`).
-5. Provider policy: `providerAllowedFor("ai-gateway", classification)`, and at rank 3 and above `assertMinimised` on the masked body.
+5. Provider policy: `providerAllowedFor("ai-gateway", classification)`, and at rank 3 and above `assertMinimised` on the masked body and the masked purpose.
 6. Price: the model must have one.
 7. Budget: one must be set, and the month's spend must be below it (P3-64).
 8. Credentials: `AI_GATEWAY_API_KEY` must be set.
@@ -73,7 +73,7 @@ Two scopes, each `{ disableAll, disabledModels, reason, setBy, setAt }`: the fir
 | `kill_switch_platform` | 2 | the operator's switch blocks every model, or this one |
 | `kill_switch_firm` | 2 | the firm's switch blocks every model, or this one |
 | `policy_denied` | 5 | the classification may not go to `ai-gateway` (no executed DPA, or out of region at rank 4; `data/provider_dpa.json` is empty until O-21 is recorded, so only `public` and `internal` reach a provider) |
-| `not_minimised` | 5 | at rank 3 and above, the masked body would still be masked again |
+| `not_minimised` | 5 | at rank 3 and above, the masked body or purpose would still be masked again |
 | `model_unpriced` | 6 | the routed model has no price |
 | `budget_not_set` | 7 | the firm has no valid monthly budget |
 | `budget_exhausted` | 7 | the month's spend has reached the budget |
