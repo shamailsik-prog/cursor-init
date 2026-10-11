@@ -32,7 +32,7 @@
 - **Size caps.**
   - Body: at most 500,000 characters (the charset rule) and at most 900,000 UTF-8 bytes, else 422 `draft_too_large`.
   - Title: 1 to 500 characters.
-  - Temporal checks: at most 20, each with `usedText` of 1 to 10,000 characters.
+  - Temporal checks: at most 20, each with `usedText` of 1 to 10,000 characters, no two on the same (sectionId, asAtDate, jurisdiction), the jurisdiction matching `/^[A-Z0-9_.:-]{1,50}$/` (R11); the caps hold for the merged set a run carries (R10).
   - Override reason: 20 to 2,000 characters after trimming.
 - **Error codes.** The first group is as planned; the codes added in execution follow it.
   - 400: `matter_required`, `invalid_document_type`, `invalid_title`, `invalid_body`, `invalid_classification`, `invalid_version`, `invalid_temporal_checks`, `invalid_reason`.
@@ -41,8 +41,8 @@
   - 422: `court_mismatch`, `classification_below_matter`, `unsupported_characters`, `draft_too_large`, `title_too_long`.
   - 403: `clearance`.
   - **Added in execution.**
-    - 400 `invalid_result_id`: `overrideGate` takes the `resultId` of the gate result the partner reviewed, and it must be a string (R6).
-    - 409 `gate_result_changed`: the stored result is not the one the partner reviewed, because a re-gate or an approval run replaced it (R6).
+    - 400 `invalid_result_id`: `overrideGate` (R6) and `approveDraft` (R9) take the `resultId` of the gate result the partner reviewed, and it must be a string.
+    - 409 `gate_result_changed`: on `overrideGate` (R6) and `approveDraft` (R9), the stored result is not the one the partner reviewed, because a re-gate or an approval run replaced it.
     - 409 `matter_closed`: `createDraft` on a closed matter (R4). Saves and restores on an existing draft stay allowed (O-70).
     - 422 `gate_result_too_large`: the findings of a gate or approval run would exceed 900,000 bytes as stored, so nothing is stored or approved and the in-force text is never truncated (R8).
     - 400 `invalid_query` (a missing or malformed query-string field, such as a draft id or an over-long filter) and 400 `invalid_cursor` / `invalid_limit` (paging, as on the other list routes).
@@ -50,7 +50,7 @@
   - Names: `draft.autosaved`, `draft.gated`, `draft.approved`.
   - Payload: `{ draftId, matterId, documentTypeId, version, gateResult: status | null, masterVersion: null }`.
   - Classification: the draft's.
-  - Id: `<draftId>_<version>_<autosaved|gated|approved>`. A re-gate of the same version uses `<draftId>_<version>_gated_<n>`, where n is the count of gate runs, so ids never collide.
+  - Id: `<draftId>_<version>_autosaved`, `<draftId>_<version>_gated_<n>` or `<draftId>_<version>_approved`. Every gate run's id is `gated_<n>`, where n is the version's count of `gateDraft` runs, from 1 (there is no bare `_gated` id), so ids never collide.
 - **Audit actions.** `draft.create`, `draft.edit`, `draft.gate`, `draft.gate_override`, `draft.approve`, each in the decision's transaction.
 - **Test fixtures.** Citations use the year 2099 only (e.g. `PLD 2099 SC 101`, `2099 SCMR 7`). Statute ids look like `test_act_s1`. No real judgment or statute is named in any test.
 - **Toolchain.** Functions lint at zero warnings, a clean `npx tsc --noEmit -p functions`, and the root `npm run typecheck` / `npm run lint` (shared `platform/` and `services/` files). Emulator tests run from the repo root with `npx firebase emulators:exec --only auth,firestore --project demo-sikander "npm --prefix functions test -- <files>"`.
@@ -59,6 +59,10 @@
   - **R4.** `createDraft` on a closed matter is 409 `matter_closed`.
   - **R5, frozen checks.** Once a version has an override, `gateDraft` on it is 409 `already_overridden`. The check set the partner cleared cannot be narrowed or swapped afterwards, so approval's re-run reuses the checks of the result the partner reviewed.
   - **R6, resultId binding.** Every write of a gate result carries a fresh `resultId`; `overrideGate` requires the `resultId` the partner reviewed (400 `invalid_result_id`; 409 `gate_result_changed` on a mismatch) and records it on the override document.
+  - **R9, approval bound to the reviewed result.** `approveDraft { draftId, version, resultId }`: the same parse (400 `invalid_result_id`), and inside the decision transaction the stored result's `resultId` must equal it (409 `gate_result_changed`), after the `updateTime` check (409 `draft_changed`).
+  - **R10, checks carried forward per draft.** Every gate run uses the caller's checks together with those recorded on the draft's most recent stored result (`draft_gate_results/{draftId}_{lastGatedVersion}`), merged by (sectionId, asAtDate, jurisdiction), the caller's `usedText` winning; a check never leaves the set; the caps apply to the merged set. `lastGatedVersion` is written with every result and is not in `DraftView`.
+  - **R11, jurisdiction.** `/^[A-Z0-9_.:-]{1,50}$/`, upper case only; and no two checks share a key (PROBE-2).
+  - **Labels and reads (final review).** A save or restore labels the new version and the draft with the strictest of the draft's label and the matter's current one; `drafts` and `draft_versions` reads need `isAuthor()`, membership, and clearance for the row's and the matter's current label (O-68 closed; O-76 for `documents`). Override documents carry the draft's classification.
 - **Existing tests.** Never weaken or skip an existing test. Rules tests that asserted client writes to `drafts` or `draft_versions` are amended to assert denial (P4-11), and the commit says so. A pinned route, action or collection list may be extended.
 
 ## Review Focus
