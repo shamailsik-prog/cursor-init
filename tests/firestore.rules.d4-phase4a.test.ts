@@ -21,10 +21,12 @@ import {
 } from "firebase/firestore"
 
 /**
- * Phase 4a (spec P4-11): the draft store is written by Cloud Functions only. `drafts` and `draft_versions`
- * keep their read rules (a cleared member of the draft's matter) and lose every client write, so `gateResult`,
- * `status`, `locked` and `approvedBy` can no longer be forged from the client SDK; `draft_gate_results` and
- * `draft_gate_overrides` are new collections that no client can read or write.
+ * Phase 4a (spec P4-11): the draft store is written by Cloud Functions only. `drafts` and `draft_versions` lose
+ * every client write, so `gateResult`, `status`, `locked` and `approvedBy` can no longer be forged from the client
+ * SDK; `draft_gate_results` and `draft_gate_overrides` are new collections that no client can read or write. Reads
+ * of `drafts` and `draft_versions` need an author role (partner, associate, clerk: interns stay denied, P4-10, O-68
+ * closed), membership of the draft's matter, and clearance for both the row's own label and the matter's current one
+ * (a label raised after the row was written binds it too: the final review's PROBE-5).
  */
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 })
 
@@ -34,6 +36,8 @@ const RULES = readFileSync("firestore.rules", "utf8")
 const FIRM = "p4a-firm"
 const OTHER_FIRM = "p4a-firm-b"
 const MATTER = "p4a-matter"
+/** A matter whose label was raised to privileged after its draft and version were written at internal. */
+const RAISED = "p4a-matter-raised"
 const MAX = "privileged-restricted"
 
 type Caller = { uid: string; claims: Record<string, unknown> }
@@ -50,11 +54,8 @@ const LOW_CLEARANCE = caller("p4a-low", FIRM, "associate", "internal")
 const FIRM_B_PARTNER = caller("p4a-b-partner", OTHER_FIRM, "partner")
 const MEMBERS = [PARTNER, ASSOC, CLERK, INTERN, CLIENT, ACCOUNTS, LOW_CLEARANCE]
 const EVERYONE = [...MEMBERS, NON_MEMBER, FIRM_B_PARTNER]
-/**
- * Members who can read a draft of the matter through the rules (the control). The rules' read path is
- * unchanged (P4-11): staff members, an intern included, although the API's permission table denies interns.
- */
-const READERS = [PARTNER, ASSOC, CLERK, INTERN]
+/** Members who can read a draft of the matter through the rules (the control): the author roles, as the API (P4-10). */
+const READERS = [PARTNER, ASSOC, CLERK]
 
 /** A live, second-factor signed-in caller whose users/{uid} record matches its token (SEC-3). */
 async function as(c: Caller) {
@@ -102,6 +103,10 @@ beforeAll(async () => {
     const db = ctx.firestore()
     await setDoc(doc(db, "matters", MATTER), { firmId: FIRM, title: "M", classification: "internal" })
     for (const c of MEMBERS) await setDoc(doc(db, "matter_members", `${MATTER}_${c.uid}`), { firmId: FIRM, matterId: MATTER, userId: c.uid })
+    await setDoc(doc(db, "matters", RAISED), { firmId: FIRM, title: "Raised", classification: "privileged" })
+    for (const c of [ASSOC, CLERK, LOW_CLEARANCE]) await setDoc(doc(db, "matter_members", `${RAISED}_${c.uid}`), { firmId: FIRM, matterId: RAISED, userId: c.uid })
+    await setDoc(doc(db, "drafts", "dRaised"), draftRow({ matterId: RAISED }))
+    await setDoc(doc(db, "draft_versions", "dRaised_1"), versionRow({ matterId: RAISED, draftId: "dRaised" }))
     await setDoc(doc(db, "drafts", "d1"), draftRow())
     await setDoc(doc(db, "drafts", "dLocked"), draftRow({ locked: true }))
     await setDoc(doc(db, "draft_versions", "d1_1"), versionRow())
@@ -129,10 +134,15 @@ describe("firestore.rules names the D4 draft collections explicitly (P4-11)", ()
     expect(line).toMatch(/allow read, write: if false;/)
   })
 
-  it.each(["drafts", "draft_versions"])("%s: reads keep the member and clearance rule; create, update and delete are false", (name) => {
+  it.each(["drafts", "draft_versions"])("%s: reads need an author role, membership and clearance on the row's and the matter's labels; create, update and delete are false", (name) => {
     const text = block(name)
-    expect(text).toMatch(/allow read: if sameFirm\(\) && [^;]*(?:isMember|memberReader)\(/)
-    expect(text).toMatch(/cleared\(resource\.data\.classification\)/)
+    const read = /allow read: if ([^;]+);/.exec(text)?.[1] ?? ""
+    expect(read).toMatch(/^sameFirm\(\) && /)
+    expect(read).toMatch(/\bisAuthor\(\)/)
+    expect(read).toMatch(/\bisMember\(resource\.data\.matterId\)/)
+    expect(read).toMatch(/cleared\(resource\.data\.classification\)/)
+    expect(read).toMatch(/cleared\(get\(\/databases\/\$\(database\)\/documents\/matters\/\$\(resource\.data\.matterId\)\)\.data\.classification\)/)
+    expect(read).not.toMatch(/memberReader|isMatterStaff|isStaff/)
     const writes = [...text.matchAll(/allow ((?:create|update|delete|write)[a-z, ]*):\s*if ([^;]+);/g)]
     expect(writes.length).toBeGreaterThan(0)
     expect(writes.map((m) => m[2]!.trim())).toEqual(writes.map(() => "false"))
@@ -143,7 +153,7 @@ describe("firestore.rules names the D4 draft collections explicitly (P4-11)", ()
 })
 
 describe("drafts and draft_versions: readable by a cleared member, writable by no client (P4-11)", () => {
-  it("control: a partner, associate, clerk and intern member read a draft and its versions", async () => {
+  it("control: a partner, associate and clerk member read a draft and its versions", async () => {
     for (const c of READERS) {
       const db = await as(c)
       await assertSucceeds(getDoc(doc(db, "drafts", "d1")))
@@ -151,7 +161,26 @@ describe("drafts and draft_versions: readable by a cleared member, writable by n
     }
   })
 
-  it("reads are unchanged: a client, accounts, a non-member and another firm's partner are denied, and a clearance below the draft's", async () => {
+  it("an intern member is denied a draft and its versions (P4-10: interns stay denied; O-68 closed)", async () => {
+    const db = await as(INTERN)
+    await assertFails(getDoc(doc(db, "drafts", "d1")))
+    await assertFails(getDoc(doc(db, "draft_versions", "d1_1")))
+    await assertFails(getDocs(query(collection(db, "draft_versions"), where("firmId", "==", FIRM), where("draftId", "==", "d1"))))
+  })
+
+  it("PROBE-5: an internal-cleared member cannot read a draft or a version of a matter whose label was raised to privileged, even when the stored labels are internal", async () => {
+    const low = await as(LOW_CLEARANCE)
+    await assertFails(getDoc(doc(low, "drafts", "dRaised")))
+    await assertFails(getDoc(doc(low, "draft_versions", "dRaised_1")))
+    // The control: a member cleared for the matter's raised label reads both, a clerk included.
+    for (const c of [ASSOC, CLERK]) {
+      const db = await as(c)
+      await assertSucceeds(getDoc(doc(db, "drafts", "dRaised")))
+      await assertSucceeds(getDoc(doc(db, "draft_versions", "dRaised_1")))
+    }
+  })
+
+  it("reads: a client, accounts, a non-member and another firm's partner are denied, and a clearance below the draft's", async () => {
     for (const c of [CLIENT, ACCOUNTS, NON_MEMBER, FIRM_B_PARTNER]) {
       const db = await as(c)
       await assertFails(getDoc(doc(db, "drafts", "d1")))

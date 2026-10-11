@@ -388,12 +388,27 @@ function refuseStaleEdit(draft: DocumentData, baseVersion: number): void {
 }
 
 /**
+ * The label a new version of `draft` takes (final review PROBE-5): the strictest of the draft's own label and its
+ * matter's current one, read in the version's transaction, so a matter label raised after the draft was created binds
+ * every later version and never falls (monotonic, L17.3 #20). The draft takes it too, and so do the events, gate
+ * results and overrides that follow the draft's label. A matter that is gone or another firm's is 404 `not_found`; one
+ * whose label is unreadable fails closed (403 `clearance`), as classifyForMatter does.
+ */
+async function raisedLabel(tx: Transaction, caller: Caller, draft: DocumentData): Promise<Classification> {
+  const matter = (await tx.get(matters().doc(draft.matterId as string))).data()
+  if (!matter || matter.firmId !== caller.firmId) throw notFound()
+  if (!isKnownClassification(matter.classification)) throw new HttpError(403, "clearance")
+  return strictest([draft.classification as Classification, matter.classification])
+}
+
+/**
  * Stores `content` as version baseVersion + 1 of the draft, in one transaction with the event and the call's audit row,
  * after re-reading the draft: locked (409 `draft_locked`), then `baseVersion` against `currentVersion` (409
  * `draft_changed`), so two writers on one base give one new version and one refusal, and the numbers stay dense. When
  * the content equals the current version's (same title, same body hash) nothing is written but the audit row:
  * `{ saved: false }`. A new version is not gated, so the draft's gate summary is reset (the old result stays in
- * `draft_gate_results`). A transaction that gives up under contention wrote nothing and answers `draft_changed`.
+ * `draft_gate_results`). The version and the draft take `raisedLabel`. A transaction that gives up under contention
+ * wrote nothing and answers `draft_changed`.
  */
 async function storeVersion(
   caller: Caller,
@@ -420,6 +435,7 @@ async function storeVersion(
           return { saved: false, draft: draftView(draftId, draft) }
         }
         const version = baseVersion + 1
+        const classification = await raisedLabel(tx, caller, draft)
         await audit.stage(tx, "allow", "ok")
         tx.create(versions().doc(versionId(draftId, version)), {
           firmId: caller.firmId,
@@ -429,15 +445,15 @@ async function storeVersion(
           title: next.title,
           body: next.body,
           bodySha256,
-          classification: draft.classification,
+          classification,
           kind,
           ...(next.restoredFrom !== undefined ? { restoredFrom: next.restoredFrom } : {}),
           createdBy: caller.uid,
           createdAt: stamp,
         })
-        const update = { title: next.title, currentVersion: version, currentBodySha256: bodySha256, gateResult: null, updatedAt: stamp }
+        const update = { title: next.title, classification, currentVersion: version, currentBodySha256: bodySha256, gateResult: null, updatedAt: stamp }
         tx.update(ref, update)
-        stageDraftEvent(tx, "draft.autosaved", "autosaved", draftId, version, draft as { firmId: string; matterId: string; documentTypeId: string; classification: Classification }, null)
+        stageDraftEvent(tx, "draft.autosaved", "autosaved", draftId, version, { ...(draft as { firmId: string; matterId: string; documentTypeId: string }), classification }, null)
         return { saved: true, draft: draftView(draftId, { ...draft, ...update }) }
       },
       { maxAttempts: CHANGE_TX_ATTEMPTS }

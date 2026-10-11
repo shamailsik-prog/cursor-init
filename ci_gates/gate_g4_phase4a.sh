@@ -33,8 +33,9 @@
 #        overriding at once, two approvals at once, a re-gate landing during an approval, the approval's re-run
 #        with the recorded checks, the lock, and the verification report
 #    b. tests/: firestore.rules.d4-phase4a.test.ts (no client writes drafts, draft_versions, draft_gate_results or
-#       draft_gate_overrides; the two gate collections are unreadable too; P4-11) and citationVerdict.test.ts (the
-#       pure verdict rule shared with the Next.js tree, P4-2)
+#       draft_gate_overrides; the two gate collections are unreadable too; P4-11; drafts and versions are read only by
+#       an author-role member cleared for the row's and the matter's current label: interns denied, PROBE-5) and
+#       citationVerdict.test.ts (the pure verdict rule shared with the Next.js tree, P4-2)
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -209,6 +210,7 @@ DRAFT_TESTS=(
   'saveDraftVersion (P4-4, P4-12) sequential saves give dense versions 1..5, each with its own hash, and every version stays readable'
   "saveDraftVersion (P4-4, P4-12) a new version is not gated: the draft's gate summary is reset (the old result stays in draft_gate_results)"
   "saveDraftVersion (P4-4, P4-12) the version carries the draft's classification, not a fresh one"
+  "saveDraftVersion (P4-4, P4-12) a version saved after the matter's label is raised carries the raised label"
   'saveDraftVersion (P4-4, P4-12) input and text checks draftId, title and body must be well formed (400), and nothing is stored'
   'saveDraftVersion (P4-4, P4-12) input and text checks a title with a control character (LF, CR, TAB, any C0 or C1, DEL) is 400 invalid_title and stores nothing'
   'saveDraftVersion (P4-4, P4-12) input and text checks a hostile body or title is 422 unsupported_characters and stores nothing; an oversize title or body is 422 too'
@@ -352,11 +354,13 @@ RULES_TESTS=(
   # firestore.rules names the D4 draft collections explicitly (P4-11)
   'firestore.rules names the D4 draft collections explicitly (P4-11) draft_gate_results has its own match block, read and write false'
   'firestore.rules names the D4 draft collections explicitly (P4-11) draft_gate_overrides has its own match block, read and write false'
-  'firestore.rules names the D4 draft collections explicitly (P4-11) drafts: reads keep the member and clearance rule; create, update and delete are false'
-  'firestore.rules names the D4 draft collections explicitly (P4-11) draft_versions: reads keep the member and clearance rule; create, update and delete are false'
+  "firestore.rules names the D4 draft collections explicitly (P4-11) drafts: reads need an author role, membership and clearance on the row's and the matter's labels; create, update and delete are false"
+  "firestore.rules names the D4 draft collections explicitly (P4-11) draft_versions: reads need an author role, membership and clearance on the row's and the matter's labels; create, update and delete are false"
   # drafts and draft_versions: readable by a cleared member, writable by no client (P4-11)
-  'drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) control: a partner, associate, clerk and intern member read a draft and its versions'
-  "drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) reads are unchanged: a client, accounts, a non-member and another firm's partner are denied, and a clearance below the draft's"
+  'drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) control: a partner, associate and clerk member read a draft and its versions'
+  'drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) an intern member is denied a draft and its versions (P4-10: interns stay denied; O-68 closed)'
+  'drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) PROBE-5: an internal-cleared member cannot read a draft or a version of a matter whose label was raised to privileged, even when the stored labels are internal'
+  "drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) reads: a client, accounts, a non-member and another firm's partner are denied, and a clearance below the draft's"
   "drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) no client of any role creates a draft or a version (even a cleared member author at the matter's own label)"
   'drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) no client updates a draft: not its body fields, not the gate summary, status, lock or approval, not by batch'
   'drafts and draft_versions: readable by a cleared member, writable by no client (P4-11) no client overwrites or deletes a draft or a version'

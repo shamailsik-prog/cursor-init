@@ -44,6 +44,7 @@ const listApi = viaApi<Page<View>>("listDrafts")
 const versionsApi = viaApi<Page<VersionMeta>>("listDraftVersions")
 const typesApi = viaApi<Page<TypeRow>>("listDocumentTypes")
 const profileApi = viaApi<Record<string, unknown>>("getTypeProfile")
+const gateApi = viaApi<{ draftId: string; version: number; status: string; resultId: string }>("gateDraft")
 
 const TYPE = "constitutional_petition_199" // courts BHC, IHC, LHC, PHC, SHC
 const SC_ONLY_TYPE = "constitutional_petition_184_3" // SC_PK only
@@ -799,6 +800,32 @@ describe.skipIf(!EMULATORS)("saveDraftVersion (P4-4, P4-12)", () => {
     await save(f, f.P, v1.draftId, 1, "Second", "Second body.")
     expect((await versionDoc(v1.draftId, 2))?.classification).toBe("privileged")
     expect((await eventDoc(v1.draftId, 2))?.classification).toBe("privileged")
+  })
+
+  it("a version saved after the matter's label is raised carries the raised label", async () => {
+    const f = await newFirm()
+    const v1 = await create(f, f.A)
+    expect(v1.classification).toBe("internal")
+    // A member raises the matter's label after version 1 was written (the client SDK may: the matters update rule).
+    await adminDb().collection("matters").doc(f.matterId).update({ classification: "privileged" })
+    const s2 = await save(f, f.A, v1.draftId, 1, "Second", "Second body.")
+    expect(s2.draft.classification).toBe("privileged")
+    expect((await draftDoc(v1.draftId))?.classification).toBe("privileged")
+    expect((await versionDoc(v1.draftId, 2))?.classification).toBe("privileged")
+    expect((await eventDoc(v1.draftId, 2))?.classification).toBe("privileged")
+    // Version 1 is immutable and keeps the label it was written with.
+    expect((await versionDoc(v1.draftId, 1))?.classification).toBe("internal")
+    // The new version's gate result and draft.gated event follow the draft's raised label.
+    const g = await send(gateApi, f, f.A, { draftId: v1.draftId, version: 2 })
+    expect(g.version).toBe(2)
+    expect((await adminDb().collection("draft_gate_results").doc(`${v1.draftId}_2`).get()).data()?.classification).toBe("privileged")
+    expect((await adminDb().collection("events").doc(`${v1.draftId}_2_gated_1`).get()).data()?.classification).toBe("privileged")
+    // Monotonic: a later lowering of the matter's label never lowers the draft; a restore after it stays privileged.
+    await adminDb().collection("matters").doc(f.matterId).update({ classification: "confidential" })
+    await restore(f, f.A, v1.draftId, 2, 1)
+    expect((await versionDoc(v1.draftId, 3))?.classification).toBe("privileged")
+    expect((await eventDoc(v1.draftId, 3))?.classification).toBe("privileged")
+    expect((await draftDoc(v1.draftId))?.classification).toBe("privileged")
   })
 
   describe("input and text checks", () => {

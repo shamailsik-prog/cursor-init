@@ -230,17 +230,19 @@ service cloud.firestore {
       allow delete: if false;
     }
     // Phase 4a (P4-11): the draft store is written by Cloud Functions only (the Admin SDK, in transactions with the
-    // audit row and the event), so no client can forge `gateResult`, `status`, `locked` or `approvedBy`. Reads are
-    // unchanged: a cleared member of the draft's matter. A draft and its versions are created, saved, restored and
-    // approved through /api/d4/drafting only.
+    // audit row and the event), so no client can forge `gateResult`, `status`, `locked` or `approvedBy`. A draft and
+    // its versions are created, saved, restored and approved through /api/d4/drafting only. Reads follow the API's
+    // `draft.read` (P4-10): an author role (partner, associate, clerk; interns stay denied, O-68 closed) who is a
+    // member of the draft's matter (R-2) and is cleared for the row's own label and for the matter's current label,
+    // so a label raised after a draft or a version was written binds it too (final review PROBE-5).
     match /drafts/{id} {
-      allow read: if sameFirm() && memberReader(resource.data.matterId) && cleared(resource.data.classification);
+      allow read: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && cleared(resource.data.classification)
+        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification);
       allow create, update, delete: if false;
     }
     match /draft_versions/{id} {
-      // R-2: drafts are matter-bound; a version is readable only by a cleared member of that matter.
-      allow read: if sameFirm() && isMatterStaff() && cleared(resource.data.classification)
-        && isMember(resource.data.matterId);
+      allow read: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && cleared(resource.data.classification)
+        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification);
       allow create, update, delete: if false; // append-only, and written by Cloud Functions only
     }
     // Phase 4a (P4-6, P4-7, P4-11): the gate's stored results and the partner's overrides are server-only: no client
