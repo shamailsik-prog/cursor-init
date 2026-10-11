@@ -22,6 +22,7 @@
     "gate:g4:phase3a": "bash ci_gates/gate_g4_phase3a.sh",
     "gate:g4:phase3b": "bash ci_gates/gate_g4_phase3b.sh",
     "gate:g4:phase3c": "bash ci_gates/gate_g4_phase3c.sh",
+    "gate:g4:phase3d": "bash ci_gates/gate_g4_phase3d.sh",
     "mutation": "stryker run stryker.config.mjs",
     "mutation:functions": "npm --prefix functions run mutation",
     "eve:dev": "eve dev",
