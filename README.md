@@ -50,7 +50,7 @@ The eve agent lives at `agent/` (`sikander-ai`). It is not a second provider pat
 
 The foundation console **Committee Brain** tab posts to `POST /api/p1/committee-brain` (Idempotency-Key required). `next.config.ts` is not wrapped with `withEve()` so `npm run dev` stays the Phase 0 inspector. The eve CLI (`npm run eve:dev`) needs Node 24; the Next.js app and CI stay on Node 20+.
 
-Do not set provider API keys. If a Gateway key already exists as `AI_GATEWAY_API_KEY` or `VERCEL_AI_GATEWAY_API_KEY`, public-rank calls may leave. Per L18 §4.6, internal may leave too; confidential and above stay blocked while `data/provider_dpa.json` is empty (`TODO(firm)`).
+Do not set provider API keys. Until O-53 closes (the app moves to the Cloud Functions route), the Next.js deployment must not hold an AI Gateway key: leave `AI_GATEWAY_API_KEY` and `VERCEL_AI_GATEWAY_API_KEY` unset, so `POST /api/p1/committee-brain` stays blocked (`PHASE0_NO_CREDENTIALS`). That route does not go through `callP1`, so the P1 kill switches, the monthly budget and the cost log govern the Cloud Functions path (`/api/platform/brain/committeeBrain`) only (ruling R8, `functions/src/p1/README.md`). Through that path, per L18 §4.6, public and internal calls may leave; confidential and above stay blocked while `data/provider_dpa.json` is empty (`TODO(firm)`).
 
 ```bash
 npm run eve:info   # Node 24 — discovered agent surface

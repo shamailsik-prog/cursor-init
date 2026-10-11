@@ -450,6 +450,8 @@ export const setAiKillSwitchOp: FirmOperation<KillSwitchSet> = {
  * setPlatformAiKillSwitch({ disableAll, disabledModels, reason }) (P3-66): the operator's switch across every
  * firm, stored at `platform/p1.killSwitch`. Platform admin only (`platformAdmin: true` in the caller's current
  * custom claims; 403 platform_admin_only otherwise), checked before the body. Firmless, like recordGatePass.
+ * Its `reason` is shown to every firm's partners in `getAiUsage` (the setter is shown as "platform"), so it must
+ * never name a firm or a client.
  */
 export const setPlatformAiKillSwitchOp: FirmlessOperation<KillSwitchSet> = {
   auth: "firmless",
