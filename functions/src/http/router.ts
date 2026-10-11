@@ -23,6 +23,8 @@ import { confirmMergeOp, disputeLinkOp, rejectLinkOp } from "../d1/entity/ops"
 import { unmergeEntityOp } from "../d1/entity/unmerge"
 import { cancelJobOp, getJobOp, listJobsOp, retryFailedJobOp } from "../p2/ops"
 import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, setPlatformAiKillSwitchOp } from "../p1/ops"
+import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDraftVersionOp, saveDraftVersionOp } from "../d4/drafts"
+import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -70,6 +72,10 @@ const D1_ENTITY = "/api/d1/entity"
 const PLATFORM_JOBS = "/api/platform/jobs"
 /** P1 AI gateway (P3-60): CORE, no layer flag. */
 const PLATFORM_BRAIN = "/api/platform/brain"
+/** D4-1 drafting (P4-10): the draft store. */
+const D4_DRAFTING = "/api/d4/drafting"
+/** D4-2 intelligence (P4-10): the document-type catalogue (and, from Task 3, the citation gate). */
+const D4_INTELLIGENCE = "/api/d4/intelligence"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
@@ -126,6 +132,14 @@ export const ROUTES: readonly Route[] = [
   post(`${PLATFORM_BRAIN}/setAiKillSwitch`, setAiKillSwitchOp),
   // firmless (platformAdmin): the operator's kill switch across firms; no X-Firm-Id, like recordGatePass
   post(`${PLATFORM_BRAIN}/setPlatformAiKillSwitch`, setPlatformAiKillSwitchOp),
+  post(`${D4_DRAFTING}/createDraft`, createDraftOp),
+  post(`${D4_DRAFTING}/saveDraftVersion`, saveDraftVersionOp),
+  post(`${D4_DRAFTING}/restoreDraftVersion`, restoreDraftVersionOp),
+  get(`${D4_DRAFTING}/getDraft`, getDraftOp),
+  get(`${D4_DRAFTING}/listDrafts`, listDraftsOp),
+  get(`${D4_DRAFTING}/listDraftVersions`, listDraftVersionsOp),
+  get(`${D4_INTELLIGENCE}/listDocumentTypes`, listDocumentTypesOp),
+  get(`${D4_INTELLIGENCE}/getTypeProfile`, getTypeProfileOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>

@@ -60,6 +60,21 @@ const CASES: Case[] = [
   { name: "accounts reads the intimation register", role: "accounts", action: "intimation_register", expected: { allow: true, reason: "accounts-register" } },
   { name: "accounts records an entry on its firm's matter", role: "accounts", action: "record_accounts_entry", matter: OWN, member: false, expected: { allow: true, reason: "accounts-register" } },
   { name: "accounts records an entry on another firm's matter", role: "accounts", action: "record_accounts_entry", matter: { firmId: "firmB", classification: "public" }, expected: { allow: false, reason: "cross-firm" } },
+  // P4-10: the D4 drafting actions (Phase 4a), matter-level, and doctype.read, firm-level.
+  { name: "draft.create by a member associate", role: "associate", action: "draft.create", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "draft.create by a partner who is not a member", role: "partner", action: "draft.create", matter: OWN, member: false, expected: { allow: false, reason: "not-member" } },
+  { name: "draft.edit by a member intern", role: "intern", action: "draft.edit", matter: OWN, member: true, expected: { allow: false, reason: "intern-channel-denied" } },
+  { name: "draft.read of another firm's matter", role: "partner", action: "draft.read", matter: { firmId: "firmB", classification: "public" }, member: true, expected: { allow: false, reason: "cross-firm" } },
+  { name: "draft.read naming no matter fails closed", role: "partner", action: "draft.read", expected: { allow: false, reason: "cross-firm" } },
+  { name: "draft.read below the matter's clearance", role: "clerk", clearance: "internal", action: "draft.read", matter: { firmId: "firmA", classification: "privileged" }, member: true, expected: { allow: false, reason: "clearance" } },
+  { name: "draft.override by a member associate", role: "associate", action: "draft.override", matter: OWN, member: true, expected: { allow: false, reason: "role-not-permitted" } },
+  { name: "draft.approve by a member partner", role: "partner", action: "draft.approve", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "draft.create by a client", role: "client", action: "draft.create", matter: OWN, member: true, expected: { allow: false, reason: "client-denied" } },
+  { name: "draft.create by accounts", role: "accounts", action: "draft.create", matter: OWN, member: true, expected: { allow: false, reason: "accounts-register-only" } },
+  { name: "doctype.read by a clerk", role: "clerk", action: "doctype.read", expected: { allow: true, reason: "ok" } },
+  { name: "doctype.read by an intern", role: "intern", action: "doctype.read", expected: { allow: false, reason: "intern-channel-denied" } },
+  { name: "doctype.read by a client", role: "client", action: "doctype.read", expected: { allow: false, reason: "client-denied" } },
+  { name: "doctype.read by accounts", role: "accounts", action: "doctype.read", expected: { allow: false, reason: "accounts-register-only" } },
   ...FIRM_ADMIN_ACTIONS.flatMap((action): Case[] => [
     { name: `${action} by a partner`, role: "partner", action, expected: { allow: true, reason: "ok" } },
     ...["associate", "clerk", "intern", "accounts", "client"].map((role): Case => ({
