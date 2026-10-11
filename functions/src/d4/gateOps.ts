@@ -45,7 +45,7 @@ import {
  *   to the `resultId` of the result the partner reviewed (R6). Once it exists the version is not re-gated (R5): the
  *   check set the partner cleared is frozen, and only approval runs, which reuse those checks, replace the result.
  * The draft holds the summary of its current version's latest run (`gateResult`, P4-4) and `lastGatedVersion`, the
- * version whose result the verification report shows.
+ * version whose result the verification report shows and whose recorded checks every later gate run carries (R10).
  *
  * Every status is held to its domain before it is stored or compared: a citation status outside VERIFIED, UNVERIFIED
  * and OVERRULED is UNVERIFIED, a temporal status outside OK, TEMPORAL_MISMATCH and TEMPORAL_UNAVAILABLE is
@@ -70,7 +70,8 @@ const chars = (text: string): number => [...text].length
 export const MAX_TEMPORAL_CHECKS = 20
 const SECTION_ID = /^[A-Za-z0-9_.:-]{1,200}$/
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
-const MAX_JURISDICTION = 50
+/** R11: an upper-case code (PK, AJK, SINDH, FEDERAL, ...): no space, no no-break space, no lower case, nothing outside ASCII. */
+const JURISDICTION = /^[A-Z0-9_.:-]{1,50}$/
 const MAX_USED_TEXT = 10_000
 /** The usedText of all checks together, in UTF-8 bytes (R8): bounds the stored result. */
 const MAX_USED_TEXT_BYTES = 200_000
@@ -90,11 +91,16 @@ function isCalendarDate(value: string): boolean {
   return day <= days
 }
 
+/** A check's match key, `sectionId|asAtDate|jurisdiction`: none of the three can hold `|`, so keys never collide. */
+const checkKey = (c: TemporalCheck): string => `${c.sectionId}|${c.asAtDate}|${c.jurisdiction}`
+
 /**
  * The caller's temporal checks (P4-6): absent is none; otherwise an array of at most 20 objects, each with a `sectionId`
- * matching /^[A-Za-z0-9_.:-]{1,200}$/, an `asAtDate` that is a real YYYY-MM-DD date, a `jurisdiction` of 1 to 50
- * characters and a `usedText` of 1 to 10,000 characters. Anything else is 400 `invalid_temporal_checks`. Only the four
- * fields are kept: nothing else a caller sent (a status, an in-force text) reaches the gate.
+ * matching /^[A-Za-z0-9_.:-]{1,200}$/, an `asAtDate` that is a real YYYY-MM-DD date, a `jurisdiction` matching
+ * /^[A-Z0-9_.:-]{1,50}$/ (R11) and a `usedText` of 1 to 10,000 characters, no two with the same (sectionId, asAtDate,
+ * jurisdiction) (a clearance of one would cover the other: the final review's PROBE-2). Anything else is 400
+ * `invalid_temporal_checks`. Only the four fields are kept: nothing else a caller sent (a status, an in-force text)
+ * reaches the gate.
  */
 export function parseTemporalChecks(value: unknown): TemporalCheck[] {
   if (value === undefined) return []
@@ -105,10 +111,11 @@ export function parseTemporalChecks(value: unknown): TemporalCheck[] {
     const { sectionId, asAtDate, jurisdiction, usedText } = entry as Record<string, unknown>
     if (typeof sectionId !== "string" || !SECTION_ID.test(sectionId)) throw invalid()
     if (typeof asAtDate !== "string" || !isCalendarDate(asAtDate)) throw invalid()
-    if (typeof jurisdiction !== "string" || chars(jurisdiction) < 1 || chars(jurisdiction) > MAX_JURISDICTION) throw invalid()
+    if (typeof jurisdiction !== "string" || !JURISDICTION.test(jurisdiction)) throw invalid()
     if (typeof usedText !== "string" || chars(usedText) < 1 || chars(usedText) > MAX_USED_TEXT) throw invalid()
     return { sectionId, asAtDate, jurisdiction, usedText }
   })
+  if (new Set(checks.map(checkKey)).size !== checks.length) throw invalid()
   if (checks.reduce((sum, c) => sum + Buffer.byteLength(c.usedText, "utf8"), 0) > MAX_USED_TEXT_BYTES) throw invalid()
   return checks
 }
@@ -116,13 +123,14 @@ export function parseTemporalChecks(value: unknown): TemporalCheck[] {
 /**
  * Caller text the gate stores (R7: a usedText, a jurisdiction, an override reason) is refused with 422
  * `unsupported_characters` on the draft body's charset rule (checkDraftCharset: bidirectional controls, invisible
- * characters, confusables). What is stored is the NFC form of the text with the rule's paste artefacts removed (a
- * zero-width space inside a word, a soft hyphen), and nothing more: no dash or digit folding, because a usedText is
- * compared exactly (after NFC) with the statute text in force, and statute text carries its em dashes.
+ * characters, confusables). What is stored is the text with the rule's paste artefacts removed (a zero-width space
+ * inside a word, a soft hyphen), each CRLF turned into LF (a Windows paste is not a mismatch; the body rule does the
+ * same), in NFC, and nothing more: no dash or digit folding, because a usedText is compared exactly (after NFC) with
+ * the statute text in force, and statute text carries its em dashes.
  */
 function requireSupportedText(raw: string): string {
   if (!checkDraftCharset(raw).ok) throw new HttpError(422, "unsupported_characters")
-  return cleanPasteArtefacts(raw).normalize("NFC")
+  return cleanPasteArtefacts(raw).replace(/\r\n/g, "\n").normalize("NFC")
 }
 
 /** The charset rule on each check's usedText and jurisdiction (R7), then their lengths again on the stored form (400). */
@@ -431,17 +439,65 @@ const summaryOf = (version: number, bodySha256: string, status: GateStatus, gate
 // gateDraft
 // ---------------------------------------------------------------------------
 
+/** The draft's `lastGatedVersion` (written with every result: a gate run, an approval run), or null when it has none. */
+function lastGatedVersionOf(draft: DocumentData): number | null {
+  const v: unknown = draft.lastGatedVersion
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 1 ? v : null
+}
+
+/** The checks a gate run carries (R10), and which stored result they came from, so the transaction can see it unchanged. */
+type Carried = { last: number | null; resultId: string | null; checks: TemporalCheck[] }
+
+/**
+ * The temporal checks recorded on the draft's most recent stored gate result, of any version (R10): the result of its
+ * `lastGatedVersion`, read without a query. A draft with no `lastGatedVersion` carries none (drafts created before R10
+ * have no results: nothing was deployed), and so does one whose result is absent or not this draft's (it records none
+ * of this draft's checks). A result whose record is not well formed is 409 `not_gated` (`recordedChecks`), so no
+ * recorded check is ever dropped silently.
+ */
+async function carriedChecks(caller: Caller, draftId: string, draft: DocumentData): Promise<Carried> {
+  const last = lastGatedVersionOf(draft)
+  if (last === null) return { last, resultId: null, checks: [] }
+  const stored = (await results().doc(versionId(draftId, last)).get()).data()
+  if (!stored || stored.firmId !== caller.firmId || stored.draftId !== draftId) return { last, resultId: null, checks: [] }
+  return { last, resultId: idOf(stored.resultId), checks: recordedChecks(stored) }
+}
+
+/**
+ * The check set of a gate run (R10): the carried checks, in their recorded order, each replaced by the caller's check
+ * on the same (sectionId, asAtDate, jurisdiction) (the caller's usedText wins), then the caller's checks on new keys,
+ * in the caller's order. A carried check never leaves the set: a partner override clears its status on its version
+ * only, and the next version re-checks it. The caps hold for the merged set (at most 20 checks, 200,000 bytes of
+ * usedText: 400 `invalid_temporal_checks`).
+ */
+function mergeChecks(carried: readonly TemporalCheck[], fromCaller: readonly TemporalCheck[]): TemporalCheck[] {
+  const callers = new Map(fromCaller.map((c) => [checkKey(c), c]))
+  const recorded = new Set(carried.map(checkKey))
+  return parseTemporalChecks([...carried.map((c) => callers.get(checkKey(c)) ?? c), ...fromCaller.filter((c) => !recorded.has(checkKey(c)))])
+}
+
+/** In the gate's transaction: the draft's latest stored result is still the one the carried checks came from (409 `draft_changed`). */
+async function requireCarriedUnchanged(tx: Transaction, draft: DocumentData, draftId: string, carried: Carried): Promise<void> {
+  if (lastGatedVersionOf(draft) !== carried.last) throw conflict("draft_changed")
+  if (carried.last === null) return
+  const now = (await tx.get(results().doc(versionId(draftId, carried.last)))).data()
+  if (idOf(now?.resultId) !== carried.resultId) throw conflict("draft_changed")
+}
+
 /**
  * gateDraft({ draftId, version, temporalChecks? }) → the GateResult (P4-6). Checks the request (400 `invalid_version`,
  * `invalid_temporal_checks`), then `draft.gate` on the draft's matter; a locked draft is 409 `draft_locked` (an approved
  * draft is not re-gated) and a version that is not the current one 409 `draft_changed`; a version with an override is
  * 409 `already_overridden` (R5: the checks its partner cleared are frozen). Then the charset rule on each check's
- * usedText and jurisdiction (422 `unsupported_characters`, R7). The gate runs on the stored version's title and body
- * against the active authority store; it reports and never edits the text. Findings over 900,000 bytes are 422
- * `gate_result_too_large` (R8). One transaction, which checks the lock, the version and the override again, sets the
- * version's result with a fresh `resultId` (replacing an earlier run of that version), the draft's summary
- * (`overridden: false`), the `draft.gated` event `<draftId>_<version>_gated_<n>` (n = this version's gate run count)
- * and the audit row.
+ * usedText and jurisdiction (422 `unsupported_characters`, R7). The run's checks are the caller's merged with those
+ * recorded on the draft's most recent stored result (R10, `mergeChecks`: a check, once recorded, is re-checked on every
+ * later run and version; the merged caps are 400 `invalid_temporal_checks`). The gate runs on the stored version's
+ * title and body against the active authority store; it reports and never edits the text. Findings over 900,000 bytes
+ * are 422 `gate_result_too_large` (R8). One transaction, which checks the lock, the version, the override and the
+ * carried result again (409 `draft_changed` if another run replaced it), sets the version's result with a fresh
+ * `resultId` (replacing an earlier run of that version), the draft's summary (`overridden: false`) and
+ * `lastGatedVersion`, the `draft.gated` event `<draftId>_<version>_gated_<n>` (n = this version's gate run count, from
+ * 1) and the audit row.
  */
 export const gateDraftOp: FirmOperation<GateResultView> = {
   auth: "firm",
@@ -460,7 +516,9 @@ export const gateDraftOp: FirmOperation<GateResultView> = {
     const resultRef = results().doc(versionId(draftId, version))
     const overrideRef = overrides().doc(versionId(draftId, version))
     refuseOverridden((await overrideRef.get()).exists)
-    const checks = requireSupportedChecks(temporalChecks)
+    const fromCaller = requireSupportedChecks(temporalChecks)
+    const carried = await carriedChecks(caller, draftId, draft)
+    const checks = mergeChecks(carried.checks, fromCaller)
     const text = await loadVersionText(caller, draftId, version, draft)
     const evaluation = normaliseEvaluation(await runGate({ title: text.title, body: text.body, temporalChecks: checks }, activeAuthorityStore()))
     requireStorable(evaluation)
@@ -469,6 +527,7 @@ export const gateDraftOp: FirmOperation<GateResultView> = {
       // The stamp is taken in the attempt that commits.
       const gatedAt = Timestamp.now()
       const current = await rereadDraft(tx, ref, caller, version, text.bodySha256)
+      await requireCarriedUnchanged(tx, current, draftId, carried)
       const prior = (await tx.get(resultRef)).data()
       refuseOverridden((await tx.get(overrideRef)).exists)
       const gateRuns = (typeof prior?.gateRuns === "number" ? prior.gateRuns : 0) + 1

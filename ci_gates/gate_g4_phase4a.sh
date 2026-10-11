@@ -27,8 +27,10 @@
 #      - the gate, override and approval (P4-6..P4-8, G-1 tests 4 and 5): version pinning (a save after a gate or an
 #        override: draft_changed or not_gated; an override never clears the next version, nor a restored body),
 #        the corpus-change test (a cleared UNVERIFIED that became OVERRULED blocks approval), R5 (a version with an
-#        override is not re-gated: Probes A and C), R6 (an override names the gate result the partner reviewed:
-#        Probe B), R7 (the charset rule on a usedText, a jurisdiction and a reason), R8 (the temporal-text and
+#        override is not re-gated: Probes A and C), R6 and R9 (an override and an approval name the gate result the
+#        partner reviewed: Probe B, PROBE-1 and 1b), R10 (checks carried forward per draft, merged by key, the merged
+#        caps), R11 (the jurisdiction pattern) and no two checks on one key (PROBE-2), R7 (the charset rule on a
+#        usedText and a reason; CRLF is LF), R8 (the temporal-text and
 #        result size caps: 400 invalid_temporal_checks, 422 gate_result_too_large, never truncated), two partners
 #        overriding at once, two approvals at once, a re-gate landing during an approval, the approval's re-run
 #        with the recorded checks, the lock, and the verification report
@@ -286,6 +288,8 @@ GATEOPS_TESTS=(
   'parseTemporalChecks (P4-6): 400 invalid_temporal_checks jurisdiction is 1 to 50 characters; usedText is 1 to 10,000 characters'
   'parseTemporalChecks (P4-6): 400 invalid_temporal_checks the usedText of all entries together is at most 200,000 UTF-8 bytes (R8)'
   'parseTemporalChecks (P4-6): 400 invalid_temporal_checks returns only the four fields of each entry (anything else the caller sent is dropped)'
+  'parseTemporalChecks (P4-6): 400 invalid_temporal_checks two checks sharing a key are refused 400 invalid_temporal_checks'
+  'parseTemporalChecks (P4-6): 400 invalid_temporal_checks jurisdiction matches /^[A-Z0-9_.:-]{1,50}$/: a trailing space, a no-break space, lowercase and a decomposed accent are refused (R11)'
   # G-1 equivalents (P4-14)
   "G-1 equivalents (P4-14) G-1 test 4: an authority overruled by a larger bench blocks approval until the matter's partner overrides with a reason"
   'G-1 equivalents (P4-14) G-1 test 5: a 2015-dated check against a section amended in 2018 is TEMPORAL_MISMATCH with both texts; no history is TEMPORAL_UNAVAILABLE'
@@ -302,8 +306,13 @@ GATEOPS_TESTS=(
   'gateDraft (P4-6, P4-12) R5: once a version is overridden it is not re-gated (409 already_overridden): the cleared check set is frozen, nothing is written'
   'gateDraft (P4-6, P4-12) R5 Probe A: after the override the store gains a differing history for the cleared section; a re-gate with no checks is refused, and approval is blocked'
   'gateDraft (P4-6, P4-12) R5 Probe C: after the override a re-gate with another usedText under the same key is refused (409 already_overridden)'
-  'gateDraft (P4-6, P4-12) R7: a usedText or jurisdiction with a bidi control or a zero-width space is 422 unsupported_characters; nothing is stored'
+  'gateDraft (P4-6, P4-12) R7: a usedText with a bidi control or a zero-width space is 422 unsupported_characters (a jurisdiction with one is 400 under R11); nothing is stored'
   'gateDraft (P4-6, P4-12) R7: the stored usedText and jurisdiction are the NFC-normalised text, without dash or digit folding (statute text keeps its em dash)'
+  'gateDraft (P4-6, P4-12) a check recorded on v1 is carried to v2 when v2 is gated without it'
+  "gateDraft (P4-6, P4-12) the caller's usedText replaces a carried check's usedText on the same key"
+  'gateDraft (P4-6, P4-12) a merged set over 20 checks is 400 invalid_temporal_checks'
+  'gateDraft (P4-6, P4-12) a merged set over 200,000 UTF-8 bytes of usedText is 400 invalid_temporal_checks'
+  'gateDraft (P4-6, P4-12) a CRLF usedText equal to an LF in-force text is OK, not MISMATCH'
   'gateDraft (P4-6, P4-12) R8: temporal checks over 200,000 UTF-8 bytes in all are 400 invalid_temporal_checks, before the permission'
   'gateDraft (P4-6, P4-12) R8: a result over 900,000 bytes is 422 gate_result_too_large; nothing is stored, the in-force text is never truncated'
   # overrideGate (P4-7)

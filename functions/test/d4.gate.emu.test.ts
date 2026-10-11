@@ -75,6 +75,9 @@ const REASON = "The overruling bench decided a different question; the partner a
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex")
 const claims = (firmId: string, role: string, clearanceLevel = "privileged-restricted") => ({ firmId, role, clearanceLevel })
 const check = (usedText: string, asAtDate = "2015-03-01", sectionId = "test_act_s1", jurisdiction = "PK") => ({ sectionId, asAtDate, jurisdiction, usedText })
+/** `n` checks of test_act_s1 in PK with distinct match keys (one asAtDate per day from 2015-01-01), each inside its 2010-2018 version. */
+const checks = (n: number, usedText: string) =>
+  Array.from({ length: n }, (_, i) => check(usedText, new Date(Date.UTC(2015, 0, 1 + i)).toISOString().slice(0, 10)))
 
 /** The seeded corpus (P4-13): one overruled judgment, one verified one, and the two versions of test_act_s1 in PK. */
 function seededStore(): InMemoryAuthorityStore {
@@ -312,8 +315,8 @@ describe("parseTemporalChecks (P4-6): 400 invalid_temporal_checks", () => {
   })
 
   it("at most 20 entries; each entry an object with the four fields", () => {
-    expect(parseTemporalChecks(Array.from({ length: 20 }, () => check(TEXT_2015)))).toHaveLength(20)
-    expect(bad(Array.from({ length: 21 }, () => check(TEXT_2015)))).toBe(true)
+    expect(parseTemporalChecks(checks(20, TEXT_2015))).toHaveLength(20)
+    expect(bad(checks(21, TEXT_2015))).toBe(true)
     for (const entry of [null, "x", [], 7]) expect([entry, bad([entry])]).toEqual([entry, true])
     for (const field of ["sectionId", "asAtDate", "jurisdiction", "usedText"]) {
       const entry: Record<string, unknown> = { ...check(TEXT_2015) }
@@ -346,14 +349,31 @@ describe("parseTemporalChecks (P4-6): 400 invalid_temporal_checks", () => {
   })
 
   it("the usedText of all entries together is at most 200,000 UTF-8 bytes (R8)", () => {
-    expect(parseTemporalChecks(Array.from({ length: 20 }, () => check("u".repeat(10_000))))).toHaveLength(20)
+    expect(parseTemporalChecks(checks(20, "u".repeat(10_000)))).toHaveLength(20)
     // Arabic alef: 2 bytes. Ten entries of 10,000 letters is 200,000 bytes, eleven is 220,000, each entry within its own cap.
-    expect(parseTemporalChecks(Array.from({ length: 10 }, () => check("\u0627".repeat(10_000))))).toHaveLength(10)
-    expect(bad(Array.from({ length: 11 }, () => check("\u0627".repeat(10_000))))).toBe(true)
+    expect(parseTemporalChecks(checks(10, "\u0627".repeat(10_000)))).toHaveLength(10)
+    expect(bad(checks(11, "\u0627".repeat(10_000)))).toBe(true)
   })
 
   it("returns only the four fields of each entry (anything else the caller sent is dropped)", () => {
     expect(parseTemporalChecks([{ ...check(TEXT_2015), status: "OK", inForceText: TEXT_2015 }])).toEqual([check(TEXT_2015)])
+  })
+
+  it("two checks sharing a key are refused 400 invalid_temporal_checks", () => {
+    // PROBE-2: one OK and one TEMPORAL_MISMATCH under one (sectionId, asAtDate, jurisdiction) would let a clearance of one cover the other.
+    expect(bad([check(TEXT_2015), check(TEXT_2018)])).toBe(true)
+    expect(bad([check(TEXT_2015), check(TEXT_2015)])).toBe(true)
+    expect(bad([check(TEXT_2015, "2015-03-01", "test_act_s9"), check(TEXT_2015), check(TEXT_2018, "2015-03-01", "test_act_s9")])).toBe(true)
+    // A different section, date or jurisdiction is another key.
+    const distinct = [check(TEXT_2015), check(TEXT_2015, "2015-03-02"), check(TEXT_2015, "2015-03-01", "test_act_s2"), check(TEXT_2015, "2015-03-01", "test_act_s1", "AJK")]
+    expect(parseTemporalChecks(distinct)).toEqual(distinct)
+  })
+
+  it("jurisdiction matches /^[A-Z0-9_.:-]{1,50}$/: a trailing space, a no-break space, lowercase and a decomposed accent are refused (R11)", () => {
+    for (const ok of ["PK", "AJK", "SINDH", "FEDERAL", "PK-ICT", "PK.SD:2", "A_1"]) expect(parseTemporalChecks([check(TEXT_2015, "2015-03-01", "test_act_s1", ok)])[0].jurisdiction).toBe(ok)
+    for (const no of ["PK ", "PK\u00a0", "pk", "Pk", "P\u0301K", "\u1e54K", " PK", "P K"]) {
+      expect([JSON.stringify(no), bad([check(TEXT_2015, "2015-03-01", "test_act_s1", no)])]).toEqual([JSON.stringify(no), true])
+    }
   })
 })
 
@@ -434,10 +454,12 @@ describe.skipIf(!EMULATORS)("G-1 equivalents (P4-14)", () => {
     // The 2015 text for the 2015 date is OK.
     expect((await gate(f, f.A, d.draftId, 1, [check(TEXT_2015)])).status).toBe("OK")
 
-    // No history for the section, or none in the jurisdiction: verify manually, never a silent pass.
+    // No history for the section, or none in the jurisdiction: verify manually, never a silent pass. The draft's
+    // recorded check (test_act_s1 in PK, now with the 2015 text) is carried beside them (R10).
     const none = await gate(f, f.A, d.draftId, 1, [check(TEXT_2015, "2015-03-01", "test_act_s9"), check(TEXT_2015, "2015-03-01", "test_act_s1", "AJK")])
     expect(none.status).toBe("TEMPORAL_UNAVAILABLE")
     expect(none.temporal.map((t) => [t.sectionId, t.jurisdiction, t.status, t.inForceText])).toEqual([
+      ["test_act_s1", "PK", "OK", TEXT_2015],
       ["test_act_s9", "PK", "TEMPORAL_UNAVAILABLE", null],
       ["test_act_s1", "AJK", "TEMPORAL_UNAVAILABLE", null],
     ])
@@ -589,7 +611,9 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
     for (const bad of [
       null,
       {},
-      Array.from({ length: 21 }, () => check(TEXT_2015)),
+      checks(21, TEXT_2015),
+      [check(TEXT_2015), check(TEXT_2018)],
+      [check(TEXT_2015, "2015-03-01", "test_act_s1", "pk")],
       [check(TEXT_2015, "2015-02-30")],
       [check(TEXT_2015, "2015-03-01", "test act")],
       [check(TEXT_2015, "2015-03-01", "test_act_s1", "")],
@@ -598,7 +622,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
       expectErr(await apiErrorOf(gate(f, f.P, d.draftId, 1, bad)), 400, "invalid_temporal_checks")
     }
     expect(await byFirm("draft_gate_results", f.firmId)).toHaveLength(0)
-    const r = await gate(f, f.P, d.draftId, 1, Array.from({ length: 20 }, () => check(TEXT_2015)))
+    const r = await gate(f, f.P, d.draftId, 1, checks(20, TEXT_2015))
     expect(r.temporal).toHaveLength(20)
     expect(r.status).toBe("OK")
   })
@@ -662,16 +686,16 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
     expect((await resultDoc(d.draftId, 1))?.temporal.map((t: { usedText: string }) => t.usedText)).toEqual([TEXT_2018])
   })
 
-  it("R7: a usedText or jurisdiction with a bidi control or a zero-width space is 422 unsupported_characters; nothing is stored", async () => {
+  it("R7: a usedText with a bidi control or a zero-width space is 422 unsupported_characters (a jurisdiction with one is 400 under R11); nothing is stored", async () => {
     const f = await newFirm()
     const d = await create(f, f.A, BODY_PLAIN)
-    for (const bad of [
-      [check("Test Act s.1 \u202eas it stood in 2015.")],
-      [check("Test Act s.1 limit:\u200bthirty days.")],
-      [check(TEXT_2015, "2015-03-01", "test_act_s1", "PK\u202e")],
-      [check(TEXT_2015, "2015-03-01", "test_act_s1", "PK:\u200bPB")],
-    ]) {
+    for (const bad of [[check("Test Act s.1 \u202eas it stood in 2015.")], [check("Test Act s.1 limit:\u200bthirty days.")]]) {
       expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, bad)), 422, "unsupported_characters")
+    }
+    // R11: a jurisdiction is /^[A-Z0-9_.:-]{1,50}$/, so one carrying a bidi control or a zero-width space is refused at parse, before the permission.
+    for (const bad of [[check(TEXT_2015, "2015-03-01", "test_act_s1", "PK\u202e")], [check(TEXT_2015, "2015-03-01", "test_act_s1", "PK:\u200bPB")]]) {
+      expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, bad)), 400, "invalid_temporal_checks")
+      expectErr(await apiErrorOf(gate(f, f.intern, d.draftId, 1, bad)), 400, "invalid_temporal_checks")
     }
     expect(await byFirm("draft_gate_results", f.firmId)).toHaveLength(0)
     expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(0)
@@ -697,10 +721,94 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
     expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, [check("\u200b")])), 400, "invalid_temporal_checks")
   })
 
+  it("a check recorded on v1 is carried to v2 when v2 is gated without it", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    const s9 = check(TEXT_2015, "2015-03-01", "test_act_s9")
+    expect((await gate(f, f.A, d.draftId, 1, [s9])).temporal).toEqual([{ ...s9, status: "TEMPORAL_UNAVAILABLE", inForceText: null }])
+    // The partner clears it on version 1 only.
+    await override(f, f.P, d.draftId, 1)
+    // The store gains a history that differs from the pleaded text; a trivial edit makes version 2, gated with no checks.
+    store.addSectionVersion("test_act_s9", "PK", "2010-01-01", null, "Test Act s.9 in force text.")
+    await save(f, f.A, d.draftId, 1, `${BODY_PLAIN} A trivial edit.`)
+    const g2 = await gate(f, f.A, d.draftId, 2)
+    // Carried and re-checked against the store as it is now: a mismatch, not the cleared UNAVAILABLE.
+    expect(g2.temporal).toEqual([{ ...s9, status: "TEMPORAL_MISMATCH", inForceText: "Test Act s.9 in force text." }])
+    expect(g2.status).toBe("TEMPORAL_MISMATCH")
+    expect((await resultDoc(d.draftId, 2))?.temporal).toEqual(g2.temporal)
+    // The version 1 override does not clear it on version 2.
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 2)), 409, "gate_blocked")
+    // A gate of version 2 with another check adds it; the carried one never leaves the set.
+    const other = check(TEXT_2015, "2015-03-01", "test_act_s1")
+    expect((await gate(f, f.A, d.draftId, 2, [other])).temporal.map((t) => [t.sectionId, t.status])).toEqual([
+      ["test_act_s9", "TEMPORAL_MISMATCH"],
+      ["test_act_s1", "OK"],
+    ])
+    // Version 3, gated with nothing, carries both.
+    await save(f, f.A, d.draftId, 2, `${BODY_PLAIN} A second edit.`)
+    expect((await gate(f, f.A, d.draftId, 3)).temporal.map((t) => t.sectionId)).toEqual(["test_act_s9", "test_act_s1"])
+  })
+
+  it("the caller's usedText replaces a carried check's usedText on the same key", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    expect((await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])).status).toBe("TEMPORAL_MISMATCH")
+    // The same key with the 2015 text: one check, the caller's text, OK.
+    const fixed = await gate(f, f.A, d.draftId, 1, [check(TEXT_2015)])
+    expect(fixed.temporal).toEqual([{ ...check(TEXT_2015), status: "OK", inForceText: TEXT_2015 }])
+    expect(fixed.status).toBe("OK")
+    // Carried to version 2 with the caller's text, not the first one.
+    await save(f, f.A, d.draftId, 1, `${BODY_PLAIN} A trivial edit.`)
+    const g2 = await gate(f, f.A, d.draftId, 2)
+    expect(g2.temporal).toEqual([{ ...check(TEXT_2015), status: "OK", inForceText: TEXT_2015 }])
+    // And back on version 2: the caller's 2018 text replaces it again, in place.
+    const back = await gate(f, f.A, d.draftId, 2, [check(TEXT_2018), check(TEXT_2015, "2015-03-01", "test_act_s9")])
+    expect(back.temporal.map((t) => [t.sectionId, t.usedText, t.status])).toEqual([
+      ["test_act_s1", TEXT_2018, "TEMPORAL_MISMATCH"],
+      ["test_act_s9", TEXT_2015, "TEMPORAL_UNAVAILABLE"],
+    ])
+  })
+
+  it("a merged set over 20 checks is 400 invalid_temporal_checks", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    const all = checks(21, TEXT_2015)
+    const first = await gate(f, f.A, d.draftId, 1, all.slice(0, 15))
+    expect(first.temporal).toHaveLength(15)
+    // Six new keys on top of the fifteen recorded: 21 in all.
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, all.slice(15))), 400, "invalid_temporal_checks")
+    // Five new keys (and a repeat of a recorded one) make exactly 20: accepted.
+    expect((await gate(f, f.A, d.draftId, 1, [all[0], ...all.slice(15, 20)])).temporal).toHaveLength(20)
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, [all[20]])), 400, "invalid_temporal_checks")
+    expect((await resultDoc(d.draftId, 1))?.temporal).toHaveLength(20)
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(2)
+  })
+
+  it("a merged set over 200,000 UTF-8 bytes of usedText is 400 invalid_temporal_checks", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    const all = checks(11, "\u0627".repeat(10_000))
+    expect((await gate(f, f.A, d.draftId, 1, all.slice(0, 10))).temporal).toHaveLength(10)
+    // An eleventh 20,000-byte usedText on top of the ten recorded is 220,000 bytes in all.
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, all.slice(10))), 400, "invalid_temporal_checks")
+    // Shorter texts under two recorded keys replace theirs, and the merged set fits: 8 x 20,000 + 2 x 5 + 20,000 bytes.
+    expect((await gate(f, f.A, d.draftId, 1, [{ ...all[0], usedText: "short" }, { ...all[1], usedText: "short" }, all[10]])).temporal).toHaveLength(11)
+  })
+
+  it("a CRLF usedText equal to an LF in-force text is OK, not MISMATCH", async () => {
+    const f = await newFirm()
+    store.addSectionVersion("test_act_s4", "PK", "2010-01-01", null, "Line one of the section.\nLine two of the section.")
+    const d = await create(f, f.A, BODY_PLAIN)
+    const r = await gate(f, f.A, d.draftId, 1, [check("Line one of the section.\r\nLine two of the section.", "2015-03-01", "test_act_s4")])
+    expect(r.temporal.map((t) => t.status)).toEqual(["OK"])
+    expect(r.status).toBe("OK")
+    expect((await resultDoc(d.draftId, 1))?.temporal[0].usedText).toBe("Line one of the section.\nLine two of the section.")
+  })
+
   it("R8: temporal checks over 200,000 UTF-8 bytes in all are 400 invalid_temporal_checks, before the permission", async () => {
     const f = await newFirm()
     const d = await create(f, f.A, BODY_PLAIN)
-    const big = Array.from({ length: 11 }, () => check("\u0627".repeat(10_000)))
+    const big = checks(11, "\u0627".repeat(10_000))
     expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, big)), 400, "invalid_temporal_checks")
     expectErr(await apiErrorOf(gate(f, f.intern, d.draftId, 1, big)), 400, "invalid_temporal_checks")
     expect(await byFirm("draft_gate_results", f.firmId)).toHaveLength(0)
@@ -727,7 +835,7 @@ describe.skipIf(!EMULATORS)("overrideGate (P4-7)", () => {
     const f = await newFirm()
     const body = "Relying on PLD 2099 SC 101, 2099 SCMR 7 and PLD 2099 SC 202."
     const d = await create(f, f.A, body)
-    await gate(f, f.A, d.draftId, 1, [check(TEXT_2015), check(TEXT_2018), check(TEXT_2015, "2015-03-01", "test_act_s9")])
+    await gate(f, f.A, d.draftId, 1, [check(TEXT_2015), check(TEXT_2018, "2015-04-01"), check(TEXT_2015, "2015-03-01", "test_act_s9")])
     const o = await override(f, f.P, d.draftId, 1, `   ${REASON}   `)
     expect(o.override).toEqual({
       draftId: d.draftId,
@@ -740,7 +848,7 @@ describe.skipIf(!EMULATORS)("overrideGate (P4-7)", () => {
       cleared: [
         { kind: "citation", ref: "PLD 2099 SC 101", status: "OVERRULED" },
         { kind: "citation", ref: "PLD 2099 SC 202", status: "UNVERIFIED" },
-        { kind: "temporal", sectionId: "test_act_s1", asAtDate: "2015-03-01", jurisdiction: "PK", status: "TEMPORAL_MISMATCH" },
+        { kind: "temporal", sectionId: "test_act_s1", asAtDate: "2015-04-01", jurisdiction: "PK", status: "TEMPORAL_MISMATCH" },
         { kind: "temporal", sectionId: "test_act_s9", asAtDate: "2015-03-01", jurisdiction: "PK", status: "TEMPORAL_UNAVAILABLE" },
       ],
     })
@@ -1109,9 +1217,11 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
     // The partner reads the report: TEMPORAL_MISMATCH, with the result's id.
     const shown = (await report(f, f.P, d.draftId)).gateResult
     expect(shown).toMatchObject({ status: "TEMPORAL_MISMATCH", resultId: reviewed.resultId })
-    // The associate re-gates the same version without the check.
+    // The associate re-gates the same version without the check: the check is carried (R10), so the block stays.
     const regated = await gate(f, f.A, d.draftId, 1)
     expect(regated.resultId).not.toBe(reviewed.resultId)
+    expect(regated.status).toBe("TEMPORAL_MISMATCH")
+    expect(regated.temporal).toEqual(reviewed.temporal)
     const before = await resultDoc(d.draftId, 1)
     // The partner approves what was shown: refused, nothing written.
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1, { resultId: reviewed.resultId })), 409, "gate_result_changed")
@@ -1120,6 +1230,8 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
     expect(await resultDoc(d.draftId, 1)).toEqual(before)
     expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
     expect((await auditRows("draft.approve", `drafts/${d.draftId}`)).map((r) => [r.actorId, r.decision, r.reason])).toEqual([[f.P.uid, "deny", "gate_result_changed"]])
+    // On the current result the approval decides again: the carried mismatch still blocks it.
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1, { resultId: regated.resultId })), 409, "gate_blocked")
   })
 
   it("approval is bound to the reviewed result on the production store: a re-gate without the check after the partner reviewed a TEMPORAL_UNAVAILABLE makes approval with the old resultId 409 gate_result_changed", async () => {
@@ -1131,10 +1243,14 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
     expect((await report(f, f.P, d.draftId)).gateResult?.resultId).toBe(reviewed.resultId)
     const regated = await gate(f, f.A, d.draftId, 1)
     expect(regated.resultId).not.toBe(reviewed.resultId)
+    expect(regated.status).toBe("TEMPORAL_UNAVAILABLE")
+    expect(regated.temporal).toEqual(reviewed.temporal)
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1, { resultId: reviewed.resultId })), 409, "gate_result_changed")
     expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
     expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
     expect(await byFirm("draft_gate_overrides", f.firmId)).toHaveLength(0)
+    // On the current result the carried TEMPORAL_UNAVAILABLE still blocks: only a partner's override clears it.
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1, { resultId: regated.resultId })), 409, "gate_blocked")
   })
 
   it("two approvals at once: exactly one approves, the other is draft_locked, and draft.approved is written once", async () => {
