@@ -440,6 +440,38 @@ describe("P1 Opik exporter (P3-67)", () => {
     expect(timeout).toHaveBeenLastCalledWith(250)
   })
 
+  it("a redirect is refused: failed, and the redirect target receives nothing", async () => {
+    const reached: string[] = []
+    const target = createServer((req, res) => {
+      reached.push(String(req.url))
+      res.setHeader("connection", "close")
+      res.writeHead(204).end()
+    })
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve))
+    try {
+      const to = `http://127.0.0.1:${(target.address() as AddressInfo).port}/elsewhere`
+      for (const status of [301, 302, 303, 307, 308]) {
+        respond = (_req, res) => res.writeHead(status, { location: to }).end()
+        expect(await exportTrace(record, enabled()), String(status)).toBe("failed")
+      }
+      expect(reached).toEqual([])
+      expect(seen).toHaveLength(5)
+    } finally {
+      target.closeAllConnections()
+      await new Promise<void>((resolve) => target.close(() => resolve()))
+    }
+  })
+
+  it("passes redirect: error to fetch", async () => {
+    const inits: (RequestInit | undefined)[] = []
+    setOpikFetchForTests((async (_url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init)
+      return new Response(null, { status: 204 })
+    }) as typeof fetch)
+    expect(await exportTrace(record, enabled())).toBe("exported")
+    expect(inits[0]?.redirect).toBe("error")
+  })
+
   it("refuses the fetch seam in production", () => {
     vi.stubEnv("NODE_ENV", "production")
     expect(() => setOpikFetchForTests(fetch)).toThrow(/test-only/)

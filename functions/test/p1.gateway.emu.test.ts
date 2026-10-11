@@ -115,7 +115,8 @@ function spyLogs(): { all: () => string; warn: ReturnType<typeof vi.spyOn>; erro
 
 /** Enables Opik (self-hosted, confirmed) with a fake fetch that captures each posted body; `status` is its answer. */
 function fakeOpik(status = 204): { bodies: string[] } {
-  vi.stubEnv("OPIK_BASE_URL", "http://opik.internal.test")
+  // A plain-http base must be loopback, a private IPv4 literal, or end in .internal or .local (M4).
+  vi.stubEnv("OPIK_BASE_URL", "http://opik.test.internal")
   vi.stubEnv("OPIK_SELF_HOSTED_CONFIRMED", "true")
   const bodies: string[] = []
   setOpikFetchForTests((async (_url: unknown, init?: RequestInit) => {

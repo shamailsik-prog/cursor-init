@@ -27,7 +27,7 @@
 #        (a request replaces the whole state), setPlatformAiKillSwitch (platformAdmin only; stops every firm;
 #        outranks a firm's own switch) and getAiUsage (the exact response; no firm is shown the operator's uid)
 #      - the units behind them: the frozen cost and routing tables, the cost arithmetic, the PKT month key, the
-#        Opik self-hosted guard and trace payload by rank, the Gateway transport's fixed error codes, messages and
+#        Opik self-hosted guard (plain http only to a private host; a redirect refused) and trace payload by rank, the Gateway transport's fixed error codes, messages and
 #        billable flags (a redirect refused, its target untouched), and the
 #        refusal of every test seam when NODE_ENV is production
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
@@ -200,6 +200,8 @@ OPIKCFG_SUITE='P1 Opik configuration (P3-67)'
 OPIKCFG_TESTS=(
   'is disabled when unset, unconfirmed, or pointed at Comet'
   'checks unset, then invalid_url, then unconfirmed, then third_party_host'
+  'allows a plain-http base only for loopback, a private IPv4 literal, or a host ending in .internal or .local'
+  'refuses a plain-http base on any other host as invalid_url, before the confirmation is read; https is unaffected'
 )
 TRACE_SUITE='P1 Opik trace payload (P3-67)'
 TRACE_TESTS=(
@@ -229,6 +231,8 @@ SEAM_TESTS=(
 EXPORTER_SUITE='P1 Opik exporter (P3-67)'
 EXPORTER_TESTS=(
   'returns failed on 500 and on 4xx, and never throws'
+  'a redirect is refused: failed, and the redirect target receives nothing'
+  'passes redirect: error to fetch'
   'refuses the fetch seam in production'
 )
 
