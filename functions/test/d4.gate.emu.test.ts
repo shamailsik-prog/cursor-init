@@ -172,7 +172,9 @@ const currentResultId = async (draftId: string, version: unknown): Promise<strin
 /** An override of the result the partner reviewed: the stored result's id unless `extra` names one (R6). */
 const override = async (f: Firm, m: Member, draftId: string, version: unknown, reason: unknown = REASON, extra: Record<string, unknown> = {}) =>
   send(overrideApi, f, m, { draftId, version, reason, resultId: await currentResultId(draftId, version), ...extra })
-const approve = (f: Firm, m: Member, draftId: string, version: unknown) => send(approveApi, f, m, { draftId, version })
+/** An approval of the result the partner reviewed: the stored result's id unless `extra` names one (R9). */
+const approve = async (f: Firm, m: Member, draftId: string, version: unknown, extra: Record<string, unknown> = {}) =>
+  send(approveApi, f, m, { draftId, version, resultId: await currentResultId(draftId, version), ...extra })
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -405,8 +407,10 @@ describe.skipIf(!EMULATORS)("G-1 equivalents (P4-14)", () => {
     const rows = await auditRows("draft.gate_override", `draft_gate_overrides/${d.draftId}_1`)
     expect(rows.filter((r) => r.decision === "allow")).toEqual([expect.objectContaining({ actorId: f.P.uid, firmId: f.firmId, decision: "allow", reason: "ok" })])
 
-    // Approval now passes: the draft is approved and locked, and draft.approved is written once.
-    const a = await approve(f, f.P, d.draftId, 1)
+    // Approval of the result the partner reviewed now passes: the draft is approved and locked, and draft.approved is written once.
+    const reviewed = (await report(f, f.P, d.draftId)).gateResult
+    expect(reviewed).toMatchObject({ status: "OVERRULED", resultId: stored?.resultId })
+    const a = await approve(f, f.P, d.draftId, 1, { resultId: reviewed?.resultId })
     expect(a.draft).toMatchObject({ status: "approved", locked: true, approvedBy: f.P.uid, approvedVersion: 1 })
     expect(a.draft.gateResult).toMatchObject({ version: 1, status: "OVERRULED", overridden: true })
     expect(await draftDoc(d.draftId)).toMatchObject({ status: "approved", locked: true, approvedBy: f.P.uid, approvedVersion: 1 })
@@ -1084,6 +1088,53 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
     // Decided again on the new result: blocked.
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1)), 409, "gate_blocked")
     expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
+  })
+
+  it("R9: a missing or non-string resultId is 400 invalid_result_id, before the permission", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_VERIFIED)
+    await gate(f, f.A, d.draftId, 1)
+    expectErr(await apiErrorOf(send(approveApi, f, f.P, { draftId: d.draftId, version: 1 })), 400, "invalid_result_id")
+    for (const bad of [null, 42, ["x"], { id: "x" }]) expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1, { resultId: bad })), 400, "invalid_result_id")
+    expectErr(await apiErrorOf(approve(f, f.A, d.draftId, 1, { resultId: 7 })), 400, "invalid_result_id")
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
+  })
+
+  it("approval is bound to the reviewed result: a re-gate without the check after the partner reviewed a TEMPORAL_MISMATCH makes approval with the old resultId 409 gate_result_changed", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    const reviewed = await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])
+    expect(reviewed.status).toBe("TEMPORAL_MISMATCH")
+    // The partner reads the report: TEMPORAL_MISMATCH, with the result's id.
+    const shown = (await report(f, f.P, d.draftId)).gateResult
+    expect(shown).toMatchObject({ status: "TEMPORAL_MISMATCH", resultId: reviewed.resultId })
+    // The associate re-gates the same version without the check.
+    const regated = await gate(f, f.A, d.draftId, 1)
+    expect(regated.resultId).not.toBe(reviewed.resultId)
+    const before = await resultDoc(d.draftId, 1)
+    // The partner approves what was shown: refused, nothing written.
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1, { resultId: reviewed.resultId })), 409, "gate_result_changed")
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+    expect(await draftDoc(d.draftId)).not.toHaveProperty("approvedBy")
+    expect(await resultDoc(d.draftId, 1)).toEqual(before)
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
+    expect((await auditRows("draft.approve", `drafts/${d.draftId}`)).map((r) => [r.actorId, r.decision, r.reason])).toEqual([[f.P.uid, "deny", "gate_result_changed"]])
+  })
+
+  it("approval is bound to the reviewed result on the production store: a re-gate without the check after the partner reviewed a TEMPORAL_UNAVAILABLE makes approval with the old resultId 409 gate_result_changed", async () => {
+    setAuthorityStoreForTests(null)
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLAIN)
+    const reviewed = await gate(f, f.A, d.draftId, 1, [check(TEXT_2015)])
+    expect(reviewed.status).toBe("TEMPORAL_UNAVAILABLE")
+    expect((await report(f, f.P, d.draftId)).gateResult?.resultId).toBe(reviewed.resultId)
+    const regated = await gate(f, f.A, d.draftId, 1)
+    expect(regated.resultId).not.toBe(reviewed.resultId)
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1, { resultId: reviewed.resultId })), 409, "gate_result_changed")
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
+    expect(await byFirm("draft_gate_overrides", f.firmId)).toHaveLength(0)
   })
 
   it("two approvals at once: exactly one approves, the other is draft_locked, and draft.approved is written once", async () => {

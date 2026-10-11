@@ -622,14 +622,17 @@ function recordedChecks(stored: DocumentData): TemporalCheck[] {
 }
 
 /**
- * approveDraft({ draftId, version }) → `{ draft, gateResult }` (P4-8). `draft.approve` on the draft's matter (a partner
- * who is a member); a locked draft is 409 `draft_locked`, a version that is not the current one 409 `draft_changed`, and
- * a version with no stored result (or a summary that is null or for another version) 409 `not_gated`. It re-runs the
+ * approveDraft({ draftId, version, resultId }) → `{ draft, gateResult }` (P4-8). Checks the request (400
+ * `invalid_version`; `invalid_result_id`: not a string, R9), then `draft.approve` on the draft's matter (a partner who
+ * is a member); a locked draft is 409 `draft_locked`, a version that is not the current one 409 `draft_changed`, and a
+ * version with no stored result (or a summary that is null or for another version) 409 `not_gated`. It re-runs the
  * gate on that version with the temporal checks recorded in its result, against the authority store as it is now, and
  * passes when the fresh result is OK or the override bound to this version and hash cleared every non-OK item with the
  * same status (`approvalPasses`). Findings over 900,000 bytes are 422 `gate_result_too_large` (R8), with nothing
- * stored. One transaction, which re-reads the draft (lock, version, summary) and refuses with 409 `draft_changed` if
- * the stored result changed since it was read, stores the fresh result (with a fresh `resultId`) and summary, then:
+ * stored. One transaction, which re-reads the draft (lock, version, summary), refuses with 409 `draft_changed` if the
+ * stored result changed since it was read and with 409 `gate_result_changed` if the stored result is not the one the
+ * partner reviewed (R9: another `resultId`, so a re-gate without a check cannot drop a block the partner was shown),
+ * stores the fresh result (with a fresh `resultId`) and summary, then:
  * - on a pass, sets `status: "approved"`, `locked: true`, `approvedBy` (the caller), `approvedAt`, `approvedVersion`,
  *   writes the `draft.approved` event `<draftId>_<version>_approved` and the allow row;
  * - otherwise writes the deny row (`gate_blocked`), and the call answers 409 `gate_blocked` once that has committed, so
@@ -646,6 +649,7 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
     audit.target = `firms/${caller.firmId}`
     const draftId = parseDraftId(data.draftId)
     const version = parseVersionNumber(data.version)
+    const resultId = parseResultId(data.resultId)
     audit.target = `drafts/${draftId}`
     const { ref, draft } = await loadDraftForCaller(caller, draftId, "draft.approve")
     refuseStale(draft, version)
@@ -670,9 +674,11 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
       // A re-gate (other checks) or another approval's run landed since the result was read: decide again on the new one.
       const now = await tx.get(resultRef)
       if (!now.exists || !now.updateTime || !read.updateTime || !now.updateTime.isEqual(read.updateTime)) throw conflict("draft_changed")
+      const prior = now.data() as DocumentData
+      // The partner approves the run they reviewed (R9, as R6): a re-gate since then may have dropped what was shown.
+      if (prior.resultId !== resultId) throw conflict("gate_result_changed")
       const override = (await tx.get(overrideRef)).data() ?? null
       const decision = approvalPasses(fresh, override, text.bodySha256)
-      const prior = now.data() as DocumentData
       const doc = resultDocument(current, draftId, version, text.bodySha256, fresh, caller.uid, at, typeof prior.gateRuns === "number" ? prior.gateRuns : 1)
       const summary = summaryOf(version, text.bodySha256, fresh.status, at, decision.overrideUsed, doc.resultId)
       tx.set(resultRef, doc)

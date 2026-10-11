@@ -134,7 +134,7 @@ const PROBES: Record<string, Probe> = {
   gateDraft: { data: (a) => ({ draftId: a.draftId, version: 1 }), target: true },
   getVerificationReport: { data: (a) => ({ draftId: a.draftId }), target: true },
   overrideGate: { data: (a) => ({ draftId: a.draftId, version: 1, resultId: G2_RESULT_ID, reason: "G2 probe override reason, long enough to pass" }), target: true },
-  approveDraft: { data: (a) => ({ draftId: a.draftId, version: 1 }), target: true },
+  approveDraft: { data: (a) => ({ draftId: a.draftId, version: 1, resultId: G2_RESULT_ID }), target: true },
 }
 
 const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops, draftOps, doctypeOps, gateOps] as unknown as Record<string, unknown>[]

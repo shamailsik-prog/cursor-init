@@ -327,6 +327,9 @@ GATEOPS_TESTS=(
   'approveDraft (P4-8) an override bound to another body hash clears nothing'
   'approveDraft (P4-8) an override that is no longer needed is not used: the corpus now verifies the authority, the summary says overridden false'
   'approveDraft (P4-8) a re-gate that lands while the approval re-runs the gate is draft_changed: never an approval on the checks it replaced'
+  'approveDraft (P4-8) R9: a missing or non-string resultId is 400 invalid_result_id, before the permission'
+  'approveDraft (P4-8) approval is bound to the reviewed result: a re-gate without the check after the partner reviewed a TEMPORAL_MISMATCH makes approval with the old resultId 409 gate_result_changed'
+  'approveDraft (P4-8) approval is bound to the reviewed result on the production store: a re-gate without the check after the partner reviewed a TEMPORAL_UNAVAILABLE makes approval with the old resultId 409 gate_result_changed'
   'approveDraft (P4-8) two approvals at once: exactly one approves, the other is draft_locked, and draft.approved is written once'
   # pinning: a body change after a gate or an override (P4-7, P4-8)
   'pinning: a body change after a gate or an override (P4-7, P4-8) gate version 1, save version 2, approve version 1: draft_changed; approve version 2: not_gated'
