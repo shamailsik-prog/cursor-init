@@ -32,6 +32,10 @@ await build({
   sourcemap: true,
   external: ["firebase-admin", "firebase-functions"],
   alias: { "@": repoRoot },
+  // Defence in depth: the deployed bundle is production whatever the host's NODE_ENV, so the test seams that
+  // check it (p1TestSeam, p1OpsTestSeam; the set*ForTests refusals) stay inert. The route check and the
+  // operator CLI are not deployed and keep the runtime value.
+  define: { "process.env.NODE_ENV": '"production"' },
   logLevel: "info",
 })
 

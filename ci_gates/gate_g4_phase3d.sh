@@ -8,8 +8,8 @@
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed).
 #    P1 is CORE and has no layer flag (P3-60), so nothing of P1 can be switched off at boot
 # 3. the named P1 tests, selected by exact full name (the gate counts them from the name arrays below), under
-#    the Auth and Firestore emulators, from p1.units.test.ts, p1.transport.test.ts, p1.gateway.emu.test.ts and
-#    p1.api.emu.test.ts:
+#    the Auth and Firestore emulators, from p1.units.test.ts, p1.transport.test.ts, p1.gateway.emu.test.ts,
+#    p1.api.emu.test.ts and deploy.test.ts:
 #      - callP1: the happy-path decision record (row, month total, event, audit), the PKT month boundary, the
 #        masking test (no party name, CNIC or mobile reaches the transport, a row, an event, an audit row, the
 #        trace, a log line or the result), every P3-61 refusal (all eight block reasons: each row of the refusal
@@ -32,6 +32,7 @@
 #        and the Gateway transport refusing redirects (the target untouched), the transport's fixed error
 #        codes, messages and billable flags, and the transport and Opik fetch seams refusing to be set when
 #        NODE_ENV is production
+#      - the deployable bundle: NODE_ENV pinned to production at build time (no runtime read left)
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -233,6 +234,11 @@ SEAM_SUITE='P1 active transport and test seam (P3-68)'
 SEAM_TESTS=(
   'refuses the test seam in production'
 )
+# --- the deployable bundle (functions/test/deploy.test.ts) -------------------------------------------------
+DEPLOY_SUITE='deploy config: proxy hops and ingress'
+DEPLOY_TESTS=(
+  'the deployable bundle pins NODE_ENV to production: no runtime NODE_ENV read is left in lib/index.js'
+)
 EXPORTER_SUITE='P1 Opik exporter (P3-67)'
 EXPORTER_TESTS=(
   'returns failed on 500 and on 4xx, and never throws'
@@ -263,8 +269,9 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${TRANSPORT_ERR_TESTS[@]}"; do names+=("$TRANSPORT_ERR_SUITE $t"); done
   for t in "${SEAM_TESTS[@]}"; do names+=("$SEAM_SUITE $t"); done
   for t in "${EXPORTER_TESTS[@]}"; do names+=("$EXPORTER_SUITE $t"); done
+  for t in "${DEPLOY_TESTS[@]}"; do names+=("$DEPLOY_SUITE $t"); done
   for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
-  npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
+  npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts test/deploy.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
   EXPECTED="$(printf '%s\n' "${names[@]}")" EXPECTED_COUNT="${#names[@]}" node -e '
     const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
     console.log(`P1 gateway, routes and units: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)

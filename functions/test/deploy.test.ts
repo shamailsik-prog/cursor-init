@@ -69,6 +69,17 @@ describe("deploy config: proxy hops and ingress", () => {
     for (const [name, region] of Object.entries(regions)) expect([name, region]).toEqual([name, ["asia-south1"]])
   }, 60_000)
 
+  it("the deployable bundle pins NODE_ENV to production: no runtime NODE_ENV read is left in lib/index.js", () => {
+    // Defence in depth for the P1 test seams (p1TestSeam, p1OpsTestSeam): production code never references them,
+    // and the bundle cannot make them live even on a host that sets NODE_ENV to something else.
+    const cwd = path.resolve(__dirname, "..")
+    execFileSync(process.execPath, ["build.mjs"], { cwd, stdio: "ignore" })
+    const bundle = readFileSync(path.join(cwd, "lib/index.js"), "utf8")
+    expect(bundle).toContain("p1TestSeam")
+    expect(bundle).toContain("p1OpsTestSeam")
+    expect(bundle).not.toMatch(/process\.env\.NODE_ENV|process\.env\[["']NODE_ENV["']\]/)
+  }, 60_000)
+
   it("api picks up SIKANDER_INGRESS_SETTINGS at load", async () => {
     vi.stubEnv("SIKANDER_INGRESS_SETTINGS", "ALLOW_INTERNAL_AND_GCLB")
     vi.stubEnv("TRUSTED_PROXY_HOPS", "1")
