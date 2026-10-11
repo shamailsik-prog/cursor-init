@@ -182,13 +182,13 @@ export function stageDraftEvent(
 // ---------------------------------------------------------------------------
 
 /** A draft id: a non-empty string (anything else is a malformed request; an id that cannot exist is 404 later). */
-function parseDraftId(value: unknown): string {
+export function parseDraftId(value: unknown): string {
   if (typeof value !== "string" || value === "") throw badRequest("invalid_query")
   return value
 }
 
 /** A version number in a POST body: a JSON integer from 1 up (400 `invalid_version`). */
-function parseVersionNumber(value: unknown): number {
+export function parseVersionNumber(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw badRequest("invalid_version")
   return value
 }

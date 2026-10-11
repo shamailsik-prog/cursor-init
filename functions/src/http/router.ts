@@ -25,6 +25,7 @@ import { cancelJobOp, getJobOp, listJobsOp, retryFailedJobOp } from "../p2/ops"
 import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, setPlatformAiKillSwitchOp } from "../p1/ops"
 import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDraftVersionOp, saveDraftVersionOp } from "../d4/drafts"
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
+import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
 import { logFailure } from "../log"
@@ -72,9 +73,9 @@ const D1_ENTITY = "/api/d1/entity"
 const PLATFORM_JOBS = "/api/platform/jobs"
 /** P1 AI gateway (P3-60): CORE, no layer flag. */
 const PLATFORM_BRAIN = "/api/platform/brain"
-/** D4-1 drafting (P4-10): the draft store. */
+/** D4-1 drafting (P4-10): the draft store, the partner override and the approval stand-in. */
 const D4_DRAFTING = "/api/d4/drafting"
-/** D4-2 intelligence (P4-10): the document-type catalogue (and, from Task 3, the citation gate). */
+/** D4-2 intelligence (P4-10): the document-type catalogue, the citation gate and its verification report. */
 const D4_INTELLIGENCE = "/api/d4/intelligence"
 
 /** A POST route whose rate-limit kind is the operation's own. */
@@ -138,8 +139,12 @@ export const ROUTES: readonly Route[] = [
   get(`${D4_DRAFTING}/getDraft`, getDraftOp),
   get(`${D4_DRAFTING}/listDrafts`, listDraftsOp),
   get(`${D4_DRAFTING}/listDraftVersions`, listDraftVersionsOp),
+  post(`${D4_DRAFTING}/overrideGate`, overrideGateOp),
+  post(`${D4_DRAFTING}/approveDraft`, approveDraftOp),
   get(`${D4_INTELLIGENCE}/listDocumentTypes`, listDocumentTypesOp),
   get(`${D4_INTELLIGENCE}/getTypeProfile`, getTypeProfileOp),
+  post(`${D4_INTELLIGENCE}/gateDraft`, gateDraftOp),
+  get(`${D4_INTELLIGENCE}/getVerificationReport`, getVerificationReportOp),
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>

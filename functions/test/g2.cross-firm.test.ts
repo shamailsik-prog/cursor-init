@@ -26,6 +26,7 @@ import * as jobOps from "../src/p2/ops"
 import * as p1Ops from "../src/p1/ops"
 import * as draftOps from "../src/d4/drafts"
 import * as doctypeOps from "../src/d4/doctypeOps"
+import * as gateOps from "../src/d4/gateOps"
 import { enqueueJob } from "../src/p2/enqueue"
 import { ROUTES, createRouter } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
@@ -127,9 +128,14 @@ const PROBES: Record<string, Probe> = {
   listDraftVersions: { data: (a) => ({ draftId: a.draftId }), target: true },
   listDocumentTypes: { data: () => ({}), target: false },
   getTypeProfile: { data: () => ({ typeId: "constitutional_petition_199" }), target: false },
+  // P4-6..P4-8: the gate, the report, the override and the approval, aimed at firm A's gated draft.
+  gateDraft: { data: (a) => ({ draftId: a.draftId, version: 1 }), target: true },
+  getVerificationReport: { data: (a) => ({ draftId: a.draftId }), target: true },
+  overrideGate: { data: (a) => ({ draftId: a.draftId, version: 1, reason: "G2 probe override reason, long enough to pass" }), target: true },
+  approveDraft: { data: (a) => ({ draftId: a.draftId, version: 1 }), target: true },
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops, draftOps, doctypeOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops, draftOps, doctypeOps, gateOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
@@ -204,12 +210,16 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
   const draftRows = (await adminDb().collection("drafts").where("firmId", "==", a.firmId).count().get()).data().count
   const draftVersionRows = (await adminDb().collection("draft_versions").where("firmId", "==", a.firmId).count().get()).data().count
   const draftEventRows = (await adminDb().collection("events").where("firmId", "==", a.firmId).count().get()).data().count
-  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs, ai: { config: aiConfig, outputs: aiOutputs, usageRows: aiUsageRows, platform: aiPlatform }, drafts: { draft: { ...draft }, draftRows, draftVersionRows, draftEventRows } }
+  // P4-6..P4-8: a cross-firm gate, override or approval that wrote anything (a result, an override, the summary, the lock) fails "unchanged".
+  const gateResult = (await adminDb().collection("draft_gate_results").doc(`${a.draftId}_1`).get()).data()
+  const gateResultRows = (await adminDb().collection("draft_gate_results").where("firmId", "==", a.firmId).count().get()).data().count
+  const gateOverrideRows = (await adminDb().collection("draft_gate_overrides").where("firmId", "==", a.firmId).count().get()).data().count
+  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs, ai: { config: aiConfig, outputs: aiOutputs, usageRows: aiUsageRows, platform: aiPlatform }, drafts: { draft: { ...draft }, draftRows, draftVersionRows, draftEventRows, gateResult: { ...gateResult }, gateResultRows, gateOverrideRows } }
 }
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
 function firmATokens(a: FirmA): string[] {
-  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, a.draftId, "G2 Alpha Draft Title", "G2 ALPHA DRAFT BODY", "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, a.draftId, "G2 Alpha Draft Title", "G2 ALPHA DRAFT BODY", "G2 ALPHA USED TEXT", "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
 }
 
 function leaked(body: unknown, tokens: string[]): string[] {
@@ -277,7 +287,9 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       currentBodySha256: bodySha,
       locked: false,
       masterVersion: null,
-      gateResult: null,
+      // P4-6: version 1 is gated (a temporal check with no history), so the override and approval probes aim at a real result.
+      gateResult: { version: 1, bodySha256: bodySha, status: "TEMPORAL_UNAVAILABLE", gatedAt: Timestamp.now(), overridden: false },
+      lastGatedVersion: 1,
       createdBy: aMembers.partner.uid,
       updatedAt: Timestamp.now(),
     })
@@ -292,6 +304,22 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       kind: "create",
       createdBy: aMembers.partner.uid,
     })
+    await adminDb()
+      .collection("draft_gate_results")
+      .doc(`${draftId}_1`)
+      .set({
+        ...stamp,
+        matterId,
+        draftId,
+        version: 1,
+        bodySha256: bodySha,
+        status: "TEMPORAL_UNAVAILABLE",
+        citations: [],
+        temporal: [{ sectionId: "test_act_s1", asAtDate: "2015-03-01", jurisdiction: "PK", usedText: "G2 ALPHA USED TEXT", status: "TEMPORAL_UNAVAILABLE", inForceText: null }],
+        gatedBy: aMembers.partner.uid,
+        gatedAt: Timestamp.now(),
+        gateRuns: 1,
+      })
     A = {
       firmId: firmA,
       draftId,
@@ -390,6 +418,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       ["/api/d4/drafting/listDraftVersions", { draftId: A.draftId }, "bodySha256"],
       ["/api/d4/intelligence/listDocumentTypes", { q: "Art. 199" }, "constitutional_petition_199"],
       ["/api/d4/intelligence/getTypeProfile", { typeId: "constitutional_petition_199" }, "template_cp_199_v1"],
+      ["/api/d4/intelligence/getVerificationReport", { draftId: A.draftId }, "G2 ALPHA USED TEXT"],
     ]
     for (const [i, [path, query, token]] of reads.entries()) {
       const { res, out } = mockRes()
