@@ -8,7 +8,7 @@ import type { CallAudit, Data, FirmOperation, FirmlessOperation } from "../p5/co
 import { requirePermission } from "../p5/permission"
 import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, spentOf } from "./config"
 import { PROVIDER_ID } from "./costTable"
-import { callP1 } from "./gateway"
+import { callP1, isAlreadyExists } from "./gateway"
 import { isMonthKey, monthKeyPkt } from "./month"
 import { TRANSPORT_ERROR } from "./types"
 
@@ -44,29 +44,49 @@ const OUTPUT_WRITE_BACKOFF_MS = 100
 /**
  * Test seam only; production code never sets it, and it is inert when `NODE_ENV` is "production".
  * `outputWriteFailures` is a queue: each attempt at the `committee_outputs` write takes the next error from it
- * and throws it instead of writing. `sleep` replaces the back-off wait.
+ * and throws it instead of writing. `lostCommitAnswers` is a queue too: each attempt whose write committed takes
+ * the next error from it and throws it, as if the commit had landed but its answer was lost (an ambiguous
+ * commit). `sleep` replaces the back-off wait.
  */
-export const p1OpsTestSeam: { outputWriteFailures?: Error[]; sleep?: (ms: number) => Promise<void> } = {}
+export const p1OpsTestSeam: { outputWriteFailures?: Error[]; lostCommitAnswers?: Error[]; sleep?: (ms: number) => Promise<void> } = {}
 
 function seam(): typeof p1OpsTestSeam {
   return process.env.NODE_ENV === "production" ? {} : p1OpsTestSeam
 }
 
+/** True when `outputRef` holds this call's row: the write being retried has in fact committed. */
+async function outputCommitted(outputRef: DocumentReference, usageLogId: string): Promise<boolean> {
+  try {
+    const snap = await outputRef.get()
+    return snap.exists && snap.get("usageLogId") === usageLogId
+  } catch {
+    return false
+  }
+}
+
 /**
  * Runs `write` up to OUTPUT_WRITE_ATTEMPTS times. The provider call and its usage row are already committed
  * by then, so a transient failure of the output row's transaction is retried rather than lost; an HttpError
- * (e.g. 503 audit_unavailable) is a decision, not a transient fault, and is never retried. The last failure is
- * rethrown as it was.
+ * (e.g. 503 audit_unavailable) is a decision, not a transient fault, and is never retried. An attempt that
+ * fails with ALREADY_EXISTS after an earlier attempt's commit was lost (an ambiguous commit) finds the row:
+ * when `outputRef` exists with this call's `usageLogId` the write is done, and it returns normally, so the
+ * route's allow row (committed with that row) stands and no deny row is written. Any other ALREADY_EXISTS is
+ * handled like any other failure. The last failure is rethrown as it was.
  */
-async function withOutputWriteRetry(write: () => Promise<void>): Promise<void> {
+async function withOutputWriteRetry(write: () => Promise<void>, row: { outputRef: DocumentReference; usageLogId: string }): Promise<void> {
   const t = seam()
   for (let attempt = 1; ; attempt++) {
     try {
       const injected = t.outputWriteFailures?.shift()
       if (injected) throw injected
-      return await write()
+      await write()
+      const lost = t.lostCommitAnswers?.shift()
+      if (lost) throw lost
+      return
     } catch (err) {
-      if (err instanceof HttpError || attempt >= OUTPUT_WRITE_ATTEMPTS) throw err
+      if (err instanceof HttpError) throw err
+      if (isAlreadyExists(err) && (await outputCommitted(row.outputRef, row.usageLogId))) return
+      if (attempt >= OUTPUT_WRITE_ATTEMPTS) throw err
       const wait = OUTPUT_WRITE_BACKOFF_MS * 2 ** (attempt - 1)
       await (t.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(wait)
     }
@@ -221,7 +241,7 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
         traceId: result.traceId,
         createdAt,
       })
-    }))
+    }), { outputRef, usageLogId: result.usageLogId })
     audit.committed()
 
     return {

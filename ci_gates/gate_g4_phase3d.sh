@@ -21,9 +21,9 @@
 #        with classification and no content)
 #      - the routes: committeeBrain (input order, access, cross-firm 404, the classification that a caller
 #        label may only raise, party-name masking, the output row, the blocked and failed rows, the idempotent
-#        replay, the bounded output-write retry), setBudgetAlerts, setAiKillSwitch (a request replaces the
-#        whole state), setPlatformAiKillSwitch (platformAdmin only; stops every firm; outranks a firm's own
-#        switch) and getAiUsage (the exact response; no firm is shown the operator's uid)
+#        replay, the bounded output-write retry and its ambiguous commit), setBudgetAlerts, setAiKillSwitch
+#        (a request replaces the whole state), setPlatformAiKillSwitch (platformAdmin only; stops every firm;
+#        outranks a firm's own switch) and getAiUsage (the exact response; no firm is shown the operator's uid)
 #      - the units behind them: the frozen cost and routing tables, the cost arithmetic, the PKT month key, the
 #        Opik self-hosted guard and trace payload by rank, the Gateway transport's fixed error strings, and the
 #        refusal of every test seam when NODE_ENV is production
@@ -143,6 +143,8 @@ API_TESTS=(
   'committeeBrain: output (P3-70) replaying the same Idempotency-Key returns the same answer with no second transport call, usage row or output row'
   'committeeBrain: output (P3-70) the output write is retried a transient failure of the first two attempts still gives one row, one allow audit row, one provider call, after waits of 100 and 200 ms'
   'committeeBrain: output (P3-70) the output write is retried after the third failure it rethrows as before: 500 internal, one provider call and its usage row, no output row, a deny audit row'
+  "committeeBrain: output (P3-70) the output write is retried an ambiguous commit (the first attempt commits, its answer is lost, the retry's create hits ALREADY_EXISTS) is a success: 200, one output row, one route allow row and no deny row, one provider call"
+  'committeeBrain: output (P3-70) the output write is retried an ALREADY_EXISTS while no output row of this call exists is not taken as a commit: it is retried like any failure'
   'committeeBrain: output (P3-70) the output write is retried an HttpError is a decision, not a transient fault: it is not retried'
   'committeeBrain: output (P3-70) a different Idempotency-Key is a new call'
   # setBudgetAlerts (P3-71)

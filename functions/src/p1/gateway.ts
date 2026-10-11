@@ -82,6 +82,12 @@ function tokenCount(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
 }
 
+/** gRPC ALREADY_EXISTS (6), or its string form: a `create` found its document already there. */
+export function isAlreadyExists(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  return code === 6 || (typeof code === "string" && code.toLowerCase() === "already-exists")
+}
+
 function transportCode(err: unknown): string {
   const message = err instanceof Error ? err.message : ""
   return TRANSPORT_CODES.test(message) ? message : "unknown"
