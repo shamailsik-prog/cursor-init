@@ -408,11 +408,14 @@ function refuseStaleEdit(draft: DocumentData, baseVersion: number): void {
  * matter's current one (`matter` as read in the version's transaction by requireStillPermitted, which has already
  * refused a caller not cleared for it), so a matter label raised after the draft was created binds every later version
  * and never falls (monotonic, L17.3 #20). The draft takes it too, and so do the events, gate results and overrides that
- * follow the draft's label. A label that is unreadable fails closed (403 `clearance`), as classifyForMatter does.
+ * follow the draft's label. A label that is unreadable fails closed (403 `clearance`), as classifyForMatter does, and
+ * so does a raised label above the caller's clearance (a backstop: requireStillPermitted has refused that already).
  */
-function raisedLabel(draft: DocumentData, matter: DocumentData): Classification {
+function raisedLabel(caller: Caller, draft: DocumentData, matter: DocumentData): Classification {
   if (!isKnownClassification(matter.classification)) throw new HttpError(403, "clearance")
-  return strictest([draft.classification as Classification, matter.classification])
+  const result = strictest([draft.classification as Classification, matter.classification])
+  if (rankOf(caller.clearanceLevel) < rankOf(result)) throw new HttpError(403, "clearance")
+  return result
 }
 
 /**
@@ -451,7 +454,7 @@ async function storeVersion(
           return { saved: false, draft: draftView(draftId, draft) }
         }
         const version = baseVersion + 1
-        const classification = raisedLabel(draft, matter)
+        const classification = raisedLabel(caller, draft, matter)
         await audit.stage(tx, "allow", "ok")
         tx.create(versions().doc(versionId(draftId, version)), {
           firmId: caller.firmId,
