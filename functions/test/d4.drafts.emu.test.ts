@@ -1250,6 +1250,11 @@ describe.skipIf(!EMULATORS)("listDrafts (P4-4, P4-10)", () => {
     for (const cursor of ["!!!", "e30", Buffer.from(JSON.stringify({ sortKey: 5, id: "x" })).toString("base64url"), Buffer.from(JSON.stringify({ sortKey: "x.y", id: "x" })).toString("base64url")]) {
       expectErr(await apiErrorOf(send(listApi, f, f.P, { matterId: f.matterId, cursor })), 400, "invalid_cursor")
     }
+    // A sort key is exactly `<seconds>.<nanos>` in decimal digits (PR #25 review): extra parts, an empty part, a sign or an exponent is refused.
+    for (const sortKey of ["1.2.3", ".2", "1.", "1", "-1.0", "+1.0", "1e3.0", " 1.0", "1.0 "]) {
+      const cursor = Buffer.from(JSON.stringify({ sortKey, id: "x" })).toString("base64url")
+      expectErr(await apiErrorOf(send(listApi, f, f.P, { matterId: f.matterId, cursor })), 400, "invalid_cursor")
+    }
   })
 
   it("lists only the named matter's drafts of the caller's firm, and hides drafts above the caller's clearance", async () => {

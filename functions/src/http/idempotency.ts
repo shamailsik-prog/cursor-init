@@ -33,7 +33,15 @@ if (!(IDEMPOTENCY_LEASE_MS > FUNCTION_TIMEOUT_SECONDS * 1000)) {
  * configuration (bootstrap_not_configured) and are released. New 409 codes are
  * released until they are added here.
  */
-const STORED_409_CODES: ReadonlySet<string> = new Set(["already_exists", "already_onboarded", "last_partner", "code_used"])
+const STORED_409_CODES: ReadonlySet<string> = new Set([
+  "already_exists",
+  "already_onboarded",
+  "last_partner",
+  "code_used",
+  // approveDraft (D4, P4-8): the refusal commits the fresh gate result first (R1), so a same-key retry must replay it,
+  // not run again against a result whose resultId the first run replaced (PR #25 review).
+  "gate_blocked",
+])
 
 /**
  * Which results are stored and replayed for their key (an explicit allowlist):

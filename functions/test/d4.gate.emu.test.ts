@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
 import { InMemoryAuthorityStore, setAuthorityStoreForTests, type AuthorityStore } from "../src/d4/authority"
+import { requireStillPermitted } from "../src/d4/drafts"
 import { approvalPasses, clearedItemsOf, normaliseEvaluation, parseTemporalChecks } from "../src/d4/gateOps"
 import type { GateEvaluation } from "../src/d4/types"
 import { ApiError, apiErrorOf, viaApi } from "./api"
@@ -1437,5 +1438,118 @@ describe.skipIf(!EMULATORS)("the production store (P4-3: EMPTY_AUTHORITY_STORE u
     const plain = await create(f, f.A, BODY_PLAIN)
     expect((await gate(f, f.A, plain.draftId, 1)).status).toBe("OK")
     expect((await approve(f, f.P, plain.draftId, 1)).draft.gateResult).toMatchObject({ status: "OK", overridden: false })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The permission again in the write transaction (PR #25 review): a change that lands after the call's permission
+// check and before its transaction commits is judged, not missed.
+// ---------------------------------------------------------------------------
+
+/** The seeded store, running `effect` once on the gate's first lookup: after the call's permission check, before its transaction. */
+function storeWithEffect(effect: () => Promise<void>): AuthorityStore {
+  let ran = false
+  const once = async () => {
+    if (ran) return
+    ran = true
+    await effect()
+  }
+  return {
+    findJudgment: async (canonical) => {
+      await once()
+      return store.findJudgment(canonical)
+    },
+    listTreatments: (judgmentId) => store.listTreatments(judgmentId),
+    getSectionAsAt: async (sectionId, asAtDate, jurisdiction) => {
+      await once()
+      return store.getSectionAsAt(sectionId, asAtDate, jurisdiction)
+    },
+  }
+}
+
+const dropMember = async (f: Firm, m: Member): Promise<void> => {
+  await adminDb().collection("matter_members").doc(`${f.matterId}_${m.uid}`).delete()
+}
+const raiseMatter = async (f: Firm, classification: string): Promise<void> => {
+  await adminDb().collection("matters").doc(f.matterId).update({ classification })
+}
+
+describe("the permission is decided again in the write transaction (PR #25 review)", () => {
+  it("approveDraft: a partner removed from the matter while the gate re-runs is 403 not_member; nothing is approved", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.P, BODY_VERIFIED)
+    expect((await gate(f, f.P, d.draftId, 1)).status).toBe("OK")
+    setAuthorityStoreForTests(storeWithEffect(() => dropMember(f, f.P)))
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, 1)), 403, "not_member")
+    expect((await draftDoc(d.draftId))?.locked).toBe(false)
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
+  })
+
+  it("approveDraft: a matter label raised above the partner's clearance while the gate re-runs is 403 clearance; nothing is approved", async () => {
+    const f = await newFirm()
+    const low = await mintIdToken(claims(f.firmId, "partner", "internal"))
+    await addMember(f.firmId, f.matterId, low.uid)
+    const d = await create(f, f.A, BODY_VERIFIED)
+    expect((await gate(f, f.A, d.draftId, 1)).status).toBe("OK")
+    setAuthorityStoreForTests(storeWithEffect(() => raiseMatter(f, "privileged")))
+    expectErr(await apiErrorOf(approve(f, low, d.draftId, 1)), 403, "clearance")
+    expect((await draftDoc(d.draftId))?.status).toBe("draft")
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.approved")).toHaveLength(0)
+  })
+
+  it("gateDraft: a member removed from the matter while the gate runs is 403 not_member; no result is stored", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_VERIFIED)
+    setAuthorityStoreForTests(storeWithEffect(() => dropMember(f, f.A)))
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1)), 403, "not_member")
+    expect(await resultDoc(d.draftId, 1)).toBeUndefined()
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(0)
+  })
+
+  it("requireStillPermitted: in a transaction, a removed member, a raised label, a role without the action and a missing matter are refused", async () => {
+    const f = await newFirm()
+    const caller = (m: Member, role: string, clearanceLevel = "privileged-restricted") =>
+      ({ uid: m.uid, firmId: f.firmId, role, clearanceLevel }) as Parameters<typeof requireStillPermitted>[1]
+    const decide = (c: Parameters<typeof requireStillPermitted>[1], action: Parameters<typeof requireStillPermitted>[2], matterId = f.matterId) =>
+      adminDb().runTransaction((tx) => requireStillPermitted(tx, c, action, matterId))
+    const refusal = async (p: Promise<unknown>) => {
+      try {
+        await p
+      } catch (err) {
+        return { status: (err as { status?: number }).status, code: (err as { code?: string }).code }
+      }
+      return "allowed"
+    }
+    // Allowed: the matter as read comes back.
+    expect((await decide(caller(f.A, "associate"), "draft.edit")).classification).toBe("internal")
+    // A role the table does not give the action: an associate cannot approve.
+    expect(await refusal(decide(caller(f.A, "associate"), "draft.approve"))).toEqual({ status: 403, code: "role_not_permitted" })
+    // A matter that is not there, or is another firm's: 404, no existence oracle.
+    expect(await refusal(decide(caller(f.A, "associate"), "draft.edit", uniq("gone")))).toEqual({ status: 404, code: "not_found" })
+    // Removed from the matter.
+    await dropMember(f, f.C)
+    expect(await refusal(decide(caller(f.C, "clerk"), "draft.edit"))).toEqual({ status: 403, code: "not_member" })
+    // The matter raised above the caller's clearance.
+    await raiseMatter(f, "privileged")
+    expect(await refusal(decide(caller(f.A, "associate", "internal"), "draft.edit"))).toEqual({ status: 403, code: "clearance" })
+    expect((await decide(caller(f.A, "associate"), "draft.edit")).classification).toBe("privileged")
+  })
+})
+
+describe("approveDraft: a same-key retry of a blocked approval (PR #25 review)", () => {
+  it("replays 409 gate_blocked and does not run again: the stored result keeps the first run's resultId", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_OVERRULED)
+    expect((await gate(f, f.A, d.draftId, 1)).status).toBe("OVERRULED")
+    const reviewed = await currentResultId(d.draftId, 1)
+    const key = randomUUID()
+    const call = () => approveApi({ token: f.P.token, headers: { "idempotency-key": key }, data: { firmId: f.firmId, draftId: d.draftId, version: 1, resultId: reviewed } } as never)
+    expectErr(await apiErrorOf(call()), 409, "gate_blocked")
+    const afterFirst = await currentResultId(d.draftId, 1)
+    expect(afterFirst).not.toBe(reviewed)
+    // The response was lost; the client retries with the same key and body: the first answer, not a second run.
+    expectErr(await apiErrorOf(call()), 409, "gate_blocked")
+    expect(await currentResultId(d.draftId, 1)).toBe(afterFirst)
+    expect((await draftDoc(d.draftId))?.locked).toBe(false)
   })
 })

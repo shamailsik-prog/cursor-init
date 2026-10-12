@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Timestamp, type DocumentData, type DocumentReference, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
+import type { DraftAction } from "@/platform/p5/permissionDecision"
 import { checkDraftCharset, cleanPasteArtefacts } from "@/services/d4-2/draftCharset"
 import { adminDb } from "../admin"
 import { contentionDeadline, isContentionAbort } from "../d1/contention"
@@ -13,6 +14,7 @@ import {
   loadDraftForCaller,
   parseDraftId,
   parseVersionNumber,
+  requireStillPermitted,
   sha256Hex,
   stageDraftEvent,
   versionId,
@@ -373,10 +375,15 @@ function refuseStale(draft: DocumentData, version: number): void {
   if (draft.currentVersion !== version) throw conflict("draft_changed")
 }
 
-/** The draft re-read in a transaction: still the caller's firm's (404), then `refuseStale`, then still the body that was read. */
-async function rereadDraft(tx: Transaction, ref: DocumentReference, caller: Caller, version: number, bodySha256: string): Promise<DocumentData> {
+/**
+ * The draft re-read in a transaction: still the caller's firm's (404), the caller still permitted `action` on its matter
+ * (requireStillPermitted: the gate ran between the first check and this transaction, PR #25 review), then
+ * `refuseStale`, then still the body that was read.
+ */
+async function rereadDraft(tx: Transaction, ref: DocumentReference, caller: Caller, action: DraftAction, version: number, bodySha256: string): Promise<DocumentData> {
   const draft = (await tx.get(ref)).data()
   if (!draft || draft.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+  await requireStillPermitted(tx, caller, action, draft.matterId as string)
   refuseStale(draft, version)
   if (draft.currentBodySha256 !== bodySha256) throw conflict("draft_changed")
   return draft
@@ -530,7 +537,7 @@ export const gateDraftOp: FirmOperation<GateResultView> = {
     const view = await inTransaction(async (tx) => {
       // The stamp is taken in the attempt that commits.
       const gatedAt = Timestamp.now()
-      const current = await rereadDraft(tx, ref, caller, version, text.bodySha256)
+      const current = await rereadDraft(tx, ref, caller, "draft.gate", version, text.bodySha256)
       await requireCarriedUnchanged(tx, current, draftId, carried)
       const prior = (await tx.get(resultRef)).data()
       refuseOverridden((await tx.get(overrideRef)).exists)
@@ -629,6 +636,7 @@ export const overrideGateOp: FirmOperation<OverrideResult> = {
       const at = Timestamp.now()
       const current = (await tx.get(ref)).data()
       if (!current || current.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+      await requireStillPermitted(tx, caller, "draft.override", current.matterId as string)
       refuseStale(current, version)
       const stored = (await tx.get(resultRef)).data()
       if (!stored || stored.firmId !== caller.firmId || stored.draftId !== draftId || stored.version !== version || stored.bodySha256 !== current.currentBodySha256) {
@@ -734,7 +742,7 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
 
     const outcome = await inTransaction(async (tx) => {
       const at = Timestamp.now()
-      const current = await rereadDraft(tx, ref, caller, version, text.bodySha256)
+      const current = await rereadDraft(tx, ref, caller, "draft.approve", version, text.bodySha256)
       requireGatedSummary(current, version)
       // A re-gate (other checks) or another approval's run landed since the result was read: decide again on the new one.
       const now = await tx.get(resultRef)

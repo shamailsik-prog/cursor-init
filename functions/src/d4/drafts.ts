@@ -9,7 +9,7 @@ import {
   type Transaction,
 } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
-import type { DraftAction } from "@/platform/p5/permissionDecision"
+import { decide, type DraftAction } from "@/platform/p5/permissionDecision"
 import { DraftCharsetError, requireSupportedDraftBody, requireSupportedDraftTitle } from "@/services/d4-2/draftCharset"
 import { adminDb } from "../admin"
 import { isContentionAbort } from "../d1/contention"
@@ -130,6 +130,23 @@ export async function requireMatterAction(caller: Caller, action: DraftAction, m
     if (err instanceof HttpError && err.status === 403 && err.code === "cross_firm") throw notFound()
     throw err
   }
+}
+
+/**
+ * In a transaction that writes a draft: the caller may still take `action` on the draft's matter, decided by the shared
+ * table (P4-10) over the matter and the caller's membership as read in `tx` (PR #25 review). The check before the
+ * transaction can go stale while the call runs (a member removed, the matter's label raised above the caller's
+ * clearance), and a transaction that read neither would commit anyway; reading both here also retries it when either
+ * changes under it. A matter that is gone or another firm's is 404 `not_found`; a refusal is 403 with the table's
+ * reason, as requirePermission answers (`not_member`, `clearance`, `role_not_permitted`). The matter comes back as read.
+ */
+export async function requireStillPermitted(tx: Transaction, caller: Caller, action: DraftAction, matterId: string): Promise<DocumentData> {
+  const matter = (await tx.get(matters().doc(matterId))).data()
+  if (!matter || matter.firmId !== caller.firmId) throw notFound()
+  const isMember = (await tx.get(adminDb().collection("matter_members").doc(`${matterId}_${caller.uid}`))).exists
+  const decision = decide(caller, action, { firmId: caller.firmId, classification: matter.classification }, isMember)
+  if (!decision.allow) throw new HttpError(403, decision.reason === "partner-only" ? "partner_only" : decision.reason.replaceAll("-", "_"))
+  return matter
 }
 
 /**
@@ -299,8 +316,8 @@ function classifyForMatter(
  * request, then `draft.create` on the matter (same firm, member, cleared; partner, associate, clerk), then reads the
  * matter (404), the open, court and classification checks (a closed matter is 409 `matter_closed`; a draft is at least
  * `internal`), and the text checks. One transaction writes the draft, version 1
- * (kind `create`), the `draft.autosaved` event and the call's audit row. The matter is read again in the
- * transaction, so a label raised in between is judged too.
+ * (kind `create`), the `draft.autosaved` event and the call's audit row. The matter and the caller's membership are
+ * read again in the transaction (requireStillPermitted), so a label raised or a member removed in between is judged too.
  */
 export const createDraftOp: FirmOperation<DraftView> = {
   auth: "firm",
@@ -327,8 +344,7 @@ export const createDraftOp: FirmOperation<DraftView> = {
     const view = await adminDb().runTransaction(async (tx) => {
       // The stamp is taken in the attempt that commits, so createdAt and updatedAt are that attempt's clock.
       const stamp = Timestamp.now()
-      const current = (await tx.get(matterRef)).data()
-      if (!current || current.firmId !== caller.firmId) throw notFound()
+      const current = await requireStillPermitted(tx, caller, "draft.create", input.matterId)
       const classification = classifyForMatter(caller, current, input.documentTypeId, input.classification)
       await audit.stage(tx, "allow", "ok")
       const draft = {
@@ -389,26 +405,25 @@ function refuseStaleEdit(draft: DocumentData, baseVersion: number): void {
 
 /**
  * The label a new version of `draft` takes (final review PROBE-5): the strictest of the draft's own label and its
- * matter's current one, read in the version's transaction, so a matter label raised after the draft was created binds
- * every later version and never falls (monotonic, L17.3 #20). The draft takes it too, and so do the events, gate
- * results and overrides that follow the draft's label. A matter that is gone or another firm's is 404 `not_found`; one
- * whose label is unreadable fails closed (403 `clearance`), as classifyForMatter does.
+ * matter's current one (`matter` as read in the version's transaction by requireStillPermitted, which has already
+ * refused a caller not cleared for it), so a matter label raised after the draft was created binds every later version
+ * and never falls (monotonic, L17.3 #20). The draft takes it too, and so do the events, gate results and overrides that
+ * follow the draft's label. A label that is unreadable fails closed (403 `clearance`), as classifyForMatter does.
  */
-async function raisedLabel(tx: Transaction, caller: Caller, draft: DocumentData): Promise<Classification> {
-  const matter = (await tx.get(matters().doc(draft.matterId as string))).data()
-  if (!matter || matter.firmId !== caller.firmId) throw notFound()
+function raisedLabel(draft: DocumentData, matter: DocumentData): Classification {
   if (!isKnownClassification(matter.classification)) throw new HttpError(403, "clearance")
   return strictest([draft.classification as Classification, matter.classification])
 }
 
 /**
  * Stores `content` as version baseVersion + 1 of the draft, in one transaction with the event and the call's audit row,
- * after re-reading the draft: locked (409 `draft_locked`), then `baseVersion` against `currentVersion` (409
- * `draft_changed`), so two writers on one base give one new version and one refusal, and the numbers stay dense. When
- * the content equals the current version's (same title, same body hash) nothing is written but the audit row:
- * `{ saved: false }`. A new version is not gated, so the draft's gate summary is reset (the old result stays in
- * `draft_gate_results`). The version and the draft take `raisedLabel`. A transaction that gives up under contention
- * wrote nothing and answers `draft_changed`.
+ * after re-reading the draft and deciding the caller's permission again on its matter (requireStillPermitted: a member
+ * removed or a label raised since the call's first check is refused): locked (409 `draft_locked`), then `baseVersion`
+ * against `currentVersion` (409 `draft_changed`), so two writers on one base give one new version and one refusal, and
+ * the numbers stay dense. When the content equals the current version's (same title, same body hash) nothing is
+ * written but the audit row: `{ saved: false }`. A new version is not gated, so the draft's gate summary is reset (the
+ * old result stays in `draft_gate_results`). The version and the draft take `raisedLabel`. A transaction that gives up
+ * under contention wrote nothing and answers `draft_changed`.
  */
 async function storeVersion(
   caller: Caller,
@@ -427,6 +442,7 @@ async function storeVersion(
         const stamp = Timestamp.now()
         const draft = (await tx.get(ref)).data()
         if (!draft || draft.firmId !== caller.firmId || !withinClearance(draft.classification, caller.clearanceLevel)) throw notFound()
+        const matter = await requireStillPermitted(tx, caller, "draft.edit", draft.matterId as string)
         refuseStaleEdit(draft, baseVersion)
         const next = await resolve(tx)
         const bodySha256 = sha256Hex(next.body)
@@ -435,7 +451,7 @@ async function storeVersion(
           return { saved: false, draft: draftView(draftId, draft) }
         }
         const version = baseVersion + 1
-        const classification = await raisedLabel(tx, caller, draft)
+        const classification = raisedLabel(draft, matter)
         await audit.stage(tx, "allow", "ok")
         tx.create(versions().doc(versionId(draftId, version)), {
           firmId: caller.firmId,
@@ -559,13 +575,15 @@ export const getDraftOp: FirmOperation<DraftRead> = {
 
 const SCAN_BATCH = 100
 
-/** The `updatedAt` cursor of listDrafts: `<seconds>.<nanos>` and the draft id (400 `invalid_cursor`). */
+/**
+ * The `updatedAt` cursor of listDrafts: `<seconds>.<nanos>` in decimal digits, exactly two parts, and the draft id
+ * (400 `invalid_cursor`). Extra or empty parts, a sign or an exponent are refused, not read as a moved boundary.
+ */
 function parseTimeCursor(cursor: string): { updatedAt: Timestamp; id: string } {
   const { sortKey, id } = decodeCursor(cursor)
-  const [seconds, nanos] = sortKey.split(".").map(Number)
-  if (!Number.isInteger(seconds) || !Number.isInteger(nanos) || nanos < 0 || nanos >= 1e9 || !isSafeDocId(id)) {
-    throw badRequest("invalid_cursor")
-  }
+  const parts = /^(\d{1,12})\.(\d{1,9})$/.exec(sortKey)
+  if (!parts || !isSafeDocId(id)) throw badRequest("invalid_cursor")
+  const [seconds, nanos] = [Number(parts[1]), Number(parts[2])]
   try {
     return { updatedAt: new Timestamp(seconds, nanos), id }
   } catch {

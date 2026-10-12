@@ -8,7 +8,7 @@ The pure gate code is shared with the Next.js tree through the `@/` alias: `serv
 
 ## Routes
 
-On the existing HTTP `api` (E-37: no onCall). Every POST needs an `Idempotency-Key`. Every route is rate kind `general` (no provider call). Lists paginate with `?limit=` (1 to 100, default 20) and `?cursor=`.
+On the existing HTTP `api` (E-37: no onCall). Every POST needs an `Idempotency-Key`. A blocked approval (409 `gate_blocked`) is stored and replayed for its key, because it commits the fresh gate result before it answers; every other D4 409 commits nothing and a same-key retry runs again. Every route is rate kind `general` (no provider call). Lists paginate with `?limit=` (1 to 100, default 20) and `?cursor=`.
 
 | Route | Method | Who | Notes |
 | --- | --- | --- | --- |
@@ -100,6 +100,8 @@ The caller's text the gate stores (a `usedText`, an override reason) passes the 
 **Approval** (`approveDraft`, P4-8; the stand-in for D2-3 routing, O-61). Partner only, a member of the matter, on the current version (409 `draft_changed`); a locked draft is 409 `draft_locked`; a version that was never gated is 409 `not_gated`; the stored result must be the one the partner reviewed (`resultId`, R9: 409 `gate_result_changed`). It re-runs the gate on that version against the authority store as it is now, with the temporal checks recorded in the version's result. It approves only if the fresh result is OK, or if the override bound to that version and body hash cleared every item that is still non-OK with the same status. A cleared UNVERIFIED that has since become OVERRULED is not cleared, nor is a cleared TEMPORAL_UNAVAILABLE that is now a mismatch (an item is matched by its kind, its reference or section key, and its status; O-71). Otherwise it refuses with 409 `gate_blocked`; it stores the fresh result and summary first, so `getVerificationReport` shows why (ruling R1: the router carries `{ error: { code } }` only). A re-gate that lands during the approval's re-run makes the approval 409 `draft_changed`. On success it sets `status: "approved"`, `locked: true`, `approvedBy`, `approvedAt` and `approvedVersion`, and writes `draft.approved`. Two approvals at once give one approval and one `draft_locked`. An approved draft refuses saves, restores, gates, overrides and approvals (409 `draft_locked`).
 
 After an override, a worsened status needs a body edit, because the override is immutable and the version is not re-gated (O-72).
+
+**R12, the permission in the transaction.** Every route that writes a draft (create, save, restore, gate, override, approve) decides the caller's permission twice: once on entry (`loadDraftForCaller` or `requireMatterAction`, audited by P5), and again inside its write transaction (`requireStillPermitted`), on the matter and the caller's `matter_members` row as read in that transaction. A member removed, or the matter's label raised above the caller's clearance, while the call runs (the gate's run on the authority store sits between the two checks) is refused 403 with the table's reason (`not_member`, `clearance`, `role_not_permitted`) and nothing is written but the deny row; a matter that is gone is 404 `not_found`.
 
 ## The authority port
 
