@@ -398,7 +398,9 @@ async function raisedLabel(tx: Transaction, caller: Caller, draft: DocumentData)
   const matter = (await tx.get(matters().doc(draft.matterId as string))).data()
   if (!matter || matter.firmId !== caller.firmId) throw notFound()
   if (!isKnownClassification(matter.classification)) throw new HttpError(403, "clearance")
-  return strictest([draft.classification as Classification, matter.classification])
+  const result = strictest([draft.classification as Classification, matter.classification])
+  if (rankOf(caller.clearanceLevel) < rankOf(result)) throw new HttpError(403, "clearance")
+  return result
 }
 
 /**
