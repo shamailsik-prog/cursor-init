@@ -17,6 +17,10 @@
  *     matter -> cross-firm / not-member / clearance; then the role table -> role-not-permitted
  *   - an AI action (AI_ACTIONS): client or own_matters -> client-denied; ai.call is matter-level
  *     (must name a matter: cross-firm / not-member / clearance); then the role table -> role-not-permitted
+ *   - a D4 drafting action (DRAFT_ACTIONS: draft.create ... draft.approve) or doctype.read: client or
+ *     own_matters -> client-denied; the draft actions are matter-level (cross-firm / not-member /
+ *     clearance), doctype.read is firm-level; then the role table -> intern-channel-denied for an
+ *     intern (as the legacy `draft` action), role-not-permitted otherwise
  *   - intern: no research / draft                -> deny intern-channel-denied
  *   - a staff-only action (STAFF_ONLY_ACTIONS) by a client or under an own_matters scope
  *                                                -> deny staff-only
@@ -165,6 +169,41 @@ const AI_ROLES: Record<AiAction, readonly string[]> = {
 }
 const AI_MATTER_LEVEL: ReadonlySet<string> = new Set(["ai.call"])
 
+/**
+ * D4 drafting (Phase 4a, P4-10): create, edit, gate and read a draft (`draft.create`, `draft.edit`, `draft.gate`,
+ * `draft.read`: partner, associate, clerk), override a gate result and approve a draft (`draft.override`,
+ * `draft.approve`: partner). All six are matter-level: they must name a matter the caller is a cleared member of
+ * (R-2: no role is exempt), so a partner who is not a member is refused. Staff only; a client or an own_matters
+ * scope is denied (client-denied) and accounts hit accounts-register-only before this table. An intern stays
+ * denied as the legacy `draft` action denies it (intern-channel-denied).
+ */
+export const DRAFT_ACTIONS = ["draft.create", "draft.edit", "draft.gate", "draft.read", "draft.override", "draft.approve"] as const
+export type DraftAction = (typeof DRAFT_ACTIONS)[number]
+const DRAFT_ACTION_SET: ReadonlySet<string> = new Set(DRAFT_ACTIONS)
+
+export function isDraftAction(action: string): action is DraftAction {
+  return DRAFT_ACTION_SET.has(action)
+}
+
+/** Reading the verified document-type catalogue (`doctype.read`): partner, associate, clerk. Firm-level: it names no matter. */
+export const DOCTYPE_ACTIONS = ["doctype.read"] as const
+export type DocTypeAction = (typeof DOCTYPE_ACTIONS)[number]
+const DOCTYPE_ACTION_SET: ReadonlySet<string> = new Set(DOCTYPE_ACTIONS)
+
+export function isDocTypeAction(action: string): action is DocTypeAction {
+  return DOCTYPE_ACTION_SET.has(action)
+}
+
+const DRAFT_ROLES: Record<DraftAction | DocTypeAction, readonly string[]> = {
+  "draft.create": ["partner", "associate", "clerk"],
+  "draft.edit": ["partner", "associate", "clerk"],
+  "draft.gate": ["partner", "associate", "clerk"],
+  "draft.read": ["partner", "associate", "clerk"],
+  "draft.override": ["partner"],
+  "draft.approve": ["partner"],
+  "doctype.read": ["partner", "associate", "clerk"],
+}
+
 const deny = (reason: string): PermissionDecision => ({ allow: false, reason })
 const allow = (reason: string): PermissionDecision => ({ allow: true, reason })
 
@@ -233,6 +272,17 @@ export function decide(
       if (refused) return refused
     }
     return AI_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
+  }
+
+  if (isDraftAction(action) || isDocTypeAction(action)) {
+    if (caller.role === "client" || extra?.scope === "own_matters") return deny("client-denied")
+    // A draft action is matter-level and must name a matter; none given fails closed. doctype.read is firm-level.
+    if (isDraftAction(action)) {
+      const refused = matterGate(caller, matter, isMember)
+      if (refused) return refused
+    }
+    if (DRAFT_ROLES[action].includes(caller.role)) return allow("ok")
+    return deny(caller.role === "intern" ? "intern-channel-denied" : "role-not-permitted")
   }
 
   if (caller.role === "intern" && (action === "research" || action === "draft")) {

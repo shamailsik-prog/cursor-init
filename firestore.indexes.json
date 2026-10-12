@@ -209,7 +209,53 @@
         { "fieldPath": "createdAt", "order": "DESCENDING" },
         { "fieldPath": "__name__", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "drafts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "matterId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "draft_versions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "draftId", "order": "ASCENDING" },
+        { "fieldPath": "version", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "draft_versions",
+      "fieldPath": "body",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_gate_results",
+      "fieldPath": "citations",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_gate_results",
+      "fieldPath": "temporal",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_gate_overrides",
+      "fieldPath": "cleared",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_gate_overrides",
+      "fieldPath": "reason",
+      "indexes": []
+    }
+  ]
 }

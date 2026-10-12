@@ -458,8 +458,12 @@ describe("M2 — role, clearance and membership on core collections", () => {
     it("member cannot create above own clearance", async () => {
       await assertFails(setDoc(doc(await authed("member1", MEMBER_ASSOC), coll, "v-hi"), matterDoc("privileged")))
     })
-    it("cleared member associate can create", async () => {
-      await assertSucceeds(setDoc(doc(await authed("m2-assoc-high", MEMBER_ASSOC_HIGH), coll, "v-ok"), matterDoc("privileged")))
+    it("cleared member associate can create (draft_versions: no longer, P4-11)", async () => {
+      const create = setDoc(doc(await authed("m2-assoc-high", MEMBER_ASSOC_HIGH), coll, "v-ok"), matterDoc("privileged"))
+      // Phase 4a (P4-11): draft_versions are written by Cloud Functions only, so the client SDK create that used to
+      // succeed is denied. document_versions keep the member-author create rule.
+      if (coll === "draft_versions") await assertFails(create)
+      else await assertSucceeds(create)
     })
     it("client-role member cannot read", async () => {
       await testEnv.withSecurityRulesDisabled(async (ctx) => {
@@ -621,8 +625,11 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
     it("member cannot create above own clearance", async () => {
       await assertFails(setDoc(doc(await authed("rv-low", ASSOC_LOW), coll, "c-hi"), row("privileged")))
     })
-    it("cleared author member can create", async () => {
-      await assertSucceeds(setDoc(doc(await authed("rv-low", ASSOC_LOW), coll, "c-ok"), row("internal")))
+    it("cleared author member can create (drafts: no longer, P4-11)", async () => {
+      const create = setDoc(doc(await authed("rv-low", ASSOC_LOW), coll, "c-ok"), row("internal"))
+      // Phase 4a (P4-11): drafts are written by Cloud Functions only; evidence_items and custody_events are unchanged.
+      if (coll === "drafts") await assertFails(create)
+      else await assertSucceeds(create)
     })
   })
 
@@ -713,8 +720,11 @@ describe.each(["drafts", "evidence_items"])("Review round 2 — %s update (N3)",
     await assertFails(updateDoc(doc(db, coll, "n3Row"), { matterId: "n3Other" }))
     await assertFails(updateDoc(doc(db, coll, "n3Row"), { firmId: "firmB" }))
   })
-  it("cleared author member can monotonically update", async () => {
-    await assertSucceeds(updateDoc(doc(await authed("n3-high", ASSOC_HIGH), coll, "n3Row"), { classification: "confidential" }))
+  it("cleared author member can monotonically update (drafts: no longer, P4-11)", async () => {
+    const update = updateDoc(doc(await authed("n3-high", ASSOC_HIGH), coll, "n3Row"), { classification: "confidential" })
+    // Phase 4a (P4-11): drafts are written by Cloud Functions only; evidence_items are unchanged.
+    if (coll === "drafts") await assertFails(update)
+    else await assertSucceeds(update)
   })
 })
 
@@ -1045,9 +1055,10 @@ describe("Review R1 #5 — a draft under a filing package is locked against body
     await assertFails(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkLocked"), { locked: false }))
     await assertFails(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkOpen"), { locked: true }))
   })
-  it("unlocked (or legacy, unflagged) drafts stay editable by a member author", async () => {
-    await assertSucceeds(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkOpen"), { body: "revised" }))
-    await assertSucceeds(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkLegacy"), { body: "revised" }))
+  it("unlocked (or legacy, unflagged) drafts are no longer editable from the client SDK either (P4-11: server-only writes)", async () => {
+    // Phase 4a (P4-11): these two updates used to succeed; every draft write is now a Cloud Functions write.
+    await assertFails(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkOpen"), { body: "revised" }))
+    await assertFails(updateDoc(doc(await authed("lk-assoc", ASSOC), "drafts", "lkLegacy"), { body: "revised" }))
   })
 })
 
@@ -1281,7 +1292,7 @@ describe("Review R2 probes (secrev2/rules2.probe.test.ts) pinned as regressions"
     })
   })
 
-  it("locked draft: every write path to the body or the lock is denied; title stays editable", async () => {
+  it("locked draft: every write path to the body or the lock is denied; the title is no longer editable either (P4-11)", async () => {
     const db = await authed("p2-member", ASSOC)
     await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { body: "evil" }))
     await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { locked: false }))
@@ -1299,7 +1310,8 @@ describe("Review R2 probes (secrev2/rules2.probe.test.ts) pinned as regressions"
       tx.update(doc(db, "drafts", "p2dl"), { body: "evil" })
     }))
     await assertFails(setDoc(doc(db, "drafts", "p2copy1"), { firmId: "firmA", matterId: "p2m1", classification: "privileged", body: "evil", locked: false }))
-    await assertSucceeds(updateDoc(doc(db, "drafts", "p2dl"), { title: "y" }))
+    // Phase 4a (P4-11): the title update that used to succeed is denied too; drafts are server-only for writes.
+    await assertFails(updateDoc(doc(db, "drafts", "p2dl"), { title: "y" }))
   })
 
   it("documents and drafts cannot be moved between matters", async () => {

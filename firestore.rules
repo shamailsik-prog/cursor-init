@@ -229,26 +229,26 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['supersededBy', 'type', 'supports', 'confidence']);  // promote / supersede only
       allow delete: if false;
     }
+    // Phase 4a (P4-11): the draft store is written by Cloud Functions only (the Admin SDK, in transactions with the
+    // audit row and the event), so no client can forge `gateResult`, `status`, `locked` or `approvedBy`. A draft and
+    // its versions are created, saved, restored and approved through /api/d4/drafting only. Reads follow the API's
+    // `draft.read` (P4-10): an author role (partner, associate, clerk; interns stay denied, O-68 closed) who is a
+    // member of the draft's matter (R-2) and is cleared for the row's own label and for the matter's current label,
+    // so a label raised after a draft or a version was written binds it too (final review PROBE-5).
     match /drafts/{id} {
-      allow read: if sameFirm() && memberReader(resource.data.matterId) && cleared(resource.data.classification);
-      allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId)
-        && !('locked' in request.resource.data);
-      // Review R1 #5: `locked` is set server-side while a filing package referencing the draft is
-      // pending or approved; clients may never change it, and a locked draft's body is frozen.
-      allow update: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && firmIdUnchanged() && monotonic()
-        && cleared(resource.data.classification) && clearedNew()
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'firmId', 'locked'])
-        && !(resource.data.get('locked', false) == true
-             && request.resource.data.diff(resource.data).affectedKeys().hasAny(['body']));
-      allow delete: if false;
+      allow read: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && cleared(resource.data.classification)
+        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification);
+      allow create, update, delete: if false;
     }
     match /draft_versions/{id} {
-      // R-2: drafts are matter-bound; a version is readable only by a cleared member of that matter.
-      allow read: if sameFirm() && isMatterStaff() && cleared(resource.data.classification)
-        && isMember(resource.data.matterId);
-      allow create: if authorNew();
-      allow update, delete: if false; // append-only
+      allow read: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && cleared(resource.data.classification)
+        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification);
+      allow create, update, delete: if false; // append-only, and written by Cloud Functions only
     }
+    // Phase 4a (P4-6, P4-7, P4-11): the gate's stored results and the partner's overrides are server-only: no client
+    // reads or writes them; partners see a summary through getDraft and the gate routes.
+    match /draft_gate_results/{id} { allow read, write: if false; }
+    match /draft_gate_overrides/{id} { allow read, write: if false; }
     match /change_proposals/{id} {
       allow read: if sameFirm() && isStaff();
       allow create: if sameFirmNew() && isAuthor() && clearedNew() && request.resource.data.proposedBy == request.auth.uid

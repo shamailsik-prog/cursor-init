@@ -82,7 +82,7 @@ describe("route table", () => {
     expect(() => buildRouteTable([route("/api/x/y/z", op), route("/api/x/y/z", op, "general", "PUT")])).not.toThrow()
   })
 
-  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, setFirmNumbering, registerClient (POST), getClient and listClients (GET) under /api/d1/client, kind general; runConflictCheck (POST, kind p1), getConflictResult (GET), resolveReviewItem and recordPartnerWaiver (POST) and getConflictTrail (GET) under /api/d1/conflict; unmergeEntity (POST) under /api/d1/entity; openMatter, advanceStage and closeMatter (POST), getMatter and listMatters (GET) under /api/d1/matter; listJobs and getJob (GET), retryFailedJob and cancelJob (POST) under /api/platform/jobs; committeeBrain (POST, kind p1), getAiUsage (GET), setBudgetAlerts, setAiKillSwitch and setPlatformAiKillSwitch (POST) under /api/platform/brain", () => {
+  it("exposes the nine identity functions as POST /api/platform/identity/{fn} and recordGatePass as POST /api/platform/gates/recordGatePass, setFirmNumbering, registerClient (POST), getClient and listClients (GET) under /api/d1/client, kind general; runConflictCheck (POST, kind p1), getConflictResult (GET), resolveReviewItem and recordPartnerWaiver (POST) and getConflictTrail (GET) under /api/d1/conflict; unmergeEntity (POST) under /api/d1/entity; openMatter, advanceStage and closeMatter (POST), getMatter and listMatters (GET) under /api/d1/matter; listJobs and getJob (GET), retryFailedJob and cancelJob (POST) under /api/platform/jobs; committeeBrain (POST, kind p1), getAiUsage (GET), setBudgetAlerts, setAiKillSwitch and setPlatformAiKillSwitch (POST) under /api/platform/brain; createDraft, saveDraftVersion and restoreDraftVersion (POST), getDraft, listDrafts and listDraftVersions (GET), overrideGate and approveDraft (POST) under /api/d4/drafting; listDocumentTypes and getTypeProfile (GET), gateDraft (POST) and getVerificationReport (GET) under /api/d4/intelligence", () => {
     const fns = [
       "onboardFirm",
       "createFirmUser",
@@ -128,6 +128,18 @@ describe("route table", () => {
         "POST /api/platform/brain/setBudgetAlerts general",
         "POST /api/platform/brain/setAiKillSwitch general",
         "POST /api/platform/brain/setPlatformAiKillSwitch general",
+        "POST /api/d4/drafting/createDraft general",
+        "POST /api/d4/drafting/saveDraftVersion general",
+        "POST /api/d4/drafting/restoreDraftVersion general",
+        "GET /api/d4/drafting/getDraft general",
+        "GET /api/d4/drafting/listDrafts general",
+        "GET /api/d4/drafting/listDraftVersions general",
+        "GET /api/d4/intelligence/listDocumentTypes general",
+        "GET /api/d4/intelligence/getTypeProfile general",
+        "POST /api/d4/drafting/overrideGate general",
+        "POST /api/d4/drafting/approveDraft general",
+        "POST /api/d4/intelligence/gateDraft general",
+        "GET /api/d4/intelligence/getVerificationReport general",
       ].sort()
     )
     expect(() => buildRouteTable(ROUTES)).not.toThrow()
@@ -185,6 +197,9 @@ describe("idempotency helpers", () => {
     [409, "already_onboarded", true],
     [409, "already_exists", true],
     [409, "code_used", true],
+    [409, "gate_blocked", true],
+    [409, "draft_changed", false],
+    [409, "gate_result_changed", false],
     [409, "claims_sync_failed", false],
     [409, "idempotency_in_progress", false],
     [409, "bootstrap_not_configured", false],
