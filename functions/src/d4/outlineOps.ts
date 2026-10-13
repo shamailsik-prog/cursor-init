@@ -320,8 +320,10 @@ function requireAcknowledged(acknowledged: readonly number[], missingFacts: numb
  * - no edit (or an edit equal to the current outline) of a version already approved under the same hash writes only
  *   the audit row;
  * - otherwise the version is approved: `approvedOutline`, stage `approved`, `sectionCount`, `sectionsStored: 0`.
- * A later run of the transaction (the SDK's retry) that finds this caller's approval of the intended version and hash
- * already recorded answers as the committed run did and writes nothing: that run's answer was lost.
+ * In the transaction, after the permission, the closed matter, the closed generation and the missing outline, an edit
+ * that is recorded already (the current outline is that edit, stored as n + 1 from n, and approved) answers as its
+ * committed run did with its own audit row and no other write: a run of the transaction after a commit whose answer was
+ * lost. Without an edit, a version approved under the same hash takes the audit-only path above.
  */
 export const approveOutlineOp: FirmOperation<ApproveOutlineResult> = {
   auth: "firm",
@@ -354,24 +356,39 @@ export const approveOutlineOp: FirmOperation<ApproveOutlineResult> = {
       changed !== undefined
         ? { version: version + 1, sha256: outlineSha256(changed), sectionCount: changed.sections.length }
         : { version, sha256: sha, sectionCount: (current.sections as unknown[]).length }
-    let runs = 0
     let out: ApproveOutlineResult
     try {
       out = await adminDb().runTransaction(async (tx) => {
-        runs += 1
         // The stamp is taken in the attempt that commits.
         const stamp = Timestamp.now()
         const b = (await tx.get(ref)).data()
         if (!b || b.firmId !== caller.firmId || !withinClearance(b.classification, caller.clearanceLevel)) throw new HttpError(404, "not_found")
-        // A later run of this transaction that finds this caller's approval of the intended version and hash: an earlier
-        // run committed it, with the audit row, and its answer was lost. Answer as that run did; write nothing again.
-        const recorded = b.approvedOutline as { version?: unknown; sha256?: unknown; by?: unknown } | null | undefined
-        if (runs > 1 && recorded?.version === intended.version && recorded.sha256 === intended.sha256 && recorded.by === caller.uid) {
-          return { generationId, stage: b.stage as Stage, outlineVersion: intended.version, outlineSha256: intended.sha256, sectionCount: intended.sectionCount }
-        }
         const matter = await requireStillPermitted(tx, caller, "draft.outline.approve", b.matterId as string)
         if (matter.status === "closed") throw new HttpError(409, "matter_closed")
-        refuseApprovalState(b, version)
+        if (b.stage === "assembled") throw new HttpError(409, "generation_closed")
+        if (typeof b.outlineVersion !== "number" || b.outlineVersion < 1) throw new HttpError(404, "outline_not_found")
+        // This edit is recorded already: the current outline is the edit, stored as n + 1 from n, and it is the approved
+        // one. Only a run of this transaction after one whose commit landed and whose answer was lost finds it (a new
+        // request naming n is refused before the transaction). It answers as that run did and stages its own audit row;
+        // nothing else is written. Judged before the version check, which would answer outline_changed.
+        if (changed !== undefined && b.outlineVersion === intended.version) {
+          const next = (await tx.get(outlines().doc(outlineId(generationId, intended.version)))).data()
+          const approvedNow = b.approvedOutline as { version?: unknown; sha256?: unknown } | null | undefined
+          if (
+            next !== undefined &&
+            next.firmId === caller.firmId &&
+            next.kind === "edited" &&
+            next.editedFrom === version &&
+            next.sha256 === intended.sha256 &&
+            approvedNow?.version === intended.version &&
+            approvedNow.sha256 === intended.sha256
+          ) {
+            if (liveLease(b, d4Now())) throw new HttpError(409, "generation_in_progress")
+            await audit.stage(tx, "allow", "ok")
+            return { generationId, stage: b.stage as Stage, outlineVersion: intended.version, outlineSha256: intended.sha256, sectionCount: intended.sectionCount }
+          }
+        }
+        if (b.outlineVersion !== version) throw new HttpError(409, "outline_changed")
         // Outlines are immutable, so the hash read here pins the content judged above.
         refuseOutline((await tx.get(outlines().doc(outlineId(generationId, version)))).data(), caller, sha)
         if (liveLease(b, d4Now())) throw new HttpError(409, "generation_in_progress")

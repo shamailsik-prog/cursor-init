@@ -244,6 +244,16 @@ async function outcomeCommitted(ref: DocumentReference, usageLogId: string): Pro
   }
 }
 
+/**
+ * The call's audit row (D5): allow/ok for a stored outcome, otherwise a deny with the outcome's reason. outcomeOf names a
+ * reason for every outcome but `stored`; one without is a programming fault, refused before any write.
+ */
+function auditRowOf(verdict: ReturnType<typeof outcomeOf>): { decision: "allow" | "deny"; reason: string } {
+  if (verdict.outcome === "stored") return { decision: "allow", reason: "ok" }
+  if (verdict.reason === null) throw new Error(`a ${verdict.outcome} step outcome without its reason`)
+  return { decision: "deny", reason: verdict.reason }
+}
+
 /** One attempt at the outcome transaction. Returns the brief as it stands once the attempt commits. */
 async function stageOutcome(tx: Transaction, a: WriteOutcomeArgs): Promise<DocumentData> {
   // The stamp is taken in the attempt that commits, so updatedAt, lastAttempt.at and the stored document share it.
@@ -256,7 +266,8 @@ async function stageOutcome(tx: Transaction, a: WriteOutcomeArgs): Promise<Docum
   const label = generationLabel(a.caller, brief, matter)
   const stored = a.verdict.outcome === "stored"
   // The call's own row (D5): allow when the outcome is stored, otherwise a deny with the outcome's reason.
-  await a.audit.stage(tx, stored ? "allow" : "deny", stored ? "ok" : (a.verdict.reason ?? TRANSPORT_ERROR))
+  const row = auditRowOf(a.verdict)
+  await a.audit.stage(tx, row.decision, row.reason)
   const extra = stored && a.onStored ? a.onStored(tx, brief, label, stamp) : {}
   const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0)
   const update: Record<string, unknown> = {
@@ -303,6 +314,7 @@ async function stageOutcome(tx: Transaction, a: WriteOutcomeArgs): Promise<Docum
 export async function writeOutcome(a: WriteOutcomeArgs): Promise<DocumentData> {
   const t = generationSeam()
   const startBy = a.deadlineMs - D4_ATTEMPT_SLACK_MS
+  auditRowOf(a.verdict)
   await t.beforeOutcomeWrite?.()
   for (let attempt = 1; ; attempt++) {
     try {

@@ -775,16 +775,27 @@ const briefAudits = async (f: Firm, action: string, generationId: string) =>
  * Spies on the SDK's transaction commits for one brief: a transaction that has read `draft_generations/{generationId}`
  * is marked, and when a marked transaction commits, `lose(n)` (n counts its marked commits from 1) decides what its
  * caller sees: null lets the commit through as it is; an error is thrown after the commit lands (a lost commit answer),
- * or in place of the commit with `commit: false` (a refused commit). The SDK retries a retryable error by running the
+ * or in place of the commit with `commit: false` (a refused commit). `beforeRead(n)` runs before the n-th transactional
+ * read of the brief, before that run's transaction holds any lock, so a test can change a document between two runs
+ * (changing one inside a run's commit would wait on that run's own lock). The SDK retries a retryable error by running the
  * transaction's function again on the same transaction object. Returns the count of marked commits so far, so a test can
  * show that its spy fired.
  */
-function briefCommits(generationId: string, lose: (n: number) => Error | null, opts: { commit?: boolean } = {}): () => number {
+function briefCommits(
+  generationId: string,
+  lose: (n: number) => Error | null,
+  opts: { commit?: boolean; beforeRead?: (n: number) => Promise<void> } = {}
+): () => number {
   const path = `draft_generations/${generationId}`
   const marked = new WeakSet<object>()
   const realGet = Transaction.prototype.get
-  vi.spyOn(Transaction.prototype, "get").mockImplementation(function (this: Transaction, ref: unknown) {
-    if (ref instanceof DocumentReference && ref.path === path) marked.add(this)
+  let reads = 0
+  vi.spyOn(Transaction.prototype, "get").mockImplementation(async function (this: Transaction, ref: unknown) {
+    if (ref instanceof DocumentReference && ref.path === path) {
+      marked.add(this)
+      reads += 1
+      await opts.beforeRead?.(reads)
+    }
     return realGet.call(this, ref as never)
   } as never)
   // `commit` is the SDK's internal step of runTransaction; it is not in the typings.
@@ -1243,29 +1254,53 @@ describe.skipIf(!EMULATORS)("D4 generation: outline steps (P4B-9, P4B-10, P4B-12
     expect(await briefOf(g)).toEqual(before)
   }, 60_000)
 
-  it("approveOutline whose commit answer is lost answers as the committed approval when the SDK runs it again: one approval, one audit row, with and without an edit", async () => {
+  it("a re-approval whose first commit is refused ABORTED runs again in full and leaves its own allow row", async () => {
     const f = await newFirm()
-    const lost = (n: number) => (n === 1 ? Object.assign(new Error("lost"), { code: 14 }) : null)
-    // No edit.
-    const plain = await outlined(f)
-    let commits = briefCommits(plain.generationId, lost)
-    expect(await approveApi(f.A, { generationId: plain.generationId, outlineVersion: 1, outlineSha256: plain.sha, acknowledgedMissingFacts: [] })).toEqual({
-      generationId: plain.generationId,
-      stage: "approved",
-      outlineVersion: 1,
-      outlineSha256: plain.sha,
-      sectionCount: 1,
-    })
+    const { generationId: g, sha } = await outlined(f)
+    const approve = () => approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] })
+    await approve()
+    const allows = async () => (await briefAudits(f, "draft.outline.approve", g)).filter((a) => a.decision === "allow").length
+    const before = await allows()
+    const briefBefore = (await briefOf(g))!
+    // The first commit of the re-approval is refused, so nothing of it commits; the SDK runs it again.
+    const commits = briefCommits(g, (n) => (n === 1 ? Object.assign(new Error("aborted"), { code: 10 }) : null), { commit: false })
+    expect(await approve()).toEqual({ generationId: g, stage: "approved", outlineVersion: 1, outlineSha256: sha, sectionCount: 1 })
     expect(commits()).toBe(2)
     vi.restoreAllMocks()
-    expect((await briefOf(plain.generationId))!.approvedOutline).toMatchObject({ version: 1, sha256: plain.sha, by: f.A.uid })
-    expect((await briefAudits(f, "draft.outline.approve", plain.generationId)).map((a) => [a.decision, a.reason])).toEqual([["allow", "ok"]])
-    // With an edit: version 2 is stored once and approved.
-    const edited = await outlined(f)
+    expect(await allows()).toBe(before + 1)
+    expect(await briefOf(g)).toEqual(briefBefore)
+  })
+
+  it("a re-approval whose first commit is refused ABORTED, with the matter closed before it runs again, is 409 matter_closed", async () => {
+    const f = await newFirm()
+    const { generationId: g, sha } = await outlined(f)
+    const approve = () => approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] })
+    await approve()
+    const allows = async () => (await briefAudits(f, "draft.outline.approve", g)).filter((a) => a.decision === "allow").length
+    const before = await allows()
+    // The first run's commit is refused; the matter is closed before the second run reads the brief.
+    const commits = briefCommits(g, (n) => (n === 1 ? Object.assign(new Error("aborted"), { code: 10 }) : null), {
+      commit: false,
+      beforeRead: async (n) => {
+        if (n === 2) await adminDb().collection("matters").doc(f.matterId).update({ status: "closed" })
+      },
+    })
+    expect(await failure(approve())).toEqual([409, "matter_closed"])
+    expect(commits()).toBe(1)
+    vi.restoreAllMocks()
+    expect(await allows()).toBe(before)
+    // The refusal is this request's one row (rows come back in document-id order, so they are compared as a set).
+    expect((await briefAudits(f, "draft.outline.approve", g)).filter((a) => a.decision === "deny").map((a) => a.reason)).toEqual(["matter_closed"])
+  })
+
+  it("an edit approval whose commit answer is lost answers as the committed approval when the SDK runs it again: one version n + 1, approved", async () => {
+    const f = await newFirm()
+    const { generationId: g, sha } = await outlined(f)
     const edit = { sections: [{ heading: "Facts", purpose: "State the facts." }, { heading: "Prayer", purpose: "Pray for relief." }], missingFacts: [] }
-    commits = briefCommits(edited.generationId, lost)
-    expect(await approveApi(f.A, { generationId: edited.generationId, outlineVersion: 1, outlineSha256: edited.sha, outline: edit, acknowledgedMissingFacts: [] })).toEqual({
-      generationId: edited.generationId,
+    // The edit's commit lands and its answer is lost; the SDK runs the transaction again.
+    const commits = briefCommits(g, (n) => (n === 1 ? Object.assign(new Error("lost"), { code: 14 }) : null))
+    expect(await approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, outline: edit, acknowledgedMissingFacts: [] })).toEqual({
+      generationId: g,
       stage: "approved",
       outlineVersion: 2,
       outlineSha256: outlineSha256(edit),
@@ -1273,12 +1308,13 @@ describe.skipIf(!EMULATORS)("D4 generation: outline steps (P4B-9, P4B-10, P4B-12
     })
     expect(commits()).toBe(2)
     vi.restoreAllMocks()
-    expect(await briefOf(edited.generationId)).toMatchObject({ outlineVersion: 2, stage: "approved", sectionCount: 2, approvedOutline: { version: 2, sha256: outlineSha256(edit), by: f.A.uid } })
-    expect((await docsOf("draft_outlines", f.firmId)).filter((o) => o.generationId === edited.generationId).map((o) => [o.version, o.kind])).toEqual(
-      expect.arrayContaining([[1, "generated"], [2, "edited"]])
-    )
-    expect((await docsOf("draft_outlines", f.firmId)).filter((o) => o.generationId === edited.generationId)).toHaveLength(2)
-    expect((await briefAudits(f, "draft.outline.approve", edited.generationId)).map((a) => [a.decision, a.reason])).toEqual([["allow", "ok"]])
+    expect(await briefOf(g)).toMatchObject({ outlineVersion: 2, stage: "approved", sectionCount: 2, approvedOutline: { version: 2, sha256: outlineSha256(edit), by: f.A.uid } })
+    const stored = (await docsOf("draft_outlines", f.firmId)).filter((o) => o.generationId === g)
+    expect(stored.map((o) => [o.version, o.kind, o.editedFrom]).sort()).toEqual([[1, "generated", null], [2, "edited", 1]])
+    // The committed run's row, and the second run's own: each run that decides stages its row.
+    const allows = (await briefAudits(f, "draft.outline.approve", g)).filter((a) => a.decision === "allow")
+    expect(allows.length).toBeGreaterThanOrEqual(1)
+    expect(allows).toHaveLength(2)
   })
 
   it("the pre-call budget is judged again just before the call: past it, the lease is released and the answer is 503 generation_busy, with no call made", async () => {
@@ -1352,10 +1388,16 @@ describe.skipIf(!EMULATORS)("D4 generation: outline steps (P4B-9, P4B-10, P4B-12
       offset += 6_000
       return out
     }) as never)
+    // callDrafting is never entered: the refusal is claimLease's own post-commit check, not the check before the call.
+    let calls = 0
+    d4GenerationTestSeam.beforeCall = async () => {
+      calls += 1
+    }
     const logs = spyLogs()
     expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).toEqual([503, "generation_busy"])
     // The spy fired; the released lease below shows it fired between the lease commit and the post-commit check.
     expect(fired).toBeGreaterThanOrEqual(1)
+    expect(calls).toBe(0)
     expect(logs.warn.mock.calls.filter((c) => c[0] === "d4.lease_released_after_error").map((c) => (c[1] as { code: string }).code)).toEqual(["released"])
     expect(sent).toHaveLength(0)
     expect(await briefOf(g)).toMatchObject({ inFlight: null, calls: 0, lastAttempt: null })
