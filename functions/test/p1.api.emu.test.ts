@@ -544,6 +544,22 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect(month).toMatchObject({ spentMicroUsd: 14000, calls: { ok: 1, failed: 0, blocked: 0 } })
     })
 
+    it("committeeBrain is unchanged by 4b: task committee, lossy masking, no pseudonyms, and a length-truncated answer stored and returned as before (P4B-5, P4B-6)", async () => {
+      const f = await newFirm({ parties: [{ name: "Ali Raza" }] })
+      const sentBodies: string[] = []
+      setP1TransportForTests({
+        async send(r) {
+          sentBodies.push(r.body)
+          return { text: "Reply for Ali Raza", inputTokens: 1000, outputTokens: 500, finishReason: "length" }
+        },
+      })
+      const r = await send(brainAt, f.P, base(f, { body: "Draft for Ali Raza." })) as Out
+      expect(r).toMatchObject({ blocked: false, text: "Reply for [PARTY]" })
+      expect(sentBodies).toEqual(["Draft for [PARTY]."])
+      expect((await outputsOf(f.firmId))[0]!.data.text).toBe("Reply for [PARTY]")
+      expect((await adminDb().collection("ai_usage_logs").where("firmId", "==", f.firmId).get()).docs.map((d) => d.get("taskType"))).toEqual(["committee"])
+    })
+
     describe("the output write is retried", () => {
       const ask = (f: Firm) => send(brainAt, f.P, { firmId: f.firmId, matterId: f.matterId, body: "Draft a reply to the notice." })
       const permissionAndCallRows = async (f: Firm) =>

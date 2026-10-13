@@ -25,17 +25,35 @@ export type MaskResult = {
   redactions: { kind: RedactionKind; count: number }[]
 }
 
-const CNIC_SEPARATED = /\b\d{5}[.\-\s]+\d{7}[.\-\s]+\d\b/g
-const CNIC_PLAIN = /\b\d{13}\b/g
+export const CNIC_SEPARATED = /\b\d{5}[.\-\s]+\d{7}[.\-\s]+\d\b/g
+export const CNIC_PLAIN = /\b\d{13}\b/g
 // Pakistani mobile: 03XXXXXXXXX / 0300-1234567 / +92 300 1234567 / (0300) 1234567
-const PK_MOBILE = /(?:\+92|92|0)[.\s-]?3\d{2}[.\s-]?\d{7}\b/g
-const PK_MOBILE_PAREN = /\(0?3\d{2}\)[.\s-]?\d{7}\b/g
-const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
-const PK_IBAN = /\bPK\s*\d{2}\s*[A-Z]{4}\s*\d{4}\s*\d{4}\s*\d{4}\s*\d{4}\b/gi
-const NTN = /\bNTN[:\s-]*\d{7}-\d\b/gi
-const PASSPORT = /\b(?:passport|ppt\.?)[:\s-]*[A-Z]{2}\d{7}\b/gi
+export const PK_MOBILE = /(?:\+92|92|0)[.\s-]?3\d{2}[.\s-]?\d{7}\b/g
+export const PK_MOBILE_PAREN = /\(0?3\d{2}\)[.\s-]?\d{7}\b/g
+export const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
+export const PK_IBAN = /\bPK\s*\d{2}\s*[A-Z]{4}\s*\d{4}\s*\d{4}\s*\d{4}\s*\d{4}\b/gi
+export const NTN = /\bNTN[:\s-]*\d{7}-\d\b/gi
+export const PASSPORT = /\b(?:passport|ppt\.?)[:\s-]*[A-Z]{2}\d{7}\b/gi
 
-function escapeRegExp(value: string): string {
+/**
+ * The patterns above, in the order `maskOutboundPII` applies them. The indexed pseudonymiser walks the same list,
+ * so the two never drift apart. Party names are not here: they are matched from the caller's own list.
+ */
+export const MASK_PATTERNS: ReadonlyArray<{ kind: "cnic" | "phone" | "email" | "iban" | "ntn" | "passport"; re: RegExp }> = Object.freeze([
+  Object.freeze({ kind: "cnic", re: CNIC_SEPARATED } as const),
+  Object.freeze({ kind: "cnic", re: CNIC_PLAIN } as const),
+  Object.freeze({ kind: "phone", re: PK_MOBILE_PAREN } as const),
+  Object.freeze({ kind: "phone", re: PK_MOBILE } as const),
+  Object.freeze({ kind: "email", re: EMAIL } as const),
+  Object.freeze({ kind: "iban", re: PK_IBAN } as const),
+  Object.freeze({ kind: "ntn", re: NTN } as const),
+  Object.freeze({ kind: "passport", re: PASSPORT } as const),
+])
+
+/** What the mask writes in place of a match. A model answer that still holds one has lost the value it stood for. */
+export const LOSSY_TOKENS: readonly string[] = Object.freeze(["[PARTY]", "[CNIC]", "[PHONE]", "[EMAIL]", "[IBAN]", "[NTN]", "[PASSPORT]"])
+
+export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 

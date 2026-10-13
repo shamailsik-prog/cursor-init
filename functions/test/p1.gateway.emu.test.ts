@@ -26,6 +26,11 @@ const at = { now: () => T }
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const BIG_BUDGET = 1_000_000_000
 
+// The Phase 4b fixtures (P4B-21).
+const PERSON = "Ardeshir Testani"
+const CNIC = "99999-9999999-9"
+const LAND = "Plot 99-T, Block Z, Test Housing Scheme, measuring 999 square yards"
+
 /** The P3-63 usage row fields, exactly. */
 const ROW_FIELDS = [
   "firmId",
@@ -51,7 +56,7 @@ const ROW_FIELDS = [
 
 const db = () => adminDb()
 
-type Reply = { text?: unknown; inputTokens?: number | null; outputTokens?: number | null }
+type Reply = { text?: unknown; inputTokens?: number | null; outputTokens?: number | null; finishReason?: string | null }
 type Sent = { model: string; body: string; maxTokens: number }
 
 /** Installs a fake transport that records what it was sent; the default reply costs 14000 micro-USD (1000 in, 500 out). */
@@ -65,6 +70,7 @@ function fakeTransport(reply: Reply | (() => Promise<never>) = {}): Sent[] {
         text: (reply.text === undefined ? "REPLY" : reply.text) as string,
         inputTokens: reply.inputTokens === undefined ? 1000 : reply.inputTokens,
         outputTokens: reply.outputTokens === undefined ? 500 : reply.outputTokens,
+        finishReason: reply.finishReason, // as given, absent included
       }
     },
   }
@@ -1040,6 +1046,89 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
       expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
       expect((await monthOf(firmId))!.calls).toEqual({ ok: 1, failed: 0, blocked: 0 })
+    })
+  })
+
+  describe("drafting, truncation and pseudonyms (P4B-4 to P4B-6)", () => {
+    it("truncated is true for an ok answer whose finishReason is anything but stop, absent included; the charge, row and event are unchanged", async () => {
+      for (const [finishReason, truncated] of [["stop", false], ["length", true], [null, true], [undefined, true], ["content_filter", true]] as const) {
+        const firmId = await seedFirm()
+        fakeTransport({ finishReason })
+        const r = await callP1(req(firmId, { taskType: "drafting" }), at)
+        expect([finishReason, r.outcome, r.truncated, r.costMicroUsd, r.model]).toEqual([finishReason, "ok", truncated, 14000, OPUS])
+        expect((await rowOf(r.usageLogId))?.outcome).toBe("ok")
+        expect(await eventsOf(firmId, "ai.call.completed")).toHaveLength(1)
+      }
+    })
+
+    it("truncated is false on a blocked call and on a failed call", async () => {
+      const blockedFirm = await seedFirm(null)
+      fakeTransport({ finishReason: "length" })
+      const blocked = await callP1(req(blockedFirm, { taskType: "drafting" }), at)
+
+      const failedFirm = await seedFirm()
+      fakeTransport(() => Promise.reject(new P1TransportError("gateway_status", { billable: false, status: 500 })))
+      const failed = await callP1(req(failedFirm, { taskType: "drafting" }), at)
+
+      expect([blocked.outcome, blocked.blockReason, blocked.truncated, failed.outcome, failed.truncated]).toEqual(["blocked", "budget_not_set", false, "failed", false])
+    })
+
+    it("with pseudonymise the transport, the row, the event, the audit row, the trace and every log line carry tokens only, and an ok result carries the frozen map", async () => {
+      const firmId = await seedFirm()
+      const sent = fakeTransport({ text: `⟦PARTY_1⟧, ${PERSON}, holds ⟦CNIC_1⟧` })
+      const opik = fakeOpik()
+      const logs = spyLogs()
+      const r = await callP1(req(firmId, { taskType: "drafting", body: `${PERSON} (${CNIC}) owns ${LAND}`, partyNames: [PERSON], pseudonymise: { verbatim: [LAND] } }), at)
+      expect(sent[0]!.body).toBe("⟦PARTY_1⟧ (⟦CNIC_1⟧) owns ⟦VERBATIM_1⟧")
+      expect(r.text).toBe("⟦PARTY_1⟧, ⟦PARTY_1⟧, holds ⟦CNIC_1⟧")
+      expect(r.outbound.redactionCounts).toMatchObject({ verbatim: 1, cnic: 1, party: 1 })
+      expect(r.pseudonyms?.map((p) => p.value)).toEqual([LAND, CNIC, PERSON])
+      expect(Object.isFrozen(r.pseudonyms)).toBe(true)
+      expect(opik.bodies).toHaveLength(1)
+      const everywhere = JSON.stringify([await rowsOf(firmId), await eventsOf(firmId), await auditsOf(firmId), opik.bodies, logs.all()])
+      for (const v of [PERSON, CNIC, LAND]) expect(everywhere).not.toContain(v)
+    })
+
+    it("without pseudonymise the call is as before: lossy masking, no pseudonyms, no verbatim count", async () => {
+      const firmId = await seedFirm()
+      const sent = fakeTransport()
+      const r = await callP1(req(firmId, { body: `${PERSON} ${CNIC}`, partyNames: [PERSON] }), at)
+      expect(sent[0]!.body).toBe("[PARTY] [CNIC]")
+      expect("pseudonyms" in r).toBe(false)
+      expect(r.outbound.redactionCounts).not.toHaveProperty("verbatim")
+    })
+
+    it("a pseudonymised privileged call with an executed DPA passes assertMinimised and goes out", async () => {
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: false } })
+      const firmId = await seedFirm()
+      const sent = fakeTransport()
+      const r = await callP1(req(firmId, { classification: "privileged", body: `${PERSON} ${CNIC}`, partyNames: [PERSON], pseudonymise: { verbatim: [] } }), at)
+      expect([r.outcome, r.blockReason]).toEqual(["ok", null])
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body).toBe("⟦PARTY_1⟧ ⟦CNIC_1⟧")
+    })
+
+    // Beyond the brief's list: the map is returned on an ok result only, and no failure path carries it.
+    it("a pseudonymised call that is blocked or fails returns no pseudonyms, and its outbound body is tokens only", async () => {
+      const body = `${PERSON} (${CNIC}) owns ${LAND}`
+      const options: Partial<P1Request> = { taskType: "drafting", body, partyNames: [PERSON], pseudonymise: { verbatim: [LAND] } }
+      const blocked = await callP1(req(await seedFirm(null), options), at)
+      fakeTransport(() => Promise.reject(new P1TransportError("gateway_status", { billable: false, status: 500 })))
+      const failed = await callP1(req(await seedFirm(), options), at)
+      expect([blocked.outcome, "pseudonyms" in blocked, failed.outcome, "pseudonyms" in failed]).toEqual(["blocked", false, "failed", false])
+      expect([blocked.outbound.body, failed.outbound.body]).toEqual(["⟦PARTY_1⟧ (⟦CNIC_1⟧) owns ⟦VERBATIM_1⟧", "⟦PARTY_1⟧ (⟦CNIC_1⟧) owns ⟦VERBATIM_1⟧"])
+    })
+
+    it("a failed commit logs no pseudonym value, and the result still carries the map", async () => {
+      const firmId = await seedFirm()
+      fakeTransport({ text: `${PERSON} holds ${CNIC} on ${LAND}` })
+      p1TestSeam.failCommit = true
+      const logs = spyLogs()
+      const r = await callP1(req(firmId, { taskType: "drafting", body: `${PERSON} (${CNIC}) owns ${LAND}`, partyNames: [PERSON], pseudonymise: { verbatim: [LAND] } }), at)
+      expect(r.outcome).toBe("ok")
+      expect(r.pseudonyms).toHaveLength(3)
+      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(1)
+      for (const v of [PERSON, CNIC, LAND]) expect(logs.all()).not.toContain(v)
     })
   })
 

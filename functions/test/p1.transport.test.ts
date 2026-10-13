@@ -82,7 +82,7 @@ describe("P1 Gateway transport (P3-68)", () => {
   it("posts the OpenAI-compatible body with the bearer key and parses text and usage", async () => {
     respond = json(200, { choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 7, completion_tokens: 3 } })
     const out = await gatewayTransport("k", `${base}/v1/chat/completions`).send(request)
-    expect(out).toEqual({ text: "hi", inputTokens: 7, outputTokens: 3 })
+    expect(out).toEqual({ text: "hi", inputTokens: 7, outputTokens: 3, finishReason: null })
     expect(seen).toHaveLength(1)
     expect(seen[0]?.method).toBe("POST")
     expect(seen[0]?.url).toBe("/v1/chat/completions")
@@ -95,6 +95,13 @@ describe("P1 Gateway transport (P3-68)", () => {
     })
   })
 
+  it("returns choices[0].finish_reason when it is a string, and null otherwise (P4B-5)", async () => {
+    for (const [raw, want] of [["stop", "stop"], ["length", "length"], [undefined, null], [7, null], [null, null]] as const) {
+      respond = json(200, { choices: [{ message: { content: "hi" }, ...(raw === undefined ? {} : { finish_reason: raw }) }] })
+      expect([raw, (await gatewayTransport("k", base).send(request)).finishReason]).toEqual([raw, want])
+    }
+  })
+
   it("sends the max_tokens it is given", async () => {
     respond = json(200, { choices: [{ message: { content: "x" } }] })
     await gatewayTransport("k", base).send({ ...request, maxTokens: 17 })
@@ -103,7 +110,7 @@ describe("P1 Gateway transport (P3-68)", () => {
 
   it("gives null tokens when the response carries no usage", async () => {
     respond = json(200, { choices: [{ message: { content: "hi" } }] })
-    expect(await gatewayTransport("k", base).send(request)).toEqual({ text: "hi", inputTokens: null, outputTokens: null })
+    expect(await gatewayTransport("k", base).send(request)).toEqual({ text: "hi", inputTokens: null, outputTokens: null, finishReason: null })
   })
 
   it("treats each side of usage on its own and nulls anything that is not a count", async () => {
@@ -299,7 +306,7 @@ describe("P1 active transport and test seam (P3-68)", () => {
     })
     const timeout = vi.spyOn(AbortSignal, "timeout")
     vi.stubEnv("AI_GATEWAY_API_KEY", "  k  ")
-    expect(await activeTransport()?.send(request)).toEqual({ text: "hi", inputTokens: 1, outputTokens: 2 })
+    expect(await activeTransport()?.send(request)).toEqual({ text: "hi", inputTokens: 1, outputTokens: 2, finishReason: null })
     expect(calls).toHaveLength(1)
     expect(calls[0]?.url).toBe("https://ai-gateway.vercel.sh/v1/chat/completions")
     expect(calls[0]?.init?.method).toBe("POST")

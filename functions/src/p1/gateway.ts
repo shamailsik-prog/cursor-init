@@ -1,6 +1,7 @@
 import { FieldValue, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { applyMap, pseudonymise, type PseudonymMap } from "@/platform/p1/pseudonymiseOutboundPII"
 import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolicy"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
@@ -24,6 +25,10 @@ import { uuidv7 } from "./uuidv7"
  *
  * No raw body, purpose or response text reaches the transport, the trace, a row, an event, an audit row or a
  * log line, and no provider error text is returned, stored or logged.
+ *
+ * A request with `pseudonymise` swaps the lossy mask of the body and of the answer for the indexed pseudonymiser
+ * (E-52(c); P4B-6): the transport, the trace and every row carry tokens only, and the map from token to value is
+ * returned on an `ok` result, to the in-process caller only. It is never stored, traced, logged or put in an error.
  */
 
 export type P1Request = {
@@ -36,13 +41,28 @@ export type P1Request = {
   body: string
   purpose: string
   partyNames?: string[]
+  /**
+   * Present: the body and the answer go through the indexed pseudonymiser instead of the lossy mask, with these
+   * strings (exact match) pseudonymised first. The purpose keeps the lossy mask; it is never sent.
+   */
+  pseudonymise?: { verbatim: readonly string[] }
 }
 
 export type P1Result = {
   outcome: P1Outcome
   blockReason: BlockReason | null
-  /** The masked response; present only when the outcome is `ok`. */
+  /** The masked response; present only when the outcome is `ok`. With `pseudonymise`, it holds tokens, not values. */
   text?: string
+  /**
+   * True when the call is `ok` and the provider's finish reason is anything but "stop" (an absent one included): the
+   * answer may be cut short (P4B-5). False on a blocked or failed call. Charging, rows, events and traces do not change.
+   */
+  truncated: boolean
+  /**
+   * The token map of a pseudonymised request, present only on its `ok` result. It holds the caller's own values: use
+   * it in process, with `rehydrate`, and never store, trace, log or return it.
+   */
+  pseudonyms?: PseudonymMap
   usageLogId: string
   traceId: string
   model: string
@@ -50,7 +70,7 @@ export type P1Result = {
   inputTokens: number
   outputTokens: number
   costMicroUsd: number
-  /** What was (or would have been) sent: the masked body and purpose, and the body's redaction counts. */
+  /** What was (or would have been) sent: the masked body and purpose, and the body's redaction counts (a pseudonymised body's include `verbatim`). */
   outbound: { body: string; purpose: string; redactionCounts: Record<string, number> }
 }
 
@@ -163,13 +183,24 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
   const [platformSnap, configSnap, totalSnap] = await db.getAll(platformConfigRef(), configRef, totalRef)
   const config = configSnap.data()
 
-  // 3. Route (P3-62). 4. Mask the body and the purpose with the party names.
+  // 3. Route (P3-62). 4. Mask the body and the purpose with the party names; a pseudonymised body is tokenised
+  // instead (P4B-6), and the purpose keeps the lossy mask.
   const model = t.modelOverride ?? (Object.hasOwn(TASK_MODEL, taskType) ? TASK_MODEL[taskType] : "")
-  const bodyMask = maskOutboundPII(req.body, { partyNames })
+  const pseudo = req.pseudonymise ? pseudonymise(req.body, { partyNames, verbatim: req.pseudonymise.verbatim }) : null
+  let outboundBody: string
+  let redactionCounts: Record<string, number>
+  if (pseudo) {
+    outboundBody = pseudo.text
+    redactionCounts = pseudo.redactionCounts
+  } else {
+    const bodyMask = maskOutboundPII(req.body, { partyNames })
+    outboundBody = bodyMask.masked
+    redactionCounts = Object.fromEntries(bodyMask.redactions.map((r) => [r.kind, r.count]))
+  }
   const outbound = {
-    body: bodyMask.masked,
+    body: outboundBody,
     purpose: maskOutboundPII(req.purpose, { partyNames }).masked,
-    redactionCounts: Object.fromEntries(bodyMask.redactions.map((r) => [r.kind, r.count])),
+    redactionCounts,
   }
 
   /** Steps 2 and 5 to 7, in order; the first refusal wins. */
@@ -192,6 +223,7 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
 
   let outcome: P1Outcome = "blocked"
   let text: string | undefined
+  let finishReason: string | null = null
   let inputTokens = 0
   let outputTokens = 0
   let tokensEstimated = false
@@ -204,7 +236,9 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
       if (typeof res?.text !== "string") {
         throw new P1TransportError("gateway_no_text", { billable: true, inputTokens: tokenCount(res?.inputTokens), outputTokens: tokenCount(res?.outputTokens) })
       }
-      const masked = maskOutboundPII(res.text, { partyNames }).masked
+      // A pseudonymised answer keeps the tokens it holds, maps a value it spells out to its token, and turns any other
+      // pattern match into a lossy token; otherwise the lossy mask.
+      const masked = pseudo ? applyMap(res.text, pseudo.map, { partyNames }) : maskOutboundPII(res.text, { partyNames }).masked
       const reportedIn = tokenCount(res.inputTokens)
       const reportedOut = tokenCount(res.outputTokens)
       // Each side is estimated from what was billed: the input from the masked body that was sent, the output from
@@ -215,6 +249,7 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
       tokensEstimated = reportedIn === null || reportedOut === null
       cost = costMicroUsd(model, inputTokens, outputTokens)! // step 6 refused an unpriced model
       text = masked
+      finishReason = typeof res.finishReason === "string" ? res.finishReason : null
       outcome = "ok"
     } catch (err) {
       outcome = "failed"
@@ -297,6 +332,8 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
     outcome,
     blockReason,
     ...(outcome === "ok" ? { text } : {}),
+    truncated: outcome === "ok" && finishReason !== "stop",
+    ...(outcome === "ok" && pseudo ? { pseudonyms: pseudo.map } : {}),
     usageLogId: usageRef.id,
     traceId,
     model,

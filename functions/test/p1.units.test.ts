@@ -20,6 +20,11 @@ describe("P1 cost table (P3-62)", () => {
     expect(PROVIDER_ID).toBe("ai-gateway")
   })
 
+  it("routes the drafting task to Opus as well, and prices no other model (P4B-4, O-77)", () => {
+    expect(TASK_MODEL).toEqual({ committee: OPUS, drafting: OPUS })
+    expect(Object.keys(MODEL_PRICES)).toEqual([OPUS])
+  })
+
   it("costMicroUsd is ceil((in x inputPrice + out x outputPrice) / 1000)", () => {
     expect(costMicroUsd(OPUS, 1000, 500)).toBe(14000)
     expect(costMicroUsd(OPUS, 1, 0)).toBe(4)
@@ -289,6 +294,10 @@ describe("P1 Opik trace payload (P3-67)", () => {
     maskedBody: "MASKED BODY",
     maskedResponse: "MASKED RESPONSE",
     ...over,
+  })
+
+  it("names a drafting call's trace p1.drafting (P4B-4)", () => {
+    expect(buildTrace(record({ taskType: "drafting" }), "sikander-p1").name).toBe("p1.drafting")
   })
 
   it("carries masked input and output at rank 2, with the full metadata", () => {

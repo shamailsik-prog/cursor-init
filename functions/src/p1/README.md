@@ -6,7 +6,7 @@ P1 is CORE, with no layer flag. The Next.js `/api/p1/committee-brain` route is t
 
 ## Entry point
 
-`callP1(request, opts?)` in `gateway.ts` is the v6 `internalAICaller`. The request carries `firmId`, `actorId` (a uid or `"system"`), `matterId | null`, `jobId | null`, `taskType` (`committee` is the only one), `classification`, `body`, `purpose` and `partyNames?`. The result carries the outcome (`ok`, `failed` or `blocked`), the block reason, the masked `text` (only when `ok`), the usage row id, the trace id, the model, the token counts, `costMicroUsd` and the masked outbound body and purpose.
+`callP1(request, opts?)` in `gateway.ts` is the v6 `internalAICaller`. The request carries `firmId`, `actorId` (a uid or `"system"`), `matterId | null`, `jobId | null`, `taskType` (`committee` or `drafting`), `classification`, `body`, `purpose`, `partyNames?` and `pseudonymise?` (below). The result carries the outcome (`ok`, `failed` or `blocked`), the block reason, the masked `text` (only when `ok`), `truncated`, the usage row id, the trace id, the model, the token counts, `costMicroUsd`, the masked outbound body and purpose, and, for a pseudonymised request, the `pseudonyms` map on its `ok` result.
 
 Spend is counted per provider call, not per request. A replay of a stored 2xx never reaches P1. A same-key retry after a 5xx can: the router stores no 5xx, so a `committeeBrain` whose output write failed for good after the provider call (500) runs again and is billed again, in its own usage row (O-58). A job attempt that calls the provider again has been billed again and gets its own row.
 
@@ -16,17 +16,36 @@ The first refusal wins. A refusal at steps 2 to 8 makes no provider call, costs 
 
 1. Classification guard: a missing or unknown label throws, before any read or write (L8473).
 2. Kill switch: the platform's, then the firm's (P3-66). Both are read fresh on every call.
-3. Route: task type to model (P3-62).
-4. Outbound mask of the body and the purpose, with the party names (`maskOutboundPII`).
+3. Route: task type to model (P3-62; see Task routes below).
+4. Outbound mask of the body and the purpose, with the party names (`maskOutboundPII`). A request with `pseudonymise` has its body pseudonymised instead (see Truncation, pseudonyms and the map below); its purpose keeps this lossy mask.
 5. Provider policy: `providerAllowedFor("ai-gateway", classification)`, and at rank 3 and above `assertMinimised` on the masked body and the masked purpose.
 6. Price: the model must have one.
 7. Budget: one must be set, and the month's spend must be below it (P3-64).
 8. Credentials: `AI_GATEWAY_API_KEY` must be set.
-9. Transport call, then the response mask. Any transport error is outcome `failed`, reason `transport_error`. It is charged when the provider may have billed it (a timeout or abort, a 2xx that is not JSON, a 2xx without usable content): the usage the response reported where it is a valid count, else the estimated input and the 4,096-token ceiling, with `tokensEstimated: true`. A non-2xx and a request that never left (a refused connection, DNS, a refused redirect) cost 0. A transport that resolves without text is billed like `gateway_no_text`; any error that is not a billable `P1TransportError` costs 0.
+9. Transport call, then the response mask (the lossy mask, or `applyMap` for a pseudonymised request), and the finish reason is read for `truncated`. Any transport error is outcome `failed`, reason `transport_error`. It is charged when the provider may have billed it (a timeout or abort, a 2xx that is not JSON, a 2xx without usable content): the usage the response reported where it is a valid count, else the estimated input and the 4,096-token ceiling, with `tokensEstimated: true`. A non-2xx and a request that never left (a refused connection, DNS, a refused redirect) cost 0. A transport that resolves without text is billed like `gateway_no_text`; any error that is not a billable `P1TransportError` costs 0.
 10. Trace export (P3-67), fail-open.
 11. One transaction: the usage row, the month total, any threshold alerts, the audit row and the event.
 
 No raw (unmasked) body, purpose or response text reaches the transport, a trace, a usage row, an event, an audit row or a log line. Provider error text is never returned, stored or logged: the transport throws a `P1TransportError` whose code (`gateway_timeout`, `gateway_request_failed`, `gateway_status`, `gateway_not_json`, `gateway_no_text`) and message are fixed, and the gateway logs only the code (`p1.transport_failed`). The transport refuses redirects (`redirect: "error"`), so the key and the masked body go to the Gateway URL only.
+
+## Task routes
+
+The route of step 3 (P3-62, P4B-4). Both task types go to the one priced model; `costTable.ts` holds the frozen tables, and a model with no price is refused `model_unpriced`. The trace is named `p1.<taskType>`.
+
+| Task type | Model | Caller |
+| --- | --- | --- |
+| `committee` | `anthropic/claude-opus-5.5` | `committeeBrain` (lossy mask, no map) |
+| `drafting` | `anthropic/claude-opus-5.5` | D4 draft generation (Phase 4b), with `pseudonymise` |
+
+## Truncation, pseudonyms and the map
+
+These three additions (E-52(a) to (c); P4B-5, P4B-6) change nothing in charging, usage rows, events or traces.
+
+- **`truncated`** is always on the result. It is `true` when the outcome is `ok` and the provider's finish reason is anything but `"stop"`, an absent or non-string one included (`"length"` and `"content_filter"` among them), so the caller treats an unknown ending as a cut-off answer. It is `false` on a `blocked` or `failed` call. The Gateway transport returns `choices[0].finish_reason` when it is a string, else `null`; the transport type makes the field optional and counts an absent one as `null`. `committeeBrain` ignores `truncated`: its answer is stored and returned as before.
+- **`pseudonymise: { verbatim }`** on the request swaps the lossy mask of the body and of the answer for the indexed pseudonymiser in `platform/p1/pseudonymiseOutboundPII.ts`. It replaces, in this order, each verbatim string (exact, longest first) with `⟦VERBATIM_n⟧`, each distinct match of the mask's own patterns with `⟦CNIC_n⟧`, `⟦PHONE_n⟧`, `⟦EMAIL_n⟧`, `⟦IBAN_n⟧`, `⟦NTN_n⟧` or `⟦PASSPORT_n⟧`, and each supplied party name (case-insensitive, longest first) with `⟦PARTY_n⟧`, one token per name, present in the text or not. n counts from 1 per kind. Every replacement runs on the text between tokens already placed, so a token is never rewritten. The transport, the trace, `outbound.body`, `text` and every row carry tokens only; `outbound.redactionCounts` counts every replacement by kind and gains `verbatim`. `assertMinimised` runs unchanged on the tokenised body. A party name that is itself a bare token word (`Party`, `Phone`) is found again inside `⟦PARTY_1⟧` and blocks a call at rank 3 and above as `not_minimised`; it fails closed.
+- **The answer** goes through `applyMap`: a token it already holds is left as it is, a mapped value it spells out becomes its token (a party name in any case, every other value exactly), and any other pattern match becomes its lossy token (`[CNIC]`, `[PHONE]`, ...), which the caller refuses. A supplied party name that the map does not hold becomes `[PARTY]`; `callP1` passes the list the map was made from, so there is none.
+- **`pseudonyms`** is the map: a frozen list of frozen `{ token, kind, value }` entries (verbatim, then pattern, then party), holding every supplied name and verbatim string. It is on the `ok` result of a pseudonymised request only (never on a blocked or failed one, and never on a request without `pseudonymise`). `rehydrate(text, map)` turns every known token back into its value in one pass, a party name as supplied, and leaves an unknown token in place for the caller to refuse.
+- **In process only.** The map holds the caller's own inputs and is returned to the in-process caller only. P1 never stores it, traces it, logs it, or puts it in a row, an event, an audit row, an error or a response, and neither may the caller (P4B-6). `INDEXED_TOKEN` is global: read it with `replace`, `match` or `matchAll`, never `test` or `exec`. P1 does not refuse a body that already holds a token; the caller refuses reserved text (D4's `reserved_tokens`) before it calls.
 
 ## Routes
 
@@ -55,7 +74,7 @@ Nothing in `functions/src` binds the key as a function secret yet. Until the dep
 
 ## Cost, budget and alerts
 
-- **Model and price.** `committee` goes to `anthropic/claude-opus-5.5` through provider id `ai-gateway`. Prices are integer nano-USD per token (input 4,000, output 20,000), with their source and the date fetched (2026-10-11) in `costTable.ts`. The routing and price tables are frozen. A model with no price is refused `model_unpriced`. Every call sends `max_tokens: 4096`.
+- **Model and price.** `committee` and `drafting` go to `anthropic/claude-opus-5.5` through provider id `ai-gateway`. Prices are integer nano-USD per token (input 4,000, output 20,000), with their source and the date fetched (2026-10-11) in `costTable.ts`. The routing and price tables are frozen. A model with no price is refused `model_unpriced`. Every call sends `max_tokens: 4096`.
 - **Cost.** In micro-USD, `ceil((inputTokens x inputPrice + outputTokens x outputPrice) / 1000)`. When the response carries no usage, each side is estimated as `ceil(UTF-8 bytes / 3)` tokens and the row says `tokensEstimated: true`: the input from the masked body that was sent, the output from the raw response, because masking shortens it and the provider billed the raw length. The raw text is used for that count only; the masked text is the only one returned, stored, traced or logged. A failed call the provider may have billed is charged too (step 9), and moves the month's spend and token totals by the same rule as an ok call, so it can cross a threshold and counts toward `budget_exhausted`.
 - **Currency.** Micro-USD integers are canonical. When the firm has set `pkrPerUsd`, the row stores the rate and `costPkr` to 2 decimal places. There is no default rate.
 - **Budget.** Per firm per PKT calendar month (`YYYY-MM`, Asia/Karachi, UTC+5). With no budget set every call is refused `budget_not_set`; once the month's spend reaches the budget, every call is refused `budget_exhausted` until the partner raises it or the month turns. The check runs before the call, so calls in flight together can overshoot; the per-user rate limit and `max_tokens` bound it.
@@ -109,13 +128,13 @@ One trace per decision, posted to `{OPIK_BASE_URL}/v1/private/traces/batch`. The
 
 ## Tests and gate
 
-`functions/test/p1.units.test.ts` and `p1.transport.test.ts` need no emulator. `p1.gateway.emu.test.ts` and `p1.api.emu.test.ts` run under the Auth and Firestore emulators, with a local HTTP server standing in for the Gateway. The rules are covered by `tests/firestore.rules.p1-phase3d.test.ts` and the new permission actions by `tests/p5.permission-ai-actions.test.ts`. `npm run gate:g4:phase3d` (`ci_gates/gate_g4_phase3d.sh`) checks route coverage, runs the named P1 tests (and the bundle's `NODE_ENV` test in `deploy.test.ts`) by exact name, lints `functions` at zero warnings and runs G-2; it runs in CI after the Phase 3c gate.
+`tests/p1.pseudonymise.test.ts` (root, no emulator) covers the indexed pseudonymiser. `functions/test/p1.units.test.ts` and `p1.transport.test.ts` need no emulator. `p1.gateway.emu.test.ts` and `p1.api.emu.test.ts` run under the Auth and Firestore emulators, with a local HTTP server standing in for the Gateway. The rules are covered by `tests/firestore.rules.p1-phase3d.test.ts` and the new permission actions by `tests/p5.permission-ai-actions.test.ts`. `npm run gate:g4:phase3d` (`ci_gates/gate_g4_phase3d.sh`) checks route coverage, runs the named P1 tests (and the bundle's `NODE_ENV` test in `deploy.test.ts`) by exact name, lints `functions` at zero warnings and runs G-2; it runs in CI after the Phase 3c gate.
 
 ## Not in this phase
 
 - L16.1 Automatic and Advanced modes and the deterministic-first gate (they need the clause library).
 - L16.2 cross-model failover, and async-by-default through a provider-calling P2 job (O-56).
-- Other task types: large-context, research, OCR, speech to text, text to speech and translation routing.
+- Other task types: large-context, research, OCR, speech to text, text to speech and translation routing (`drafting` is Phase 4b's).
 - The citation guardrail (L960-961): Phase 4.
 - Opik evaluations (`runEvalExperiment`, `onlineEvalRule`).
 - Address masking: `maskOutboundPII` has no address rule (a recorded gap under O-13).

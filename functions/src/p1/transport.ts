@@ -6,7 +6,12 @@
  */
 
 export type P1Transport = {
-  send(req: { model: string; body: string; maxTokens: number }): Promise<{ text: string; inputTokens: number | null; outputTokens: number | null }>
+  /**
+   * `finishReason` is the provider's `choices[0].finish_reason` when it is a string, else null (P4B-5). It is optional
+   * in the type and an absent one counts as null, so a test transport that omits it compiles; the Gateway transport
+   * always returns it.
+   */
+  send(req: { model: string; body: string; maxTokens: number }): Promise<{ text: string; inputTokens: number | null; outputTokens: number | null; finishReason?: string | null }>
 }
 
 export const GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
@@ -55,7 +60,7 @@ export class P1TransportError extends Error {
 }
 
 type GatewayBody = {
-  choices?: { message?: { content?: unknown } }[]
+  choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown }
 } | null
 
@@ -102,10 +107,11 @@ export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts
         throw isAbort(err) ? timedOut() : new P1TransportError("gateway_not_json", { billable: true })
       }
       const text = json?.choices?.[0]?.message?.content
+      const reason = json?.choices?.[0]?.finish_reason
       const inputTokens = tokenCount(json?.usage?.prompt_tokens)
       const outputTokens = tokenCount(json?.usage?.completion_tokens)
       if (typeof text !== "string") throw new P1TransportError("gateway_no_text", { billable: true, inputTokens, outputTokens })
-      return { text, inputTokens, outputTokens }
+      return { text, inputTokens, outputTokens, finishReason: typeof reason === "string" ? reason : null }
     },
   }
 }

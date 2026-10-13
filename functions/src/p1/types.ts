@@ -1,7 +1,7 @@
 /** P1 gateway shared types (spec P3-61..P3-68). Pure: no I/O. */
 
-/** The one task type this phase (P3-62). */
-export type TaskType = "committee"
+/** The task types, each routed to a model in `TASK_MODEL` (P3-62; `drafting` is Phase 4b's, P4B-4). */
+export type TaskType = "committee" | "drafting"
 
 /** Why a call was refused before any provider call: a fixed set, never free text (P3-61). */
 export type BlockReason =

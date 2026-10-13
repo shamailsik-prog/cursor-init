@@ -1,7 +1,7 @@
 import type { TaskType } from "./types"
 
 /** Task type to model (P3-62). Frozen, like the price table. */
-export const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze({ committee: "anthropic/claude-opus-5.5" })
+export const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze({ committee: "anthropic/claude-opus-5.5", drafting: "anthropic/claude-opus-5.5" })
 
 /** Integer nano-USD per token, with where and when the price was taken (P3-62). Frozen: nothing changes a price at run time. The metered model replaces these at G-1. */
 export const MODEL_PRICES: Readonly<
