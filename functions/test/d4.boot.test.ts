@@ -62,7 +62,7 @@ describe("D4 boot (P4-3, P4-10)", () => {
       fieldOverrides: Array<{ collectionGroup: string; fieldPath: string; indexes: unknown[] }>
     }
     const exempt = indexes.fieldOverrides.filter((o) => Array.isArray(o.indexes) && o.indexes.length === 0).map((o) => `${o.collectionGroup}.${o.fieldPath}`)
-    for (const field of ["draft_versions.body", "draft_gate_results.citations", "draft_gate_results.temporal", "draft_gate_overrides.cleared", "draft_gate_overrides.reason"]) {
+    for (const field of ["draft_versions.body", "draft_gate_results.citations", "draft_gate_results.temporal", "draft_gate_overrides.cleared", "draft_gate_overrides.reason", "drafts.reviewChecklist"]) {
       expect(exempt).toContain(field)
     }
   })

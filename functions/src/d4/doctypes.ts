@@ -45,6 +45,23 @@ export function getDocumentType(id: string): DocumentType | null {
 }
 
 /**
+ * Whether a document of this type is law-dependent (F06): it is filed in a forum, that is its `courtIds` do not list
+ * NON_FORUM. Approving one needs the type's review checklist with evidence. A type that lists NON_FORUM (a notice, a
+ * contract, an affidavit, an instrument) is not law-dependent, even if it also lists a court.
+ */
+export function isLawDependent(type: DocumentType): boolean {
+  return !type.courtIds.includes("NON_FORUM")
+}
+
+/**
+ * The type's review checklist (F06): every distinct item of its seed `checklist`, in the seed's order. Some seed rows
+ * repeat an item (`sale_deed` lists "Stamp duty: MANUAL — do not compute" twice); a reviewer answers each item once.
+ */
+export function reviewChecklistOf(type: DocumentType): string[] {
+  return [...new Set(type.checklist)]
+}
+
+/**
  * Whether a matter in `courtId` may use the type. True when:
  * - the matter has no court (`courtId` undefined);
  * - the type lists NON_FORUM, as the seed's notices, contracts and affidavits do (R2): it is not filed in a court, so it

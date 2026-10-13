@@ -3,6 +3,7 @@ import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
 import { InMemoryAuthorityStore, setAuthorityStoreForTests, type AuthorityStore } from "../src/d4/authority"
+import { getDocumentType } from "../src/d4/doctypes"
 import { requireStillPermitted } from "../src/d4/drafts"
 import { approvalPasses, clearedItemsOf, normaliseEvaluation, parseTemporalChecks } from "../src/d4/gateOps"
 import type { GateEvaluation } from "../src/d4/types"
@@ -176,9 +177,14 @@ const currentResultId = async (draftId: string, version: unknown): Promise<strin
 /** An override of the result the partner reviewed: the stored result's id unless `extra` names one (R6). */
 const override = async (f: Firm, m: Member, draftId: string, version: unknown, reason: unknown = REASON, extra: Record<string, unknown> = {}) =>
   send(overrideApi, f, m, { draftId, version, reason, resultId: await currentResultId(draftId, version), ...extra })
-/** An approval of the result the partner reviewed: the stored result's id unless `extra` names one (R9). */
+/**
+ * The review checklist of TYPE (a forum-filed, law-dependent type), complete: every distinct item of the seed row once,
+ * each with evidence (F06). Approval of a law-dependent type requires it, so every approval below supplies it.
+ */
+const FULL_CHECKLIST = [...new Set(getDocumentType(TYPE)?.checklist ?? [])].map((item, i) => ({ item, evidence: `Checked against the file by the partner, point ${i + 1}.` }))
+/** An approval of the result the partner reviewed, with the type's complete review checklist: the stored result's id unless `extra` names one (R9). */
 const approve = async (f: Firm, m: Member, draftId: string, version: unknown, extra: Record<string, unknown> = {}) =>
-  send(approveApi, f, m, { draftId, version, resultId: await currentResultId(draftId, version), ...extra })
+  send(approveApi, f, m, { draftId, version, resultId: await currentResultId(draftId, version), reviewChecklist: FULL_CHECKLIST, ...extra })
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -228,8 +234,25 @@ describe("normaliseEvaluation: the status domain before anything is stored or co
   })
 
   it("never lowers the runner's overall status: a stated OVERRULED stays OVERRULED", () => {
-    const raw: GateEvaluation = { status: "OVERRULED", citations: [], temporal: [] }
+    const raw = { status: "OVERRULED" as const, citations: [], temporal: [] }
     expect(normaliseEvaluation(raw).status).toBe("OVERRULED")
+  })
+
+  it("F06: a stored OK with no findings (a result written before F06) is NOT_ASSESSED, never OK", () => {
+    const legacy = { status: "OK", citations: [], temporal: [] } as unknown as GateEvaluation
+    expect(normaliseEvaluation(legacy)).toEqual({ status: "NOT_ASSESSED", citations: [], temporal: [], scope: { citations: 0, temporalChecks: 0, assessed: false } })
+  })
+
+  it("F06: the scope is derived from the findings, never taken from a stored scope", () => {
+    const forged = { status: "OK", citations: [], temporal: [], scope: { citations: 3, temporalChecks: 1, assessed: true } } as unknown as GateEvaluation
+    expect(normaliseEvaluation(forged)).toMatchObject({ status: "NOT_ASSESSED", scope: { citations: 0, temporalChecks: 0, assessed: false } })
+    const raw = { status: "UNVERIFIED", citations: [{ ref: "PLD 2099 SC 202", judgmentId: null, status: "UNVERIFIED" }], temporal: [], scope: { assessed: false } } as unknown as GateEvaluation
+    expect(normaliseEvaluation(raw).scope).toEqual({ citations: 1, temporalChecks: 0, assessed: true })
+  })
+
+  it("F06: a stated NOT_ASSESSED is never lowered to OK, even beside findings that are all OK", () => {
+    const raw = { status: "NOT_ASSESSED", citations: [{ ref: "2099 SCMR 7", judgmentId: "j_7", status: "VERIFIED" }], temporal: [] } as unknown as GateEvaluation
+    expect(normaliseEvaluation(raw).status).toBe("NOT_ASSESSED")
   })
 
   it("keeps only the named fields of each finding", () => {
@@ -290,6 +313,33 @@ describe("approvalPasses and clearedItemsOf (P4-7, P4-8)", () => {
     const e = normaliseEvaluation({ status: "UNVERIFIED", citations: [], temporal: [] })
     expect(e.status).toBe("UNVERIFIED")
     expect(approvalPasses(e, { bodySha256: hash, cleared: [] }, hash)).toEqual({ pass: false, overrideUsed: false })
+  })
+
+  it("F06: clearedItemsOf names one scope item for a NOT_ASSESSED evaluation, and none for an assessed one", () => {
+    expect(clearedItemsOf(evaluation([]))).toEqual([{ kind: "scope", status: "NOT_ASSESSED" }])
+    expect(clearedItemsOf(evaluation([verified]))).toEqual([])
+    expect(clearedItemsOf(evaluation([unknown]))).toEqual([{ kind: "citation", ref: "PLD 2099 SC 202", status: "UNVERIFIED" }])
+  })
+
+  it("F06: a NOT_ASSESSED evaluation passes only when the override bound to this body cleared the not-assessed scope", () => {
+    const e = evaluation([])
+    expect(e.status).toBe("NOT_ASSESSED")
+    expect(approvalPasses(e, null, hash)).toEqual({ pass: false, overrideUsed: false })
+    expect(approvalPasses(e, { bodySha256: hash, cleared: [] }, hash)).toEqual({ pass: false, overrideUsed: false })
+    expect(approvalPasses(e, { bodySha256: hash, cleared: [{ kind: "scope", status: "NOT_ASSESSED" }] }, hash)).toEqual({ pass: true, overrideUsed: true })
+    expect(approvalPasses(e, { bodySha256: "b".repeat(64), cleared: [{ kind: "scope", status: "NOT_ASSESSED" }] }, hash).pass).toBe(false)
+    // A scope item with another status, or a citation item, does not clear the not-assessed scope.
+    expect(approvalPasses(e, { bodySha256: hash, cleared: [{ kind: "scope", status: "OK" }] }, hash).pass).toBe(false)
+    expect(approvalPasses(e, { bodySha256: hash, cleared: [{ kind: "citation", ref: "PLD 2099 SC 202", status: "UNVERIFIED" }] }, hash).pass).toBe(false)
+  })
+
+  it("F06: a cleared scope item clears nothing else: an UNVERIFIED evaluation, or an UNVERIFIED status with no finding, stays blocked", () => {
+    const scopeOnly = { bodySha256: hash, cleared: [{ kind: "scope", status: "NOT_ASSESSED" }] }
+    expect(approvalPasses(evaluation([unknown]), scopeOnly, hash).pass).toBe(false)
+    const bare = normaliseEvaluation({ status: "UNVERIFIED", citations: [], temporal: [] })
+    expect(bare.status).toBe("UNVERIFIED")
+    expect(clearedItemsOf(bare)).toEqual([])
+    expect(approvalPasses(bare, scopeOnly, hash).pass).toBe(false)
   })
 
   it("a cleared item whose kind or status is outside the domain clears nothing (fails closed)", () => {
@@ -490,6 +540,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
         { ref: "PLD 2099 SC 202", judgmentId: null, status: "UNVERIFIED" },
       ],
       temporal: [{ ...check(TEXT_2018), status: "TEMPORAL_MISMATCH", inForceText: TEXT_2015 }],
+      scope: { citations: 3, temporalChecks: 1, assessed: true },
       gatedBy: f.C.uid,
       gatedAt: r.gatedAt,
       resultId: r.resultId,
@@ -507,6 +558,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
       status: "OVERRULED",
       citations: r.citations,
       temporal: r.temporal,
+      scope: { citations: 3, temporalChecks: 1, assessed: true },
       gatedBy: f.C.uid,
       gateRuns: 1,
       resultId: r.resultId,
@@ -1423,7 +1475,7 @@ describe.skipIf(!EMULATORS)("getVerificationReport (P4-6, P4-7)", () => {
 })
 
 describe.skipIf(!EMULATORS)("the production store (P4-3: EMPTY_AUTHORITY_STORE until O-59)", () => {
-  it("every draft that cites an authority needs an override to approve; a draft that cites nothing and checks nothing approves", async () => {
+  it("every draft that cites an authority needs an override to approve; a draft that cites nothing and checks nothing is NOT_ASSESSED and needs one too (F06)", async () => {
     setAuthorityStoreForTests(null)
     const f = await newFirm()
     const d = await create(f, f.A, BODY_VERIFIED)
@@ -1435,9 +1487,13 @@ describe.skipIf(!EMULATORS)("the production store (P4-3: EMPTY_AUTHORITY_STORE u
     await override(f, f.P, d.draftId, 1)
     expect((await approve(f, f.P, d.draftId, 1)).draft).toMatchObject({ status: "approved", locked: true })
 
+    // F06: before the fix these two lines asserted the defect (status OK, approved with no override). Nothing legal
+    // was checked, so the result is NOT_ASSESSED; it blocks approval until the partner's explicit override clears it.
     const plain = await create(f, f.A, BODY_PLAIN)
-    expect((await gate(f, f.A, plain.draftId, 1)).status).toBe("OK")
-    expect((await approve(f, f.P, plain.draftId, 1)).draft.gateResult).toMatchObject({ status: "OK", overridden: false })
+    expect((await gate(f, f.A, plain.draftId, 1)).status).toBe("NOT_ASSESSED")
+    expectErr(await apiErrorOf(approve(f, f.P, plain.draftId, 1)), 409, "gate_blocked")
+    await override(f, f.P, plain.draftId, 1)
+    expect((await approve(f, f.P, plain.draftId, 1)).draft.gateResult).toMatchObject({ status: "NOT_ASSESSED", overridden: true })
   })
 })
 
@@ -1543,7 +1599,7 @@ describe("approveDraft: a same-key retry of a blocked approval (PR #25 review)",
     expect((await gate(f, f.A, d.draftId, 1)).status).toBe("OVERRULED")
     const reviewed = await currentResultId(d.draftId, 1)
     const key = randomUUID()
-    const call = () => approveApi({ token: f.P.token, headers: { "idempotency-key": key }, data: { firmId: f.firmId, draftId: d.draftId, version: 1, resultId: reviewed } } as never)
+    const call = () => approveApi({ token: f.P.token, headers: { "idempotency-key": key }, data: { firmId: f.firmId, draftId: d.draftId, version: 1, resultId: reviewed, reviewChecklist: FULL_CHECKLIST } } as never)
     expectErr(await apiErrorOf(call()), 409, "gate_blocked")
     const afterFirst = await currentResultId(d.draftId, 1)
     expect(afterFirst).not.toBe(reviewed)

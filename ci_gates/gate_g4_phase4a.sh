@@ -16,8 +16,9 @@
 #      - the pure gate (P4-6): the severity order, an out-of-domain status failing closed, the G-1 test 4 and test 5
 #        cores (an overruling by a larger bench is OVERRULED; a 2015 check against a 2018 amendment is
 #        TEMPORAL_MISMATCH with the text in force; no history is TEMPORAL_UNAVAILABLE, never a silent pass), the
-#        jurisdiction on the section lookup (E-39(1)), the empty production authority store (P4-3) and the test
-#        seam refused when NODE_ENV is production
+#        jurisdiction on the section lookup (E-39(1)), NOT_ASSESSED (never OK) when no citation and no temporal check
+#        ran (audit F06), the empty production authority store (P4-3) and the test seam refused when NODE_ENV is
+#        production
 #      - the document types (E-15, R2): only VERIFIED rows are selectable, the court rule, a NON_FORUM type allowed
 #        on any matter, a family court entry
 #      - the draft store (P4-4, P4-5, P4-12): create (the court check, the classification that only rises, the
@@ -90,7 +91,7 @@ GATE_UNIT_TESTS=(
   'runGate: an out-of-domain status fails closed a status outside the domain alone is UNVERIFIED overall, not OK'
   'runGate: an out-of-domain status fails closed beside a VERIFIED citation it still decides UNVERIFIED, never OK'
   'runGate: an out-of-domain status fails closed does not hide a more severe status'
-  'runGate: an out-of-domain status fails closed an empty list is still OK'
+  'runGate: an out-of-domain status fails closed an empty list is NOT_ASSESSED, never OK (F06)'
   # runGate: temporal checks (P4-6, E-39)
   'runGate: temporal checks (P4-6, E-39) G-1 test 5 core: a 2015 check using the 2018 text is TEMPORAL_MISMATCH and carries the text in force'
   'runGate: temporal checks (P4-6, E-39) the same check using the 2015 text is OK'
@@ -108,8 +109,8 @@ GATE_UNIT_TESTS=(
   'runGate: temporal checks (P4-6, E-39) sends the store only the section key, the date and the jurisdiction'
   'runGate: temporal checks (P4-6, E-39) does not change the checks it is given'
   # runGate: nothing to gate
-  'runGate: nothing to gate an empty body and no checks give OK with empty lists'
-  'runGate: nothing to gate prose without a citation and no checks give OK'
+  'runGate: nothing to gate an empty body and no checks give NOT_ASSESSED with empty lists and an unassessed scope (F06)'
+  'runGate: nothing to gate prose without a citation and no checks give NOT_ASSESSED, never OK (F06)'
   # EMPTY_AUTHORITY_STORE (P4-3: the production adapter until O-59)
   'EMPTY_AUTHORITY_STORE (P4-3: the production adapter until O-59) has no judgment, no treatment and no history'
   'EMPTY_AUTHORITY_STORE (P4-3: the production adapter until O-59) turns every citation UNVERIFIED and every check TEMPORAL_UNAVAILABLE'
@@ -397,7 +398,7 @@ GATEOPS_TESTS=(
   'getVerificationReport (P4-6, P4-7) after a save the last result is shown with current: false; gating the new version shows its result and no override'
   "getVerificationReport (P4-6, P4-7) is audited as an allow under draft.read; access: an intern, a client, accounts and a non-member are refused, another firm's is 404, no draftId 400"
   # the production store (P4-3: EMPTY_AUTHORITY_STORE until O-59)
-  'the production store (P4-3: EMPTY_AUTHORITY_STORE until O-59) every draft that cites an authority needs an override to approve; a draft that cites nothing and checks nothing approves'
+  'the production store (P4-3: EMPTY_AUTHORITY_STORE until O-59) every draft that cites an authority needs an override to approve; a draft that cites nothing and checks nothing is NOT_ASSESSED and needs one too (F06)'
 )
 
 # --- tests/firestore.rules.d4-phase4a.test.ts (P4-11: the draft store is written by Cloud Functions only) -------

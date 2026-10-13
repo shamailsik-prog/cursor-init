@@ -20,13 +20,16 @@ import {
   versionId,
   type DraftView,
   type GateSummary,
+  type ReviewChecklistEntry,
 } from "./drafts"
-import { runGate } from "./gate"
+import { getDocumentType, isLawDependent, reviewChecklistOf } from "./doctypes"
+import { runGate, scopeOf } from "./gate"
 import {
   GATE_SEVERITY,
   type CitationFinding,
   type CitationStatus,
   type GateEvaluation,
+  type GateScope,
   type GateStatus,
   type TemporalCheck,
   type TemporalFinding,
@@ -52,7 +55,9 @@ import {
  * Every status is held to its domain before it is stored or compared: a citation status outside VERIFIED, UNVERIFIED
  * and OVERRULED is UNVERIFIED, a temporal status outside OK, TEMPORAL_MISMATCH and TEMPORAL_UNAVAILABLE is
  * TEMPORAL_UNAVAILABLE ("verify manually"), and the overall status is the most severe of the runner's own and the
- * findings', so nothing outside the domain can pass as OK.
+ * findings', so nothing outside the domain can pass as OK. A result with no finding at all is NOT_ASSESSED (F06): it
+ * assessed nothing, so it never passes as OK either; only the partner override clears it, and approving a
+ * law-dependent document type also needs its review checklist with evidence (`requireReviewChecklist`).
  */
 
 const versions = () => adminDb().collection("draft_versions")
@@ -164,6 +169,64 @@ function parseResultId(value: unknown): string {
   return value
 }
 
+/** At most this many entries in a review checklist (F06); the longest seed checklist has 12 items. */
+export const MAX_REVIEW_CHECKLIST_ENTRIES = 50
+const MAX_CHECKLIST_ITEM = 500
+/** The most evidence one checklist item may carry, in characters once trimmed (F06). */
+export const MAX_CHECKLIST_EVIDENCE = 2_000
+
+/**
+ * The approval's review checklist as sent (F06): absent is none (null); otherwise an array of at most 50 entries,
+ * each an object with a string `item` (1 to 500 characters) and a string `evidence` of at most 2,000 characters once
+ * trimmed (one or more lines). Anything else is 400 `invalid_review_checklist`, checked with the other 400s, before
+ * the permission. Only the two fields are kept. Whether the entries answer the type's checklist, and whether each
+ * evidence says something, is decided after the permission (`requireReviewChecklist`, 422).
+ */
+export function parseReviewChecklist(value: unknown): ReviewChecklistEntry[] | null {
+  if (value === undefined) return null
+  const invalid = () => new HttpError(400, "invalid_review_checklist")
+  if (!Array.isArray(value) || value.length > MAX_REVIEW_CHECKLIST_ENTRIES) throw invalid()
+  return value.map((entry: unknown): ReviewChecklistEntry => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw invalid()
+    const { item, evidence } = entry as Record<string, unknown>
+    if (typeof item !== "string" || chars(item) < 1 || chars(item) > MAX_CHECKLIST_ITEM) throw invalid()
+    if (typeof evidence !== "string" || chars(evidence.trim()) > MAX_CHECKLIST_EVIDENCE) throw invalid()
+    return { item, evidence }
+  })
+}
+
+/**
+ * The review checklist an approval of `documentTypeId` needs and stores (F06), or null when it needs and has none.
+ * A law-dependent type (filed in a forum: `isLawDependent`) needs one; for a NON_FORUM type it is optional, but one
+ * that is sent is held to the same rule. The rule: the entries name every item of the type's checklist
+ * (`reviewChecklistOf`) exactly once, by exact string, in any order, and nothing else, and every evidence is something
+ * once trimmed; otherwise 422 `review_checklist_incomplete`. Each evidence then passes the draft charset rule (422
+ * `unsupported_characters`, R7) and is stored as the override reason is (paste artefacts removed, CRLF as LF, NFC),
+ * trimmed, and checked again on that form (empty: 422 `review_checklist_incomplete`; over 2,000 characters: 400
+ * `invalid_review_checklist`). The entries come back in the type's order. A draft whose type is no longer a verified
+ * type cannot be checked and is not approved (404 `document_type_not_found`).
+ */
+function requireReviewChecklist(documentTypeId: unknown, sent: readonly ReviewChecklistEntry[] | null): ReviewChecklistEntry[] | null {
+  const type = typeof documentTypeId === "string" ? getDocumentType(documentTypeId) : null
+  if (type === null) throw new HttpError(404, "document_type_not_found")
+  if (sent === null && !isLawDependent(type)) return null
+  const incomplete = () => new HttpError(422, "review_checklist_incomplete")
+  if (sent === null) throw incomplete()
+  const items = reviewChecklistOf(type)
+  const byItem = new Map<string, string>()
+  for (const entry of sent) {
+    if (!items.includes(entry.item) || byItem.has(entry.item) || entry.evidence.trim() === "") throw incomplete()
+    byItem.set(entry.item, entry.evidence)
+  }
+  if (byItem.size !== items.length) throw incomplete()
+  return items.map((item) => {
+    const evidence = requireSupportedText(byItem.get(item) as string).trim()
+    if (evidence === "") throw incomplete()
+    if (chars(evidence) > MAX_CHECKLIST_EVIDENCE) throw new HttpError(400, "invalid_review_checklist")
+    return { item, evidence }
+  })
+}
+
 // ---------------------------------------------------------------------------
 // The status domain and the approval rule (pure)
 // ---------------------------------------------------------------------------
@@ -174,12 +237,16 @@ const TEMPORAL_STATUSES: readonly TemporalStatus[] = ["OK", "TEMPORAL_MISMATCH",
 const inDomain = <T extends string>(domain: readonly T[], value: unknown): value is T =>
   typeof value === "string" && (domain as readonly string[]).includes(value)
 
+/** An evaluation as it may arrive: a run's, or a stored result's (whose `scope`, if any, is never trusted). */
+type EvaluationInput = Omit<GateEvaluation, "scope"> & { scope?: unknown }
+
 /**
  * A gate evaluation held to its domain (see the module comment), with each finding rebuilt from its named fields. The
  * overall status never falls below the runner's own: it is the most severe of that status (UNVERIFIED if outside the
- * domain) and the findings' statuses.
+ * domain) and the findings' statuses. The scope is derived from the findings (F06); with no finding at all the status
+ * is at least NOT_ASSESSED, so a result stored before F06 (status OK, no findings, no scope) never reads as OK.
  */
-export function normaliseEvaluation(e: GateEvaluation): GateEvaluation {
+export function normaliseEvaluation(e: EvaluationInput): GateEvaluation {
   const citations: CitationFinding[] = e.citations.map((c) => ({
     ref: c.ref,
     judgmentId: c.judgmentId ?? null,
@@ -193,36 +260,49 @@ export function normaliseEvaluation(e: GateEvaluation): GateEvaluation {
     status: inDomain(TEMPORAL_STATUSES, t.status) ? t.status : "TEMPORAL_UNAVAILABLE",
     inForceText: t.inForceText ?? null,
   }))
+  const scope = scopeOf(citations, temporal)
   const present = new Set<GateStatus>([inDomain(GATE_SEVERITY, e.status) ? e.status : "UNVERIFIED"])
   for (const c of citations) present.add(c.status === "VERIFIED" ? "OK" : c.status)
   for (const t of temporal) present.add(t.status)
-  return { status: GATE_SEVERITY.find((s) => present.has(s)) ?? "UNVERIFIED", citations, temporal }
+  if (!scope.assessed) present.add("NOT_ASSESSED")
+  return { status: GATE_SEVERITY.find((s) => present.has(s)) ?? "UNVERIFIED", citations, temporal, scope }
 }
 
-/** One item an override cleared, with the status it had when the partner cleared it (P4-7). */
+/** The one item an override clears for a NOT_ASSESSED result (F06): the scope nothing assessed. */
+export const NOT_ASSESSED_SCOPE_ITEM = Object.freeze({ kind: "scope", status: "NOT_ASSESSED" } as const)
+
+/** One item an override cleared, with the status it had when the partner cleared it (P4-7; the scope item, F06). */
 export type ClearedItem =
   | { kind: "citation"; ref: string; status: CitationStatus }
   | { kind: "temporal"; sectionId: string; asAtDate: string; jurisdiction: string; status: TemporalStatus }
+  | { kind: "scope"; status: "NOT_ASSESSED" }
 
-/** Every non-OK item of a (normalised) evaluation: each citation that is not VERIFIED and each check that is not OK. */
+/**
+ * Every non-OK item of a (normalised) evaluation: each citation that is not VERIFIED and each check that is not OK;
+ * for a NOT_ASSESSED evaluation, which has neither, the one scope item (F06). A status that is not OK with nothing to
+ * name (an UNVERIFIED with no finding) has no item, so it can never be cleared.
+ */
 export function clearedItemsOf(e: GateEvaluation): ClearedItem[] {
   const items: ClearedItem[] = []
   for (const c of e.citations) if (c.status !== "VERIFIED") items.push({ kind: "citation", ref: c.ref, status: c.status })
   for (const t of e.temporal) {
     if (t.status !== "OK") items.push({ kind: "temporal", sectionId: t.sectionId, asAtDate: t.asAtDate, jurisdiction: t.jurisdiction, status: t.status })
   }
+  if (e.status === "NOT_ASSESSED" && !e.scope.assessed) items.push({ ...NOT_ASSESSED_SCOPE_ITEM })
   return items
 }
 
 /**
- * The match key of a non-OK item (P4-8): `citation|<ref>|<status>` or `temporal|<sectionId>|<asAtDate>|<jurisdiction>|<status>`.
- * The keys cannot collide: a status never contains `|`, nor does a section id or a date, so the last segment is the
- * status and the free-text field (the ref, the jurisdiction) is what lies between the fixed ones. An item that is not
- * well formed, or whose kind or status is outside the domain, has no key and so clears nothing (fails closed).
+ * The match key of a non-OK item (P4-8): `citation|<ref>|<status>`, `temporal|<sectionId>|<asAtDate>|<jurisdiction>|<status>`
+ * or `scope|NOT_ASSESSED` (F06). The keys cannot collide: each starts with its kind, a status never contains `|`, nor
+ * does a section id or a date, so the last segment is the status and the free-text field (the ref, the jurisdiction)
+ * is what lies between the fixed ones. An item that is not well formed, or whose kind or status is outside the domain,
+ * has no key and so clears nothing (fails closed).
  */
 function matchKey(item: unknown): string | null {
   if (item === null || typeof item !== "object") return null
   const i = item as Record<string, unknown>
+  if (i.kind === "scope" && i.status === "NOT_ASSESSED") return "scope|NOT_ASSESSED"
   if (i.kind === "citation" && typeof i.ref === "string" && inDomain(CITATION_STATUSES, i.status) && i.status !== "VERIFIED") {
     return `citation|${i.ref}|${i.status}`
   }
@@ -242,11 +322,12 @@ function matchKey(item: unknown): string | null {
 /**
  * Whether a version may be approved on a fresh evaluation (P4-8): it passes when the evaluation is OK, or when the
  * override bound to this body hash cleared every non-OK item with the same status (a cleared UNVERIFIED that is now
- * OVERRULED is not cleared). A non-OK evaluation with no non-OK item to name cannot be cleared. `overrideUsed` is true
- * only when the override was needed and carried the approval.
+ * OVERRULED is not cleared). A NOT_ASSESSED evaluation passes only on an override that cleared the not-assessed scope
+ * (F06). A non-OK evaluation with no non-OK item to name cannot be cleared. `overrideUsed` is true only when the
+ * override was needed and carried the approval.
  */
 export function approvalPasses(
-  fresh: GateEvaluation,
+  fresh: EvaluationInput,
   override: { bodySha256?: unknown; cleared?: unknown } | null,
   bodySha256: string
 ): { pass: boolean; overrideUsed: boolean } {
@@ -271,6 +352,8 @@ export type GateResultView = {
   status: GateStatus
   citations: CitationFinding[]
   temporal: TemporalFinding[]
+  /** What the run assessed (F06), derived from the findings: `assessed: false` is a NOT_ASSESSED result. */
+  scope: GateScope
   gatedBy: string
   gatedAt: string | null
   /** This run's id (R6): an override names the result its partner reviewed. */
@@ -307,6 +390,7 @@ function resultView(d: DocumentData): GateResultView {
     status: e.status,
     citations: e.citations,
     temporal: e.temporal,
+    scope: e.scope,
     gatedBy: d.gatedBy,
     gatedAt: iso(d.gatedAt),
     resultId: idOf(d.resultId),
@@ -317,6 +401,7 @@ function resultView(d: DocumentData): GateResultView {
 function clearedView(item: unknown): ClearedItem[] {
   if (matchKey(item) === null) return []
   const i = item as Record<string, string>
+  if (i.kind === "scope") return [{ ...NOT_ASSESSED_SCOPE_ITEM }]
   return i.kind === "citation"
     ? [{ kind: "citation", ref: i.ref, status: i.status as CitationStatus }]
     : [{ kind: "temporal", sectionId: i.sectionId, asAtDate: i.asAtDate, jurisdiction: i.jurisdiction, status: i.status as TemporalStatus }]
@@ -426,6 +511,8 @@ function resultDocument(
     status: e.status,
     citations: e.citations,
     temporal: e.temporal,
+    // What the run assessed (F06). Recorded for the reader; every read derives it again from the findings.
+    scope: e.scope,
     gatedBy,
     gatedAt,
     gateRuns,
@@ -610,7 +697,9 @@ export type OverrideResult = { override: OverrideView; draft: DraftView }
  * result 409 `nothing_to_override`; an existing override 409 `already_overridden`. Otherwise it creates the immutable
  * override `{ firmId, matterId, draftId, version, bodySha256, resultId, classification, by, at, reason, cleared }`
  * (`classification` is the draft's label; `by` is the authenticated caller, never a body field; `cleared` lists every
- * non-OK item of the reviewed result with its status), sets the summary's `overridden: true` and writes the audit row
+ * non-OK item of the reviewed result with its status, and for a NOT_ASSESSED result the one scope item
+ * `{ kind: "scope", status: "NOT_ASSESSED" }`: the partner's explicit approval of prose nothing assessed, F06; a stored
+ * result with no findings reads as NOT_ASSESSED whatever status it states), sets the summary's `overridden: true` and writes the audit row
  * (`draft.gate_override`, targeting the override document). No event.
  */
 export const overrideGateOp: FirmOperation<OverrideResult> = {
@@ -676,7 +765,8 @@ export const overrideGateOp: FirmOperation<OverrideResult> = {
 // approveDraft
 // ---------------------------------------------------------------------------
 
-export type ApprovalResult = { draft: DraftView; gateResult: GateResultView }
+/** The approval (P4-8), with the review checklist it stored (F06; null when the type needs none and none was sent). */
+export type ApprovalResult = { draft: DraftView; gateResult: GateResultView; reviewChecklist: ReviewChecklistEntry[] | null }
 
 /** The draft's summary must be for `version` and its current body; a null summary or one for another version is 409 `not_gated`. */
 function requireGatedSummary(draft: DocumentData, version: number): void {
@@ -695,19 +785,25 @@ function recordedChecks(stored: DocumentData): TemporalCheck[] {
 }
 
 /**
- * approveDraft({ draftId, version, resultId }) → `{ draft, gateResult }` (P4-8). Checks the request (400
- * `invalid_version`; `invalid_result_id`: not a string, R9), then `draft.approve` on the draft's matter (a partner who
- * is a member); a locked draft is 409 `draft_locked`, a version that is not the current one 409 `draft_changed`, and a
- * version with no stored result (or a summary that is null or for another version) 409 `not_gated`. It re-runs the
- * gate on that version with the temporal checks recorded in its result, against the authority store as it is now, and
- * passes when the fresh result is OK or the override bound to this version and hash cleared every non-OK item with the
- * same status (`approvalPasses`). Findings over 900,000 bytes are 422 `gate_result_too_large` (R8), with nothing
- * stored. One transaction, which re-reads the draft (lock, version, summary), refuses with 409 `draft_changed` if the
- * stored result changed since it was read and with 409 `gate_result_changed` if the stored result is not the one the
- * partner reviewed (R9: another `resultId`, so a re-gate without a check cannot drop a block the partner was shown),
- * stores the fresh result (with a fresh `resultId`) and summary, then:
- * - on a pass, sets `status: "approved"`, `locked: true`, `approvedBy` (the caller), `approvedAt`, `approvedVersion`,
- *   writes the `draft.approved` event `<draftId>_<version>_approved` and the allow row;
+ * approveDraft({ draftId, version, resultId, reviewChecklist? }) → `{ draft, gateResult, reviewChecklist }` (P4-8,
+ * F06). Checks the request (400 `invalid_version`; `invalid_result_id`: not a string, R9; `invalid_review_checklist`:
+ * `parseReviewChecklist`), then `draft.approve` on the draft's matter (a partner who is a member); a locked draft is
+ * 409 `draft_locked`, a version that is not the current one 409 `draft_changed`, and a version with no stored result
+ * (or a summary that is null or for another version) 409 `not_gated`. Then the review checklist (F06,
+ * `requireReviewChecklist`): a law-dependent type needs every item of its checklist with evidence (422
+ * `review_checklist_incomplete`), whatever the gate says. It re-runs the gate on that version with the temporal checks
+ * recorded in its result, against the authority store as it is now, and passes when the fresh result is OK or the
+ * override bound to this version and hash cleared every non-OK item with the same status (`approvalPasses`; a
+ * NOT_ASSESSED result needs the override's not-assessed scope item, F06). The fresh run decides, never a stored status:
+ * a stored OK with no findings is NOT_ASSESSED again here. Findings over 900,000 bytes are 422
+ * `gate_result_too_large` (R8), with nothing stored. One transaction, which re-reads the draft (lock, version,
+ * summary), refuses with 409 `draft_changed` if the stored result changed since it was read and with 409
+ * `gate_result_changed` if the stored result is not the one the partner reviewed (R9: another `resultId`, so a re-gate
+ * without a check cannot drop a block the partner was shown), stores the fresh result (with a fresh `resultId`) and
+ * summary, then:
+ * - on a pass, sets `status: "approved"`, `locked: true`, `approvedBy` (the caller), `approvedAt`, `approvedVersion`
+ *   and, when there is one, `reviewChecklist` (the entries in the type's order, with their evidence), writes the
+ *   `draft.approved` event `<draftId>_<version>_approved` and the allow row;
  * - otherwise writes the deny row (`gate_blocked`), and the call answers 409 `gate_blocked` once that has committed, so
  *   getVerificationReport shows the fresh findings (ruling R1: the router carries no error details).
  * The approval's run is not a gateDraft run: it keeps the version's run count and writes no `draft.gated` event.
@@ -723,10 +819,12 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
     const draftId = parseDraftId(data.draftId)
     const version = parseVersionNumber(data.version)
     const resultId = parseResultId(data.resultId)
+    const sentChecklist = parseReviewChecklist(data.reviewChecklist)
     audit.target = `drafts/${draftId}`
     const { ref, draft } = await loadDraftForCaller(caller, draftId, "draft.approve")
     refuseStale(draft, version)
     requireGatedSummary(draft, version)
+    const reviewChecklist = requireReviewChecklist(draft.documentTypeId, sentChecklist)
 
     const resultRef = results().doc(versionId(draftId, version))
     const overrideRef = overrides().doc(versionId(draftId, version))
@@ -767,13 +865,15 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
         approvedBy: caller.uid,
         approvedAt: at,
         approvedVersion: version,
+        // The partner's review of a law-dependent document (F06), with the evidence for each item of its type's checklist.
+        ...(reviewChecklist ? { reviewChecklist } : {}),
         gateResult: summary,
         lastGatedVersion: version,
         updatedAt: at,
       }
       tx.update(ref, update)
       stageDraftEvent(tx, "draft.approved", "approved", draftId, version, current as DraftRecord, fresh.status)
-      return { pass: true as const, view: { draft: draftView(draftId, { ...current, ...update }), gateResult: resultView(doc) } }
+      return { pass: true as const, view: { draft: draftView(draftId, { ...current, ...update }), gateResult: resultView(doc), reviewChecklist } }
     })
     audit.committed()
     if (!outcome.pass) throw conflict("gate_blocked")

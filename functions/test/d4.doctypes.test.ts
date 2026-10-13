@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import seed from "@/data/documentTypes.json"
-import { courtAllowed, getDocumentType, listDocumentTypes, type DocumentType } from "../src/d4/doctypes"
+import { courtAllowed, getDocumentType, isLawDependent, listDocumentTypes, reviewChecklistOf, type DocumentType } from "../src/d4/doctypes"
 
 const rows = seed.types as DocumentType[]
 const byId = (id: string) => rows.find((t) => t.id === id)!
@@ -227,5 +227,30 @@ describe("listDocumentTypes (P4-5)", () => {
     // The seed is in registry order, not id order, so sorting is the function's work.
     expect(isSorted(rows.map((t) => t.id))).toBe(false)
     expect(isSorted(listDocumentTypes({}).map((t) => t.id))).toBe(true)
+  })
+})
+
+describe("the review checklist of a law-dependent type (F06)", () => {
+  it("a type filed in a forum is law-dependent; a NON_FORUM type is not, even one that also lists a court", () => {
+    expect(isLawDependent(byId("constitutional_petition_199"))).toBe(true)
+    expect(isLawDependent(byId("bail_application_497"))).toBe(true)
+    expect(isLawDependent(byId("sale_deed"))).toBe(false)
+    expect(isLawDependent(byId("heirship_affidavit"))).toBe(false)
+    expect(byId("heirship_affidavit").courtIds.length).toBeGreaterThan(1)
+    // Over the whole seed: law-dependent exactly when NON_FORUM is absent (74 NON_FORUM types, README).
+    expect(rows.filter((t) => !isLawDependent(t))).toHaveLength(74)
+  })
+
+  it("lists every distinct seed item once, in the seed's order", () => {
+    const petition = byId("constitutional_petition_199")
+    expect(reviewChecklistOf(petition)).toEqual([...petition.checklist])
+    const deed = byId("sale_deed")
+    expect(deed.checklist.filter((c) => c === "Stamp duty: MANUAL — do not compute")).toHaveLength(2)
+    expect(reviewChecklistOf(deed)).toEqual([...new Set(deed.checklist)])
+    expect(reviewChecklistOf(deed)).toHaveLength(deed.checklist.length - 1)
+  })
+
+  it("every verified type has at least one review item, so a law-dependent approval always has something to answer", () => {
+    for (const t of rows.filter((r) => r.status === "VERIFIED")) expect(reviewChecklistOf(t).length).toBeGreaterThan(0)
   })
 })
