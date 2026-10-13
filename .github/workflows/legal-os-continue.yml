@@ -163,9 +163,7 @@ jobs:
         with:
           # These are alternative credentials. Prefer OAuth if both secrets exist so an
           # exhausted API-key balance cannot shadow a usable OAuth token.
-          anthropic_api_key: >-
-            ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' &&
-                secrets.ANTHROPIC_API_KEY || '' }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The watchdog dispatches this workflow with GITHUB_TOKEN (actor github-actions[bot]).
           allowed_bots: "github-actions[bot]"
