@@ -38,6 +38,8 @@ does not touch Origin and does not revive the retired lattice / workflow-SLO ops
 | Secret `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`) | GitHub → this repo → Settings → Secrets and variables → Actions → New repository secret |
 | Claude GitHub App installed on this repo | https://github.com/apps/claude |
 
+If both Claude credentials are configured, the workflow uses `CLAUDE_CODE_OAUTH_TOKEN`; otherwise it uses `ANTHROPIC_API_KEY`. The credentials are alternatives, and only one is passed to the action.
+
 Without a secret, the continue workflow opens the issue **"Legal OS autopilot needs a Claude
 secret"** and stops. The watchdog still raises its stall issue. Without the GitHub App, Claude
 cannot authenticate to GitHub to push its branch and open its PR, so the build step fails.
