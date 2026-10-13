@@ -33,6 +33,12 @@ def check(path):
         env = svc.get("environment") or {}
         if isinstance(env, list):
             env = dict(e.split("=", 1) if "=" in e else (e, "") for e in env)
+        if "postgres" in image or "pgvector" in image:
+            for req in ("POSTGRES_USER", "POSTGRES_PASSWORD"):
+                if req not in env:
+                    errors.append(f"{name}: {req} must be set (required ${{VAR:?}} reference)")
+            if str(env.get("POSTGRES_HOST_AUTH_METHOD", "")).strip().lower() == "trust":
+                errors.append(f"{name}: POSTGRES_HOST_AUTH_METHOD=trust disables password auth")
         for key in ("POSTGRES_PASSWORD", "POSTGRES_USER", "MYSQL_ROOT_PASSWORD"):
             if key in env:
                 val = str(env[key])
