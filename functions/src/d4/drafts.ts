@@ -3,6 +3,7 @@ import {
   FieldPath,
   FieldValue,
   Timestamp,
+  type CollectionReference,
   type DocumentData,
   type DocumentReference,
   type Query,
@@ -150,23 +151,36 @@ export async function requireStillPermitted(tx: Transaction, caller: Caller, act
 }
 
 /**
- * The draft `draftId` for a caller who may take `action` on its matter. 404 `not_found` for an id that cannot name a
- * draft, a draft that is absent or in another firm, and one above the caller's clearance (no existence oracle); the
- * permission is checked on the draft's matter, so a same-firm caller who is not a cleared member of that matter is
- * refused 403 (not_member, clearance, role) and a client, intern or accounts user is refused by role.
+ * The document `id` of `collection` (a draft, or a generation brief: any row with `firmId`, `matterId` and
+ * `classification`) for a caller who may take `action` on its matter. 404 `not_found` for an id that cannot name a
+ * document, a document that is absent or in another firm, and one above the caller's clearance (no existence oracle);
+ * the permission is checked on the document's matter, so a same-firm caller who is not a cleared member of that matter
+ * is refused 403 (not_member, clearance, role) and a client, intern or accounts user is refused by role. The one place
+ * these rules live: `loadDraftForCaller` and the generation store's `loadGenerationForCaller` both call it.
  */
+export async function loadForCaller(
+  collection: CollectionReference,
+  caller: Caller,
+  id: string,
+  action: DraftAction
+): Promise<{ ref: DocumentReference; data: DocumentData }> {
+  if (!isSafeDocId(id)) throw notFound()
+  const ref = collection.doc(id)
+  const data = (await ref.get()).data()
+  if (!data || data.firmId !== caller.firmId || typeof data.matterId !== "string") throw notFound()
+  await requireMatterAction(caller, action, data.matterId)
+  if (!withinClearance(data.classification, caller.clearanceLevel)) throw notFound()
+  return { ref, data }
+}
+
+/** The draft `draftId` for a caller who may take `action` on its matter (`loadForCaller` on `drafts`). */
 export async function loadDraftForCaller(
   caller: Caller,
   draftId: string,
   action: DraftAction
 ): Promise<{ ref: DocumentReference; draft: DocumentData }> {
-  if (!isSafeDocId(draftId)) throw notFound()
-  const ref = drafts().doc(draftId)
-  const draft = (await ref.get()).data()
-  if (!draft || draft.firmId !== caller.firmId || typeof draft.matterId !== "string") throw notFound()
-  await requireMatterAction(caller, action, draft.matterId)
-  if (!withinClearance(draft.classification, caller.clearanceLevel)) throw notFound()
-  return { ref, draft }
+  const { ref, data } = await loadForCaller(drafts(), caller, draftId, action)
+  return { ref, draft: data }
 }
 
 /**
@@ -217,7 +231,7 @@ function parseVersionParam(value: unknown): number {
 }
 
 /** C0 controls (LF, CR and TAB among them), DEL and the C1 controls: a title is one line of text. */
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/
+export const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/
 
 /**
  * A title is a string with something in it, and no control character anywhere (400 `invalid_title`): not a line break,
@@ -595,6 +609,61 @@ export function parseTimeCursor(cursor: string): { updatedAt: Timestamp; id: str
   }
 }
 
+/** A page request of a list ordered by `updatedAt`: the limit and the decoded cursor (400 `invalid_limit`, 400 `invalid_cursor`). */
+export type TimePage = { limit: number; after: { updatedAt: Timestamp; id: string } | null }
+
+/** `?limit=&cursor=` of a list ordered by `updatedAt`, read before any permission check, limit first. */
+export function parseTimePage(data: Data): TimePage {
+  const { limit, cursor } = parsePage(data)
+  return { limit, after: cursor === null ? null : parseTimeCursor(cursor) }
+}
+
+/**
+ * The rows of `collection` for `matterId` that the caller is cleared for, newest first (updatedAt desc, then id desc),
+ * as `view` shows them, with the page's `nextCursor` (`<seconds>.<nanos>` of the last row's `updatedAt` and its id).
+ * Reads in batches of 100 and skips a row above the caller's clearance without counting it, so a page is full whenever
+ * enough cleared rows exist. The caller has already been permitted on the matter (`requireMatterAction`). The one place
+ * the list rules live: `listDraftsOp` and the generation store's `listGenerationsOp` both call it.
+ */
+export async function listClearedByUpdatedAt<T>(
+  collection: CollectionReference,
+  caller: Caller,
+  matterId: string,
+  page: TimePage,
+  view: (id: string, row: DocumentData) => T
+): Promise<Page<T>> {
+  const items: Array<{ id: string; row: DocumentData }> = []
+  let after = page.after
+  let more = false
+  for (;;) {
+    let q: Query = collection
+      .where("firmId", "==", caller.firmId)
+      .where("matterId", "==", matterId)
+      .orderBy("updatedAt", "desc")
+      .orderBy(FieldPath.documentId(), "desc")
+    if (after) q = q.startAfter(after.updatedAt, after.id)
+    const snap = await q.limit(SCAN_BATCH).get()
+    for (const doc of snap.docs) {
+      if (!withinClearance(doc.data().classification, caller.clearanceLevel)) continue
+      if (items.length === page.limit) {
+        more = true
+        break
+      }
+      items.push({ id: doc.id, row: doc.data() })
+    }
+    if (more || snap.size < SCAN_BATCH) break
+    const last = snap.docs[snap.docs.length - 1]
+    after = { updatedAt: last.data().updatedAt as Timestamp, id: last.id }
+  }
+
+  const last = items[items.length - 1]
+  const lastStamp = last?.row.updatedAt as Timestamp | undefined
+  return {
+    items: items.map(({ id, row }) => view(id, row)),
+    nextCursor: more && last && lastStamp ? encodeCursor(`${lastStamp.seconds}.${lastStamp.nanoseconds}`, last.id) : null,
+  }
+}
+
 /**
  * listDrafts(?matterId=&limit=&cursor=) → `{ items, nextCursor }` (P4-4): the matter's drafts the caller is cleared
  * for, newest first (updatedAt desc, then id desc), as DraftViews (no body). A matter is required (400
@@ -610,41 +679,13 @@ export const listDraftsOp: FirmOperation<Page<DraftView>> = {
     audit.target = `firms/${caller.firmId}`
     const matterId = data.matterId
     if (typeof matterId !== "string" || matterId === "") throw badRequest("matter_required")
-    const { limit, cursor } = parsePage(data)
-    let after = cursor === null ? null : parseTimeCursor(cursor)
+    const page = parseTimePage(data)
     audit.target = `matters/${matterId}`
     await requireMatterAction(caller, "draft.read", matterId)
 
-    const items: Array<{ id: string; row: DocumentData }> = []
-    let more = false
-    for (;;) {
-      let q: Query = drafts()
-        .where("firmId", "==", caller.firmId)
-        .where("matterId", "==", matterId)
-        .orderBy("updatedAt", "desc")
-        .orderBy(FieldPath.documentId(), "desc")
-      if (after) q = q.startAfter(after.updatedAt, after.id)
-      const snap = await q.limit(SCAN_BATCH).get()
-      for (const doc of snap.docs) {
-        if (!withinClearance(doc.data().classification, caller.clearanceLevel)) continue
-        if (items.length === limit) {
-          more = true
-          break
-        }
-        items.push({ id: doc.id, row: doc.data() })
-      }
-      if (more || snap.size < SCAN_BATCH) break
-      const last = snap.docs[snap.docs.length - 1]
-      after = { updatedAt: last.data().updatedAt as Timestamp, id: last.id }
-    }
-
+    const out = await listClearedByUpdatedAt(drafts(), caller, matterId, page, draftView)
     await audit.allow()
-    const last = items[items.length - 1]
-    const lastStamp = last?.row.updatedAt as Timestamp | undefined
-    return {
-      items: items.map(({ id, row }) => draftView(id, row)),
-      nextCursor: more && last && lastStamp ? encodeCursor(`${lastStamp.seconds}.${lastStamp.nanoseconds}`, last.id) : null,
-    }
+    return out
   },
 }
 

@@ -1,15 +1,27 @@
-import { FieldPath, Timestamp, type DocumentData, type DocumentReference, type Query } from "firebase-admin/firestore"
+import { Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import type { DraftAction } from "@/platform/p5/permissionDecision"
 import { DraftCharsetError, requireSupportedDraftBody } from "@/services/d4-2/draftCharset"
 import { adminDb } from "../admin"
-import { encodeCursor, parsePage, type Page } from "../d1/pagination"
+import type { Page } from "../d1/pagination"
 import { HttpError } from "../http/errors"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
-import { isSafeDocId, type Data, type FirmOperation } from "../p5/common"
+import type { Data, FirmOperation } from "../p5/common"
 import { getDocumentType } from "./doctypes"
-import { checkedText, classifyForMatter, iso, parseTimeCursor, parseTitle, requireMatterAction, requireStillPermitted, strictest, withinClearance } from "./drafts"
+import {
+  CONTROL_CHARACTER,
+  checkedText,
+  classifyForMatter,
+  iso,
+  listClearedByUpdatedAt,
+  loadForCaller,
+  parseTimePage,
+  parseTitle,
+  requireMatterAction,
+  requireStillPermitted,
+  strictest,
+} from "./drafts"
 
 /**
  * The D4 generation store (spec P4B-1, P4B-8, P4B-13): `startDraft`, `getGeneration` and `listGenerations` behind
@@ -56,24 +68,19 @@ export function parseGenerationId(value: unknown): string {
 }
 
 /**
- * The brief `generationId` for a caller who may take `action` on its matter: `loadDraftForCaller`'s rule. 404
- * `not_found` for an id that cannot name a brief, a brief that is absent or in another firm's, and one above the
- * caller's clearance (no existence oracle); the permission is checked on the brief's matter, so a same-firm caller who
- * is not a cleared member of that matter is refused 403 (not_member, clearance, role), and a client, intern or accounts
- * user is refused by role.
+ * The brief `generationId` for a caller who may take `action` on its matter: `loadDraftForCaller`'s rule, which is
+ * `loadForCaller` over `draft_generations`. 404 `not_found` for an id that cannot name a brief, a brief that is absent or
+ * in another firm's, and one above the caller's clearance (no existence oracle); the permission is checked on the
+ * brief's matter, so a same-firm caller who is not a cleared member of that matter is refused 403 (not_member,
+ * clearance, role), and a client, intern or accounts user is refused by role.
  */
 export async function loadGenerationForCaller(
   caller: Caller,
   generationId: string,
   action: DraftAction
 ): Promise<{ ref: DocumentReference; brief: DocumentData }> {
-  if (!isSafeDocId(generationId)) throw notFound()
-  const ref = generations().doc(generationId)
-  const brief = (await ref.get()).data()
-  if (!brief || brief.firmId !== caller.firmId || typeof brief.matterId !== "string") throw notFound()
-  await requireMatterAction(caller, action, brief.matterId)
-  if (!withinClearance(brief.classification, caller.clearanceLevel)) throw notFound()
-  return { ref, brief }
+  const { ref, data } = await loadForCaller(generations(), caller, generationId, action)
+  return { ref, brief: data }
 }
 
 /**
@@ -259,9 +266,6 @@ const MAX_VERBATIM_TEXT = 10_000
 const MAX_VERBATIM_TOTAL = 50_000
 const MAX_PARTY_NAMES = 50
 const MAX_PARTY_NAME = 200
-
-/** C0 controls (LF, CR and TAB among them), DEL and the C1 controls: a party name is one line of text. */
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/
 
 type StartInput = {
   matterId: string
@@ -468,13 +472,12 @@ export const getGenerationOp: FirmOperation<GenerationView> = {
 // listGenerations
 // ---------------------------------------------------------------------------
 
-const SCAN_BATCH = 100
-
 /**
- * listGenerations(?matterId=&limit=&cursor=) → `{ items, nextCursor }` (P4B-8), as listDrafts does it: the matter's
- * briefs the caller is cleared for, newest first (updatedAt desc, then id desc), as `GenerationSummary` rows. A matter
- * is required (400 `matter_required`); `draft.read` is checked on it (another firm's or a missing matter is 404). The
- * cursor is `<seconds>.<nanos>` of the last row's `updatedAt` and its id (400 `invalid_cursor`).
+ * listGenerations(?matterId=&limit=&cursor=) → `{ items, nextCursor }` (P4B-8), as listDrafts does it
+ * (`listClearedByUpdatedAt` over `draft_generations`): the matter's briefs the caller is cleared for, newest first
+ * (updatedAt desc, then id desc), as `GenerationSummary` rows. A matter is required (400 `matter_required`);
+ * `draft.read` is checked on it (another firm's or a missing matter is 404). The cursor is `<seconds>.<nanos>` of the
+ * last row's `updatedAt` and its id (400 `invalid_cursor`).
  */
 export const listGenerationsOp: FirmOperation<Page<GenerationSummary>> = {
   auth: "firm",
@@ -486,41 +489,13 @@ export const listGenerationsOp: FirmOperation<Page<GenerationSummary>> = {
     audit.target = `firms/${caller.firmId}`
     const matterId = data.matterId
     if (typeof matterId !== "string" || matterId === "") throw badRequest("matter_required")
-    const { limit, cursor } = parsePage(data)
-    let after = cursor === null ? null : parseTimeCursor(cursor)
+    const page = parseTimePage(data)
     audit.target = `matters/${matterId}`
     await requireMatterAction(caller, "draft.read", matterId)
 
     const nowMs = Date.now()
-    const items: Array<{ id: string; row: DocumentData }> = []
-    let more = false
-    for (;;) {
-      let q: Query = generations()
-        .where("firmId", "==", caller.firmId)
-        .where("matterId", "==", matterId)
-        .orderBy("updatedAt", "desc")
-        .orderBy(FieldPath.documentId(), "desc")
-      if (after) q = q.startAfter(after.updatedAt, after.id)
-      const snap = await q.limit(SCAN_BATCH).get()
-      for (const doc of snap.docs) {
-        if (!withinClearance(doc.data().classification, caller.clearanceLevel)) continue
-        if (items.length === limit) {
-          more = true
-          break
-        }
-        items.push({ id: doc.id, row: doc.data() })
-      }
-      if (more || snap.size < SCAN_BATCH) break
-      const last = snap.docs[snap.docs.length - 1]
-      after = { updatedAt: last.data().updatedAt as Timestamp, id: last.id }
-    }
-
+    const out = await listClearedByUpdatedAt(generations(), caller, matterId, page, (id, row) => generationSummary(id, row, nowMs))
     await audit.allow()
-    const last = items[items.length - 1]
-    const lastStamp = last?.row.updatedAt as Timestamp | undefined
-    return {
-      items: items.map(({ id, row }) => generationSummary(id, row, nowMs)),
-      nextCursor: more && last && lastStamp ? encodeCursor(`${lastStamp.seconds}.${lastStamp.nanoseconds}`, last.id) : null,
-    }
+    return out
   },
 }

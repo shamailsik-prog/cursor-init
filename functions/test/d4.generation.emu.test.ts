@@ -3,6 +3,7 @@ import { logger } from "firebase-functions"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { adminDb } from "../src/admin"
 import { encodeCursor } from "../src/d1/pagination"
+import { RESERVED_TOKEN } from "../src/d4/generations"
 import { firmConfigRef } from "../src/p1/config"
 import { setOpikFetchForTests } from "../src/p1/opik"
 import { activeTransport, setP1TransportForTests } from "../src/p1/transport"
@@ -215,7 +216,7 @@ export async function idempotencyRowsOf(firmId: string): Promise<Array<DocumentD
   const snap = await adminDb()
     .collection("idempotency_keys")
     .where(FieldPath.documentId(), ">=", `${firmId}_`)
-    .where(FieldPath.documentId(), "<", `${firmId}_`)
+    .where(FieldPath.documentId(), "<", `${firmId}_\uf8ff`)
     .get()
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
 }
@@ -398,8 +399,8 @@ describe.skipIf(!EMULATORS)("D4 generation: entry routes (P4B-1, P4B-8, P4B-13, 
     expect(brief.partyNames).toEqual(partyNames)
 
     // Normalised: CRLF to LF and NFC in the facts, a verbatim text and a party name; the title is trimmed.
-    const o2 = await start(f, { title: "  Petition  ", facts: "Café term.\r\nSecond line.", verbatim: [{ field: "petitioner", text: "Café\r\nlane" }], partyNames: ["Café Ltd"] })
-    expect(await briefOf(o2.generationId)).toMatchObject({ title: "Petition", facts: "Café term.\nSecond line.", verbatim: [{ field: "petitioner", text: "Café\nlane" }], partyNames: ["Café Ltd"] })
+    const o2 = await start(f, { title: "  Petition  ", facts: "Cafe\u0301 term.\r\nSecond line.", verbatim: [{ field: "petitioner", text: "Cafe\u0301\r\nlane" }], partyNames: ["Cafe\u0301 Ltd"] })
+    expect(await briefOf(o2.generationId)).toMatchObject({ title: "Petition", facts: "Caf\u00e9 term.\nSecond line.", verbatim: [{ field: "petitioner", text: "Caf\u00e9\nlane" }], partyNames: ["Caf\u00e9 Ltd"] })
 
     // An empty list is the same as none.
     const o3 = await start(f, { verbatim: [], partyNames: [] })
@@ -478,13 +479,13 @@ describe.skipIf(!EMULATORS)("D4 generation: entry routes (P4B-1, P4B-8, P4B-13, 
 
   it("the text rules come after the permission: a bidirectional or invisible character in any field is 422 unsupported_characters, with nothing stored", async () => {
     const f = await newFirm()
-    const RLO = "‮"
+    const RLO = "\u202e"
     const hostile: Array<[string, Record<string, unknown>]> = [
       ["title", { title: `Petition${RLO}` }],
       ["facts", { facts: `${FACTS}${RLO}` }],
       ["verbatim text", { documentTypeId: DEED, verbatim: [{ field: "exactLandDescription", text: `${LAND}${RLO}` }] }],
       ["party name", { partyNames: [`${PERSON}${RLO}`] }],
-      ["facts, a zero-width space inside a number", { facts: `${FACTS} 1​0` }],
+      ["facts, a zero-width space inside a number", { facts: `${FACTS} 1\u200b0` }],
       ["party name, a tag character", { partyNames: ["Ali\u{e0041}"] }],
     ]
     for (const [name, over] of hostile) {
@@ -493,6 +494,47 @@ describe.skipIf(!EMULATORS)("D4 generation: entry routes (P4B-1, P4B-8, P4B-13, 
       expect([name, ...(await failure(start(f, over, f.outsider)))]).toEqual([name, 403, "not_member"])
       expect([name, ...(await failure(start(f, over, f.intern)))]).toEqual([name, 403, "intern_channel_denied"])
     }
+    expect(await docsOf("draft_generations", f.firmId)).toHaveLength(0)
+  })
+
+  it("text that is nothing once normalised is 422 unsupported_characters, after the permission, with nothing stored", async () => {
+    const f = await newFirm()
+    // A zero-width space on its own is dropped by the charset layer's paste clean-up, which leaves nothing to store.
+    const ZWSP = "\u200b"
+    const empty: Array<[string, Record<string, unknown>]> = [
+      ["facts", { facts: ZWSP }],
+      ["verbatim text", { documentTypeId: DEED, verbatim: [{ field: "exactLandDescription", text: ZWSP }] }],
+      ["party name", { partyNames: [` ${ZWSP}`] }],
+      ["party name beside a real one", { partyNames: [PERSON, ZWSP] }],
+    ]
+    for (const [name, over] of empty) {
+      expect([name, ...(await failure(start(f, over)))]).toEqual([name, 422, "unsupported_characters"])
+      expect([name, ...(await failure(start(f, over, f.outsider)))]).toEqual([name, 403, "not_member"])
+    }
+    expect(await docsOf("draft_generations", f.firmId)).toHaveLength(0)
+  })
+
+  it("a reserved token that exists only once the text is normalised is 422 reserved_tokens: a soft hyphen or a zero-width space inside a bare token", async () => {
+    const f = await newFirm()
+    // The charset layer drops both between two letters of one script, so the stored text holds `PARTY_1` though the text
+    // as sent does not. (A digit written in another script is refused by the charset layer itself, never folded.)
+    const SOFT_HYPHEN = "\u00ad"
+    const ZWSP = "\u200b"
+    for (const hidden of [SOFT_HYPHEN, ZWSP]) {
+      const token = `PAR${hidden}TY_1`
+      expect(RESERVED_TOKEN.test(token)).toBe(false)
+      for (const over of [
+        { title: `Petition ${token}` },
+        { facts: `${FACTS} See ${token}.` },
+        { facts: `${FACTS} See CN${hidden}IC_2.` },
+        { documentTypeId: DEED, verbatim: [{ field: "exactLandDescription", text: `Plot ${token}` }] },
+        { partyNames: [token] },
+      ]) {
+        expect([JSON.stringify(over), ...(await failure(start(f, over)))]).toEqual([JSON.stringify(over), 422, "reserved_tokens"])
+      }
+    }
+    // After the permission, as the other text rules.
+    expect(await failure(start(f, { facts: `${FACTS} PAR${SOFT_HYPHEN}TY_1` }, f.intern))).toEqual([403, "intern_channel_denied"])
     expect(await docsOf("draft_generations", f.firmId)).toHaveLength(0)
   })
 
