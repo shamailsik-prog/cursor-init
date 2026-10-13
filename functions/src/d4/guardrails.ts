@@ -13,7 +13,8 @@ import { RESERVED_TOKEN, type VerbatimField } from "./generations"
  *  2. `output_unparseable`: an outline answer is not one of D11's two shapes or breaks the outline limits; a section is
  *     empty once a first line that repeats its heading is dropped (D10);
  *  3. `rehydration_failed`: no token map came back, or a `⟦`, a `⟧`, a lossy mask token or a bare token is left once the
- *     tokens are re-hydrated, string by string (a damaged or invented token never reaches storage half-restored);
+ *     tokens are re-hydrated, string by string (a damaged or invented token never reaches storage half-restored); the
+ *     same check runs again on each string's normalised form in step 5, which can spell a token the answer hid;
  *  4. `output_too_large`: the re-hydrated strings total over MAX_OUTPUT_CHARS;
  *  5. `output_unsupported_characters`: a string the draft charset rule refuses; a string that passes is kept in the
  *     rule's normalised form (requireSupportedDraftBody's), and an outline is then judged against its limits again on
@@ -184,7 +185,8 @@ type Answer = { text: string; truncated: boolean; pseudonyms?: PseudonymMap }
 /**
  * Steps 3 to 5 on the strings of an answer: re-hydrate each (step 3, with the leftover check: RESERVED_TOKEN is the same
  * set of `⟦`, `⟧`, lossy tokens and bare tokens, and is not global), the total (step 4), then the charset rule on each,
- * which gives the stored form (step 5). Returns the stored strings, or the refusal.
+ * which gives the stored form (step 5), and the leftover check again on that form (`rehydration_failed`). Returns the
+ * stored strings, or the refusal.
  */
 function restoreStrings(strings: readonly string[], pseudonyms: PseudonymMap | undefined): { ok: true; value: string[] } | { ok: false; reason: RefusalReason } {
   if (pseudonyms === undefined) return { ok: false, reason: "rehydration_failed" }
@@ -195,6 +197,10 @@ function restoreStrings(strings: readonly string[], pseudonyms: PseudonymMap | u
   for (const s of restored) {
     const check = checkDraftCharset(s)
     if (!check.ok) return { ok: false, reason: "output_unsupported_characters" }
+    // The normalised form can spell a token the text as written did not: the charset rule drops a soft hyphen or a
+    // zero-width space between two letters of one script (`PAR`, U+00AD, `TY_1` becomes `PARTY_1`). The leftover check
+    // is run again on what would be stored, so no reserved token is ever stored.
+    if (RESERVED_TOKEN.test(check.normalised)) return { ok: false, reason: "rehydration_failed" }
     stored.push(check.normalised)
   }
   return { ok: true, value: stored }

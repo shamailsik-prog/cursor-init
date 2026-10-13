@@ -97,7 +97,9 @@ export function verbatimOf(brief: DocumentData): VerbatimField[] {
  * `draft.generate` again on its matter (`requireStillPermitted`, R12), refuses a closed matter (409 `matter_closed`),
  * runs the step's own `recheck` of the brief, refuses a live lease (409 `generation_in_progress`), takes the label
  * (`generationLabel`), and writes `inFlight` (a new claim id, the step, `by`, and `leaseUntil` GENERATION_LEASE_MS
- * from now), the label and `updatedAt`. A transaction that gives up under contention is 503 `generation_busy`. Past the
+ * from now), the label and `updatedAt`. A run of the transaction that finds this claim's lease already there (an
+ * earlier run committed and its answer was lost) takes it as held. Any failure that is not an HttpError releases the
+ * lease if it is this claim's, then is rethrown; one that gives up under contention is 503 `generation_busy`. Past the
  * budget once it has committed, the lease is released in its own transaction and the answer is 503 `generation_busy`.
  */
 export async function claimLease(
@@ -115,6 +117,12 @@ export async function claimLease(
     claim = await adminDb().runTransaction(async (tx) => {
       const brief = (await tx.get(ref)).data()
       if (!brief || brief.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+      // This request's own lease is there already: an earlier run of this transaction committed and its answer was lost,
+      // and the SDK runs it again. That run judged and wrote everything; the lease is held, so nothing is judged again.
+      if ((brief.inFlight as { claimId?: unknown } | null | undefined)?.claimId === claimId) {
+        const matter = (await tx.get(adminDb().collection("matters").doc(brief.matterId as string))).data() ?? {}
+        return { claimId, brief, matter, label: brief.classification as Classification, startedMs }
+      }
       const matter = await requireStillPermitted(tx, caller, "draft.generate", brief.matterId as string)
       if (matter.status === "closed") throw new HttpError(409, "matter_closed")
       recheck(brief)
@@ -126,7 +134,10 @@ export async function claimLease(
       return { claimId, brief: { ...brief, inFlight, classification: label }, matter, label, startedMs }
     })
   } catch (err) {
-    // The attempts ran out against another writer on this brief: nothing was written.
+    // A failure that is not a decision may follow a run whose commit landed and whose answer was lost (contention among
+    // them): release the lease if it is this claim's (releaseLease is fenced by the claim id, and does nothing otherwise).
+    if (!(err instanceof HttpError)) await releaseLease(ref, claimId)
+    // The attempts ran out against another writer on this brief.
     if (isContentionAbort(err)) throw busy()
     throw err
   }
@@ -142,7 +153,8 @@ export async function claimLease(
  * the matter's party names (its `matter_parties` names and the brief's, longest first, read fresh: `partyNamesFor`),
  * and the brief's verbatim values to pseudonymise. `body` is the prompt; `purpose` is the step's fixed purpose. The
  * month and the trace id run on the router's clock, as committeeBrain's do; P1's own deadlines run on the real clock.
- * The `beforeCall` seam runs just before `callP1`.
+ * The `beforeCall` seam runs just before `callP1`, and then the pre-call budget is judged again from `claim.startedMs`:
+ * past it, 503 `generation_busy` with no call (the caller releases the lease, D27).
  */
 export async function callDrafting(caller: Caller, claim: StepClaim, purpose: string, body: string, routerNow: number | undefined): Promise<P1Result> {
   const { brief } = claim
@@ -151,6 +163,9 @@ export async function callDrafting(caller: Caller, claim: StepClaim, purpose: st
   const partyNames = await partyNamesFor(caller.firmId, matterId, supplied)
   const verbatim = verbatimOf(brief).map((v) => v.text)
   await generationSeam().beforeCall?.()
+  // The pre-call budget once more (D20), after the work between the lease and the call: the party names and the prompt.
+  // Past it, no call is made; the caller releases the lease on the throw (D27).
+  if (d4Now() - claim.startedMs > D4_PRECALL_BUDGET_MS) throw busy()
   // The router's clock for the month and the trace id, plus real elapsed time so the trace has a duration.
   const t0 = Date.now()
   const clock = () => (routerNow ?? t0) + (Date.now() - t0)
@@ -182,12 +197,17 @@ export async function releaseLease(ref: DocumentReference, claimId: string): Pro
 }
 
 /**
- * The step's outcome (spec "Outcomes and errors"): P1 `blocked` is `blocked` with P1's reason, P1 `failed` is `failed`
- * with `transport_error`, an `ok` answer a guardrail refused is `refused` with the guardrail's reason and at most
- * MAX_UNSUPPORTED_REFS new authorities, and anything else is `stored`.
+ * The step's outcome (spec "Outcomes and errors"): P1 `blocked` is `blocked` with P1's reason (a block without one
+ * throws: it is a P1 fault), P1 `failed` is `failed` with `transport_error`, an `ok` answer a guardrail refused is
+ * `refused` with the guardrail's reason and at most MAX_UNSUPPORTED_REFS new authorities, and anything else is `stored`.
+ * The P1 routes call it between the lease and the outcome write, where a throw releases the lease (D27).
  */
 export function outcomeOf(result: P1Result, guard: Guarded<unknown> | null): { outcome: StepOutcome; reason: string | null; unsupportedRefs: string[] } {
-  if (result.outcome === "blocked") return { outcome: "blocked", reason: result.blockReason ?? TRANSPORT_ERROR, unsupportedRefs: [] }
+  if (result.outcome === "blocked") {
+    // P1 names the reason of every block; one without is a P1 fault, never recorded under another outcome's reason.
+    if (result.blockReason === null) throw new Error("P1 blocked without a reason")
+    return { outcome: "blocked", reason: result.blockReason, unsupportedRefs: [] }
+  }
   if (result.outcome === "failed") return { outcome: "failed", reason: TRANSPORT_ERROR, unsupportedRefs: [] }
   if (guard !== null && !guard.ok) return { outcome: "refused", reason: guard.reason, unsupportedRefs: guard.unsupportedRefs.slice(0, MAX_UNSUPPORTED_REFS) }
   return { outcome: "stored", reason: null, unsupportedRefs: [] }

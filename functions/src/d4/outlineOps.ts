@@ -183,6 +183,7 @@ export const generateOutlineOp: FirmOperation<OutlineStepResult> = {
     const claim = await claimLease(caller, ref, { step: "outline", outlineVersion: version, section: null }, recheck, startedMs)
     let result: P1Result
     let guard: Guarded<OutlineContent> | null
+    let verdict: ReturnType<typeof outcomeOf>
     let deadlineMs: number
     try {
       const b = claim.brief
@@ -196,12 +197,12 @@ export const generateOutlineOp: FirmOperation<OutlineStepResult> = {
         result.outcome === "ok"
           ? checkOutlineAnswer({ text: result.text ?? "", truncated: result.truncated, pseudonyms: result.pseudonyms }, advocateText({ title: b.title as string, facts: b.facts as string, verbatim }))
           : null
+      verdict = outcomeOf(result, guard)
     } catch (err) {
       await releaseLease(ref, claim.claimId)
       throw err
     }
 
-    const verdict = outcomeOf(result, guard)
     const accepted = guard !== null && guard.ok ? guard.value : null
     const written = await writeOutcome({
       caller,
@@ -319,6 +320,8 @@ function requireAcknowledged(acknowledged: readonly number[], missingFacts: numb
  * - no edit (or an edit equal to the current outline) of a version already approved under the same hash writes only
  *   the audit row;
  * - otherwise the version is approved: `approvedOutline`, stage `approved`, `sectionCount`, `sectionsStored: 0`.
+ * A later run of the transaction (the SDK's retry) that finds this caller's approval of the intended version and hash
+ * already recorded answers as the committed run did and writes nothing: that run's answer was lost.
  */
 export const approveOutlineOp: FirmOperation<ApproveOutlineResult> = {
   auth: "firm",
@@ -346,13 +349,26 @@ export const approveOutlineOp: FirmOperation<ApproveOutlineResult> = {
     const approved = changed ?? contentOf(current)
     requireAcknowledged(acknowledged, approved.missingFacts.length)
 
+    // What this request records: the edit's version and hash, or the named version's.
+    const intended =
+      changed !== undefined
+        ? { version: version + 1, sha256: outlineSha256(changed), sectionCount: changed.sections.length }
+        : { version, sha256: sha, sectionCount: (current.sections as unknown[]).length }
+    let runs = 0
     let out: ApproveOutlineResult
     try {
       out = await adminDb().runTransaction(async (tx) => {
+        runs += 1
         // The stamp is taken in the attempt that commits.
         const stamp = Timestamp.now()
         const b = (await tx.get(ref)).data()
         if (!b || b.firmId !== caller.firmId || !withinClearance(b.classification, caller.clearanceLevel)) throw new HttpError(404, "not_found")
+        // A later run of this transaction that finds this caller's approval of the intended version and hash: an earlier
+        // run committed it, with the audit row, and its answer was lost. Answer as that run did; write nothing again.
+        const recorded = b.approvedOutline as { version?: unknown; sha256?: unknown; by?: unknown } | null | undefined
+        if (runs > 1 && recorded?.version === intended.version && recorded.sha256 === intended.sha256 && recorded.by === caller.uid) {
+          return { generationId, stage: b.stage as Stage, outlineVersion: intended.version, outlineSha256: intended.sha256, sectionCount: intended.sectionCount }
+        }
         const matter = await requireStillPermitted(tx, caller, "draft.outline.approve", b.matterId as string)
         if (matter.status === "closed") throw new HttpError(409, "matter_closed")
         refuseApprovalState(b, version)
@@ -364,8 +380,8 @@ export const approveOutlineOp: FirmOperation<ApproveOutlineResult> = {
 
         const approval = (v: number, sha256: string) => ({ version: v, sha256, by: caller.uid, at: stamp, acknowledgedMissingFacts: acknowledged })
         if (changed !== undefined) {
-          const next = version + 1
-          const nextSha = outlineSha256(changed)
+          const next = intended.version
+          const nextSha = intended.sha256
           tx.create(outlines().doc(outlineId(generationId, next)), {
             firmId: b.firmId,
             matterId: b.matterId,
@@ -399,7 +415,7 @@ export const approveOutlineOp: FirmOperation<ApproveOutlineResult> = {
           })
           return { generationId, stage: "approved" as Stage, outlineVersion: next, outlineSha256: nextSha, sectionCount: changed.sections.length }
         }
-        const sectionCount = (current.sections as unknown[]).length
+        const sectionCount = intended.sectionCount
         const already = b.approvedOutline as { version?: unknown; sha256?: unknown } | null | undefined
         if (already?.version === version && already.sha256 === sha) {
           return { generationId, stage: b.stage as Stage, outlineVersion: version, outlineSha256: sha, sectionCount }

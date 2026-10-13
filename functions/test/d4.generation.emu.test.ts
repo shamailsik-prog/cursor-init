@@ -11,7 +11,7 @@ import { outlineSha256 } from "../src/d4/guardrails"
 import { InMemoryTemplateStore, setTemplateStoreForTests } from "../src/d4/templates"
 import { firmConfigRef } from "../src/p1/config"
 import { setOpikFetchForTests } from "../src/p1/opik"
-import { activeTransport, setP1TransportForTests } from "../src/p1/transport"
+import { P1TransportError, activeTransport, setP1TransportForTests } from "../src/p1/transport"
 import * as auditModule from "../src/p5/audit"
 import { apiErrorOf, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -771,6 +771,36 @@ const DPA_IN_REGION = { "ai-gateway": { dpaExecuted: true, inRegion: true } }
 const briefAudits = async (f: Firm, action: string, generationId: string) =>
   (await docsOf("audit_log", f.firmId)).filter((a) => a.action === action && a.target === `draft_generations/${generationId}`)
 
+/**
+ * Spies on the SDK's transaction commits for one brief: a transaction that has read `draft_generations/{generationId}`
+ * is marked, and when a marked transaction commits, `lose(n)` (n counts its marked commits from 1) decides what its
+ * caller sees: null lets the commit through as it is; an error is thrown after the commit lands (a lost commit answer),
+ * or in place of the commit with `commit: false` (a refused commit). The SDK retries a retryable error by running the
+ * transaction's function again on the same transaction object. Returns the count of marked commits so far, so a test can
+ * show that its spy fired.
+ */
+function briefCommits(generationId: string, lose: (n: number) => Error | null, opts: { commit?: boolean } = {}): () => number {
+  const path = `draft_generations/${generationId}`
+  const marked = new WeakSet<object>()
+  const realGet = Transaction.prototype.get
+  vi.spyOn(Transaction.prototype, "get").mockImplementation(function (this: Transaction, ref: unknown) {
+    if (ref instanceof DocumentReference && ref.path === path) marked.add(this)
+    return realGet.call(this, ref as never)
+  } as never)
+  // `commit` is the SDK's internal step of runTransaction; it is not in the typings.
+  const proto = Transaction.prototype as unknown as { commit: () => Promise<void> }
+  const realCommit = proto.commit
+  let n = 0
+  vi.spyOn(proto, "commit").mockImplementation(async function (this: Transaction) {
+    if (!marked.has(this)) return realCommit.call(this)
+    n += 1
+    const err = lose(n)
+    if (err === null || opts.commit !== false) await realCommit.call(this)
+    if (err !== null) throw err
+  } as never)
+  return () => n
+}
+
 describe.skipIf(!EMULATORS)("D4 generation: outline steps (P4B-9, P4B-10, P4B-12, P4B-14, P4B-17, P4B-19, P4B-20)", () => {
   afterEach(() => {
     setProviderConfigForTests(null)
@@ -1109,13 +1139,19 @@ describe.skipIf(!EMULATORS)("D4 generation: outline steps (P4B-9, P4B-10, P4B-12
     d4GenerationTestSeam.lostCommitAnswers = [Object.assign(new Error("y"), { code: 14 })]
     // From the outcome write on, a plain read of the brief fails: only the next attempt's own transactional read can see the commit.
     const realGet = DocumentReference.prototype.get
+    let refused = 0
     d4GenerationTestSeam.beforeOutcomeWrite = async () => {
       vi.spyOn(DocumentReference.prototype, "get").mockImplementation(function (this: DocumentReference) {
-        return this.path === briefPath ? Promise.reject(Object.assign(new Error("read failed"), { code: 14 })) : realGet.call(this)
+        if (this.path !== briefPath) return realGet.call(this)
+        refused += 1
+        return Promise.reject(Object.assign(new Error("read failed"), { code: 14 }))
       } as never)
     }
     const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
     vi.restoreAllMocks()
+    // The confirming read was refused, so only the next attempt's own transactional read can have confirmed the write.
+    expect(refused).toBeGreaterThanOrEqual(1)
+    expect(d4GenerationTestSeam.lostCommitAnswers).toEqual([])
     expect(r).toMatchObject({ outcome: "stored", outlineVersion: 1, stage: "outlined", called: true })
     expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1)
     expect(await briefOf(g)).toMatchObject({ calls: 1, costMicroUsd: 14000, inFlight: null, lastAttempt: { usageLogId: r.usageLogId } })
@@ -1158,6 +1194,137 @@ describe.skipIf(!EMULATORS)("D4 generation: outline steps (P4B-9, P4B-10, P4B-12
     expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1)
   })
 
+  it("a lease whose commit answer is lost is this request's own when the SDK runs the transaction again: the step goes on, with one call and no lease left", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const sent = scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+    const commits = briefCommits(g, (n) => (n === 1 ? Object.assign(new Error("lost"), { code: 14 }) : null))
+    const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+    // The lease (its answer lost), the SDK's second run of it, then the outcome write.
+    expect(commits()).toBeGreaterThanOrEqual(3)
+    vi.restoreAllMocks()
+    expect(r).toMatchObject({ outcome: "stored", outlineVersion: 1, called: true })
+    expect(sent).toHaveLength(1)
+    expect(await briefOf(g)).toMatchObject({ calls: 1, outlineVersion: 1, inFlight: null })
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([["allow", "ok"]])
+  })
+
+  it("a lease whose commit answer is lost for good is released before the error is rethrown: no call, no lease left", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const sent = scripted([])
+    // An error the SDK does not retry, after the lease has committed.
+    const commits = briefCommits(g, (n) => (n === 1 ? new Error("answer lost") : null))
+    const logs = spyLogs()
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).toEqual([500, "internal"])
+    // The lease, then the release.
+    expect(commits()).toBe(2)
+    expect(logs.warn.mock.calls.filter((c) => c[0] === "d4.lease_released_after_error").map((c) => (c[1] as { code: string }).code)).toEqual(["released"])
+    vi.restoreAllMocks()
+    expect(sent).toHaveLength(0)
+    expect(await briefOf(g)).toMatchObject({ inFlight: null, calls: 0, lastAttempt: null })
+  })
+
+  it("the lease transaction that gives up under contention is 503 generation_busy, with no call made and no lease left", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const before = (await briefOf(g))!
+    const sent = scripted([])
+    // The op's clock stands still, so the pre-call budget cannot pass: a 503 here is the contention's.
+    d4GenerationTestSeam.wallClock = () => Date.parse("2099-01-01T00:00:00.000Z")
+    // Every attempt of the lease transaction is refused ABORTED (the SDK's five attempts); the release that follows commits.
+    const commits = briefCommits(g, (n) => (n <= 5 ? Object.assign(new Error("aborted"), { code: 10 }) : null), { commit: false })
+    const logs = spyLogs()
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).toEqual([503, "generation_busy"])
+    expect(commits()).toBe(6)
+    expect(logs.warn.mock.calls.filter((c) => c[0] === "d4.lease_released_after_error").map((c) => (c[1] as { code: string }).code)).toEqual(["not_held"])
+    vi.restoreAllMocks()
+    expect(sent).toHaveLength(0)
+    expect(await briefOf(g)).toEqual(before)
+  }, 60_000)
+
+  it("approveOutline whose commit answer is lost answers as the committed approval when the SDK runs it again: one approval, one audit row, with and without an edit", async () => {
+    const f = await newFirm()
+    const lost = (n: number) => (n === 1 ? Object.assign(new Error("lost"), { code: 14 }) : null)
+    // No edit.
+    const plain = await outlined(f)
+    let commits = briefCommits(plain.generationId, lost)
+    expect(await approveApi(f.A, { generationId: plain.generationId, outlineVersion: 1, outlineSha256: plain.sha, acknowledgedMissingFacts: [] })).toEqual({
+      generationId: plain.generationId,
+      stage: "approved",
+      outlineVersion: 1,
+      outlineSha256: plain.sha,
+      sectionCount: 1,
+    })
+    expect(commits()).toBe(2)
+    vi.restoreAllMocks()
+    expect((await briefOf(plain.generationId))!.approvedOutline).toMatchObject({ version: 1, sha256: plain.sha, by: f.A.uid })
+    expect((await briefAudits(f, "draft.outline.approve", plain.generationId)).map((a) => [a.decision, a.reason])).toEqual([["allow", "ok"]])
+    // With an edit: version 2 is stored once and approved.
+    const edited = await outlined(f)
+    const edit = { sections: [{ heading: "Facts", purpose: "State the facts." }, { heading: "Prayer", purpose: "Pray for relief." }], missingFacts: [] }
+    commits = briefCommits(edited.generationId, lost)
+    expect(await approveApi(f.A, { generationId: edited.generationId, outlineVersion: 1, outlineSha256: edited.sha, outline: edit, acknowledgedMissingFacts: [] })).toEqual({
+      generationId: edited.generationId,
+      stage: "approved",
+      outlineVersion: 2,
+      outlineSha256: outlineSha256(edit),
+      sectionCount: 2,
+    })
+    expect(commits()).toBe(2)
+    vi.restoreAllMocks()
+    expect(await briefOf(edited.generationId)).toMatchObject({ outlineVersion: 2, stage: "approved", sectionCount: 2, approvedOutline: { version: 2, sha256: outlineSha256(edit), by: f.A.uid } })
+    expect((await docsOf("draft_outlines", f.firmId)).filter((o) => o.generationId === edited.generationId).map((o) => [o.version, o.kind])).toEqual(
+      expect.arrayContaining([[1, "generated"], [2, "edited"]])
+    )
+    expect((await docsOf("draft_outlines", f.firmId)).filter((o) => o.generationId === edited.generationId)).toHaveLength(2)
+    expect((await briefAudits(f, "draft.outline.approve", edited.generationId)).map((a) => [a.decision, a.reason])).toEqual([["allow", "ok"]])
+  })
+
+  it("the pre-call budget is judged again just before the call: past it, the lease is released and the answer is 503 generation_busy, with no call made", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const sent = scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+    // The clock moves 6,000 ms between the lease and the call (the party names, the prompt), and nowhere else.
+    let offset = 0
+    let fired = 0
+    d4GenerationTestSeam.wallClock = () => Date.now() + offset
+    d4GenerationTestSeam.beforeCall = async () => {
+      fired += 1
+      offset += 6_000
+    }
+    const logs = spyLogs()
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).toEqual([503, "generation_busy"])
+    expect(fired).toBe(1)
+    expect(logs.warn.mock.calls.filter((c) => c[0] === "d4.lease_released_after_error").map((c) => (c[1] as { code: string }).code)).toEqual(["released"])
+    expect(sent).toHaveLength(0)
+    expect(await docsOf("ai_usage_logs", f.firmId)).toHaveLength(0)
+    expect(await briefOf(g)).toMatchObject({ inFlight: null, calls: 0, lastAttempt: null })
+  })
+
+  it("a failed call: 200 failed transport_error, billed on the brief as one call, the lease released, a deny audit row and no outline", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    let sends = 0
+    setP1TransportForTests({
+      async send() {
+        sends += 1
+        throw new P1TransportError("gateway_status", { billable: false, status: 500 })
+      },
+    })
+    spyLogs()
+    const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+    expect(sends).toBe(1)
+    expect(r).toMatchObject({ outcome: "failed", reason: "transport_error", called: true, path: "ai", model: OPUS, usage: NO_USAGE, outlineVersion: 0, stage: "facts" })
+    expect(r.usageLogId).not.toBeNull()
+    const brief = (await briefOf(g))!
+    expect(brief).toMatchObject({ calls: 1, costMicroUsd: 0, inFlight: null, outlineVersion: 0, stage: "facts", path: "ai" })
+    expect(brief.lastAttempt).toMatchObject({ step: "outline", outcome: "failed", reason: "transport_error", usageLogId: r.usageLogId, costMicroUsd: 0, unsupportedRefs: [] })
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([["deny", "transport_error"]])
+    expect((await docsOf("ai_usage_logs", f.firmId)).map((u) => u.outcome)).toEqual(["failed"])
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(0)
+  })
+
   it("the pre-call budget: past 5,000 ms before the lease commits is 503 generation_busy, with no call made and no lease left", async () => {
     const f = await newFirm()
     const g = (await start(f)).generationId
@@ -1175,16 +1342,20 @@ describe.skipIf(!EMULATORS)("D4 generation: outline steps (P4B-9, P4B-10, P4B-12
     const sent = scripted([])
     // The op's clock jumps 6,000 ms when a transaction commits; the lease transaction is the op's first.
     let offset = 0
+    let fired = 0
     d4GenerationTestSeam.wallClock = () => Date.now() + offset
     const db = adminDb()
     const real = db.runTransaction.bind(db)
     vi.spyOn(db, "runTransaction").mockImplementation((async (fn: never, opts: never) => {
       const out = await real(fn, opts)
+      fired += 1
       offset += 6_000
       return out
     }) as never)
     const logs = spyLogs()
     expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).toEqual([503, "generation_busy"])
+    // The spy fired; the released lease below shows it fired between the lease commit and the post-commit check.
+    expect(fired).toBeGreaterThanOrEqual(1)
     expect(logs.warn.mock.calls.filter((c) => c[0] === "d4.lease_released_after_error").map((c) => (c[1] as { code: string }).code)).toEqual(["released"])
     expect(sent).toHaveLength(0)
     expect(await briefOf(g)).toMatchObject({ inFlight: null, calls: 0, lastAttempt: null })

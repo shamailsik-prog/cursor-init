@@ -4,7 +4,8 @@ import { pseudonymise } from "@/platform/p1/pseudonymiseOutboundPII"
 import { getDocumentType } from "../src/d4/doctypes"
 import { sha256Hex } from "../src/d4/drafts"
 import { OUTLINE_PURPOSE, PROMPT_VERSION, SECTION_PURPOSE, SECTION_WORD_BUDGET, outlinePrompt, sectionPrompt } from "../src/d4/generationPrompt"
-import { D4_ATTEMPT_SLACK_MS, D4_PRECALL_BUDGET_MS, D4_WRITE_DEADLINE_MS, GENERATION_LEASE_MS } from "../src/d4/generationRun"
+import { D4_ATTEMPT_SLACK_MS, D4_PRECALL_BUDGET_MS, D4_WRITE_DEADLINE_MS, GENERATION_LEASE_MS, d4GenerationTestSeam, d4Now, outcomeOf } from "../src/d4/generationRun"
+import { generationSeam } from "../src/d4/generations"
 import {
   RESERVED_TOKEN,
   generationLabel,
@@ -30,7 +31,7 @@ import {
 import { EMPTY_TEMPLATE_STORE, InMemoryTemplateStore, deterministicFirstCheck, setTemplateStoreForTests } from "../src/d4/templates"
 import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { HttpError } from "../src/http/errors"
-import { COMMIT_ATTEMPT_SLACK_MS, COMMIT_DEADLINE_MS } from "../src/p1/gateway"
+import { COMMIT_ATTEMPT_SLACK_MS, COMMIT_DEADLINE_MS, type P1Result } from "../src/p1/gateway"
 import { OPIK_TIMEOUT_MS } from "../src/p1/opik"
 import { TRANSPORT_TIMEOUT_MS } from "../src/p1/transport"
 import type { Caller } from "../src/p5/auth"
@@ -364,6 +365,27 @@ describe("D4 guardrails (P4B-12)", () => {
     expect(checkOutlineAnswer({ text: outlineJson([{ heading: "Facts", purpose: "p" }]), truncated: false }, own)).toMatchObject({ ok: false, reason: "rehydration_failed" })
   })
 
+  it("rehydration_failed for a reserved token that exists only once the charset rule has normalised the answer: a soft hyphen or a zero-width space inside PARTY_1 or [CNIC]", () => {
+    const SOFT_HYPHEN = "\u00ad"
+    const ZWSP = "\u200b"
+    for (const hidden of [SOFT_HYPHEN, ZWSP]) {
+      for (const text of [`Against PAR${hidden}TY_1.`, `Was [CN${hidden}IC] given?`, `See CN${hidden}IC_1.`]) {
+        const name = JSON.stringify(text)
+        // As sent, the text holds no reserved token; only its stored form does.
+        expect([name, RESERVED_TOKEN.test(text)]).toEqual([name, false])
+        expect([name, section(text)]).toEqual([name, { ok: false, reason: "rehydration_failed", unsupportedRefs: [] }])
+        const asPurpose = checkOutlineAnswer({ text: outlineJson([{ heading: "Facts", purpose: text }]), truncated: false, pseudonyms: pseudo.map }, own)
+        expect([name, asPurpose]).toEqual([name, { ok: false, reason: "rehydration_failed", unsupportedRefs: [] }])
+        const asNote = checkOutlineAnswer({ text: outlineJson([{ heading: "Facts", purpose: "p" }], [{ field: "asAtDate", note: text }]), truncated: false, pseudonyms: pseudo.map }, own)
+        expect([name, asNote]).toEqual([name, { ok: false, reason: "rehydration_failed", unsupportedRefs: [] }])
+      }
+    }
+    // The charset rule still comes first: a string it refuses is output_unsupported_characters.
+    expect(section(`Against PAR\u00adTY_1 \u202e.`)).toMatchObject({ ok: false, reason: "output_unsupported_characters" })
+    // A soft hyphen that hides no token is the advocate's ordinary text and is stored without it.
+    expect(section(`The peti\u00adtioner was served.`)).toEqual({ ok: true, value: "The petitioner was served." })
+  })
+
   it("output_too_large over 200,000 characters after re-hydration, and not at 200,000", () => {
     expect(MAX_OUTPUT_CHARS).toBe(200_000)
     expect(section(chars(200_000, "a"))).toEqual({ ok: true, value: chars(200_000, "a") })
@@ -448,6 +470,57 @@ describe("D4 guardrails (P4B-12)", () => {
     const verbatim = pseudonymise(`${FACTS} ${LAND}\nsecond line`, { partyNames: [PERSON], verbatim: [`${LAND}\nsecond line`] })
     const twoLines = checkOutlineAnswer({ text: outlineJson([{ heading: "Land: ⟦VERBATIM_1⟧", purpose: "p" }]), truncated: false, pseudonyms: verbatim.map }, own)
     expect(twoLines).toMatchObject({ ok: false, reason: "output_unparseable" })
+  })
+})
+
+describe("D4 generation step outcome and seam (P4B-12, P4B-14)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    for (const key of Object.keys(d4GenerationTestSeam) as Array<keyof typeof d4GenerationTestSeam>) delete d4GenerationTestSeam[key]
+  })
+
+  const p1 = (over: Partial<P1Result>): P1Result => ({
+    outcome: "ok",
+    blockReason: null,
+    text: "t",
+    truncated: false,
+    usageLogId: "u1",
+    traceId: "t1",
+    model: "anthropic/claude-opus-5.5",
+    classification: "internal",
+    inputTokens: 1000,
+    outputTokens: 500,
+    costMicroUsd: 14000,
+    outbound: { body: "b", purpose: "draft-outline", redactionCounts: {} },
+    ...over,
+  })
+
+  it("outcomeOf: blocked with P1's reason, failed with transport_error, refused with the guardrail's reason and at most 50 refs, otherwise stored", () => {
+    expect(outcomeOf(p1({ outcome: "blocked", blockReason: "policy_denied", text: undefined }), null)).toEqual({ outcome: "blocked", reason: "policy_denied", unsupportedRefs: [] })
+    expect(outcomeOf(p1({ outcome: "failed", text: undefined }), null)).toEqual({ outcome: "failed", reason: "transport_error", unsupportedRefs: [] })
+    const refs = Array.from({ length: 60 }, (_, i) => `2099 SCMR ${i + 1}`)
+    expect(outcomeOf(p1({}), { ok: false, reason: "unsupported_authority", unsupportedRefs: refs })).toEqual({ outcome: "refused", reason: "unsupported_authority", unsupportedRefs: refs.slice(0, 50) })
+    expect(outcomeOf(p1({}), { ok: false, reason: "output_truncated", unsupportedRefs: [] })).toEqual({ outcome: "refused", reason: "output_truncated", unsupportedRefs: [] })
+    expect(outcomeOf(p1({}), { ok: true, value: "x" })).toEqual({ outcome: "stored", reason: null, unsupportedRefs: [] })
+    // P1's outcome comes first: a blocked or failed call is never judged by a guardrail.
+    expect(outcomeOf(p1({ outcome: "blocked", blockReason: "budget_exhausted" }), { ok: false, reason: "output_truncated", unsupportedRefs: [] })).toMatchObject({ outcome: "blocked", reason: "budget_exhausted" })
+  })
+
+  it("outcomeOf refuses a blocked P1 result without a reason, never recording it as transport_error", () => {
+    expect(() => outcomeOf(p1({ outcome: "blocked", blockReason: null, text: undefined }), null)).toThrow("blocked without a reason")
+  })
+
+  it("the generation seam is inert when NODE_ENV is production: the real clock, no hooks and no injected failures", () => {
+    d4GenerationTestSeam.wallClock = () => 5
+    d4GenerationTestSeam.outcomeWriteFailures = [new Error("x")]
+    expect(d4Now()).toBe(5)
+    expect(generationSeam().outcomeWriteFailures).toHaveLength(1)
+    vi.stubEnv("NODE_ENV", "production")
+    expect(generationSeam()).toEqual({})
+    const before = Date.now()
+    const now = d4Now()
+    expect(now).toBeGreaterThanOrEqual(before)
+    expect(now).toBeLessThanOrEqual(Date.now())
   })
 })
 
