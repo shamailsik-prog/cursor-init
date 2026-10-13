@@ -84,13 +84,17 @@
 **Constants.**
 - `TASK_MODEL.drafting = "anthropic/claude-opus-5.5"`; the prices are unchanged; the trace name is `p1.drafting`.
 - `PROMPT_VERSION = "4b.1"`, `OUTLINE_PURPOSE = "draft-outline"`, `SECTION_PURPOSE = "draft-section"`.
-- `D4_PRECALL_BUDGET_MS = 5_000`, `D4_WRITE_DEADLINE_MS = 10_000`, `GENERATION_LEASE_MS = 180_000`.
-- The import-time check: 60,000 + 2,000 + 30,000 + 10,000 + 5,000 + 10,000 = 117,000 < 120,000.
+- `D4_PRECALL_BUDGET_MS = 5_000`, `D4_WRITE_DEADLINE_MS = 10_000`, `D4_ATTEMPT_SLACK_MS = 4_000`, `GENERATION_LEASE_MS = 180_000`.
+- The import-time check: 60,000 + 2,000 + 30,000 + 10,000 + 5,000 + 10,000 = 117,000 < 120,000, and `D4_ATTEMPT_SLACK_MS < D4_WRITE_DEADLINE_MS`.
+- The budget's clock starts at the op's entry (`d4Now()`), never the router's `session.now`, which the emulator suites fix (D23).
+- No write attempt (outcome write or assembly) starts later than `D4_WRITE_DEADLINE_MS − D4_ATTEMPT_SLACK_MS` (6,000 ms) after `callP1` returns. The last 4,000 ms are for the attempt in flight, as P1 reserves `COMMIT_ATTEMPT_SLACK_MS` (D24).
+- The 3,000 ms left of the 120 s timeout cover the router's own work around the handler (auth, rate limit, the idempotency claim and result write).
+- `SECTION_WORD_BUDGET = 1_000` (D25).
 
 **Tokens.**
 - An indexed token is `⟦KIND_n⟧`, KIND one of `VERBATIM`, `CNIC`, `PHONE`, `EMAIL`, `IBAN`, `NTN`, `PASSPORT`, `PARTY`, n from 1 per kind.
 - The lossy tokens are `[PARTY]`, `[CNIC]`, `[PHONE]`, `[EMAIL]`, `[IBAN]`, `[NTN]`, `[PASSPORT]`.
-- Caller text holding `⟦`, `⟧` or a lossy token is 422 `reserved_tokens`.
+- Caller text holding `⟦`, `⟧`, a lossy token or a bare token (`/\b(?:PARTY|CNIC|PHONE|EMAIL|IBAN|NTN|PASSPORT|VERBATIM)_\d+\b/`) is 422 `reserved_tokens` (D26).
 - An answer is refused `rehydration_failed` if, after re-hydration, it still holds `⟦`, `⟧`, a lossy token, or `/\b(?:PARTY|CNIC|PHONE|EMAIL|IBAN|NTN|PASSPORT|VERBATIM)_\d+\b/`.
 
 **Collections** (top-level, `firmId` on every row, written by Functions in transactions).
@@ -202,8 +206,8 @@ const FACTS = `The petitioner ${PERSON} (CNIC ${CNIC}, mobile ${PHONE}) challeng
 - **D17.** The G-2 probes and firm-A seed stay in Task 5, as the decomposition says. `g2.cross-firm.test.ts` runs only under `G2_GATE=1`, so Tasks 2 to 4 leave every routinely run suite green. Instead, the boot test's route list grows with each task.
 - **D18.** Task 2 renames the 4a boot test, which can no longer say "exactly the twelve", and updates its name in `gate_g4_phase4a.sh`. Task 5 updates that gate's `d4/drafting` count from 8 to 15, the precedent 3b set for the d1 counts of earlier gates.
 - **D19.** The lease and both budgets read `d4GenerationTestSeam.wallClock ?? Date.now`.
-  - The first outcome-write attempt always runs; retries stop at `D4_WRITE_DEADLINE_MS` after `callP1` returns.
-  - Assembly starts only before that deadline, and each attempt of its transaction checks the deadline first.
+  - The first outcome-write attempt always runs. No retry starts later than `D4_WRITE_DEADLINE_MS − D4_ATTEMPT_SLACK_MS` after `callP1` returns (D24).
+  - Assembly starts only before that start-by time, and each attempt of its transaction checks it first.
 - **D20.** The pre-call budget is checked before the lease transaction and after it commits.
   - If it is past after the commit, the lease is released in its own transaction and the answer is 503 `generation_busy`.
   - A lease transaction that gives up under contention is also 503 `generation_busy`.
@@ -211,6 +215,19 @@ const FACTS = `The petitioner ${PERSON} (CNIC ${CNIC}, mobile ${PHONE}) challeng
   - `gateOps.ts` exports `resultDocument`, `summaryOf` and `requireStorable` (the spec's).
   - `p1/ops.ts` exports `partyNamesFor` (the spec's).
 - **D22.** Assembly calls `classifyForMatter(caller, matter, documentTypeId, strictest([brief.classification, matter.classification]))`. A matter label raised mid-run therefore never trips `classification_below_matter`.
+
+The engineering review of 13 October 2026 added D23 to D28. Each one's finding, reason and record is in "Engineering review" at the end of this plan.
+
+- **D23.** Both budgets start at the op's entry, `startedMs = d4Now()`. The router's `session.now` is not a real clock in the emulator suites (`p1.gateway.emu.test.ts:25`), and the router's own work falls inside the 3,000 ms the arithmetic leaves.
+- **D24.** `D4_ATTEMPT_SLACK_MS = 4_000` of `D4_WRITE_DEADLINE_MS` is reserved for the write attempt in flight. No outcome-write or assembly attempt starts later than 6,000 ms after `callP1` returns. This mirrors P1's `COMMIT_ATTEMPT_SLACK_MS` (`gateway.ts:92`, `:99`).
+- **D25.** The section prompt asks for at most about `SECTION_WORD_BUDGET` (1,000) words. The outline prompt asks the model to split any part that would need more into further sections, up to the 25 cap.
+  - Reason: at an assumed 40 to 70 output tokens a second, 4,096 tokens take about 60 to 100 s, past the 60 s transport timeout [estimated, unmeasured: O-57].
+  - A timeout is billed at the 4,096-token ceiling and stores nothing (`gateway.ts:226-233`).
+- **D26.** `RESERVED_TOKEN` also matches a bare token (`/\b(?:PARTY|…|VERBATIM)_\d+\b/`). Without this, caller text holding `PARTY_1` would make every answer that echoes it a billed `rehydration_failed`.
+- **D27.** If anything throws after `claimLease` commits and before `writeOutcome` begins, `releaseLease` frees the lease, then the error is rethrown. That covers `callP1` itself (`gateway.ts:160`'s `db.getAll` can reject before any provider call), building the prompt and the guards.
+  - `releaseLease` runs its own transaction and acts only while `inFlight.claimId` is still this request's. It is best effort and logs `d4.lease_released_after_error` with ids and a code only.
+  - Without it, a throw holds the lease for 180 s, and every retry answers 409 `generation_in_progress` for a call that billed nothing.
+- **D28.** `assembleGeneration` reads the k sections with one `getAll`, never one read per section.
 
 ## Review Focus
 
@@ -470,7 +487,7 @@ Two transport assertions gain finishReason: null (stricter). committeeBrain is u
     - `parseGenerationId(value: unknown): string` (400 `invalid_generation_id`)
     - `loadGenerationForCaller(caller: Caller, generationId: string, action: DraftAction): Promise<{ ref: DocumentReference; brief: DocumentData }>`. This is `loadDraftForCaller`'s rule: an unsafe id, an absent brief, another firm's brief and one above the caller's clearance are all 404 `not_found`; the action is checked on the brief's matter.
     - `generationLabel(caller: Caller, brief: DocumentData, matter: DocumentData): Classification`. This gives the strictest of the brief's label and the matter's label. An unreadable label, or a result above the caller's clearance, is 403 `clearance`.
-    - `RESERVED_TOKEN: RegExp` (`/[⟦⟧]|\[(?:PARTY|CNIC|PHONE|EMAIL|IBAN|NTN|PASSPORT)\]/`) and `refuseReservedTokens(texts: readonly string[]): void` (422 `reserved_tokens`)
+    - `RESERVED_TOKEN: RegExp` (`/[⟦⟧]|\[(?:PARTY|CNIC|PHONE|EMAIL|IBAN|NTN|PASSPORT)\]|\b(?:PARTY|CNIC|PHONE|EMAIL|IBAN|NTN|PASSPORT|VERBATIM)_\d+\b/`, D26) and `refuseReservedTokens(texts: readonly string[]): void` (422 `reserved_tokens`)
     - `liveLease(brief: DocumentData, nowMs: number): boolean`, true when `inFlight` exists and `inFlight.leaseUntil.toMillis() > nowMs`
     - `type GenerationView`: every brief field, with `generationId`, timestamps as ISO strings, and `inProgress` in place of `inFlight`
     - `generationView(id: string, d: DocumentData, nowMs: number): GenerationView` and `generationSummary(id: string, d: DocumentData, nowMs: number)`. The summary is the view without `facts`, `verbatim`, `partyNames` and `lastAttempt.unsupportedRefs`.
@@ -592,8 +609,8 @@ it("startDraft checks its fields in order before the permission: matter, type, t
 it("startDraft classification: at least internal, never below the matter's, within the caller's clearance; a closed matter is 409 matter_closed and a type that does not admit the court 422 court_mismatch", async () => {
   // a public matter gives internal; a confidential matter with classification "internal" gives 422 classification_below_matter; f.low asking for privileged gives 403 clearance; status "closed" gives 409 matter_closed; courtId "NOT_A_COURT" with TYPE gives 422 court_mismatch
 })
-it("reserved tokens: a ⟦, a ⟧ or a lossy mask token in the title, facts, a verbatim text or a party name is 422 reserved_tokens, after the permission, with nothing stored", async () => {
-  for (const over of [{ title: "Petition ⟦PARTY_1⟧" }, { facts: `${FACTS} [CNIC]` }, { documentTypeId: DEED, verbatim: [{ field: "exactLandDescription", text: "Plot ⟧" }] }, { partyNames: ["[PARTY]"] }]) {
+it("reserved tokens: a ⟦, a ⟧, a lossy mask token or a bare token in the title, facts, a verbatim text or a party name is 422 reserved_tokens, after the permission, with nothing stored", async () => {
+  for (const over of [{ title: "Petition ⟦PARTY_1⟧" }, { facts: `${FACTS} [CNIC]` }, { facts: `${FACTS} See PARTY_1.` }, { documentTypeId: DEED, verbatim: [{ field: "exactLandDescription", text: "Plot ⟧" }] }, { partyNames: ["[PARTY]"] }]) {
     expect((await apiErrorOf(start(f, over))).code).toBe("reserved_tokens")
   }
   expect((await apiErrorOf(start(f, { facts: "⟦x⟧" }, f.intern))).code).toBe("intern_channel_denied")
@@ -668,6 +685,7 @@ The 4a boot test is renamed (it can no longer pin exactly twelve D4 routes); the
     - `PROMPT_VERSION = "4b.1"`, `OUTLINE_PURPOSE = "draft-outline"`, `SECTION_PURPOSE = "draft-section"`
     - `outlinePrompt(i: { type: DocumentType; verbatim: readonly VerbatimField[]; facts: string }): string`
     - `sectionPrompt(i: { type: DocumentType; verbatim: readonly VerbatimField[]; facts: string; outline: OutlineContent; section: number; previousText: string | null }): string`
+    - `SECTION_WORD_BUDGET = 1_000` (D25)
   - `guardrails.ts`:
     - `type OutlineContent = { sections: { heading: string; purpose: string }[]; missingFacts: { field: string; note: string }[] }`
     - `type RefusalReason = "output_truncated" | "output_unparseable" | "rehydration_failed" | "output_too_large" | "output_unsupported_characters" | "unsupported_authority"`
@@ -681,13 +699,14 @@ The 4a boot test is renamed (it can no longer pin exactly twelve D4 routes); the
     - `checkOutlineAnswer(answer: { text: string; truncated: boolean; pseudonyms?: PseudonymMap }, own: string): Guarded<OutlineContent>`
     - `checkSectionAnswer(answer: { text: string; truncated: boolean; pseudonyms?: PseudonymMap }, own: string, heading: string): Guarded<string>`
   - `generationRun.ts`:
-    - `D4_PRECALL_BUDGET_MS`, `D4_WRITE_DEADLINE_MS`, `GENERATION_LEASE_MS`, and the import-time check
-    - `d4GenerationTestSeam: { failAssembly?: boolean; outcomeWriteFailures?: Error[]; lostCommitAnswers?: Error[]; wallClock?: () => number; beforeOutcomeWrite?: () => Promise<void> }`, inert in production
+    - `D4_PRECALL_BUDGET_MS`, `D4_WRITE_DEADLINE_MS`, `D4_ATTEMPT_SLACK_MS`, `GENERATION_LEASE_MS`, and the import-time check
+    - `d4GenerationTestSeam: { failAssembly?: boolean; outcomeWriteFailures?: Error[]; lostCommitAnswers?: Error[]; wallClock?: () => number; beforeCall?: () => Promise<void>; beforeOutcomeWrite?: () => Promise<void> }`, inert in production. `beforeCall` runs in `callDrafting` just before `callP1`; a throw from it stands in for `callP1` throwing (D27).
     - `d4Now(): number`
     - `type StepResult`: `OutlineStepResult`'s fields with `step: "outline" | "section"`
     - `type StepClaim = { claimId: string; brief: DocumentData; matter: DocumentData; label: Classification; startedMs: number }`
     - `claimLease(caller: Caller, ref: DocumentReference, step: { step: "outline" | "section"; outlineVersion: number; section: number | null }, recheck: (brief: DocumentData) => void, startedMs: number): Promise<StepClaim>`
     - `callDrafting(caller: Caller, claim: StepClaim, purpose: string, body: string, routerNow: number | undefined): Promise<P1Result>`
+    - `releaseLease(ref: DocumentReference, claimId: string): Promise<void>` (D27): its own transaction; clears `inFlight` only while `inFlight.claimId === claimId`; never throws (a failure is logged with ids and a code)
     - `outcomeOf(result: P1Result, guard: Guarded<unknown> | null): { outcome: StepOutcome; reason: string | null; unsupportedRefs: string[] }`
     - `writeOutcome(a: { caller: Caller; audit: CallAudit; ref: DocumentReference; claim: StepClaim; result: P1Result; verdict: ReturnType<typeof outcomeOf>; step: "outline" | "section"; outlineVersion: number; section: number | null; deadlineMs: number; onStored?: (tx: Transaction, brief: DocumentData, label: Classification, at: Timestamp) => Record<string, unknown> }): Promise<DocumentData>`
   - `outlineOps.ts`: `generateOutlineOp`, `getOutlineOp`, `approveOutlineOp`, `type OutlineStepResult = StepResult & { step: "outline" }`, and `type OutlineView`. The view holds the outline's fields without `firmId` and `matterId`, plus `approved`.
@@ -728,7 +747,8 @@ The 4a boot test is renamed (it can no longer pin exactly twelve D4 routes); the
   - Seam queues: `outcomeWriteFailures` throws before an attempt; `lostCommitAnswers` throws after a commit.
   - After a failure, a brief whose `lastAttempt.usageLogId === result.usageLogId` means the write is done.
   - An `HttpError` is never retried.
-  - The back-off between attempts is 100 ms, doubling, never past the deadline. Retries stop at the deadline, and the last error is rethrown (500, O-85).
+  - The back-off between attempts is 100 ms, doubling, never past the start-by time. No retry starts after `D4_WRITE_DEADLINE_MS − D4_ATTEMPT_SLACK_MS` (D24), and the last error is rethrown (500, O-85).
+- **The lease on an error (D27).** In both P1 routes, a throw after `claimLease` commits and before `writeOutcome` begins (from `callDrafting`, the prompt or a guard) calls `releaseLease(ref, claim.claimId)`, then rethrows. Nothing is stored on the brief; P1's usage row records any spend.
 - **The guards.** Each runs the P4B-12 steps in order, and the first failure wins:
   1. `truncated`;
   2. parse or empty (`parseOutlineAnswer`; for a section, empty after D10);
@@ -838,6 +858,11 @@ The 4a boot test is renamed (it can no longer pin exactly twelve D4 routes); the
       const p = sectionPrompt({ type: getDocumentType(TYPE)!, verbatim: [], facts: FACTS, outline: { sections: [{ heading: "Facts", purpose: "pf" }, { heading: "Grounds", purpose: "pg" }], missingFacts: [] }, section: 2, previousText: "PREVIOUS SECTION TEXT" })
       for (const s of ["2 of 2", "1. Facts", "2. Grounds", "PREVIOUS SECTION TEXT", getDocumentType(TYPE)!.firstGroundRule]) expect(p).toContain(s)
     })
+    it("both prompts carry the section word budget: the section prompt caps the body at about 1,000 words and the outline prompt asks for longer parts to be split (D25)", () => {
+      expect(SECTION_WORD_BUDGET).toBe(1_000)
+      expect(sectionPrompt({ type: getDocumentType(TYPE)!, verbatim: [], facts: FACTS, outline: { sections: [{ heading: "Facts", purpose: "pf" }], missingFacts: [] }, section: 1, previousText: null })).toContain("1,000 words")
+      expect(outlinePrompt({ type: getDocumentType(TYPE)!, verbatim: [], facts: FACTS })).toContain("1,000 words")
+    })
     it("PROMPT_VERSION is 4b.1 and the purposes are draft-outline and draft-section", () => {
       expect([PROMPT_VERSION, OUTLINE_PURPOSE, SECTION_PURPOSE]).toEqual(["4b.1", "draft-outline", "draft-section"])
     })
@@ -846,9 +871,9 @@ The 4a boot test is renamed (it can no longer pin exactly twelve D4 routes); the
   - Under `describe("D4 generation time budget (P4B-17)")`:
 
     ```ts
-    it("P1's 102 s worst case, the 5 s pre-call budget and the 10 s write deadline make 117 s, inside the 120 s timeout, and the 180 s lease outlives it", () => {
+    it("P1's 102 s worst case, the 5 s pre-call budget and the 10 s write deadline make 117 s, inside the 120 s timeout; 4 s of the write deadline is the in-flight slack; the 180 s lease outlives the timeout", () => {
       expect(TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS + COMMIT_ATTEMPT_SLACK_MS).toBe(102_000)
-      expect([D4_PRECALL_BUDGET_MS, D4_WRITE_DEADLINE_MS, GENERATION_LEASE_MS]).toEqual([5_000, 10_000, 180_000])
+      expect([D4_PRECALL_BUDGET_MS, D4_WRITE_DEADLINE_MS, D4_ATTEMPT_SLACK_MS, GENERATION_LEASE_MS]).toEqual([5_000, 10_000, 4_000, 180_000])
       expect(102_000 + D4_PRECALL_BUDGET_MS + D4_WRITE_DEADLINE_MS).toBe(117_000); expect(117_000).toBeLessThan(FUNCTION_TIMEOUT_SECONDS * 1000)
       expect(GENERATION_LEASE_MS).toBeGreaterThan(FUNCTION_TIMEOUT_SECONDS * 1000)
     })
@@ -891,6 +916,7 @@ it("6a. approval binding: a clerk is 403 role_not_permitted, a wrong hash or ver
   expect(ok).toEqual({ generationId: g, stage: "approved", outlineVersion: 2, outlineSha256: outlineSha256(edit), sectionCount: 2 })
   expect(outline2).toMatchObject({ version: 2, kind: "edited", editedFrom: 1, sha256: outlineSha256(edit), path: null, costMicroUsd: 0, usageLogId: outline1.usageLogId })
   expect(brief.approvedOutline).toMatchObject({ version: 2, sha256: outlineSha256(edit), by: f.A.uid, acknowledgedMissingFacts: [] })
+  // D6: an "edit" identical to the current outline is no edit: on a fresh generation, approving outline 1 with outline equal to its stored content approves version 1 and stores no version 2
 })
 it("8. rank 4: privileged-restricted is policy_denied with an empty config and with a DPA but not in-region; no deterministic path is offered", async () => {
   for (const cfg of [{}, { "ai-gateway": { dpaExecuted: true, inRegion: false } }]) {
@@ -951,6 +977,13 @@ it("the pre-call budget: past 5,000 ms before the lease commits is 503 generatio
   expect((await apiErrorOf(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).code).toBe("generation_busy")
   expect(sent).toHaveLength(0); expect(brief.inFlight).toBeNull()
 })
+it("a throw after the lease commits and before the outcome write releases the lease: the request fails, nothing is billed or stored, and a retry runs at once (D27)", async () => {
+  d4GenerationTestSeam.beforeCall = () => Promise.reject(Object.assign(new Error("boom"), { code: 14 })); const sent = scripted([{ text: outlineJson([{ heading: "Facts", purpose: "State the facts." }]) }])
+  expect((await apiErrorOf(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).status).toBe(500)
+  expect(brief).toMatchObject({ inFlight: null, calls: 0, outlineVersion: 0 }); expect(sent).toHaveLength(0); expect(await docsOf("ai_usage_logs", f.firmId)).toHaveLength(0)
+  delete d4GenerationTestSeam.beforeCall
+  expect(await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })).toMatchObject({ outcome: "stored", outlineVersion: 1 })
+})
 it("approveOutline with no edit of a version already approved under the same hash writes only its audit row", async () => {
   expect(briefAfter.updatedAt.isEqual(briefBefore.updatedAt)).toBe(true)
   // requirePermission writes its own rows (target matters/…); the call's rows target the brief
@@ -970,8 +1003,9 @@ it("getOutline returns the current or a named version with approved; an absent v
   - The fixed text carries the spec's "Prompt contract" bullets for each call, in its own words.
   - The outline prompt is followed by the type's `name`, `firstGroundRule` and `requiredFields`, one `<field>: <text>` line per verbatim field, and the facts.
   - The section prompt is followed by the type's `name` and `firstGroundRule`, the verbatim lines, the facts, the outline numbered `1. <heading>: <purpose>`, `section i of k`, and section i − 1's text when there is one.
+  - D25: the section instructions ask for a body of at most about 1,000 words (`SECTION_WORD_BUDGET`, written "1,000 words"). The outline instructions ask for any part that would need more to be split into further sections, within 25.
 - [ ] **Step 6: Implement `guardrails.ts`** to the interface and the guard contract. Export `partyNamesFor` from `p1/ops.ts`.
-- [ ] **Step 7: Implement `generationRun.ts`** to the contracts. Place the import-time check beside P1's: if `TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS + COMMIT_ATTEMPT_SLACK_MS + D4_PRECALL_BUDGET_MS + D4_WRITE_DEADLINE_MS >= FUNCTION_TIMEOUT_SECONDS * 1000`, it throws.
+- [ ] **Step 7: Implement `generationRun.ts`** to the contracts. Place the import-time check beside P1's: if `TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS + COMMIT_ATTEMPT_SLACK_MS + D4_PRECALL_BUDGET_MS + D4_WRITE_DEADLINE_MS >= FUNCTION_TIMEOUT_SECONDS * 1000`, or if `D4_ATTEMPT_SLACK_MS >= D4_WRITE_DEADLINE_MS`, it throws.
 - [ ] **Step 8: Implement `outlineOps.ts`**, register the three routes, and append them to `D4_GENERATION_ROUTES`.
 - [ ] **Step 9: Run the tests and see them pass.**
   - Run Step 3's two commands, and `npm --prefix functions test -- d4.boot`. Expected: PASS.
@@ -1028,7 +1062,7 @@ git commit -m "feat(d4): generateOutline, getOutline, approveOutline — prompt 
     - otherwise, `assembleGeneration` with `deadlineMs = d4Now() + D4_WRITE_DEADLINE_MS`, when assembly is due;
     - otherwise `"none"`.
 - **`assembleGeneration`.**
-  1. Read the approved outline's sections 1 to k. Build `assembleBody`.
+  1. Read the approved outline's sections 1 to k with one `getAll` (D28). Build `assembleBody`.
   2. Run `checkedText(brief.title, body)`. A 422 `draft_too_large` gives `refused` / `draft_too_large`.
   3. `normaliseEvaluation(await runGate({ title, body, temporalChecks: [] }, activeAuthorityStore()))`, then `requireStorable`. A 422 `gate_result_too_large` gives `refused`.
   4. One transaction. Each attempt first checks the deadline and `failAssembly` (D14, D19). Then:
@@ -1161,6 +1195,14 @@ it("write deadline: an assembly that cannot start before the deadline is pending
   expect(await draftApi(f.A, { generationId: g, outlineVersion: 1, section: 1 })).toMatchObject({ outcome: "stored", assembly: "pending" })
   delete d4GenerationTestSeam.beforeOutcomeWrite
   expect(await draftApi(f.A, { generationId: g, outlineVersion: 1, section: 1 })).toMatchObject({ called: false, assembly: "assembled" })
+})
+it("a superseded approval never assembles: sections stored with assembly pending, then a newer outline; replaying the last section answers called false and assembly none, and no draft exists", async () => {
+  d4GenerationTestSeam.failAssembly = true
+  expect(await draftApi(f.A, { generationId: g, outlineVersion: 1, section: 1 })).toMatchObject({ outcome: "stored", assembly: "pending" })
+  d4GenerationTestSeam.failAssembly = false
+  await outlineApi(f.A, { generationId: g, baseOutlineVersion: 1 }) // stores outline 2 and voids the approval
+  expect(await draftApi(f.A, { generationId: g, outlineVersion: 1, section: 1 })).toMatchObject({ called: false, assembly: "none", draftId: null })
+  expect(await docsOf("drafts", f.firmId)).toHaveLength(0)
 })
 it("after assembly every step but a replay is 409 generation_closed", async () => {
   for (const p of [outlineApi(f.A, { generationId: g, baseOutlineVersion: 1 }), approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] })]) expect((await apiErrorOf(p)).code).toBe("generation_closed")
@@ -1335,3 +1377,330 @@ When the PR is opened, set `backend_real`, `frontend_real` and `transport_stub` 
 - Hostile characters, a retry after a lost response, and the R12 race are covered by required tests and are not repeated there.
 
 **4. Proportion.** The plan pins signatures, contracts, test names and assertions. It writes no op bodies. The only algorithms it spells out are those its signatures leave open: the pseudonymiser's order and its "no rewrite inside a token" rule, the guard order, and the assembly writes. The plan is about 1,340 lines against the spec's 353 (3.8 times). Two things account for that: Global Constraints copies the spec's values verbatim, as required, and about 90 named tests are given as assertions carrying the spec's numbers. With the test bodies taken out, the plan would be about the spec's length. The implementation it describes (seven routes, a pseudonymiser, guards, an assembly transaction and about 90 tests) is several times longer than the plan.
+
+---
+
+## Engineering review (gstack `/plan-eng-review`, 13 October 2026)
+
+**Target:** this plan together with its spec, `docs/superpowers/specs/2026-10-13-phase4b-draft-generation-design.md`, at `37659bf`. The owner chose this review ("Eng review of 4b"). Every later choice was decided under the owner's standing autonomy instruction (`/root/.claude/CLAUDE.md`, 7 October 2026): the recommended option was taken and recorded below. Plan decisions D23 to D28 above are the accepted changes. The review's question numbers (Q3 to Q12) are separate from the plan's D numbers.
+
+**Prior learning applied:** `ops-claim-gate` (confidence 9/10, 2026-10-10). The PR body keeps "complete" and "product-done" out, and `check_pr_phase_claims.py` runs before landing (Task 5).
+
+### Scope Challenge
+
+**A. What already exists, by sub-problem.**
+- Masking: `platform/p1/maskOutboundPII.ts:28-36`, reused for the patterns.
+- The P1 chokepoint: `functions/src/p1/gateway.ts:147`.
+- R12: `functions/src/d4/drafts.ts:143`.
+- The 4a gate and its stores: `gateOps.ts:182` (`normaliseEvaluation`, already exported), `:361` (`requireStorable`), `:407` (`resultDocument`), `:436` (`summaryOf`).
+- Classification: `drafts.ts:296` (`classifyForMatter`).
+- Citations: `services/d4-2/citations.ts:36`, `:1256`, `:1266`.
+- The charset rule: `services/d4-2/draftCharset.ts:222`, `:395`.
+- The template port mirrors `d4/authority.ts:21-101`.
+
+Nothing on `origin/main` since 2026-10-12 touches these paths (`e7e18e6` is the tip).
+
+**Search check** (WebSearch, standard):
+- **[Layer 1] Reversible placeholders.** Detect, replace with an indexed placeholder, send, then restore. This is current practice; the mapping is the high-value target and must stay protected. The plan keeps it in process only. Source: [Grepture: mask and restore](https://grepture.com/blog/mask-and-restore-reversible-redaction-llm), [MLflow: PII redaction](https://mlflow.org/articles/pii-redaction-llm).
+- **[Layer 1] Firestore lease.** A lease longer than the worst-case run, an idempotent transaction body and a fencing token on writes. The plan has 180 s > 120 s and `claimId` checked at the outcome write. Source: [the Oscar Firestore lock](https://go.googlesource.com/oscar/+/master/internal/gcp/firestore/db.go), [Firestore contention docs](https://firebase.google.com/docs/firestore/transaction-data-contention?hl=es).
+- **Open.** No published mapping of Anthropic stop reasons to the Gateway's `finish_reason` was found; only `"stop"` appears in [Vercel's chat completions reference](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-chat-completions/chat-completions). O-84 stays [REQUIRES VERIFICATION].
+
+**TODOS.md:** none in the repository. Open items (O-nn) serve that purpose.
+
+**Complexity check** (estimated, from the plan's file lists):
+- About 45 changed files.
+- 8 new modules: the pseudonymiser, `templates`, `generations`, `generationPrompt`, `guardrails`, `generationRun`, `outlineOps` and `sectionOps`.
+- The gate trips (8+ files, 2+ new modules).
+
+**B. Complexity selectors.**
+- **Q3, feature cuts: none proposed.** Each feature serves a ruling:
+  - Without the pseudonymiser, party names come back as `[PARTY]`, so the draft is unusable.
+  - `listGenerations` is the resume path.
+  - Verbatim fields are the owner's standard.
+  - The template port is L16.1's deterministic-first check.
+- **Q4, structure.**
+  - A) Original arrangement (recommended): eight focused modules, one responsibility each, following the `authority.ts` port precedent.
+  - B) Smaller arrangement: fold `templates.ts` into `generations.ts` and `guardrails.ts` into `generationPrompt.ts`, which saves 2 files but mixes the port with the store and the guards with the prompt.
+  - **Answer:** A, auto-decided (recommended).
+  - **Scope record:** feature answers Q3 (no cuts); structure A; accepted scope is the plan as written plus D23 to D28; no pending remedies.
+
+**C. Findings.** No issues found at scope level. **Scope accepted as-is.**
+
+**Reality rows:**
+
+```
+REALITY: premise-table pass 14 premises checked, unverified=2 (Opus output speed for D25; the Gateway's finish_reason values, O-84) functions/src/p1/transport.ts:104-108
+REALITY: already-done pass origin/main e7e18e6 has no commit since 2026-10-12 touching functions/src/d4, functions/src/p1 or platform/p1 functions/src/d4/drafts.ts:143
+REALITY: surface-check pass npm scripts test:rules, test:unit, gate:g0, gate:g2, gate:g4:phase4a, typecheck and lint exist; the helpers rowsOf/eventsOf/auditsOf/rowOf, seedFirm and fakeTransport exist functions/test/p1.gateway.emu.test.ts:58-107
+REALITY: binding-decisions pass gstack decision log empty; the owner rulings honoured: GitHub is the master copy, autonomy, issue #26 unconfirmed (P4B-20) AGENTS.md:1
+REALITY: numbers finding 14,000 micro-USD and USD 0.05 re-derived [measured: costTable prices]; 102 s and 117 s re-derived [measured: gateway.ts:99, opik.ts:9, transport.ts:14]; "117 s < 120 s" was stated as a bound with no in-flight slack, fixed by D24 functions/src/p1/gateway.ts:92
+REALITY: deferred-asks pass issue #26 deferred as O-82 with its reason; every spec deferral carries a reason docs/superpowers/specs/2026-10-13-phase4b-draft-generation-design.md:74
+REALITY: pr-count pass one PR (#28); no .gstack/ship-policy.json, so one PR per wave docs/superpowers/plans/2026-10-13-phase4b-draft-generation.md:1
+REALITY: transaction-semantics pass every write is one transaction that re-decides R12; the lease is fenced by claimId at the outcome write functions/src/d4/drafts.ts:143
+REALITY: units pass every budget is in ms; FUNCTION_TIMEOUT_SECONDS (s) is multiplied by 1000 everywhere it is compared functions/src/health.ts:12
+```
+
+### 1. Architecture review
+
+- `[P2] (confidence: 8/10) functions/src/p1/gateway.ts:160 — "const [platformSnap, configSnap, totalSnap] = await db.getAll(...)"`
+  - `callP1` can reject before any provider call, and the plan's guards or prompt can throw after `claimLease` commits.
+  - Nothing releases `inFlight`, so every retry answers 409 `generation_in_progress` for 180 s for a call that billed nothing.
+  - Found by: Claude, native review.
+- `[P2] (confidence: 8/10) functions/src/p1/gateway.ts:92,99 — "export const COMMIT_ATTEMPT_SLACK_MS = 10_000" and the 102 s check`
+  - P1 reserves slack for the commit attempt still running at its deadline. The plan's D4 write deadline (10 s) has none: the outcome-write or assembly attempt that starts just before it can run past the 117 s the import check claims.
+  - The budget's start (`startedMs`) is also undefined, and the router clock is fixed in the emulator suites: `functions/test/p1.gateway.emu.test.ts:25` `const at = { now: () => T }`.
+  - Found by: Claude, native review.
+- `[P2] (confidence: 6/10) functions/src/p1/gateway.ts:226-233 — a billable failure is charged "reportedOut ?? MAX_OUTPUT_TOKENS"`
+  - Medium confidence; verify this is a real issue.
+  - A section near `max_tokens: 4096` likely exceeds the 60 s transport timeout (`transport.ts:14`) at an assumed 40 to 70 output tokens a second [estimated, unmeasured: O-57].
+  - Each such timeout bills the 4,096-token ceiling and stores nothing, on every retry. The prompt gives no length budget.
+  - Found by: Claude, native review.
+
+Failure scenarios for the new paths, with the plan's handling:
+- **Provider down.** The answer is `failed`/`transport_error`, billed per I1, recorded on the brief. Tested (outcome tests).
+- **Kill switch mid-run.** The section is `blocked`. Test 7.
+- **Lost commit answer.** It is confirmed by `lastAttempt.usageLogId`. Tested.
+- **Firestore read failure inside `callP1`.** Previously the lease was stuck; now D27 releases it, with a test.
+
+Distribution: no new artifact; the Functions deploy is unchanged.
+
+**Q5 (A1 → D27).** Release the lease on a throw.
+- A) Release it in its own transaction (fenced by `claimId`), then rethrow, with a test (recommended). Human ~2 h / CC ~10 min.
+- B) Leave it to expire in 180 s.
+
+Answer: A, auto-decided. **Accepted.**
+
+**Q6 (A2 → D23, D24).** The time budget.
+- A) Reserve 4 s of the 10 s write deadline for the attempt in flight (no attempt starts after 6 s), start both budgets at the op's own `d4Now()`, and state that the 3 s remainder covers the router (recommended). Human ~1 h / CC ~5 min.
+- B) Keep the plan's arithmetic.
+
+Answer: A, auto-decided. **Accepted.**
+
+**Q7 (A3 → D25).** The section length.
+- A) A 1,000-word section budget in the section prompt, and a split instruction in the outline prompt, with a prompt test (recommended). Human ~30 min / CC ~5 min.
+- B) Rely on `max_tokens` alone.
+
+Answer: A, auto-decided. **Accepted.** The throughput premise stays under O-57.
+
+Dispositions: A1 accepted (Q5); A2 accepted (Q6); A3 accepted (Q7).
+
+### 2. Code quality review
+
+- `[P3] (confidence: 7/10) plan Task 2 "RESERVED_TOKEN: RegExp (/[⟦⟧]|\[(?:PARTY|…)\]/)" against Global Constraints "refused rehydration_failed if … /\b(?:PARTY|…|VERBATIM)_\d+\b/"`
+  - Caller text holding a bare `PARTY_1` passes the input check but makes every answer that echoes it a billed `rehydration_failed`.
+  - Found by: Claude, native review.
+- **Shared code considered and rejected:** `withOutputWriteRetry` and `outputCommitted` (`functions/src/p1/ops.ts:58-107`) against the plan's `writeOutcome` retry. The contracts are incompatible:
+  - attempts: a fixed 3 against the deadline-bound D24;
+  - confirmation: the output document existing against `brief.lastAttempt.usageLogId`;
+  - the seam queues differ.
+
+  There are no net savings; keep them separate.
+- The 4a helpers the plan exports (D21) are already the single copies. `normaliseEvaluation` is already exported (`gateOps.ts:182`).
+
+**Q8 (A4 → D26).** Bare tokens.
+- A) Extend `RESERVED_TOKEN` to bare tokens, with a test row (recommended). Human ~15 min / CC ~2 min.
+- B) Leave it.
+
+Answer: A, auto-decided. **Accepted.**
+
+Dispositions: A4 accepted (Q8).
+
+### 3. Test review
+
+Framework: vitest (`functions/` and the root), with the Auth and Firestore emulators and `@firebase/rules-unit-testing`. CLAUDE.md has no Testing section; the framework was detected from the repository.
+
+```
+CODE PATHS                                                  USER FLOWS
+[+] platform/p1/pseudonymiseOutboundPII.ts                  [+] Advocate: facts → outline → approve → sections → draft
+  ├── pseudonymise / applyMap / rehydrate [★★★ T1 unit x10]   ├── [★★★ TESTED] full run, tests 1, 3, the 4a-draft test [→E2E emu]
+[+] functions/src/p1/gateway.ts (drafting, truncated, map)    ├── [★★★ TESTED] stop between sections, test 7
+  ├── [★★★ TESTED] truncated matrix, map leak scan (T1)       ├── [★★★ TESTED] resume after a lost answer, test 9 / listGenerations
+  └── [★★★ TESTED] committeeBrain unchanged (T1)              └── [★★★ TESTED] double submit, test 9 (concurrent → 409)
+[+] d4/generations.ts startDraft/get/list [★★★ T2]          [+] Error states the advocate sees
+[+] d4/guardrails.ts six steps, order, D10, D11 [★★★ T3]      ├── [★★★ TESTED] refused / blocked / failed in a 200 body
+[+] d4/generationRun.ts                                       ├── [★★★ TESTED] 409 generation_in_progress while in flight
+  ├── claimLease / budget / 503 [★★★ T3]                      └── [★★★ TESTED] 503 generation_busy, assembly "pending"
+  ├── writeOutcome retry, lost commit, R12 403 [★★★ T3]
+  ├── [GAP→ADDED] throw before outcome write releases the lease (D27)
+  └── [★★ TESTED] write deadline → pending (T4)
+[+] d4/outlineOps.ts approve binding [★★★ T3 test 6a]
+  └── [GAP→ADDED] identical "edit" is no edit (D6)
+[+] d4/sectionOps.ts assembly [★★★ T4 tests 10, events, refusals]
+  └── [GAP→ADDED] superseded approval never assembles
+[+] d4/generationPrompt.ts [★★ T3 unit]
+  └── [GAP→ADDED] the 1,000-word budget in both prompts (D25)
+
+LLM integration: [GAP] [→EVAL] prompt 4b.1 output quality: no eval suite; a stub transport proves the contract, not the drafting. Deferred to G-1 with a live key (O-57, O-84).
+
+COVERAGE: 30/34 paths tested in the plan as written (88%); 34/34 with the review's additions; LLM quality 0/1 (deferred).
+QUALITY: ★★★: 26 ★★: 4 ★: 0 | GAPS: 4 added, 1 eval deferred
+```
+
+Value cards for the added tests:
+- **Lease released on a throw.** Value: protects=a throw before the outcome write frees the lease; fails_when=the release is removed or not fenced by claimId; why_new=no test throws between lease and write; seam=d4GenerationTestSeam.beforeCall; no_claim=a real Firestore getAll failure (seam throw stands in).
+- **Identical edit.** Value: protects=D6 identical edit approves n, stores no n+1; fails_when=the hash comparison is dropped; why_new=6a covers a real edit only; seam=none; no_claim=none beyond protects.
+- **Superseded approval.** Value: protects=no draft is assembled from a voided approval; fails_when=the due check ignores approvedOutline; why_new=test 10 retries with the approval intact; seam=failAssembly; no_claim=a real assembly failure (seam stands in).
+- **Word budget.** Value: protects=both prompts carry the 1,000-word budget; fails_when=the budget text is dropped; why_new=the prompt tests assert structure only; seam=none; no_claim=that the model obeys it (stub transport).
+
+**Tests made obsolete:** none. The 4a boot test is renamed, not retired (D18).
+
+**Regression rule:**
+- `committeeBrain` is pinned unchanged (Task 1).
+- The 4a suites run green in Tasks 2 to 4.
+- The two transport assertions become stricter.
+
+No regression contract is unapproved.
+
+**Q9 (the identical-edit test row)** and **Q10 (the superseded-approval test):** each A) add it (recommended), auto-decided. **Accepted.**
+
+Test gaps identified: 3 (identical edit; superseded approval; LLM eval, deferred), plus the proof tests the remedies need (D25 to D27). Test plan artifact: `~/.gstack/projects/shamailsik-prog-cursor-init/root-claude-superpowers-installation-5u3208-eng-review-test-plan-20261013.md`.
+
+Dispositions: Q9 accepted; Q10 accepted; LLM eval deferred to G-1 (O-57, O-84).
+
+### 4. Performance review
+
+- `[P3] (confidence: 6/10) plan Task 4 "Read the approved outline's sections 1 to k."` Medium confidence; verify this is a real issue.
+  - Up to 25 sequential reads of documents up to about 400 KB each could cost about 25 round trips inside the 6 s write start-by window.
+  - Use one `getAll` (D28).
+- **Recorded, no change.** Every section call re-sends the facts. At most that is 25 calls × about 30,000 input tokens, or about USD 3 of input per 25-section draft [estimated: 4,000 nano-USD per input token, `costTable.ts:7`]. Prompt caching is not available on the Gateway path the transport uses (unmeasured), so it is NOT in scope.
+- Firestore: one `partyNamesFor` query per call; `listGenerations` uses its composite index; every write touches the brief once. No N+1 beyond the D28 item.
+
+**Q11 (D28):** A) one `getAll` (recommended), auto-decided. **Accepted.**
+
+Dispositions: P-1 accepted (Q11).
+
+### Outside voice
+
+- Codex is not installed (`CODEX_MODE: not_installed`; `codex_reviews` unset).
+- The native fallback needs TaskOutput, which this session does not provide.
+- **Outside voice unavailable.** Recorded as missing coverage, never as clean. The SDD whole-branch review after Task 5 is the independent check.
+
+### TODOs
+
+**Q12:** two candidates. Both are already open items, so nothing new is added (B, skip as a separate TODO, auto-decided):
+- the live G-1 check of `finish_reason` and section latency (O-57, O-84);
+- prompt caching for the repeated facts (NOT in scope).
+
+### NOT in scope
+
+- The P2 async path (O-79).
+- Live-model evals of prompt 4b.1 (G-1, O-57, O-84).
+- Prompt caching of the facts across sections (no Gateway support measured).
+- Renewing the lease during a call: 180 s already exceeds the 120 s timeout.
+- `matter_parties` names that look like bare tokens. D1 owns their validation; they fail closed as `rehydration_failed`.
+- The rest of the spec's "Out of scope" list stands.
+
+### What already exists
+
+- **Reused unchanged:** the mask patterns, `callP1`, R12, `classifyForMatter`, the 4a gate and its stores, `normaliseCitation`, the charset rule, `partyNamesFor`, and the `AuthorityStore` port shape.
+- **Built new:**
+  - the pseudonymiser, because the lossy mask cannot be reversed;
+  - the generation store, because the set has no outline collection;
+  - the guardrails, because P4-15 places them in the D4 caller.
+
+### Failure modes
+
+| New path | Realistic failure | Test | Handling | Seen by the user |
+| --- | --- | --- | --- | --- |
+| Pseudonymise round trip | the model damages a token | Review Focus 1 | `rehydration_failed` | a 200 `refused` |
+| Section call | timeout near `max_tokens` | test 5 analogue | D25 budget; billed `failed` | a 200 `failed` |
+| Lease | throw before the outcome write | added (D27) | release, rethrow | 500, then retry works |
+| Outcome write | lost commit answer | tested | confirmed by `usageLogId` | stored once |
+| Assembly | contention past the deadline | tested | `pending` | retry assembles |
+| Assembly | the approval voided meanwhile | added | `none` | no draft |
+
+Critical gaps (no test, no handling and silent): 0.
+
+### Worktree parallelization strategy
+
+| Step | Modules touched | Depends on |
+| --- | --- | --- |
+| Task 1 | `platform/p1/`, `functions/src/p1/` | — |
+| Task 2 | `functions/src/d4/`, `platform/p5/`, rules | — |
+| Task 3 | `functions/src/d4/`, `functions/src/p1/ops.ts` | Tasks 1 and 2 |
+| Task 4 | `functions/src/d4/` | Task 3 |
+| Task 5 | `ci_gates/`, `docs/`, the G-2 test | Task 4 |
+
+- Lanes: A is Task 1 and B is Task 2 (disjoint modules), then C (Tasks 3 → 4 → 5).
+- Conflict flags:
+  - Tasks 2 to 4 share `functions/test/d4.generation.emu.test.ts`, `d4.boot.test.ts` and `router.ts`.
+  - SDD runs one implementer at a time, so execution is sequential: Task 1, then 2, 3, 4 and 5.
+
+### Implementation Tasks
+
+Synthesized from this review's findings. Each folds into the plan task that owns the code.
+
+- [ ] **T1 (P2, human: ~2h / CC: ~10min)** — d4/generationRun — release the lease on a throw (D27)
+  - Surfaced by: Architecture — `gateway.ts:160` `db.getAll` can reject.
+  - Files: `functions/src/d4/generationRun.ts`, `outlineOps.ts`, `sectionOps.ts`, `functions/test/d4.generation.emu.test.ts`.
+  - Verify: the D27 emulator test.
+- [ ] **T2 (P2, human: ~1h / CC: ~5min)** — d4/generationRun — in-flight slack and the op's own clock (D23, D24)
+  - Surfaced by: Architecture — `gateway.ts:92,99`.
+  - Files: `functions/src/d4/generationRun.ts`, `functions/test/d4.generation.test.ts`.
+  - Verify: the time budget unit test.
+- [ ] **T3 (P2, human: ~30min / CC: ~5min)** — d4/generationPrompt — the 1,000-word section budget (D25)
+  - Surfaced by: Architecture — `gateway.ts:226-233`.
+  - Files: `functions/src/d4/generationPrompt.ts`, `functions/test/d4.generation.test.ts`.
+  - Verify: the prompt budget unit test.
+- [ ] **T4 (P3, human: ~15min / CC: ~2min)** — d4/generations — bare tokens are reserved (D26)
+  - Surfaced by: Code Quality — `RESERVED_TOKEN`.
+  - Files: `functions/src/d4/generations.ts`, `functions/test/d4.generation.emu.test.ts`.
+  - Verify: the reserved-tokens test row.
+- [ ] **T5 (P3, human: ~30min / CC: ~5min)** — d4/outlineOps, d4/sectionOps — the identical-edit row and the superseded-approval test
+  - Surfaced by: Test review.
+  - Files: `functions/test/d4.generation.emu.test.ts`.
+  - Verify: tests 6a and "a superseded approval never assembles".
+- [ ] **T6 (P3, human: ~10min / CC: ~2min)** — d4/sectionOps — read the sections with one `getAll` (D28)
+  - Surfaced by: Performance — plan Task 4.
+  - Files: `functions/src/d4/sectionOps.ts`.
+  - Verify: test 10 and the 4a-draft test.
+
+### Decision ledger
+
+Each answer below was auto-decided under the owner's standing autonomy instruction (`/root/.claude/CLAUDE.md`, 7 October 2026: "Make every technical, product and process decision yourself"). In each case the option marked recommended was taken.
+
+- **Q3:** feature cuts. State: approved. Answer: none proposed. Accepted scope: the plan's feature list.
+- **Q4:** structure. State: approved. Answer: A, the original arrangement. Accepted scope: eight modules as planned.
+- **Q5:** the lease on a throw. State: approved. Answer: A. Accepted scope: D27 and its test.
+- **Q6:** the time budget. State: approved. Answer: A. Accepted scope: D23, D24, the constant, the import check and the unit test.
+- **Q7:** the section length. State: approved. Answer: A. Accepted scope: D25, both prompts and the unit test.
+- **Q8:** bare tokens. State: approved. Answer: A. Accepted scope: D26 and the test row.
+- **Q9:** the identical-edit test. State: approved. Answer: A. Accepted scope: the 6a row.
+- **Q10:** the superseded-approval test. State: approved. Answer: A. Accepted scope: the new Task 4 test.
+- **Q11:** sections read with `getAll`. State: approved. Answer: A. Accepted scope: D28.
+- **Q12:** TODOs. State: approved. Answer: B (both are already O-57 and O-84). Accepted scope: none.
+- **Setup:** cross-project learnings. The `CROSS_PROJECT` config was left unset and learnings stay project-scoped, because this machine holds client codebases. That is the conservative choice, and it writes no config.
+
+Approval readiness: PASS (Q3 to Q12, each with its auto-decision reference above).
+
+### Completion summary
+
+- Step 0: Scope Challenge: scope accepted as-is.
+- Reality rows: 7/7 tier-1 rows plus 2 tier-2 rows emitted (`PLAN_REALITY: phase=eng rows=7/7 missing=none unverified=2 verdict=complete`); 2 unverified premises.
+- Architecture Review: 3 issues found.
+- Code Quality Review: 1 issue found.
+- Test Review: diagram produced; 3 gaps identified.
+- Performance Review: 1 issue found.
+- NOT in scope: written.
+- What already exists: written.
+- TODOS.md updates: 2 items proposed (both already open items; none added).
+- Failure modes: 0 critical gaps flagged.
+- Unresolved decisions: 0 in this review.
+- Outside voice: codex, unavailable (not installed; the native fallback needs TaskOutput, which is absent).
+- Parallelization: 2 lanes possible, executed sequentially (5 sequential).
+- Lake Score: 7/7.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Outside Review | codex (`/plan-eng-review` outside voice) | Independent 2nd opinion | 1 | unavailable | not installed; native fallback unavailable (no TaskOutput) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_open | 8 issues, 0 critical gaps (all 8 accepted into the plan as D23 to D28 and tests) |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **OUTSIDE COVERAGE:** codex, plan-review phase, unavailable (CLI not installed; native fallback unavailable). There are no outside findings, and the coverage is missing, not clean.
+- **VERDICT:** no review is CLEAR. The Eng review found 8 issues, and every one is resolved in the plan, so its status records mapped work and no open decision. Eng review required: build to the amended plan, and the SDD whole-branch review is the independent check.
+
+NO UNRESOLVED DECISIONS
