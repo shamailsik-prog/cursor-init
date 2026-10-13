@@ -166,6 +166,13 @@ describe("#2/#4 committee-brain free text cannot be laundered through a referenc
       contentHash: "h",
       sourceChannel: "web",
       classification: "internal",
+      storagePath: "fs://firmA/documents/doc_b/v1",
+      isImmutable: false,
+      byteSize: 0,
+      mimeType: "application/octet-stream",
+      objectVersion: 1,
+      uploadedBy: "partner_a",
+      objectBytesStatus: "available",
     })
     const res = await cb({ actorId: "partner_a", matterId: "mat_a", body: "x", documentIds: ["doc_b"] })
     expect(res.status).toBe(403)
@@ -182,6 +189,13 @@ describe("#2/#4 committee-brain free text cannot be laundered through a referenc
       contentHash: "h",
       sourceChannel: "web",
       classification: "privileged",
+      storagePath: "fs://firmA/documents/doc_priv/v1",
+      isImmutable: false,
+      byteSize: 0,
+      mimeType: "application/octet-stream",
+      objectVersion: 1,
+      uploadedBy: "partner_a",
+      objectBytesStatus: "available",
     })
     const res = await cb({
       actorId: "partner_a",

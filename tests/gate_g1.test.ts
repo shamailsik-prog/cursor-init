@@ -29,32 +29,35 @@ import { requestTranslation } from "@/platform/p1/translate"
 import { setTransportForTests } from "@/platform/p1/internalAICaller"
 
 describe("Gate G-1 forensic spine", () => {
-  it("G1-1 triple upload same hash, three idempotency keys -> one document, reused:true, one OCR job", () => {
+  it("G1-1 triple upload same hash, three idempotency keys -> one document, reused:true, one OCR job", async () => {
     const store = newStore()
     const bytes = Buffer.from("%PDF-same-hash%")
-    const a = uploadDocument(store, {
+    const a = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes,
       sourceChannel: "web",
       classification: "internal",
       idempotencyKey: "11111111-1111-4111-8111-111111111111",
+      uploadedBy: "partner_a",
     })
-    const b = uploadDocument(store, {
+    const b = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes,
       sourceChannel: "team_portal",
       classification: "internal",
       idempotencyKey: "22222222-2222-4222-8222-222222222222",
+      uploadedBy: "partner_a",
     })
-    const c = uploadDocument(store, {
+    const c = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes,
       sourceChannel: "bulk",
       classification: "internal",
       idempotencyKey: "33333333-3333-4333-8333-333333333333",
+      uploadedBy: "partner_a",
     })
     expect(a.reused).toBe(false)
     expect(b.reused).toBe(true)
@@ -255,7 +258,7 @@ describe("Gate G-1 forensic spine", () => {
     }
   })
 
-  it("G1-8 classification downgrade without declassify() -> trigger exception; with partner declassify -> succeeds, audit logged", () => {
+  it("G1-8 classification downgrade without declassify() -> trigger exception; with partner declassify -> succeeds, audit logged", async () => {
     const store = newStore()
     seedUser(store, {
       id: "partner1",
@@ -263,13 +266,14 @@ describe("Gate G-1 forensic spine", () => {
       role: "partner",
       clearanceLevel: "privileged-restricted",
     })
-    const up = uploadDocument(store, {
+    const up = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes: Buffer.from("privileged-memo"),
       sourceChannel: "web",
       classification: "privileged",
       idempotencyKey: "44444444-4444-4444-8444-444444444444",
+      uploadedBy: "partner_a",
     })
     expect(() =>
       setClassification(store, up.docId, "internal", "partner1")
