@@ -1,0 +1,55 @@
+name: corpus compose policy (F30)
+on:
+  pull_request:
+    paths: ["corpus_service/docker-compose.yml", "ci_gates/check_compose_policy.py", "ci_gates/fixtures/**", ".github/workflows/corpus-compose-policy.yml"]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  policy-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pip install pyyaml
+      - name: Policy accepts the shipped compose
+        run: python3 ci_gates/check_compose_policy.py corpus_service/docker-compose.yml
+      - name: Policy rejects the pre-fix (insecure) compose
+        run: |
+          if python3 ci_gates/check_compose_policy.py ci_gates/fixtures/compose_insecure.yml; then
+            echo "policy failed to reject insecure fixture"; exit 1; fi
+      - name: Compose refuses to start without secrets
+        working-directory: corpus_service
+        run: |
+          touch .env
+          if docker compose config >/dev/null 2>&1; then echo "compose accepted missing secrets"; exit 1; fi
+          echo "OK: compose refuses missing POSTGRES/REDIS secrets"
+      - name: E2E - stores unreachable from host, auth enforced inside the private network
+        working-directory: corpus_service
+        run: |
+          set -euo pipefail
+          export POSTGRES_USER=app_$(openssl rand -hex 4)
+          export POSTGRES_PASSWORD=$(openssl rand -hex 24)
+          export REDIS_PASSWORD=$(openssl rand -hex 24)
+          touch init.sql
+          docker compose up -d --wait postgres redis
+          # 1. No host listener on store ports.
+          if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then echo "postgres reachable on host"; exit 1; fi
+          if (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; then echo "redis reachable on host"; exit 1; fi
+          docker compose ps --format json | grep -q '"PublishedPort":[1-9]' && { echo "published port found"; exit 1; } || true
+          NET=$(docker network ls --format '{{.Name}}' | grep '_data$')
+          # 2. Redis rejects unauthenticated clients, accepts the secret.
+          out=$(docker run --rm --network "$NET" redis:7-alpine redis-cli -h redis ping 2>&1 || true)
+          echo "$out" | grep -q NOAUTH || { echo "redis allowed unauthenticated ping: $out"; exit 1; }
+          docker run --rm --network "$NET" redis:7-alpine redis-cli -h redis -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+          # 3. Postgres rejects the old default and wrong passwords, accepts the secret.
+          if docker run --rm --network "$NET" -e PGPASSWORD=legal postgres:16-alpine psql -h postgres -U legal -d legal_scraper -c 'select 1' 2>/dev/null; then
+            echo "default legal/legal login works"; exit 1; fi
+          docker run --rm --network "$NET" -e PGPASSWORD="$POSTGRES_PASSWORD" postgres:16-alpine psql -h postgres -U "$POSTGRES_USER" -d legal_scraper -tAc 'select 1' | grep -q 1
+          # 4. Data network is internal (no egress).
+          if docker run --rm --network "$NET" alpine:3 wget -q -T 5 -O- http://1.1.1.1 >/dev/null 2>&1; then echo "data network has egress"; exit 1; fi
+          echo "F30 e2e PASS"
+      - if: always()
+        working-directory: corpus_service
+        run: docker compose down -v || true
