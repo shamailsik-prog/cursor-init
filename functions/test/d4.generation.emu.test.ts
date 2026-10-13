@@ -1,9 +1,14 @@
-import { FieldPath, Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { DocumentReference, FieldPath, Timestamp, Transaction, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { encodeCursor } from "../src/d1/pagination"
-import { RESERVED_TOKEN } from "../src/d4/generations"
+import { setAuthorityStoreForTests } from "../src/d4/authority"
+import { d4GenerationTestSeam } from "../src/d4/generationRun"
+import { RESERVED_TOKEN, generations } from "../src/d4/generations"
+import { outlineSha256 } from "../src/d4/guardrails"
+import { InMemoryTemplateStore, setTemplateStoreForTests } from "../src/d4/templates"
 import { firmConfigRef } from "../src/p1/config"
 import { setOpikFetchForTests } from "../src/p1/opik"
 import { activeTransport, setP1TransportForTests } from "../src/p1/transport"
@@ -134,9 +139,32 @@ const through =
   (m: Member, data: Record<string, unknown> = {}, headers?: Record<string, string>): Promise<T> =>
     api({ token: m.token, data: { firmId: m.firmId, ...data }, headers } as never)
 
+/** A P1 step's answer (OutlineStepResult; Task 4's SectionStepResult adds its fields). */
+export type StepJson = {
+  generationId: string
+  stage: string
+  step: string
+  outlineVersion: number
+  called: boolean
+  outcome: string
+  reason: string | null
+  path: string | null
+  model: string | null
+  usage: { inputTokens: number; outputTokens: number; costMicroUsd: number }
+  usageLogId: string | null
+  traceId: string | null
+  [field: string]: unknown
+}
+export type ApproveJson = { generationId: string; stage: string; outlineVersion: number; outlineSha256: string; sectionCount: number }
+/** An outline as getOutline returns it. */
+export type OutlineViewJson = { version: number; sha256: string; approved: boolean; [field: string]: unknown }
+
 export const startApi = through(route<StartOut>("startDraft"))
 export const getGenerationApi = through(route<GenerationJson>("getGeneration"))
 export const listGenerationsApi = through(route<PageJson<GenerationJson>>("listGenerations"))
+export const outlineApi = through(route<StepJson>("generateOutline"))
+export const approveApi = through(route<ApproveJson>("approveOutline"))
+export const getOutlineApi = through(route<OutlineViewJson>("getOutline"))
 
 /** startDraft on the firm's matter with valid fields, `over` laid on top (an `undefined` removes a field), as `member`. */
 export const start = (f: Firm, over: Record<string, unknown> = {}, member: Member = f.A): Promise<StartOut> =>
@@ -221,10 +249,36 @@ export async function idempotencyRowsOf(firmId: string): Promise<Array<DocumentD
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
 }
 
-const briefOf = async (generationId: string) => (await adminDb().collection("draft_generations").doc(generationId).get()).data()
+export const briefOf = async (generationId: string) => (await adminDb().collection("draft_generations").doc(generationId).get()).data()
+/** The stored outline version `version` of a generation, as written (undefined when absent). */
+export const outlineDocOf = async (generationId: string, version: number) => (await adminDb().collection("draft_outlines").doc(`${generationId}_${version}`).get()).data()
 const failure = async (p: Promise<unknown>): Promise<[number, string]> => {
   const e = await apiErrorOf(p)
   return [e.status, e.code]
+}
+
+/** An outline as the model is asked to give it (D11), and as approveOutline takes an edit. */
+export type OutlineContentJson = { sections: Array<{ heading: string; purpose: string }>; missingFacts: Array<{ field: string; note: string }> }
+/** A one-section outline with no missing facts. */
+export const ONE_SECTION: OutlineContentJson = { sections: [{ heading: "Facts", purpose: "State the facts." }], missingFacts: [] }
+
+/**
+ * `start`, then `generateOutline` from base 0 with one scripted answer (`content`, ONE_SECTION by default), as `member`
+ * (the firm's associate by default). Fails unless the outline is stored. Returns the generation, the stored version and
+ * its hash as stored.
+ */
+export async function outlined(
+  f: Firm,
+  opts: { content?: OutlineContentJson; start?: Record<string, unknown>; member?: Member } = {}
+): Promise<{ generationId: string; outlineVersion: number; sha: string }> {
+  const content = opts.content ?? ONE_SECTION
+  const member = opts.member ?? f.A
+  const generationId = (await start(f, opts.start ?? {}, member)).generationId
+  scripted([{ text: outlineJson(content.sections, content.missingFacts) }])
+  const r = await outlineApi(member, { generationId, baseOutlineVersion: 0 })
+  if (r.outcome !== "stored") throw new Error(`outlined: ${r.outcome} ${String(r.reason)}`)
+  const stored = await outlineDocOf(generationId, r.outlineVersion)
+  return { generationId, outlineVersion: r.outlineVersion, sha: stored!.sha256 as string }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,5 +756,559 @@ describe.skipIf(!EMULATORS)("D4 generation: entry routes (P4B-1, P4B-8, P4B-13, 
     vi.restoreAllMocks()
     expect(await docsOf("draft_generations", f.firmId)).toHaveLength(0)
     expect((await start(f)).stage).toBe("facts")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The outline steps
+// ---------------------------------------------------------------------------
+
+const OPUS = "anthropic/claude-opus-5.5"
+const NO_USAGE = { inputTokens: 0, outputTokens: 0, costMicroUsd: 0 }
+const DPA = { "ai-gateway": { dpaExecuted: true, inRegion: false } }
+const DPA_IN_REGION = { "ai-gateway": { dpaExecuted: true, inRegion: true } }
+/** The audit rows of the firm for `action` that name the brief `generationId` as their target. */
+const briefAudits = async (f: Firm, action: string, generationId: string) =>
+  (await docsOf("audit_log", f.firmId)).filter((a) => a.action === action && a.target === `draft_generations/${generationId}`)
+
+describe.skipIf(!EMULATORS)("D4 generation: outline steps (P4B-9, P4B-10, P4B-12, P4B-14, P4B-17, P4B-19, P4B-20)", () => {
+  afterEach(() => {
+    setProviderConfigForTests(null)
+    setTemplateStoreForTests(null)
+    setAuthorityStoreForTests(null)
+    setP1TransportForTests(null)
+    setOpikFetchForTests(null)
+    for (const key of Object.keys(d4GenerationTestSeam) as Array<keyof typeof d4GenerationTestSeam>) delete d4GenerationTestSeam[key]
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it("2. bad tokens: ⟦PARTY_9⟧, a bare PARTY_1 and [CNIC] in an answer are each refused rehydration_failed, with nothing stored", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    for (const bad of ["⟦PARTY_9⟧", "PARTY_1", "[CNIC]"]) {
+      scripted([{ text: outlineJson([{ heading: "Facts", purpose: `The case of ${bad}.` }]) }])
+      const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+      expect([bad, r.outcome, r.reason, r.called]).toEqual([bad, "refused", "rehydration_failed", true])
+      // Billed: the usage is this request's, and the answer names no text.
+      expect([bad, r.usage, r.outlineVersion, r.stage]).toEqual([bad, { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 }, 0, "facts"])
+      expect(JSON.stringify(r)).not.toContain("The case of")
+    }
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(0)
+    const brief = (await briefOf(g))!
+    expect(brief).toMatchObject({ outlineVersion: 0, stage: "facts", calls: 3, costMicroUsd: 42000, inFlight: null, lastAttempt: { step: "outline", outcome: "refused", reason: "rehydration_failed" } })
+    expect(brief.lastAttempt).toMatchObject({ outlineVersion: 1, section: null, unsupportedRefs: [], costMicroUsd: 14000, by: f.A.uid })
+    // Each refused call has its deny row, with the outcome's reason (D5).
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([
+      ["deny", "rehydration_failed"],
+      ["deny", "rehydration_failed"],
+      ["deny", "rehydration_failed"],
+    ])
+  })
+
+  it("4. privileged, no DPA: policy_denied, ai.call.blocked, recorded on the brief, and no outline stored", async () => {
+    const f = await newFirm("privileged"); setProviderConfigForTests({}); const sent = scripted([])
+    const g = (await start(f)).generationId
+    const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+    expect([r.outcome, r.reason, r.called, r.usage.costMicroUsd]).toEqual(["blocked", "policy_denied", true, 0])
+    expect(sent).toHaveLength(0)
+    expect((await docsOf("events", f.firmId)).filter((e) => e.name === "ai.call.blocked" && e.id.startsWith(r.usageLogId!))).toHaveLength(1)
+    expect(await briefOf(g)).toMatchObject({ classification: "privileged", calls: 1, costMicroUsd: 0, stage: "facts", lastAttempt: { outcome: "blocked", reason: "policy_denied", usageLogId: r.usageLogId } })
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(0)
+    // P1 was asked at the brief's label, and the call's own row is a deny with P1's reason (D5).
+    expect((await docsOf("ai_usage_logs", f.firmId)).map((u) => [u.classification, u.outcome, u.blockReason, u.taskType])).toEqual([["privileged", "blocked", "policy_denied", "drafting"]])
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([["deny", "policy_denied"]])
+  })
+
+  it("6a. approval binding: a clerk is 403 role_not_permitted, a wrong hash or version is 409 outline_changed, unacknowledged missing facts are 422, and an edit is stored as n + 1 (kind edited) and approved", async () => {
+    const f = await newFirm()
+    // outline 1 has one missingFacts entry
+    const withGap: OutlineContentJson = { sections: [{ heading: "Facts", purpose: "State the facts." }], missingFacts: [{ field: "asAtDate", note: "Not given." }] }
+    const { generationId: g, sha } = await outlined(f, { content: withGap })
+    expect((await apiErrorOf(approveApi(f.C, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [0] }))).code).toBe("role_not_permitted")
+    expect((await apiErrorOf(approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: "0".repeat(64), acknowledgedMissingFacts: [0] }))).code).toBe("outline_changed")
+    expect((await apiErrorOf(approveApi(f.A, { generationId: g, outlineVersion: 2, outlineSha256: sha, acknowledgedMissingFacts: [0] }))).code).toBe("outline_changed")
+    expect((await apiErrorOf(approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] }))).code).toBe("missing_facts_not_acknowledged")
+    // D7: the acknowledgement is exactly every missing fact, no fewer and no more.
+    for (const ack of [[1], [0, 1]]) {
+      const e = await apiErrorOf(approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: ack }))
+      expect([JSON.stringify(ack), e.status, e.code]).toEqual([JSON.stringify(ack), 422, "missing_facts_not_acknowledged"])
+    }
+    expect((await briefOf(g))!.approvedOutline).toBeNull()
+    const edit = { sections: [{ heading: "Facts", purpose: "State the facts." }, { heading: "Prayer", purpose: "Pray for relief." }], missingFacts: [] }
+    const ok = await approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, outline: edit, acknowledgedMissingFacts: [] })
+    expect(ok).toEqual({ generationId: g, stage: "approved", outlineVersion: 2, outlineSha256: outlineSha256(edit), sectionCount: 2 })
+    const outline1 = (await outlineDocOf(g, 1))!
+    const outline2 = (await outlineDocOf(g, 2))!
+    expect(outline2).toMatchObject({ version: 2, kind: "edited", editedFrom: 1, sha256: outlineSha256(edit), path: null, costMicroUsd: 0, usageLogId: outline1.usageLogId })
+    expect(outline2).toMatchObject({ firmId: f.firmId, matterId: f.matterId, generationId: g, sections: edit.sections, missingFacts: [], classification: "internal", model: null, promptVersion: null, traceId: null, inputTokens: 0, outputTokens: 0, createdBy: f.A.uid })
+    expect(Object.keys(outline2).sort()).toEqual(Object.keys(outline1).sort())
+    const brief = (await briefOf(g))!
+    expect(brief.approvedOutline).toMatchObject({ version: 2, sha256: outlineSha256(edit), by: f.A.uid, acknowledgedMissingFacts: [] })
+    expect(brief).toMatchObject({ stage: "approved", outlineVersion: 2, sectionCount: 2, sectionsStored: 0, calls: 1 })
+    expect(brief.approvedOutline.at).toBeInstanceOf(Timestamp)
+    // Approving the stored outline with its missing fact acknowledged binds that version and records the acknowledgement.
+    const gap = await outlined(f, { content: withGap })
+    expect(await approveApi(f.P, { generationId: gap.generationId, outlineVersion: 1, outlineSha256: gap.sha, acknowledgedMissingFacts: [0] })).toEqual({ generationId: gap.generationId, stage: "approved", outlineVersion: 1, outlineSha256: gap.sha, sectionCount: 1 })
+    expect((await briefOf(gap.generationId))!.approvedOutline).toMatchObject({ version: 1, sha256: gap.sha, by: f.P.uid, acknowledgedMissingFacts: [0] })
+    // D6: an "edit" identical to the current outline is no edit: on a fresh generation, approving outline 1 with outline equal to its stored content approves version 1 and stores no version 2
+    const same = await outlined(f)
+    const plain = await approveApi(f.A, { generationId: same.generationId, outlineVersion: 1, outlineSha256: same.sha, outline: ONE_SECTION, acknowledgedMissingFacts: [] })
+    expect(plain).toEqual({ generationId: same.generationId, stage: "approved", outlineVersion: 1, outlineSha256: same.sha, sectionCount: 1 })
+    expect(await outlineDocOf(same.generationId, 2)).toBeUndefined()
+    expect(await briefOf(same.generationId)).toMatchObject({ outlineVersion: 1, approvedOutline: { version: 1, sha256: same.sha } })
+    // Only the edit stored a version: three generated outlines and one edited.
+    expect((await docsOf("draft_outlines", f.firmId)).map((o) => o.kind).sort()).toEqual(["edited", "generated", "generated", "generated"])
+  })
+
+  it("8. rank 4: privileged-restricted is policy_denied with an empty config and with a DPA but not in-region; no deterministic path is offered", async () => {
+    const f = await newFirm("privileged-restricted")
+    const g = (await start(f)).generationId
+    const sent = scripted([])
+    for (const cfg of [{}, { "ai-gateway": { dpaExecuted: true, inRegion: false } }]) {
+      setProviderConfigForTests(cfg)
+      const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+      expect([r.outcome, r.reason, r.path]).toEqual(["blocked", "policy_denied", "ai"])
+    }
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(0)
+    expect(sent).toHaveLength(0)
+    expect(await briefOf(g)).toMatchObject({ classification: "privileged-restricted", calls: 2, costMicroUsd: 0, stage: "facts", outlineVersion: 0, path: "ai", inFlight: null })
+  })
+
+  it("deterministic-first: a test template gives 501 deterministic_not_built with no transport call, no usage row and the brief unchanged", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const before = (await briefOf(g))!
+    setTemplateStoreForTests(new InMemoryTemplateStore().addTemplate(TYPE, "template_cp_199_v1")); const sent = scripted([])
+    const e = await apiErrorOf(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))
+    expect([e.status, e.code, sent.length, (await docsOf("ai_usage_logs", f.firmId)).length]).toEqual([501, "deterministic_not_built", 0, 0])
+    expect(await briefOf(g)).toMatchObject({ calls: 0, path: null, inFlight: null })
+    expect(await briefOf(g)).toEqual(before)
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([["deny", "deterministic_not_built"]])
+    // A template is the type's own: another type's template with the same id is not this type's, and the call is made.
+    setTemplateStoreForTests(new InMemoryTemplateStore().addTemplate(DEED, "template_cp_199_v1"))
+    scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+    expect(await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })).toMatchObject({ outcome: "stored", path: "ai" })
+  })
+
+  it("ranks 0-4 through setProviderConfigForTests: {} lets ranks 0-1 through, a DPA adds ranks 2-3, a DPA in-region adds rank 4", async () => {
+    const labels = ["public", "internal", "confidential", "privileged", "privileged-restricted"]
+    const expectFor = { none: ["stored", "stored", "blocked", "blocked", "blocked"], dpa: ["stored", "stored", "stored", "stored", "blocked"], region: ["stored", "stored", "stored", "stored", "stored"] }
+    // one firm and one brief per label and config; the public brief is labelled internal
+    const f = await newFirm()
+    const matters: string[] = []
+    for (const label of labels) matters.push(await extraMatter(f, { classification: label }))
+    const outcomes: Record<keyof typeof expectFor, string[]> = { none: [], dpa: [], region: [] }
+    const configs: Array<[keyof typeof expectFor, Parameters<typeof setProviderConfigForTests>[0]]> = [["none", {}], ["dpa", DPA], ["region", DPA_IN_REGION]]
+    for (const [name, cfg] of configs) {
+      setProviderConfigForTests(cfg)
+      for (const [i, label] of labels.entries()) {
+        const out = await start(f, { matterId: matters[i] })
+        expect([label, out.classification]).toEqual([label, label === "public" ? "internal" : label])
+        scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+        const r = await outlineApi(f.A, { generationId: out.generationId, baseOutlineVersion: 0 })
+        outcomes[name].push(r.outcome)
+        if (r.outcome === "blocked") expect([name, label, r.reason]).toEqual([name, label, "policy_denied"])
+        else expect((await outlineDocOf(out.generationId, 1))!.classification).toBe(out.classification)
+      }
+    }
+    expect(outcomes).toEqual(expectFor)
+  }, 90_000)
+
+  it("reserved tokens in an outline edit are 422 reserved_tokens, and nothing is stored", async () => {
+    const f = await newFirm()
+    const { generationId: g, sha } = await outlined(f)
+    const e = await apiErrorOf(approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, outline: { sections: [{ heading: "⟦PARTY_1⟧", purpose: "p" }], missingFacts: [] }, acknowledgedMissingFacts: [] }))
+    expect([e.status, e.code]).toEqual([422, "reserved_tokens"]); expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1); expect((await briefOf(g))!.approvedOutline).toBeNull()
+    // In any string of the edit, each kind of reserved token, one that exists only once normalised included.
+    const edits: OutlineContentJson[] = [
+      { sections: [{ heading: "Facts", purpose: "Against PARTY_1." }], missingFacts: [] },
+      { sections: [{ heading: "Facts", purpose: "p" }], missingFacts: [{ field: "asAtDate", note: "Was [CNIC] given?" }] },
+      { sections: [{ heading: "Facts", purpose: "p" }], missingFacts: [{ field: "x⟧", note: "n" }] },
+      { sections: [{ heading: "Facts", purpose: "PAR\u00adTY_1 was served." }], missingFacts: [] },
+    ]
+    for (const outline of edits) {
+      const r = await apiErrorOf(approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, outline, acknowledgedMissingFacts: outline.missingFacts.map((_, i) => i) }))
+      expect([JSON.stringify(outline), r.status, r.code]).toEqual([JSON.stringify(outline), 422, "reserved_tokens"])
+    }
+    // The charset rule comes first, and both come after the permission.
+    const hostile = { sections: [{ heading: "Facts", purpose: "PARTY_1 \u202e" }], missingFacts: [] }
+    expect(await failure(approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, outline: hostile, acknowledgedMissingFacts: [] }))).toEqual([422, "unsupported_characters"])
+    expect(await failure(approveApi(f.C, { generationId: g, outlineVersion: 1, outlineSha256: sha, outline: hostile, acknowledgedMissingFacts: [] }))).toEqual([403, "role_not_permitted"])
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1)
+    expect(await briefOf(g)).toMatchObject({ outlineVersion: 1, stage: "outlined", approvedOutline: null })
+  })
+
+  it("R12: a member removed during the call gets 403 at the outcome write; nothing is stored and the usage row is present", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+    d4GenerationTestSeam.beforeOutcomeWrite = () => adminDb().collection("matter_members").doc(`${f.matterId}_${f.A.uid}`).delete().then(() => undefined)
+    const e = await apiErrorOf(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))
+    expect([e.status, e.code]).toEqual([403, "not_member"])
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(0); expect(await briefOf(g)).toMatchObject({ calls: 0, outlineVersion: 0 })
+    expect((await docsOf("ai_usage_logs", f.firmId)).map((u) => u.outcome)).toEqual(["ok"])
+    // D12: the refusal writes nothing, so the lease runs out at leaseUntil; the call's row is the router's deny.
+    expect((await briefOf(g))!).toMatchObject({ lastAttempt: null, stage: "facts", inFlight: { step: "outline", outlineVersion: 1, section: null, by: f.A.uid } })
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([["deny", "not_member"]])
+  })
+
+  it("a stored outline: version base + 1, kind generated, with its hash, label, path ai, model, prompt version and usage; the answer holds ids and usage only", async () => {
+    const f = await newFirm()
+    // The brief names the person as a party, so the model sees and writes ⟦PARTY_1⟧ in their place.
+    const g = (await start(f, { partyNames: [PERSON] })).generationId
+    const outline1Content: OutlineContentJson = {
+      sections: [{ heading: "Facts", purpose: `The case of ⟦PARTY_1⟧ as numbered paragraphs.` }, { heading: "Grounds", purpose: `Rely on ${OWN_CITATION}.` }, { heading: "Prayer", purpose: "Set aside the order." }],
+      missingFacts: [{ field: "asAtDate", note: "The date of the order is not given." }],
+    }
+    const stored: OutlineContentJson = { ...outline1Content, sections: outline1Content.sections.map((s, i) => (i === 0 ? { ...s, purpose: `The case of ${PERSON} as numbered paragraphs.` } : s)) }
+    const sent = scripted([{ text: "```json\n" + outlineJson(outline1Content.sections, outline1Content.missingFacts) + "\n```" }])
+    const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+    expect(Object.keys(r).sort()).toEqual(["called", "generationId", "model", "outcome", "outlineVersion", "path", "reason", "stage", "step", "traceId", "usage", "usageLogId"])
+    expect(r).toMatchObject({ stage: "outlined", step: "outline", outlineVersion: 1, called: true, outcome: "stored", reason: null, path: "ai", model: "anthropic/claude-opus-5.5", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
+    expect(JSON.stringify(r)).not.toMatch(/Ardeshir|numbered paragraphs|Set aside|asAtDate/)
+    const gen = r.generationId
+    expect(gen).toBe(g)
+    const outline1 = (await outlineDocOf(gen, 1))!
+    expect(outline1).toMatchObject({ version: 1, kind: "generated", editedFrom: null, sha256: outlineSha256(stored), classification: "internal", path: "ai", promptVersion: "4b.1", usageLogId: r.usageLogId, traceId: r.traceId, costMicroUsd: 14000 })
+    expect(outline1).toMatchObject({ firmId: f.firmId, matterId: f.matterId, generationId: gen, sections: stored.sections, missingFacts: stored.missingFacts, model: OPUS, inputTokens: 1000, outputTokens: 500, createdBy: f.A.uid })
+    expect(Object.keys(outline1).sort()).toEqual(
+      ["classification", "costMicroUsd", "createdAt", "createdBy", "editedFrom", "firmId", "generationId", "inputTokens", "kind", "matterId", "missingFacts", "model", "outputTokens", "path", "promptVersion", "sections", "sha256", "traceId", "usageLogId", "version"].sort()
+    )
+    const brief = (await briefOf(gen))!
+    expect(brief).toMatchObject({ stage: "outlined", outlineVersion: 1, path: "ai", promptVersion: "4b.1", calls: 1, costMicroUsd: 14000, inFlight: null })
+    expect(brief).toMatchObject({ model: OPUS, classification: "internal", approvedOutline: null, sectionCount: null, sectionsStored: 0 })
+    expect(brief.lastAttempt).toMatchObject({ step: "outline", outlineVersion: 1, section: null, outcome: "stored", reason: null, unsupportedRefs: [], usageLogId: r.usageLogId, traceId: r.traceId, costMicroUsd: 14000, by: f.A.uid })
+    expect(brief.updatedAt.isEqual(outline1.createdAt)).toBe(true)
+    // One call, with the drafting route's model and cap; the body carries the party as a token only.
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ model: OPUS, maxTokens: 4096 })
+    expect(sent[0]!.body).not.toContain(PERSON)
+    expect(tokensIn(sent[0]!.body, "PARTY")).not.toHaveLength(0)
+    expect((await docsOf("ai_usage_logs", f.firmId)).map((u) => [u.taskType, u.outcome, u.classification])).toEqual([["drafting", "ok", "internal"]])
+    expect((await briefAudits(f, "draft.generate", gen)).map((a) => [a.decision, a.reason])).toEqual([["allow", "ok"]])
+    // No events at the outline steps (P4B-15) beyond P1's own.
+    expect((await docsOf("events", f.firmId)).map((e) => e.name)).toEqual(["ai.call.completed"])
+    // The idempotency store holds the answer, never the outline.
+    expect(JSON.stringify(await idempotencyRowsOf(f.firmId))).not.toMatch(/Ardeshir|numbered paragraphs/)
+  })
+
+  it("a new outline voids the approval; a stale base is 409 outline_changed; a stored base + 1 is returned with called: false and no transport call", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const second: OutlineContentJson = { sections: [...ONE_SECTION.sections, { heading: "Prayer", purpose: "Pray for relief." }], missingFacts: [] }
+    const sent = scripted([{ text: outlineJson(ONE_SECTION.sections) }, { text: outlineJson(second.sections) }])
+    const r1 = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+    const sha1 = (await outlineDocOf(g, 1))!.sha256 as string
+    await approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha1, acknowledgedMissingFacts: [] })
+    expect(await briefOf(g)).toMatchObject({ stage: "approved", sectionCount: 1 })
+    // after approving 1: generateOutline base 1 gives version 2, stage outlined, approvedOutline null, sectionCount null, sectionsStored 0
+    const r2 = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 1 })
+    expect(r2).toMatchObject({ outlineVersion: 2, stage: "outlined", outcome: "stored", called: true })
+    expect(await briefOf(g)).toMatchObject({ outlineVersion: 2, stage: "outlined", approvedOutline: null, sectionCount: null, sectionsStored: 0, calls: 2 })
+    expect((await outlineDocOf(g, 2))!.sha256).toBe(outlineSha256(second))
+    // base 0 again: called false, outcome stored, outlineVersion 1, usage zeros, usageLogId null, traceId null, sent.length unchanged
+    const replay = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+    expect(replay).toEqual({ generationId: g, stage: "outlined", step: "outline", outlineVersion: 1, called: false, outcome: "stored", reason: null, path: "ai", model: OPUS, usage: NO_USAGE, usageLogId: null, traceId: null })
+    expect((await outlineApi(f.A, { generationId: g, baseOutlineVersion: 1 })).outlineVersion).toBe(2)
+    expect(sent).toHaveLength(2)
+    expect(await briefOf(g)).toMatchObject({ calls: 2, outlineVersion: 2 })
+    expect(r1.usageLogId).not.toBeNull()
+    // base 5: 409 outline_changed
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 5 }))).toEqual([409, "outline_changed"])
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 3 }))).toEqual([409, "outline_changed"])
+    // D3: an edited version is not a generateOutline result; its base falls through to outline_changed.
+    const sha2 = (await outlineDocOf(g, 2))!.sha256 as string
+    await approveApi(f.A, { generationId: g, outlineVersion: 2, outlineSha256: sha2, outline: ONE_SECTION, acknowledgedMissingFacts: [] })
+    expect((await outlineDocOf(g, 3))!.kind).toBe("edited")
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 2 }))).toEqual([409, "outline_changed"])
+    expect(sent).toHaveLength(2)
+  })
+
+  it("a live lease is 409 generation_in_progress for generateOutline and approveOutline, and the outcome write releases it", async () => {
+    const f = await newFirm()
+    const { generationId: g, sha } = await outlined(f)
+    // a transport held open by a promise: while the first call is in flight, a second generateOutline (new key) and an approveOutline each give 409 generation_in_progress; after the release, brief.inFlight is null
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let entered!: () => void
+    const inCall = new Promise<void>((resolve) => (entered = resolve))
+    setP1TransportForTests({
+      async send() {
+        entered()
+        await held
+        return { text: outlineJson(ONE_SECTION.sections), inputTokens: 1000, outputTokens: 500, finishReason: "stop" }
+      },
+    })
+    const running = outlineApi(f.A, { generationId: g, baseOutlineVersion: 1 })
+    await inCall
+    expect((await briefOf(g))!.inFlight).toMatchObject({ step: "outline", outlineVersion: 2, section: null, by: f.A.uid })
+    expect((await getGenerationApi(f.A, { generationId: g })).inProgress).toBe(true)
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 1 }))).toEqual([409, "generation_in_progress"])
+    expect(await failure(outlineApi(f.C, { generationId: g, baseOutlineVersion: 1 }))).toEqual([409, "generation_in_progress"])
+    expect(await failure(approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] }))).toEqual([409, "generation_in_progress"])
+    release()
+    expect(await running).toMatchObject({ outcome: "stored", outlineVersion: 2, called: true })
+    const brief = (await briefOf(g))!
+    expect(brief.inFlight).toBeNull()
+    expect(brief).toMatchObject({ calls: 2, outlineVersion: 2, approvedOutline: null })
+    expect((await getGenerationApi(f.A, { generationId: g })).inProgress).toBe(false)
+  })
+
+  it("a lease that is no longer this request's at the outcome write is 409 generation_changed, with nothing stored", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+    d4GenerationTestSeam.beforeOutcomeWrite = () => generations().doc(g).update({ "inFlight.claimId": "someone-else" }).then(() => undefined)
+    expect((await apiErrorOf(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).code).toBe("generation_changed")
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(0)
+    expect(await briefOf(g)).toMatchObject({ calls: 0, outlineVersion: 0, lastAttempt: null, inFlight: { claimId: "someone-else" } })
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([["deny", "generation_changed"]])
+  })
+
+  it("the outcome write is retried to the D4 deadline, and a lost commit answer is confirmed by lastAttempt.usageLogId: one outline, billed once", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+    d4GenerationTestSeam.outcomeWriteFailures = [Object.assign(new Error("x"), { code: 14 })]; d4GenerationTestSeam.lostCommitAnswers = [Object.assign(new Error("y"), { code: 14 })]
+    const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+    expect(r.outcome).toBe("stored"); expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1); expect(await briefOf(g)).toMatchObject({ calls: 1, costMicroUsd: 14000 })
+    expect([d4GenerationTestSeam.outcomeWriteFailures, d4GenerationTestSeam.lostCommitAnswers]).toEqual([[], []])
+    expect(r).toMatchObject({ outlineVersion: 1, stage: "outlined", called: true })
+    expect(await briefOf(g)).toMatchObject({ inFlight: null, outlineVersion: 1, lastAttempt: { usageLogId: r.usageLogId, outcome: "stored" } })
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([["allow", "ok"]])
+  })
+
+  it("an outcome write that fails until the start-by time answers 500 with nothing stored, and no retry starts after it (D24, O-85)", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+    // Each attempt fails; the clock moves 2,500 ms per reading, so the start-by time (6,000 ms after the call) passes
+    // after a few attempts, and the queue is not emptied.
+    const failures = Array.from({ length: 20 }, () => Object.assign(new Error("x"), { code: 14 }))
+    d4GenerationTestSeam.outcomeWriteFailures = failures
+    let t = Date.now()
+    d4GenerationTestSeam.beforeOutcomeWrite = async () => {
+      d4GenerationTestSeam.wallClock = () => (t += 2_500)
+    }
+    const logs = spyLogs()
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).toEqual([500, "internal"])
+    // The router logs the failure with its code only.
+    expect(logs.error.mock.calls.map((c) => c[1])).toEqual([{ code: "grpc_14" }])
+    expect(failures.length).toBeGreaterThan(15)
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(0)
+    expect(await briefOf(g)).toMatchObject({ calls: 0, lastAttempt: null })
+    expect((await docsOf("ai_usage_logs", f.firmId)).map((u) => u.outcome)).toEqual(["ok"])
+  })
+
+  it("a lost commit answer whose confirming read fails too is confirmed by the next attempt inside its transaction: one outline, billed once", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    scripted([{ text: outlineJson(ONE_SECTION.sections) }])
+    const briefPath = generations().doc(g).path
+    d4GenerationTestSeam.lostCommitAnswers = [Object.assign(new Error("y"), { code: 14 })]
+    // From the outcome write on, a plain read of the brief fails: only the next attempt's own transactional read can see the commit.
+    const realGet = DocumentReference.prototype.get
+    d4GenerationTestSeam.beforeOutcomeWrite = async () => {
+      vi.spyOn(DocumentReference.prototype, "get").mockImplementation(function (this: DocumentReference) {
+        return this.path === briefPath ? Promise.reject(Object.assign(new Error("read failed"), { code: 14 })) : realGet.call(this)
+      } as never)
+    }
+    const r = await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })
+    vi.restoreAllMocks()
+    expect(r).toMatchObject({ outcome: "stored", outlineVersion: 1, stage: "outlined", called: true })
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1)
+    expect(await briefOf(g)).toMatchObject({ calls: 1, costMicroUsd: 14000, inFlight: null, lastAttempt: { usageLogId: r.usageLogId } })
+    expect((await briefAudits(f, "draft.generate", g)).map((a) => [a.decision, a.reason])).toEqual([["allow", "ok"]])
+  })
+
+  it("approveOutline judges the matter, the version and the lease again in its transaction: a change that lands after the first checks is refused, with nothing written", async () => {
+    const f = await newFirm()
+    const { generationId: g, sha } = await outlined(f)
+    const briefPath = generations().doc(g).path
+    // Each change is made just before the approval transaction reads the brief, so only that transaction can see it.
+    let inject: (() => Promise<unknown>) | null = null
+    const realGet = Transaction.prototype.get
+    vi.spyOn(Transaction.prototype, "get").mockImplementation(async function (this: Transaction, ref: unknown) {
+      if (inject !== null && ref instanceof DocumentReference && ref.path === briefPath) {
+        const change = inject
+        inject = null
+        await change()
+      }
+      return realGet.call(this, ref as never)
+    } as never)
+    const approve = () => approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] })
+    const lease = { claimId: "another-request", step: "outline", outlineVersion: 2, section: null, by: f.C.uid, leaseUntil: Timestamp.fromMillis(Date.now() + 60_000) }
+    const cases: Array<[string, () => Promise<unknown>, () => Promise<unknown>, [number, string]]> = [
+      ["a lease", () => generations().doc(g).update({ inFlight: lease }), () => generations().doc(g).update({ inFlight: null }), [409, "generation_in_progress"]],
+      ["a closed matter", () => adminDb().collection("matters").doc(f.matterId).update({ status: "closed" }), () => adminDb().collection("matters").doc(f.matterId).update({ status: "open" }), [409, "matter_closed"]],
+      ["a newer version", () => generations().doc(g).update({ outlineVersion: 2 }), () => generations().doc(g).update({ outlineVersion: 1 }), [409, "outline_changed"]],
+      ["a removed member", () => adminDb().collection("matter_members").doc(`${f.matterId}_${f.A.uid}`).delete(), () => adminDb().collection("matter_members").doc(`${f.matterId}_${f.A.uid}`).set({ firmId: f.firmId, matterId: f.matterId, userId: f.A.uid, classification: "internal" }), [403, "not_member"]],
+    ]
+    for (const [name, change, undo, refusal] of cases) {
+      inject = change
+      expect([name, ...(await failure(approve()))]).toEqual([name, ...refusal])
+      expect([name, inject]).toEqual([name, null])
+      expect([name, (await briefOf(g))!.approvedOutline]).toEqual([name, null])
+      await undo()
+    }
+    expect((await briefAudits(f, "draft.outline.approve", g)).map((a) => a.decision)).toEqual(["deny", "deny", "deny", "deny"])
+    // With nothing changed, the same request is approved.
+    expect(await approve()).toMatchObject({ stage: "approved", outlineVersion: 1 })
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1)
+  })
+
+  it("the pre-call budget: past 5,000 ms before the lease commits is 503 generation_busy, with no call made and no lease left", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const before = (await briefOf(g))!
+    let t = Date.now(); d4GenerationTestSeam.wallClock = () => (t += 6_000); const sent = scripted([])
+    expect((await apiErrorOf(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).code).toBe("generation_busy")
+    expect(sent).toHaveLength(0); expect((await briefOf(g))!.inFlight).toBeNull()
+    // Refused before the lease transaction: the brief is untouched, its updatedAt included.
+    expect(await briefOf(g)).toEqual(before)
+  })
+
+  it("the pre-call budget past once the lease has committed releases the lease in its own transaction: 503 generation_busy, no call made, no lease left (D20)", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const sent = scripted([])
+    // The op's clock jumps 6,000 ms when a transaction commits; the lease transaction is the op's first.
+    let offset = 0
+    d4GenerationTestSeam.wallClock = () => Date.now() + offset
+    const db = adminDb()
+    const real = db.runTransaction.bind(db)
+    vi.spyOn(db, "runTransaction").mockImplementation((async (fn: never, opts: never) => {
+      const out = await real(fn, opts)
+      offset += 6_000
+      return out
+    }) as never)
+    const logs = spyLogs()
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).toEqual([503, "generation_busy"])
+    expect(logs.warn.mock.calls.filter((c) => c[0] === "d4.lease_released_after_error").map((c) => (c[1] as { code: string }).code)).toEqual(["released"])
+    expect(sent).toHaveLength(0)
+    expect(await briefOf(g)).toMatchObject({ inFlight: null, calls: 0, lastAttempt: null })
+  })
+
+  it("a throw after the lease commits and before the outcome write releases the lease: the request fails, nothing is billed or stored, and a retry runs at once (D27)", async () => {
+    const f = await newFirm()
+    const g = (await start(f)).generationId
+    const logs = spyLogs()
+    d4GenerationTestSeam.beforeCall = () => Promise.reject(Object.assign(new Error("boom"), { code: 14 })); const sent = scripted([{ text: outlineJson([{ heading: "Facts", purpose: "State the facts." }]) }])
+    expect((await apiErrorOf(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).status).toBe(500)
+    expect(await briefOf(g)).toMatchObject({ inFlight: null, calls: 0, outlineVersion: 0 }); expect(sent).toHaveLength(0); expect(await docsOf("ai_usage_logs", f.firmId)).toHaveLength(0)
+    // The release is logged with ids and a code only.
+    const released = logs.warn.mock.calls.filter((c) => c[0] === "d4.lease_released_after_error")
+    expect(released).toHaveLength(1)
+    expect(Object.keys(released[0]![1] as object).sort()).toEqual(["claimId", "code", "generationId"])
+    expect(released[0]![1]).toMatchObject({ generationId: g, code: "released" })
+    delete d4GenerationTestSeam.beforeCall
+    expect(await outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 })).toMatchObject({ outcome: "stored", outlineVersion: 1 })
+  })
+
+  it("approveOutline with no edit of a version already approved under the same hash writes only its audit row", async () => {
+    const f = await newFirm()
+    const { generationId: g, sha } = await outlined(f)
+    expect(await approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] })).toEqual({ generationId: g, stage: "approved", outlineVersion: 1, outlineSha256: sha, sectionCount: 1 })
+    const briefBefore = (await briefOf(g))!
+    await sleep(5)
+    expect(await approveApi(f.P, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] })).toEqual({ generationId: g, stage: "approved", outlineVersion: 1, outlineSha256: sha, sectionCount: 1 })
+    const briefAfter = (await briefOf(g))!
+    expect(briefAfter.updatedAt.isEqual(briefBefore.updatedAt)).toBe(true)
+    expect(briefAfter).toEqual(briefBefore)
+    expect(briefAfter.approvedOutline.by).toBe(f.A.uid)
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1)
+    const audits = await docsOf("audit_log", f.firmId)
+    // requirePermission writes its own rows (target matters/…); the call's rows target the brief
+    expect(audits.filter((a) => a.action === "draft.outline.approve" && a.target === `draft_generations/${g}` && a.decision === "allow")).toHaveLength(2)
+    expect(audits.filter((a) => a.action === "draft.outline.approve" && a.target === `matters/${f.matterId}` && a.decision === "allow")).toHaveLength(2)
+  })
+
+  it("getOutline returns the current or a named version with approved; an absent version is 404 outline_not_found; a closed matter is 409 matter_closed for generateOutline and approveOutline", async () => {
+    const f = await newFirm()
+    const fresh = (await start(f)).generationId
+    expect(await failure(getOutlineApi(f.A, { generationId: fresh }))).toEqual([404, "outline_not_found"])
+    expect(await failure(getOutlineApi(f.A, { generationId: fresh, version: "1" }))).toEqual([404, "outline_not_found"])
+    const { generationId: g, sha } = await outlined(f)
+    expect(await getOutlineApi(f.C, { generationId: g })).toMatchObject({ version: 1, approved: false })
+    await approveApi(f.A, { generationId: g, outlineVersion: 1, outlineSha256: sha, acknowledgedMissingFacts: [] })
+    expect(await getOutlineApi(f.C, { generationId: g })).toMatchObject({ version: 1, approved: true }); expect((await getOutlineApi(f.C, { generationId: g, version: "9" }).catch((e) => e)).code).toBe("outline_not_found")
+    const view = await getOutlineApi(f.low, { generationId: g, version: "1" })
+    const stored = (await outlineDocOf(g, 1))!
+    expect(view).toEqual({
+      generationId: g,
+      version: 1,
+      kind: "generated",
+      sections: ONE_SECTION.sections,
+      missingFacts: [],
+      sha256: sha,
+      classification: "internal",
+      editedFrom: null,
+      path: "ai",
+      model: OPUS,
+      promptVersion: "4b.1",
+      traceId: stored.traceId,
+      inputTokens: 1000,
+      outputTokens: 500,
+      costMicroUsd: 14000,
+      usageLogId: stored.usageLogId,
+      createdBy: f.A.uid,
+      createdAt: (stored.createdAt as Timestamp).toDate().toISOString(),
+      approved: true,
+    })
+    expect((await briefAudits(f, "draft.read", g)).filter((a) => a.decision === "allow").length).toBeGreaterThan(0)
+    // A newer version voids the approval: neither version reads as approved.
+    scripted([{ text: outlineJson([{ heading: "Grounds", purpose: "Argue." }]) }])
+    await outlineApi(f.A, { generationId: g, baseOutlineVersion: 1 })
+    expect(await getOutlineApi(f.C, { generationId: g })).toMatchObject({ version: 2, approved: false, sections: [{ heading: "Grounds", purpose: "Argue." }] })
+    expect(await getOutlineApi(f.C, { generationId: g, version: "1" })).toMatchObject({ version: 1, approved: false })
+    // The roles and the brief's rules are getGeneration's.
+    expect(await failure(getOutlineApi(f.intern, { generationId: g }))).toEqual([403, "intern_channel_denied"])
+    expect(await failure(getOutlineApi(f.outsider, { generationId: g }))).toEqual([403, "not_member"])
+    expect(await failure(getOutlineApi((await newFirm()).A, { generationId: g }))).toEqual([404, "not_found"])
+    // status set to "closed": generateOutline and approveOutline each give 409 matter_closed
+    const sha2 = (await outlineDocOf(g, 2))!.sha256 as string
+    await adminDb().collection("matters").doc(f.matterId).update({ status: "closed" })
+    const sent = scripted([])
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 2 }))).toEqual([409, "matter_closed"])
+    // Before the stored result too: a closed matter answers no step.
+    expect(await failure(outlineApi(f.A, { generationId: g, baseOutlineVersion: 0 }))).toEqual([409, "matter_closed"])
+    expect(await failure(approveApi(f.A, { generationId: g, outlineVersion: 2, outlineSha256: sha2, acknowledgedMissingFacts: [] }))).toEqual([409, "matter_closed"])
+    expect(sent).toHaveLength(0)
+    // Reading stays open.
+    expect(await getOutlineApi(f.A, { generationId: g })).toMatchObject({ version: 2 })
+  })
+
+  it("generateOutline, approveOutline and getOutline check their fields in order before the permission", async () => {
+    const f = await newFirm()
+    const { generationId: g, sha } = await outlined(f)
+    // As the intern: a 403 would show if the permission ran before a check.
+    const gen = async (data: Record<string, unknown>) => (await failure(outlineApi(f.intern, data)))[1]
+    expect(await gen({})).toBe("invalid_generation_id")
+    expect(await gen({ generationId: "", baseOutlineVersion: 0 })).toBe("invalid_generation_id")
+    for (const base of [undefined, null, -1, 1.5, "0", Number.MAX_SAFE_INTEGER + 1]) expect([String(base), await gen({ generationId: g, baseOutlineVersion: base })]).toEqual([String(base), "invalid_version"])
+    expect(await gen({ generationId: g, baseOutlineVersion: 0 })).toBe("intern_channel_denied")
+    expect(await failure(outlineApi(f.A, { generationId: "no-such-generation", baseOutlineVersion: 0 }))).toEqual([404, "not_found"])
+
+    const valid = { generationId: g, outlineVersion: 1, outlineSha256: sha, outline: ONE_SECTION, acknowledgedMissingFacts: [] }
+    const approve = async (over: Record<string, unknown>) => (await failure(approveApi(f.intern, { ...valid, ...over })))[1]
+    expect(await approve({ generationId: 5, outlineVersion: 0, outlineSha256: "x", outline: {}, acknowledgedMissingFacts: "x" })).toBe("invalid_generation_id")
+    expect(await approve({ outlineVersion: 0, outlineSha256: "x", outline: {}, acknowledgedMissingFacts: "x" })).toBe("invalid_version")
+    expect(await approve({ outlineSha256: "x", outline: {}, acknowledgedMissingFacts: "x" })).toBe("invalid_outline_hash")
+    expect(await approve({ outline: {}, acknowledgedMissingFacts: "x" })).toBe("invalid_outline")
+    expect(await approve({ acknowledgedMissingFacts: "x" })).toBe("invalid_acknowledgement")
+    for (const v of [undefined, 0, -1, "1", 1.5]) expect([String(v), await approve({ outlineVersion: v })]).toEqual([String(v), "invalid_version"])
+    for (const h of [undefined, sha.toUpperCase(), sha.slice(1), `${sha}0`, "g".repeat(64)]) expect([String(h).slice(0, 8), await approve({ outlineSha256: h })]).toEqual([String(h).slice(0, 8), "invalid_outline_hash"])
+    for (const o of [null, "x", [], { sections: [] , missingFacts: [] }, { ...ONE_SECTION, extra: 1 }]) expect([JSON.stringify(o), await approve({ outline: o })]).toEqual([JSON.stringify(o), "invalid_outline"])
+    for (const a of [undefined, null, {}, [0, 0], [50], [-1], [1.5], ["0"], [null]]) expect([JSON.stringify(a), await approve({ acknowledgedMissingFacts: a })]).toEqual([JSON.stringify(a), "invalid_acknowledgement"])
+    expect(await approve({})).toBe("intern_channel_denied")
+    expect(await approve({ outline: undefined })).toBe("intern_channel_denied")
+    expect(await approve({ acknowledgedMissingFacts: Array.from({ length: 50 }, (_, i) => 49 - i) })).toBe("intern_channel_denied")
+
+    const read = async (data: Record<string, unknown>) => (await failure(getOutlineApi(f.intern, data)))[1]
+    expect(await read({})).toBe("invalid_generation_id")
+    for (const v of ["0", "01", "x", "-1", "1.0", "1234567890", ""]) expect([v, await read({ generationId: g, version: v })]).toEqual([v, "invalid_version"])
+    expect(await read({ generationId: g, version: "1" })).toBe("intern_channel_denied")
+    expect(await docsOf("draft_outlines", f.firmId)).toHaveLength(1)
   })
 })

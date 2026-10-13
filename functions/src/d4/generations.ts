@@ -115,6 +115,44 @@ export function refuseReservedTokens(texts: readonly string[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// The generation clock and its test seam (D19, D23)
+// ---------------------------------------------------------------------------
+
+/**
+ * Test seam only; production code never sets it, and it is inert when `NODE_ENV` is "production". It lives here, beside
+ * the lease test and the view that read its clock, and `generationRun.ts` re-exports it with `d4Now`, so the step
+ * modules and this one share it with no import cycle.
+ * - `wallClock` replaces `Date.now` as the clock of the lease, the pre-call budget, the write deadline and `inProgress`.
+ * - `beforeCall` runs just before `callP1`; a throw from it stands in for `callP1` throwing (D27).
+ * - `beforeOutcomeWrite` runs once before the outcome write's first attempt.
+ * - `outcomeWriteFailures` is a queue: each outcome-write attempt takes the next error from it and throws it instead
+ *   of writing. `lostCommitAnswers` is a queue too: each attempt whose transaction committed takes the next error from
+ *   it and throws it, as if the commit had landed and its answer been lost.
+ * - `failAssembly` makes the assembly transaction fail (Task 4).
+ */
+export const d4GenerationTestSeam: {
+  failAssembly?: boolean
+  outcomeWriteFailures?: Error[]
+  lostCommitAnswers?: Error[]
+  wallClock?: () => number
+  beforeCall?: () => Promise<void>
+  beforeOutcomeWrite?: () => Promise<void>
+} = {}
+
+/** The seam as production sees it: empty. */
+export function generationSeam(): typeof d4GenerationTestSeam {
+  return process.env.NODE_ENV === "production" ? {} : d4GenerationTestSeam
+}
+
+/**
+ * The generation steps' clock, epoch ms: `Date.now()` unless a test sets `wallClock` (D19). Never the router's
+ * `session.now`, which the emulator suites fix to a constant (D23).
+ */
+export function d4Now(): number {
+  return (generationSeam().wallClock ?? Date.now)()
+}
+
+// ---------------------------------------------------------------------------
 // The lease and the view
 // ---------------------------------------------------------------------------
 
@@ -464,7 +502,7 @@ export const getGenerationOp: FirmOperation<GenerationView> = {
     audit.target = `draft_generations/${generationId}`
     const { brief } = await loadGenerationForCaller(caller, generationId, "draft.read")
     await audit.allow()
-    return generationView(generationId, brief, Date.now())
+    return generationView(generationId, brief, d4Now())
   },
 }
 
@@ -493,7 +531,7 @@ export const listGenerationsOp: FirmOperation<Page<GenerationSummary>> = {
     audit.target = `matters/${matterId}`
     await requireMatterAction(caller, "draft.read", matterId)
 
-    const nowMs = Date.now()
+    const nowMs = d4Now()
     const out = await listClearedByUpdatedAt(generations(), caller, matterId, page, (id, row) => generationSummary(id, row, nowMs))
     await audit.allow()
     return out

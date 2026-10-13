@@ -1,5 +1,10 @@
 import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { pseudonymise } from "@/platform/p1/pseudonymiseOutboundPII"
+import { getDocumentType } from "../src/d4/doctypes"
+import { sha256Hex } from "../src/d4/drafts"
+import { OUTLINE_PURPOSE, PROMPT_VERSION, SECTION_PURPOSE, SECTION_WORD_BUDGET, outlinePrompt, sectionPrompt } from "../src/d4/generationPrompt"
+import { D4_ATTEMPT_SLACK_MS, D4_PRECALL_BUDGET_MS, D4_WRITE_DEADLINE_MS, GENERATION_LEASE_MS } from "../src/d4/generationRun"
 import {
   RESERVED_TOKEN,
   generationLabel,
@@ -11,8 +16,23 @@ import {
   refuseReservedTokens,
   sectionId,
 } from "../src/d4/generations"
-import { EMPTY_TEMPLATE_STORE, InMemoryTemplateStore, setTemplateStoreForTests } from "../src/d4/templates"
+import {
+  MAX_OUTPUT_CHARS,
+  MAX_UNSUPPORTED_REFS,
+  advocateText,
+  checkOutlineAnswer,
+  checkSectionAnswer,
+  newAuthorities,
+  outlineSha256,
+  parseOutlineAnswer,
+  validOutline,
+} from "../src/d4/guardrails"
+import { EMPTY_TEMPLATE_STORE, InMemoryTemplateStore, deterministicFirstCheck, setTemplateStoreForTests } from "../src/d4/templates"
+import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { HttpError } from "../src/http/errors"
+import { COMMIT_ATTEMPT_SLACK_MS, COMMIT_DEADLINE_MS } from "../src/p1/gateway"
+import { OPIK_TIMEOUT_MS } from "../src/p1/opik"
+import { TRANSPORT_TIMEOUT_MS } from "../src/p1/transport"
 import type { Caller } from "../src/p5/auth"
 
 /**
@@ -20,8 +40,22 @@ import type { Caller } from "../src/p5/auth"
  * their unit tests here (the prompt, the guardrails, the budget arithmetic).
  */
 
+// The Phase 4b fixtures (P4B-21), as d4.generation.emu.test.ts has them. They are repeated here, not imported: importing
+// that file would run its suites in this one.
 const TYPE = "constitutional_petition_199" // template_cp_199_v1
 const DEED = "sale_deed" // NON_FORUM
+const PERSON = "Ardeshir Testani"
+const INSTITUTION = "Federation of Testlandia through the Secretary, Ministry of Fixtures"
+const CNIC = "99999-9999999-9"
+const PHONE = "0399-9999999"
+const OWN_CITATION = "PLD 2099 SC 101"
+const NEW_CITATION = "2099 SCMR 7"
+const LAND = "Plot 99-T, Block Z, Test Housing Scheme, measuring 999 square yards"
+const FACTS = `The petitioner ${PERSON} (CNIC ${CNIC}, mobile ${PHONE}) challenges the order of the ${INSTITUTION} dated 1 January 2099, relying on ${OWN_CITATION}.`
+
+/** An outline answer: the bare JSON object the model is asked for (D11). */
+const outlineJson = (sections: Array<{ heading: string; purpose: string }>, missingFacts: Array<{ field: string; note: string }> = []): string =>
+  JSON.stringify({ sections, missingFacts })
 
 describe("D4 template port (P4B-9)", () => {
   afterEach(() => {
@@ -41,6 +75,14 @@ describe("D4 template port (P4B-9)", () => {
   it("setTemplateStoreForTests throws when NODE_ENV is production", () => {
     vi.stubEnv("NODE_ENV", "production")
     expect(() => setTemplateStoreForTests(null)).toThrow("setTemplateStoreForTests is test-only")
+  })
+
+  it("deterministicFirstCheck is deterministic when the store holds the type's template and ai otherwise", async () => {
+    const s = new InMemoryTemplateStore().addTemplate(TYPE, "template_cp_199_v1")
+    expect(await deterministicFirstCheck(s, TYPE, "template_cp_199_v1")).toBe("deterministic")
+    expect(await deterministicFirstCheck(s, DEED, "template_sale_deed_v1")).toBe("ai")
+    expect(await deterministicFirstCheck(s, TYPE, "template_other")).toBe("ai")
+    expect(await deterministicFirstCheck(EMPTY_TEMPLATE_STORE, TYPE, "template_cp_199_v1")).toBe("ai")
   })
 })
 
@@ -197,5 +239,264 @@ describe("D4 generation store: the view (P4B-8, D2)", () => {
     expect(summary.lastAttempt).not.toHaveProperty("unsupportedRefs")
     expect(JSON.stringify(summary)).not.toMatch(/The facts|Ardeshir|2099 SCMR/)
     expect(generationSummary("g2", stored({ lastAttempt: null }), 0).lastAttempt).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Task 3: the outline parser, the guardrails, the outline hash, the prompt and the time budget
+// ---------------------------------------------------------------------------
+
+/** A string of `n` characters. */
+const chars = (n: number, c = "x"): string => c.repeat(n)
+/** An outline with one section and no missing facts, `over` laid on top. */
+const outlineOf = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ sections: [{ heading: "H", purpose: "P" }], missingFacts: [], ...over })
+
+describe("D4 outline answer parser (P4B-12 step 2)", () => {
+  // Review Focus 3
+  it("accepts the bare JSON object or exactly one json fence, and nothing else", () => {
+    const j = outlineJson([{ heading: "Facts", purpose: "State the facts." }])
+    for (const ok of [j, `  ${j}\n`, "```json\n" + j + "\n```", "```JSON\n" + j + "\n```"]) expect(parseOutlineAnswer(ok)).not.toBeNull()
+    for (const bad of [`Here is the outline:\n${j}`, `${j}\nHope this helps.`, "```json\n" + j + "\n```\n```json\n" + j + "\n```", "```\n" + j + "\n```", "{}", "not json"]) expect(parseOutlineAnswer(bad)).toBeNull()
+    // What parses is the outline itself, its strings trimmed.
+    expect(parseOutlineAnswer("```json\n" + outlineJson([{ heading: "  Facts ", purpose: " State the facts.\n" }], [{ field: " asAtDate", note: "Not given. " }]) + "\n```")).toEqual({
+      sections: [{ heading: "Facts", purpose: "State the facts." }],
+      missingFacts: [{ field: "asAtDate", note: "Not given." }],
+    })
+    // Prose inside the fence, an empty fence, a fence with text after it, and a JSON value that is not an object.
+    for (const bad of ["```json\nHere: " + j + "\n```", "```json\n\n```", "```json\n" + j + "\n```\nDone.", "[" + j + "]", '"text"', "", "   "]) expect(parseOutlineAnswer(bad)).toBeNull()
+  })
+
+  it("enforces the limits: 1-25 sections, one-line headings of 1-200, purposes of 1-2,000, 0-50 missing facts with one-line fields of 1-100 and notes of 1-500", () => {
+    const section = (heading: string, purpose = "P") => ({ heading, purpose })
+    const missing = (field: string, note = "N") => ({ field, note })
+    const passes: Array<[string, Record<string, unknown>]> = [
+      ["1 section", outlineOf()],
+      ["25 sections", outlineOf({ sections: Array.from({ length: 25 }, (_, i) => section(`H${i}`)) })],
+      ["a heading of 1", outlineOf({ sections: [section("h")] })],
+      ["a heading of 200", outlineOf({ sections: [section(chars(200))] })],
+      ["a purpose of 1", outlineOf({ sections: [section("H", "p")] })],
+      ["a purpose of 2,000", outlineOf({ sections: [section("H", chars(2000))] })],
+      ["a purpose over several lines", outlineOf({ sections: [section("H", "one\ntwo")] })],
+      ["0 missing facts", outlineOf({ missingFacts: [] })],
+      ["50 missing facts", outlineOf({ missingFacts: Array.from({ length: 50 }, (_, i) => missing(`f${i}`)) })],
+      ["a field of 100", outlineOf({ missingFacts: [missing(chars(100))] })],
+      ["a note of 500", outlineOf({ missingFacts: [missing("f", chars(500))] })],
+      ["a heading of 200 once trimmed", outlineOf({ sections: [section(`  ${chars(200)}  `)] })],
+    ]
+    for (const [name, value] of passes) expect([name, validOutline(value) !== null]).toEqual([name, true])
+    const fails: Array<[string, Record<string, unknown>]> = [
+      ["0 sections", outlineOf({ sections: [] })],
+      ["26 sections", outlineOf({ sections: Array.from({ length: 26 }, (_, i) => section(`H${i}`)) })],
+      ["an empty heading", outlineOf({ sections: [section("")] })],
+      ["a blank heading", outlineOf({ sections: [section("   ")] })],
+      ["a heading of 201", outlineOf({ sections: [section(chars(201))] })],
+      ["a heading with a line break", outlineOf({ sections: [section("Fa\ncts")] })],
+      ["a heading with a tab", outlineOf({ sections: [section("Fa\tcts")] })],
+      ["an empty purpose", outlineOf({ sections: [section("H", "")] })],
+      ["a purpose of 2,001", outlineOf({ sections: [section("H", chars(2001))] })],
+      ["51 missing facts", outlineOf({ missingFacts: Array.from({ length: 51 }, (_, i) => missing(`f${i}`)) })],
+      ["an empty field", outlineOf({ missingFacts: [missing("")] })],
+      ["a field of 101", outlineOf({ missingFacts: [missing(chars(101))] })],
+      ["a field with a line break", outlineOf({ missingFacts: [missing("as\nAtDate")] })],
+      ["an empty note", outlineOf({ missingFacts: [missing("f", "")] })],
+      ["a note of 501", outlineOf({ missingFacts: [missing("f", chars(501))] })],
+    ]
+    for (const [name, value] of fails) expect([name, validOutline(value)]).toEqual([name, null])
+    // The parser applies the same limits.
+    expect(parseOutlineAnswer(outlineJson(Array.from({ length: 26 }, (_, i) => section(`H${i}`))))).toBeNull()
+    expect(parseOutlineAnswer(outlineJson([section(chars(201))]))).toBeNull()
+  })
+
+  it("refuses extra keys, a missing missingFacts, and a non-string value", () => {
+    expect(validOutline({ sections: [{ heading: "H", purpose: "P" }], missingFacts: [], extra: 1 })).toBeNull()
+    expect(validOutline({ sections: [{ heading: "H", purpose: "P" }] })).toBeNull()
+    expect(validOutline({ sections: [{ heading: "H", purpose: 7 }], missingFacts: [] })).toBeNull()
+    expect(validOutline({ sections: [{ heading: "H", purpose: "P", note: "x" }], missingFacts: [] })).toBeNull()
+    expect(validOutline({ sections: [{ heading: "H" }], missingFacts: [] })).toBeNull()
+    expect(validOutline({ sections: [{ heading: "H", purpose: "P" }], missingFacts: [{ field: "f" }] })).toBeNull()
+    expect(validOutline({ sections: [{ heading: "H", purpose: "P" }], missingFacts: [{ field: "f", note: "n", extra: "x" }] })).toBeNull()
+    expect(validOutline({ sections: [{ heading: "H", purpose: "P" }], missingFacts: [{ field: 1, note: "n" }] })).toBeNull()
+    expect(validOutline({ sections: "H", missingFacts: [] })).toBeNull()
+    expect(validOutline({ sections: [["H", "P"]], missingFacts: [] })).toBeNull()
+    expect(validOutline({ sections: [null], missingFacts: [] })).toBeNull()
+    expect(validOutline({ sections: [{ heading: "H", purpose: "P" }], missingFacts: {} })).toBeNull()
+    for (const v of [null, undefined, "x", 1, [], [outlineOf()]]) expect(validOutline(v)).toBeNull()
+    // A key that JSON can carry but an object literal cannot: refused as an extra key.
+    expect(validOutline(JSON.parse('{"sections":[{"heading":"H","purpose":"P"}],"missingFacts":[],"__proto__":{}}'))).toBeNull()
+  })
+})
+
+describe("D4 guardrails (P4B-12)", () => {
+  const pseudo = pseudonymise(FACTS, { partyNames: [INSTITUTION, PERSON] })
+  const own = advocateText({ title: "T", facts: FACTS, verbatim: [] })
+  const section = (text: string, o: { heading?: string; truncated?: boolean; ownText?: string; map?: typeof pseudo.map | null } = {}) =>
+    checkSectionAnswer({ text, truncated: o.truncated ?? false, pseudonyms: o.map === null ? undefined : (o.map ?? pseudo.map) }, o.ownText ?? own, o.heading ?? "H")
+
+  it("the checks run in order and the first failure wins: truncated, unparseable, rehydration, size, charset, authority", () => {
+    expect(checkSectionAnswer({ text: "", truncated: true, pseudonyms: pseudo.map }, own, "Grounds")).toMatchObject({ ok: false, reason: "output_truncated" })
+    expect(checkSectionAnswer({ text: "⟦PARTY_9⟧ \u202e 2099 SCMR 7", truncated: false, pseudonyms: pseudo.map }, own, "Grounds")).toMatchObject({ ok: false, reason: "rehydration_failed" })
+    expect(checkSectionAnswer({ text: "\u202e 2099 SCMR 7", truncated: false, pseudonyms: pseudo.map }, own, "Grounds")).toMatchObject({ ok: false, reason: "output_unsupported_characters" })
+    // Each step before the next: empty before rehydration, rehydration before size, size before charset.
+    expect(section("", { map: null })).toMatchObject({ ok: false, reason: "output_unparseable" })
+    expect(section(`${chars(MAX_OUTPUT_CHARS + 1, "a")} ⟦PARTY_9⟧`)).toMatchObject({ ok: false, reason: "rehydration_failed" })
+    expect(section(`${chars(MAX_OUTPUT_CHARS + 1, "a")}\u202e`)).toMatchObject({ ok: false, reason: "output_too_large" })
+    expect(section(`Relies on ${NEW_CITATION}.\u202e`)).toMatchObject({ ok: false, reason: "output_unsupported_characters" })
+    // The outline answer runs the same steps in the same order.
+    const outline = (purpose: string, truncated = false) => checkOutlineAnswer({ text: outlineJson([{ heading: "Facts", purpose }]), truncated, pseudonyms: pseudo.map }, own)
+    expect(outline("p", true)).toMatchObject({ ok: false, reason: "output_truncated" })
+    expect(checkOutlineAnswer({ text: "not json", truncated: false, pseudonyms: pseudo.map }, own)).toMatchObject({ ok: false, reason: "output_unparseable" })
+    expect(outline(`⟦PARTY_9⟧ \u202e ${NEW_CITATION}`)).toMatchObject({ ok: false, reason: "rehydration_failed" })
+    expect(outline(`\u202e ${NEW_CITATION}`)).toMatchObject({ ok: false, reason: "output_unsupported_characters" })
+    expect(outline(`Relies on ${NEW_CITATION}.`)).toEqual({ ok: false, reason: "unsupported_authority", unsupportedRefs: [NEW_CITATION] })
+    expect(outline(`Relies on ${OWN_CITATION}.`)).toMatchObject({ ok: true })
+  })
+
+  // Review Focus 1
+  it("rehydration_failed for any bracket, lossy token or bare token left after re-hydration, a damaged token included", () => {
+    for (const t of ["⟦PARTY_9⟧", "⟦party_1⟧", "⟦PARTY_1 ⟧", "a lone ⟧", "PARTY_1", "CNIC_1", "VERBATIM_2", "[CNIC]", "[PARTY]", "no pseudonyms"])
+      expect([t, checkSectionAnswer({ text: t, truncated: false, pseudonyms: t === "no pseudonyms" ? undefined : pseudo.map }, own, "H").ok]).toEqual([t, false])
+    for (const t of ["⟦PARTY_9⟧", "⟦party_1⟧", "⟦PARTY_1 ⟧", "a lone ⟧", "a lone ⟦", "PARTY_1", "CNIC_1", "VERBATIM_2", "[CNIC]", "[PARTY]", "[PASSPORT]", "no pseudonyms"])
+      expect([t, section(t, { map: t === "no pseudonyms" ? null : undefined })]).toEqual([t, { ok: false, reason: "rehydration_failed", unsupportedRefs: [] }])
+    // A token the map holds comes back as its value; nothing is left.
+    expect(section("⟦PARTY_2⟧ was served; his CNIC is ⟦CNIC_1⟧.")).toEqual({ ok: true, value: `${PERSON} was served; his CNIC is ${CNIC}.` })
+    // An outline is judged string by string: one bad token anywhere refuses the whole answer.
+    expect(checkOutlineAnswer({ text: outlineJson([{ heading: "Facts", purpose: "p" }], [{ field: "f", note: "See PARTY_1." }]), truncated: false, pseudonyms: pseudo.map }, own)).toMatchObject({ ok: false, reason: "rehydration_failed" })
+    expect(checkOutlineAnswer({ text: outlineJson([{ heading: "Facts", purpose: "p" }]), truncated: false }, own)).toMatchObject({ ok: false, reason: "rehydration_failed" })
+  })
+
+  it("output_too_large over 200,000 characters after re-hydration, and not at 200,000", () => {
+    expect(MAX_OUTPUT_CHARS).toBe(200_000)
+    expect(section(chars(200_000, "a"))).toEqual({ ok: true, value: chars(200_000, "a") })
+    // ⟦PARTY_1⟧ is the institution: the text is short of the cap as sent and one over it once re-hydrated.
+    const text = `${chars(200_001 - INSTITUTION.length, "a")}⟦PARTY_1⟧`
+    expect(text.length).toBeLessThan(200_000)
+    expect(section(text)).toMatchObject({ ok: false, reason: "output_too_large" })
+    expect(section(`${chars(200_000 - INSTITUTION.length, "a")}⟦PARTY_1⟧`)).toMatchObject({ ok: true })
+    // For an outline, the total of its strings counts: 21 purposes that each re-hydrate to a 10,000-character verbatim
+    // value make 210,000. The size check comes before the outline's own limits are judged again on the stored strings.
+    const value = chars(10_000, "v")
+    const big = pseudonymise(`${FACTS} ${value}`, { partyNames: [PERSON], verbatim: [value] })
+    const sections = (n: number) => Array.from({ length: n }, (_, i) => ({ heading: `H${i}`, purpose: "⟦VERBATIM_1⟧" }))
+    expect(checkOutlineAnswer({ text: outlineJson(sections(21)), truncated: false, pseudonyms: big.map }, own)).toMatchObject({ ok: false, reason: "output_too_large" })
+    expect(checkOutlineAnswer({ text: outlineJson(sections(19)), truncated: false, pseudonyms: big.map }, own)).toMatchObject({ ok: false, reason: "output_unparseable" })
+    // The largest outline the limits allow is well inside the cap.
+    const many = Array.from({ length: 25 }, (_, i) => ({ heading: `H${i}`, purpose: chars(2000, "a") }))
+    const notes = Array.from({ length: 50 }, (_, i) => ({ field: `f${i}`, note: chars(500, "n") }))
+    const total = many.reduce((n, s) => n + s.heading.length + s.purpose.length, 0) + notes.reduce((n, m) => n + m.field.length + m.note.length, 0)
+    expect(total).toBeLessThan(MAX_OUTPUT_CHARS)
+    expect(checkOutlineAnswer({ text: outlineJson(many, notes), truncated: false, pseudonyms: pseudo.map }, own)).toMatchObject({ ok: true })
+  })
+
+  it("unsupported_authority: a ref not in the advocate's own text, or an UNRECOGNISED suspect, is new; at most 50 are recorded", () => {
+    expect(checkSectionAnswer({ text: `Relies on ${NEW_CITATION}.`, truncated: false, pseudonyms: pseudo.map }, own, "H")).toEqual({ ok: false, reason: "unsupported_authority", unsupportedRefs: [NEW_CITATION] })
+    expect(checkSectionAnswer({ text: `Relies on ${OWN_CITATION}.`, truncated: false, pseudonyms: pseudo.map }, own, "H")).toMatchObject({ ok: true })
+    // 60 distinct refs: every one is new, and 50 are recorded, in order.
+    const sixty = Array.from({ length: 60 }, (_, i) => `2099 SCMR ${i + 1}`)
+    const many = section(`Relies on ${sixty.join("; ")}.`)
+    expect(many).toMatchObject({ ok: false, reason: "unsupported_authority" })
+    expect(MAX_UNSUPPORTED_REFS).toBe(50)
+    expect(many.ok === false && many.unsupportedRefs).toEqual(sixty.slice(0, 50))
+    expect(newAuthorities(`Relies on ${sixty.join("; ")}.`, own)).toEqual(sixty)
+    // A repeated new ref is recorded once.
+    expect(section(`${NEW_CITATION}, and again ${NEW_CITATION}.`)).toEqual({ ok: false, reason: "unsupported_authority", unsupportedRefs: [NEW_CITATION] })
+    // A suspect the strict extractor cannot read is always new, even when the advocate wrote the same text.
+    const suspect = "2099SCMR7"
+    const suspects = newAuthorities(`See ${suspect}.`, advocateText({ title: "T", facts: `See ${suspect}.`, verbatim: [] }))
+    expect(suspects).toHaveLength(1)
+    expect(suspects[0]!.startsWith("UNRECOGNISED: ")).toBe(true)
+    // For a section, refs in the approved outline count as the advocate's.
+    const approved = { sections: [{ heading: "Grounds", purpose: `Rely on ${NEW_CITATION}.` }], missingFacts: [] }
+    const withOutline = advocateText({ title: "T", facts: FACTS, verbatim: [] }, approved)
+    expect(section(`Relies on ${NEW_CITATION}.`, { ownText: withOutline })).toMatchObject({ ok: true })
+    // The title and the verbatim texts are the advocate's too.
+    expect(section(`Relies on ${NEW_CITATION}.`, { ownText: advocateText({ title: `Petition under ${NEW_CITATION}`, facts: "f", verbatim: [] }) })).toMatchObject({ ok: true })
+    expect(section(`Relies on ${NEW_CITATION}.`, { ownText: advocateText({ title: "T", facts: "f", verbatim: [{ field: "reliefSought", text: `As in ${NEW_CITATION}` }] }) })).toMatchObject({ ok: true })
+    expect(advocateText({ title: "T", facts: "F", verbatim: [{ field: "a", text: "V" }] }, { sections: [{ heading: "H", purpose: "P" }], missingFacts: [{ field: "m", note: "N" }] })).toBe(["T", "F", "V", "H", "P", "m", "N"].join("\n"))
+  })
+
+  // Review Focus 5
+  it("an authority the advocate wrote in another form is the advocate's authority", () => {
+    const ownOdd = advocateText({ title: "T", facts: "Relies on P.L.D. 2099 Supreme Court 101.", verbatim: [] })
+    expect(checkSectionAnswer({ text: `As held in ${OWN_CITATION}.`, truncated: false, pseudonyms: pseudo.map }, ownOdd, "H")).toMatchObject({ ok: true })
+    expect(newAuthorities(`As held in ${OWN_CITATION} and in P.L.D. 2099 S.C. 101.`, ownOdd)).toEqual([])
+  })
+
+  // Review Focus 4
+  it("a section whose first line repeats its heading loses that line; a section with nothing else is output_unparseable", () => {
+    expect(checkSectionAnswer({ text: "GROUNDS:\n\nThe order is void.", truncated: false, pseudonyms: pseudo.map }, own, "Grounds")).toEqual({ ok: true, value: "The order is void." })
+    expect(checkSectionAnswer({ text: "Grounds\n\n", truncated: false, pseudonyms: pseudo.map }, own, "Grounds")).toMatchObject({ ok: false, reason: "output_unparseable" })
+    // Only the first line, and only when it is the heading; a heading that names a party is matched once re-hydrated.
+    expect(section("The order is void.\nGrounds", { heading: "Grounds" })).toEqual({ ok: true, value: "The order is void.\nGrounds" })
+    expect(section("Grounds of challenge\nThe order is void.", { heading: "Grounds" })).toEqual({ ok: true, value: "Grounds of challenge\nThe order is void." })
+    expect(section("  grounds :  \n\n\nThe order is void.\n", { heading: "Grounds" })).toEqual({ ok: true, value: "The order is void." })
+    expect(section(`Case of ⟦PARTY_2⟧\nThe order is void.`, { heading: `Case of ${PERSON}` })).toEqual({ ok: true, value: "The order is void." })
+    expect(section("   \n\n ", { heading: "Grounds" })).toMatchObject({ ok: false, reason: "output_unparseable" })
+    // A body that is nothing once the charset rule has normalised it is empty too.
+    expect(section("\u200b", { heading: "Grounds" })).toMatchObject({ ok: false, reason: "output_unparseable" })
+  })
+
+  it("an outline answer is re-hydrated string by string and stored in the charset rule's normalised form", () => {
+    const r = checkOutlineAnswer({ text: outlineJson([{ heading: "Facts", purpose: "The case of ⟦PARTY_2⟧ against ⟦PARTY_1⟧." }]), truncated: false, pseudonyms: pseudo.map }, own)
+    expect(r).toEqual({ ok: true, value: { sections: [{ heading: "Facts", purpose: `The case of ${PERSON} against ${INSTITUTION}.` }], missingFacts: [] } })
+    // Normalised: NFC, CRLF to LF and an ASCII dash, in every string.
+    const n = checkOutlineAnswer({ text: outlineJson([{ heading: "Cafe\u0301", purpose: "Line one\r\nline two \u2013 end" }], [{ field: "na\u0308me", note: "Note \u2014 x" }]), truncated: false, pseudonyms: pseudo.map }, own)
+    expect(n).toEqual({ ok: true, value: { sections: [{ heading: "Caf\u00e9", purpose: "Line one\nline two - end" }], missingFacts: [{ field: "n\u00e4me", note: "Note - x" }] } })
+    // A string that breaks a limit once re-hydrated is refused, never stored outside the limits: a heading over 200
+    // characters, or one that a verbatim value turns into two lines.
+    const long = checkOutlineAnswer({ text: outlineJson([{ heading: `${chars(190, "h")} ⟦PARTY_1⟧`, purpose: "p" }]), truncated: false, pseudonyms: pseudo.map }, own)
+    expect(long).toMatchObject({ ok: false, reason: "output_unparseable" })
+    const verbatim = pseudonymise(`${FACTS} ${LAND}\nsecond line`, { partyNames: [PERSON], verbatim: [`${LAND}\nsecond line`] })
+    const twoLines = checkOutlineAnswer({ text: outlineJson([{ heading: "Land: ⟦VERBATIM_1⟧", purpose: "p" }]), truncated: false, pseudonyms: verbatim.map }, own)
+    expect(twoLines).toMatchObject({ ok: false, reason: "output_unparseable" })
+  })
+})
+
+describe("D4 outline hash (P4B-10)", () => {
+  it("outlineSha256 is the SHA-256 of JSON.stringify({ sections: [{ heading, purpose }], missingFacts: [{ field, note }] }), keys in that order", () => {
+    const o = { missingFacts: [{ note: "n", field: "f" }], sections: [{ purpose: "p", heading: "h" }] }
+    expect(outlineSha256(o)).toBe(sha256Hex('{"sections":[{"heading":"h","purpose":"p"}],"missingFacts":[{"field":"f","note":"n"}]}'))
+    expect(outlineSha256({ sections: [{ heading: "h", purpose: "p" }], missingFacts: [] })).toMatch(/^[0-9a-f]{64}$/)
+    expect(outlineSha256({ sections: [{ heading: "h", purpose: "p" }], missingFacts: [] })).not.toBe(outlineSha256({ sections: [{ heading: "h", purpose: "q" }], missingFacts: [] }))
+  })
+})
+
+describe("D4 generation prompt (P4B-4, prompt contract)", () => {
+  it("the outline prompt carries the fixed instructions, the type's name, firstGroundRule and requiredFields, the verbatim fields as <field>: <text>, and the facts; never a label, a matter id or a party list", () => {
+    const p = outlinePrompt({ type: getDocumentType(DEED)!, verbatim: [{ field: "exactLandDescription", text: LAND }], facts: FACTS })
+    for (const s of [getDocumentType(DEED)!.name, getDocumentType(DEED)!.firstGroundRule, ...getDocumentType(DEED)!.requiredFields, `exactLandDescription: ${LAND}`, FACTS, '"sections"', '"missingFacts"', "⟦"]) expect(p).toContain(s)
+    for (const s of ["classification", "matterId", "partyNames"]) expect(p).not.toContain(s) // the signature takes no label, id or party list; the emulator tests 1 and "classification" check the sent bodies
+    expect(outlinePrompt({ type: getDocumentType(DEED)!, verbatim: [], facts: FACTS })).toBe(outlinePrompt({ type: getDocumentType(DEED)!, verbatim: [], facts: FACTS }))
+    // The fixed text holds no well-formed token, which P1 would treat as one it placed.
+    expect(p).not.toMatch(/⟦(?:VERBATIM|CNIC|PHONE|EMAIL|IBAN|NTN|PASSPORT|PARTY)_\d+⟧/)
+  })
+
+  it("the section prompt carries section i of k, the numbered approved outline and section i − 1's text", () => {
+    const p = sectionPrompt({ type: getDocumentType(TYPE)!, verbatim: [], facts: FACTS, outline: { sections: [{ heading: "Facts", purpose: "pf" }, { heading: "Grounds", purpose: "pg" }], missingFacts: [] }, section: 2, previousText: "PREVIOUS SECTION TEXT" })
+    for (const s of ["2 of 2", "1. Facts", "2. Grounds", "PREVIOUS SECTION TEXT", getDocumentType(TYPE)!.firstGroundRule]) expect(p).toContain(s)
+    for (const s of [getDocumentType(TYPE)!.name, "1. Facts: pf", "2. Grounds: pg", FACTS]) expect(p).toContain(s)
+    for (const s of ["classification", "matterId", "partyNames"]) expect(p).not.toContain(s)
+    // Section 1 has no previous section.
+    const first = sectionPrompt({ type: getDocumentType(DEED)!, verbatim: [{ field: "exactLandDescription", text: LAND }], facts: FACTS, outline: { sections: [{ heading: "Recitals", purpose: "pr" }], missingFacts: [] }, section: 1, previousText: null })
+    for (const s of ["1 of 1", "1. Recitals: pr", `exactLandDescription: ${LAND}`, getDocumentType(DEED)!.firstGroundRule]) expect(first).toContain(s)
+    expect(first).not.toContain("PREVIOUS SECTION TEXT")
+  })
+
+  it("both prompts carry the section word budget: the section prompt caps the body at about 1,000 words and the outline prompt asks for longer parts to be split (D25)", () => {
+    expect(SECTION_WORD_BUDGET).toBe(1_000)
+    expect(sectionPrompt({ type: getDocumentType(TYPE)!, verbatim: [], facts: FACTS, outline: { sections: [{ heading: "Facts", purpose: "pf" }], missingFacts: [] }, section: 1, previousText: null })).toContain("1,000 words")
+    expect(outlinePrompt({ type: getDocumentType(TYPE)!, verbatim: [], facts: FACTS })).toContain("1,000 words")
+  })
+
+  it("PROMPT_VERSION is 4b.1 and the purposes are draft-outline and draft-section", () => {
+    expect([PROMPT_VERSION, OUTLINE_PURPOSE, SECTION_PURPOSE]).toEqual(["4b.1", "draft-outline", "draft-section"])
+  })
+})
+
+describe("D4 generation time budget (P4B-17)", () => {
+  it("P1's 102 s worst case, the 5 s pre-call budget and the 10 s write deadline make 117 s, inside the 120 s timeout; 4 s of the write deadline is the in-flight slack; the 180 s lease outlives the timeout", () => {
+    expect(TRANSPORT_TIMEOUT_MS + OPIK_TIMEOUT_MS + COMMIT_DEADLINE_MS + COMMIT_ATTEMPT_SLACK_MS).toBe(102_000)
+    expect([D4_PRECALL_BUDGET_MS, D4_WRITE_DEADLINE_MS, D4_ATTEMPT_SLACK_MS, GENERATION_LEASE_MS]).toEqual([5_000, 10_000, 4_000, 180_000])
+    expect(102_000 + D4_PRECALL_BUDGET_MS + D4_WRITE_DEADLINE_MS).toBe(117_000); expect(117_000).toBeLessThan(FUNCTION_TIMEOUT_SECONDS * 1000)
+    expect(GENERATION_LEASE_MS).toBeGreaterThan(FUNCTION_TIMEOUT_SECONDS * 1000)
   })
 })

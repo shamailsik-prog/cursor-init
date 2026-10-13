@@ -152,7 +152,7 @@ function strictest(labels: Classification[]): Classification {
  * Every `name` and `names` entry of this firm's `matter_parties` rows for the matter, plus the supplied names,
  * de-duplicated. Longest first, so "Ali Raza Khan" is masked whole before "Ali Raza" can leave "Khan" behind.
  */
-async function partyNamesFor(firmId: string, matterId: string, supplied: string[]): Promise<string[]> {
+export async function partyNamesFor(firmId: string, matterId: string, supplied: string[]): Promise<string[]> {
   const rows = await adminDb().collection("matter_parties").where("firmId", "==", firmId).where("matterId", "==", matterId).get()
   const names = new Set<string>()
   const add = (value: unknown) => {

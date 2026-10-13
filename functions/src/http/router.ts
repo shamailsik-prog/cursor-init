@@ -26,6 +26,7 @@ import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, s
 import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDraftVersionOp, saveDraftVersionOp } from "../d4/drafts"
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
 import { getGenerationOp, listGenerationsOp, startDraftOp } from "../d4/generations"
+import { approveOutlineOp, generateOutlineOp, getOutlineOp } from "../d4/outlineOps"
 import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
@@ -142,10 +143,14 @@ export const ROUTES: readonly Route[] = [
   get(`${D4_DRAFTING}/listDraftVersions`, listDraftVersionsOp),
   post(`${D4_DRAFTING}/overrideGate`, overrideGateOp),
   post(`${D4_DRAFTING}/approveDraft`, approveDraftOp),
-  // Phase 4b (P4B-1): draft generation. The generation store's entry routes; the P1 steps are added by the tasks that build them.
+  // Phase 4b (P4B-1): draft generation. The generation store's entry routes, then the outline steps (generateOutline is
+  // a P1 route, kind p1); generateDraft is added by the task that builds it.
   post(`${D4_DRAFTING}/startDraft`, startDraftOp),
   get(`${D4_DRAFTING}/getGeneration`, getGenerationOp),
   get(`${D4_DRAFTING}/listGenerations`, listGenerationsOp),
+  post(`${D4_DRAFTING}/generateOutline`, generateOutlineOp),
+  get(`${D4_DRAFTING}/getOutline`, getOutlineOp),
+  post(`${D4_DRAFTING}/approveOutline`, approveOutlineOp),
   get(`${D4_INTELLIGENCE}/listDocumentTypes`, listDocumentTypesOp),
   get(`${D4_INTELLIGENCE}/getTypeProfile`, getTypeProfileOp),
   post(`${D4_INTELLIGENCE}/gateDraft`, gateDraftOp),

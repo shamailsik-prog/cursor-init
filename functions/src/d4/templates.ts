@@ -51,3 +51,12 @@ export function setTemplateStoreForTests(s: TemplateStore | null): void {
 export function activeTemplateStore(): TemplateStore {
   return testStore ?? EMPTY_TEMPLATE_STORE
 }
+
+/**
+ * The deterministic-first check (P4B-9; L5495-5499): `"deterministic"` when `store` holds the type's template, so the
+ * step must skip the model entirely (L5497), and `"ai"` otherwise. It runs before every P1 call of a generation step.
+ * Until the templates are built (O-80) a step that finds one answers 501 `deterministic_not_built` with no call.
+ */
+export async function deterministicFirstCheck(store: TemplateStore, documentTypeId: string, templateId: string): Promise<"ai" | "deterministic"> {
+  return (await store.findTemplate(documentTypeId, templateId)) === null ? "ai" : "deterministic"
+}

@@ -31,6 +31,9 @@ const D4_GENERATION_ROUTES = [
   "POST /api/d4/drafting/startDraft general",
   "GET /api/d4/drafting/getGeneration general",
   "GET /api/d4/drafting/listGenerations general",
+  "POST /api/d4/drafting/generateOutline p1",
+  "GET /api/d4/drafting/getOutline general",
+  "POST /api/d4/drafting/approveOutline general",
 ]
 
 /** The last path segment of a "METHOD /path kind" route line. */

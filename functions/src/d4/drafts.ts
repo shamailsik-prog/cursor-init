@@ -225,7 +225,7 @@ export function parseVersionNumber(value: unknown): number {
 }
 
 /** A version number in a query string: 1 to 9 digits, no sign, no leading zero (400 `invalid_version`). */
-function parseVersionParam(value: unknown): number {
+export function parseVersionParam(value: unknown): number {
   if (typeof value !== "string" || !/^[1-9]\d{0,8}$/.test(value)) throw badRequest("invalid_version")
   return Number(value)
 }
