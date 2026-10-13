@@ -1,0 +1,9 @@
+# Pre-fix F30 shape; check_compose_policy.py must reject this.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment: {POSTGRES_USER: legal, POSTGRES_PASSWORD: legal}
+    ports: ["5432:5432"]
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
