@@ -11,6 +11,7 @@ export const BodySchema = z.discriminatedUnion("action", [
     matterId: idField.nullable().optional(),
     contentBase64: base64Field,
     sourceChannel: z.enum(["web", "team_portal", "whatsapp", "bulk"]),
+    mimeType: z.string().min(1).max(256).optional(),
     // Optional: an unlabelled upload defaults to privileged (L17.3), floored at the matter.
     classification: classificationField.optional(),
   }),
@@ -20,6 +21,6 @@ export const DOCUMENTS_SURFACE = defineSurface({
   views: [],
   actions: Object.keys(bodyFieldsOf(BodySchema)),
   bodyFields: bodyFieldsOf(BodySchema),
-  queryParams: ["userId", "matterId", "limit", "cursor", "actorId", "firmId"],
+  queryParams: ["userId", "matterId", "limit", "cursor", "actorId", "firmId", "docId", "includeContent"],
   headers: SESSION_HEADERS,
 })

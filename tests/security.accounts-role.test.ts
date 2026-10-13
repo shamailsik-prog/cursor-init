@@ -11,7 +11,7 @@ import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/run
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
-function seed() {
+async function seed() {
   const store = getRuntimeStore()
   store.users.set("accounts_a", {
     id: "accounts_a",
@@ -28,21 +28,23 @@ function seed() {
   })
   addMember(store, matter.id, "partner_a", "firmA")
   addMember(store, matter.id, "accounts_a", "firmA")
-  uploadDocument(store, {
+  await uploadDocument(store, {
     firmId: "firmA",
     matterId: matter.id,
     bytes: Buffer.from("%PDF-matter%"),
     sourceChannel: "web",
     classification: "internal",
     idempotencyKey: "k1",
+      uploadedBy: "partner_a",
   })
-  uploadDocument(store, {
+  await uploadDocument(store, {
     firmId: "firmA",
     matterId: null,
     bytes: Buffer.from("%PDF-loose%"),
     sourceChannel: "web",
     classification: "confidential",
     idempotencyKey: "k2",
+      uploadedBy: "partner_a",
   })
   return { store, matterId: matter.id }
 }
@@ -51,8 +53,8 @@ beforeEach(() => resetRuntimeStoreForTests())
 afterEach(() => resetRuntimeStoreForTests())
 
 describe("accounts role is register-only (L17.6 #41)", () => {
-  it("checkPermission denies accounts every matter action, even as a member; allows the intimation register", () => {
-    const { store, matterId } = seed()
+  it("checkPermission denies accounts every matter action, even as a member; allows the intimation register", async () => {
+    const { store, matterId } = await seed()
     for (const action of ["draft", "research", "committee_brain", "read", "list_matters"]) {
       const decision = checkPermission(store, "accounts_a", action, action === "list_matters" ? undefined : matterId)
       expect(decision).toMatchObject({ allow: false, reason: "accounts-register-only" })
@@ -61,7 +63,7 @@ describe("accounts role is register-only (L17.6 #41)", () => {
   })
 
   it("documents API: accounts can neither list matter / loose-vault documents nor ingest", async () => {
-    const { matterId } = seed()
+    const { matterId } = await seed()
     const list = await documentsGet(
       new Request(`http://127.0.0.1/api/d1/documents?userId=accounts_a&matterId=${matterId}`)
     )
@@ -90,7 +92,7 @@ describe("accounts role is register-only (L17.6 #41)", () => {
   })
 
   it("matters, clients and drafts reads are denied to accounts", async () => {
-    const { matterId } = seed()
+    const { matterId } = await seed()
     const matters = await mattersGet(new Request("http://127.0.0.1/api/d1/matters?userId=accounts_a"))
     expect(matters.status).toBe(403)
     const clients = await clientsGet(new Request("http://127.0.0.1/api/d1/clients?userId=accounts_a"))

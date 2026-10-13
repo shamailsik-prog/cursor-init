@@ -25,24 +25,26 @@ import { requestTranslation } from "@/platform/p1/translate"
 import { setTransportForTests } from "@/platform/p1/internalAICaller"
 
 describe("G-1 spine hardening", () => {
-  it("same-hash reuse inherits the higher classification and does not add a second OCR job", () => {
+  it("same-hash reuse inherits the higher classification and does not add a second OCR job", async () => {
     const store = newStore()
     const bytes = Buffer.from("%PDF-same-hash-class%")
-    const first = uploadDocument(store, {
+    const first = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes,
       sourceChannel: "web",
       classification: "internal",
       idempotencyKey: "11111111-1111-4111-8111-111111111111",
+      uploadedBy: "partner_a",
     })
-    const second = uploadDocument(store, {
+    const second = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes,
       sourceChannel: "bulk",
       classification: "privileged",
       idempotencyKey: "22222222-2222-4222-8222-222222222222",
+      uploadedBy: "partner_a",
     })
     expect(second.reused).toBe(true)
     expect(second.docId).toBe(first.docId)
@@ -51,29 +53,31 @@ describe("G-1 spine hardening", () => {
     expect(ocrJobsFor(store, first.docId)[0]?.classification).toBe("privileged")
   })
 
-  it("same-hash reuse never downgrades classification", () => {
+  it("same-hash reuse never downgrades classification", async () => {
     const store = newStore()
     const bytes = Buffer.from("%PDF-no-downgrade%")
-    const first = uploadDocument(store, {
+    const first = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes,
       sourceChannel: "web",
       classification: "privileged",
       idempotencyKey: "11111111-1111-4111-8111-111111111111",
+      uploadedBy: "partner_a",
     })
-    uploadDocument(store, {
+    await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes,
       sourceChannel: "bulk",
       classification: "internal",
       idempotencyKey: "22222222-2222-4222-8222-222222222222",
+      uploadedBy: "partner_a",
     })
     expect(store.documents.get(first.docId)?.classification).toBe("privileged")
   })
 
-  it("intern cannot downgrade by passing a fake reason into setClassification", () => {
+  it("intern cannot downgrade by passing a fake reason into setClassification", async () => {
     const store = newStore()
     seedUser(store, {
       id: "intern1",
@@ -81,13 +85,14 @@ describe("G-1 spine hardening", () => {
       role: "intern",
       clearanceLevel: "confidential",
     })
-    const up = uploadDocument(store, {
+    const up = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes: Buffer.from("privileged-memo"),
       sourceChannel: "web",
       classification: "privileged",
       idempotencyKey: "44444444-4444-4444-8444-444444444444",
+      uploadedBy: "partner_a",
     })
     expect(() =>
       setClassification(
@@ -101,7 +106,7 @@ describe("G-1 spine hardening", () => {
     expect(store.documents.get(up.docId)?.classification).toBe("privileged")
   })
 
-  it("partner declassify still succeeds after the partner-only check", () => {
+  it("partner declassify still succeeds after the partner-only check", async () => {
     const store = newStore()
     seedUser(store, {
       id: "partner1",
@@ -109,13 +114,14 @@ describe("G-1 spine hardening", () => {
       role: "partner",
       clearanceLevel: "privileged-restricted",
     })
-    const up = uploadDocument(store, {
+    const up = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes: Buffer.from("privileged-memo-2"),
       sourceChannel: "web",
       classification: "privileged",
       idempotencyKey: "55555555-5555-4555-8555-555555555555",
+      uploadedBy: "partner_a",
     })
     declassify(store, up.docId, "internal", "partner1", "Client waived for filing")
     expect(store.documents.get(up.docId)?.classification).toBe("internal")
@@ -210,9 +216,9 @@ describe("G-1 spine hardening", () => {
     expect(store.members.size).toBe(0)
   })
 
-  it("refuses unknown classification on upload instead of storing it", () => {
+  it("refuses unknown classification on upload instead of storing it", async () => {
     const store = newStore()
-    expect(() =>
+    await expect(
       uploadDocument(store, {
         firmId: "firmA",
         matterId: null,
@@ -220,8 +226,9 @@ describe("G-1 spine hardening", () => {
         sourceChannel: "web",
         classification: "super-secret" as never,
         idempotencyKey: "11111111-1111-4111-8111-111111111111",
+        uploadedBy: "partner_a",
       })
-    ).toThrow(/classification/)
+    ).rejects.toThrow(/classification/)
   })
 
   it("search refuses embeddings whose vector length is not 1536", () => {
@@ -312,7 +319,7 @@ describe("G-1 spine hardening", () => {
     ).toThrow(/classification/)
   })
 
-  it("setClassification refuses an unknown next rank instead of storing it", () => {
+  it("setClassification refuses an unknown next rank instead of storing it", async () => {
     const store = newStore()
     seedUser(store, {
       id: "partner1",
@@ -320,13 +327,14 @@ describe("G-1 spine hardening", () => {
       role: "partner",
       clearanceLevel: "privileged-restricted",
     })
-    const up = uploadDocument(store, {
+    const up = await uploadDocument(store, {
       firmId: "firmA",
       matterId: null,
       bytes: Buffer.from("memo"),
       sourceChannel: "web",
       classification: "internal",
       idempotencyKey: "66666666-6666-4666-8666-666666666666",
+      uploadedBy: "partner_a",
     })
     expect(() =>
       setClassification(store, up.docId, "super-secret" as never, "partner1")
