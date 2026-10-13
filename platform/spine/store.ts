@@ -64,8 +64,10 @@ export type DocumentRecord = {
   byteSize: number
   mimeType: string
   objectVersion: number
-  /** User id of the uploader (ownership for audit and access scope). */
+  /** User id of the uploader (ownership for audit and scope). */
   uploadedBy: string
+  /** Whether encrypted object bytes are known to be retrievable. */
+  objectBytesStatus: "available" | "missing"
 }
 
 export type Job = {

@@ -48,12 +48,13 @@ function doc(id: string, matterId: string | null, classification: Classification
     contentHash: id,
     sourceChannel: "web",
     classification,
-    storagePath: `r2://${firmId}/documents/${id}/v1`,
+    storagePath: `fs://${firmId}/documents/${id}/v1`,
     isImmutable: false,
     byteSize: 0,
     mimeType: "application/octet-stream",
     objectVersion: 1,
     uploadedBy: "partner_a",
+    objectBytesStatus: "available",
   }
 }
 

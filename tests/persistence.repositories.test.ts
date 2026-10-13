@@ -3495,12 +3495,13 @@ describe("Firestore repository adapters", () => {
         contentHash: "hash-1",
         sourceChannel: "web",
         classification: "internal",
-        storagePath: "r2://firmA/documents/doc_1/v1",
+        storagePath: "fs://firmA/documents/doc_1/v1",
         isImmutable: false,
         byteSize: 0,
         mimeType: "application/octet-stream",
         objectVersion: 1,
         uploadedBy: "partner_a",
+        objectBytesStatus: "available",
       })
       const doc = await repos.documents.get("doc_1")
       expect(doc?.contentHash).toBe("hash-1")

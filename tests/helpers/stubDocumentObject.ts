@@ -10,14 +10,20 @@ export function stubDocumentObject(
   core: DocumentCore,
   overrides: Partial<DocumentRecord> = {}
 ): DocumentRecord {
+  const storagePath =
+    overrides.storagePath ??
+    (overrides.objectBytesStatus === "missing" ? "" : `fs://${core.firmId}/documents/${core.id}/v1`)
+  const objectBytesStatus =
+    overrides.objectBytesStatus ?? (storagePath ? "available" : "missing")
   return {
-    storagePath: overrides.storagePath ?? `r2://${core.firmId}/documents/${core.id}/v1`,
+    ...core,
+    ...overrides,
+    storagePath,
     isImmutable: overrides.isImmutable ?? false,
     byteSize: overrides.byteSize ?? 0,
     mimeType: overrides.mimeType ?? "application/octet-stream",
     objectVersion: overrides.objectVersion ?? 1,
     uploadedBy: overrides.uploadedBy ?? "partner_a",
-    ...core,
-    ...overrides,
+    objectBytesStatus,
   }
 }

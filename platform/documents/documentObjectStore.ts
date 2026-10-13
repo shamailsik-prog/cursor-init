@@ -1,12 +1,16 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
+import { copyFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import path from "node:path"
+import type { SpineStore } from "@/platform/spine/store"
 
 const OBJECT_FORMAT_VERSION = 1
 const NONCE_BYTES = 12
 const TAG_BYTES = 16
+const STORAGE_SCHEME = "fs://"
+const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/
 
 export type DocumentObjectPutInput = {
+  store: SpineStore
   firmId: string
   docId: string
   bytes: Buffer
@@ -21,20 +25,50 @@ export type DocumentObjectPutResult = {
   mimeType: string
 }
 
+export class DocumentObjectConfigurationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "DocumentObjectConfigurationError"
+  }
+}
+
 function encryptionKey(): Buffer {
   const raw = process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY?.trim()
   if (!raw) {
-    throw new Error("SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY is not set")
+    throw new DocumentObjectConfigurationError("SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY is not set")
   }
   const key = Buffer.from(raw, "hex")
   if (key.length !== 32) {
-    throw new Error("SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY must be 64 hex characters (32 bytes)")
+    throw new DocumentObjectConfigurationError(
+      "SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
+    )
   }
   return key
 }
 
+export function assertDocumentObjectIngestAllowed(): void {
+  if (process.env.NODE_ENV !== "production") return
+  if (!process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY?.trim()) {
+    throw new DocumentObjectConfigurationError(
+      "document object encryption key is required in production before ingest is accepted"
+    )
+  }
+  if (!process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) {
+    throw new DocumentObjectConfigurationError(
+      "SIKANDER_DOCUMENT_OBJECT_ROOT is required in production before ingest is accepted"
+    )
+  }
+}
+
+export function validateDocumentObjectIdentity(firmId: string, docId: string): void {
+  if (!SAFE_SEGMENT.test(firmId) || !SAFE_SEGMENT.test(docId)) {
+    throw new Error("document object identity failed path safety validation")
+  }
+}
+
 export function buildDocumentStoragePath(firmId: string, docId: string, objectVersion: number): string {
-  return `r2://${firmId}/documents/${docId}/v${objectVersion}`
+  validateDocumentObjectIdentity(firmId, docId)
+  return `${STORAGE_SCHEME}${firmId}/documents/${docId}/v${objectVersion}`
 }
 
 function encryptPlaintext(plaintext: Buffer): Buffer {
@@ -43,12 +77,7 @@ function encryptPlaintext(plaintext: Buffer): Buffer {
   const cipher = createCipheriv("aes-256-gcm", key, nonce)
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()])
   const tag = cipher.getAuthTag()
-  return Buffer.concat([
-    Buffer.from([OBJECT_FORMAT_VERSION]),
-    nonce,
-    ciphertext,
-    tag,
-  ])
+  return Buffer.concat([Buffer.from([OBJECT_FORMAT_VERSION]), nonce, ciphertext, tag])
 }
 
 function decryptPayload(payload: Buffer): Buffer {
@@ -68,12 +97,13 @@ function decryptPayload(payload: Buffer): Buffer {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()])
 }
 
-function digestFor(firmId: string, bytes: Buffer): string {
-  return createHash("sha256").update(firmId).update(bytes).digest("hex")
-}
-
-function assertExpectedHash(firmId: string, bytes: Buffer, expectedContentHash: string): void {
-  const actual = digestFor(firmId, bytes)
+function assertExpectedHash(
+  store: SpineStore,
+  firmId: string,
+  bytes: Buffer,
+  expectedContentHash: string
+): void {
+  const actual = store.hashKey(firmId, bytes)
   if (actual !== expectedContentHash) {
     throw new Error("document object integrity check failed: content hash mismatch")
   }
@@ -83,30 +113,49 @@ const memoryObjects = new Map<string, Buffer>()
 
 function useMemoryBackend(): boolean {
   if (process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) return false
+  if (process.env.NODE_ENV === "production") return false
   return process.env.VITEST === "true" || process.env.NODE_ENV === "test"
 }
 
 function objectRoot(): string {
   const root = process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()
   if (!root) {
-    throw new Error("SIKANDER_DOCUMENT_OBJECT_ROOT is not set")
+    throw new DocumentObjectConfigurationError("SIKANDER_DOCUMENT_OBJECT_ROOT is not set")
   }
-  return root
+  return path.resolve(root)
 }
 
-function filesystemPathFor(storagePath: string): string {
-  const withoutScheme = storagePath.replace(/^r2:\/\//, "")
-  return path.join(objectRoot(), withoutScheme + ".enc")
+export function filesystemPathForStoragePath(storagePath: string): string {
+  if (!storagePath.startsWith(STORAGE_SCHEME)) {
+    throw new Error("document storagePath must use fs:// scheme")
+  }
+  const relative = storagePath.slice(STORAGE_SCHEME.length)
+  const segments = relative.split("/").filter(Boolean)
+  for (const segment of segments) {
+    if (!SAFE_SEGMENT.test(segment) && !/^v[0-9]+$/.test(segment)) {
+      throw new Error("document object path segment failed safety validation")
+    }
+  }
+  const root = objectRoot()
+  const filePath = path.resolve(root, ...segments) + ".enc"
+  const relativeToRoot = path.relative(root, filePath)
+  if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
+    throw new Error("document object path escapes storage root")
+  }
+  return filePath
 }
 
 async function writePayload(storagePath: string, payload: Buffer): Promise<void> {
   if (useMemoryBackend()) {
+    if (memoryObjects.has(storagePath)) {
+      throw new Error("document object already exists (immutable)")
+    }
     memoryObjects.set(storagePath, payload)
     return
   }
-  const filePath = filesystemPathFor(storagePath)
+  const filePath = filesystemPathForStoragePath(storagePath)
   await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, payload)
+  await writeFile(filePath, payload, { flag: "wx" })
 }
 
 async function readPayload(storagePath: string): Promise<Buffer> {
@@ -115,20 +164,34 @@ async function readPayload(storagePath: string): Promise<Buffer> {
     if (!payload) throw new Error(`document object not found: ${storagePath}`)
     return payload
   }
-  return readFile(filesystemPathFor(storagePath))
+  return readFile(filesystemPathForStoragePath(storagePath))
+}
+
+export async function deleteDocumentObject(storagePath: string): Promise<void> {
+  if (useMemoryBackend()) {
+    memoryObjects.delete(storagePath)
+    return
+  }
+  try {
+    await unlink(filesystemPathForStoragePath(storagePath))
+  } catch {
+    // best-effort rollback
+  }
 }
 
 export async function putImmutableDocumentObject(
   input: DocumentObjectPutInput
 ): Promise<DocumentObjectPutResult> {
+  validateDocumentObjectIdentity(input.firmId, input.docId)
   const objectVersion = 1
   const storagePath = buildDocumentStoragePath(input.firmId, input.docId, objectVersion)
-  assertExpectedHash(input.firmId, input.bytes, input.contentHash)
+  assertExpectedHash(input.store, input.firmId, input.bytes, input.contentHash)
   const payload = encryptPlaintext(input.bytes)
   await writePayload(storagePath, payload)
   const roundTrip = decryptPayload(await readPayload(storagePath))
-  assertExpectedHash(input.firmId, roundTrip, input.contentHash)
+  assertExpectedHash(input.store, input.firmId, roundTrip, input.contentHash)
   if (!roundTrip.equals(input.bytes)) {
+    await deleteDocumentObject(storagePath)
     throw new Error("document object round-trip verification failed")
   }
   return {
@@ -140,13 +203,34 @@ export async function putImmutableDocumentObject(
 }
 
 export async function getImmutableDocumentObject(
+  store: SpineStore,
   firmId: string,
   storagePath: string,
   expectedContentHash: string
 ): Promise<Buffer> {
   const plaintext = decryptPayload(await readPayload(storagePath))
-  assertExpectedHash(firmId, plaintext, expectedContentHash)
+  assertExpectedHash(store, firmId, plaintext, expectedContentHash)
   return plaintext
+}
+
+export async function backupDocumentObjectFile(storagePath: string, backupFilePath: string): Promise<void> {
+  const payload = await readPayload(storagePath)
+  await mkdir(path.dirname(path.resolve(backupFilePath)), { recursive: true })
+  await writeFile(path.resolve(backupFilePath), payload)
+}
+
+export async function restoreDocumentObjectFile(
+  storagePath: string,
+  backupFilePath: string
+): Promise<void> {
+  const payload = await readFile(path.resolve(backupFilePath))
+  if (useMemoryBackend()) {
+    memoryObjects.set(storagePath, payload)
+    return
+  }
+  const filePath = filesystemPathForStoragePath(storagePath)
+  await mkdir(path.dirname(filePath), { recursive: true })
+  await writeFile(filePath, payload, { flag: "wx" })
 }
 
 export function resetDocumentObjectStoreForTests(): void {
