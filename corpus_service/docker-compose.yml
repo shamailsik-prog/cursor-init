@@ -1,12 +1,18 @@
+# Production-safe compose (audit F30). Data stores are NOT published on host interfaces and sit
+# on an internal-only network. All credentials are required and have no defaults: compose refuses
+# to start if POSTGRES_PASSWORD or REDIS_PASSWORD is unset. Policy enforced by
+# ci_gates/check_compose_policy.py and proven end to end in .github/workflows/corpus-compose-policy.yml.
 services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      # Bind to loopback by default; put a TLS reverse proxy in front. Override API_BIND only deliberately.
+      - "${API_BIND:-127.0.0.1}:8000:8000"
     env_file: .env
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state
+    networks: [edge, data]
     depends_on:
       postgres:
         condition: service_healthy
@@ -20,6 +26,7 @@ services:
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state
+    networks: [edge, data]
     depends_on: [postgres, redis]
     command: python -m scraper.workers.harvester
     environment:
@@ -32,6 +39,7 @@ services:
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state
+    networks: [edge, data]
     depends_on: [postgres, redis]
     command: python -m scraper.workers.harvester
     environment:
@@ -44,6 +52,7 @@ services:
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state
+    networks: [edge, data]
     depends_on: [postgres, redis]
     command: celery -A scraper.tasks.celery_app worker -Q celery,embeddings --loglevel=INFO
     restart: unless-stopped
@@ -51,6 +60,7 @@ services:
   celery-beat:
     build: .
     env_file: .env
+    networks: [data]
     depends_on: [postgres, redis]
     command: celery -A scraper.tasks.celery_app beat --loglevel=INFO
     restart: unless-stopped
@@ -58,27 +68,35 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: legal
-      POSTGRES_PASSWORD: legal
-      POSTGRES_DB: legal_scraper
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER_required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD_required}
+      POSTGRES_DB: ${POSTGRES_DB:-legal_scraper}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks: [data]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U legal"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 5s
       retries: 5
-    ports:
-      - "5432:5432"
+    # No "ports:" on purpose: reachable only from the internal data network.
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD_required}", "--protected-mode", "yes"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    networks: [data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 5
-    ports:
-      - "6379:6379"
+    # No "ports:" on purpose.
+
+networks:
+  edge: {}
+  data:
+    internal: true
 
 volumes:
   pgdata:
