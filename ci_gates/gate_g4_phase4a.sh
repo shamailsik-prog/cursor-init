@@ -56,7 +56,7 @@ cd "$ROOT"
 
 # --- functions/test/d4.boot.test.ts (the D4 routes at boot, the production store, the index exemptions; no emulator)
 D4_BOOT_TESTS=(
-  'D4 boot (P4-3, P4-10) the entry point exports api, and the router built with every layer flag off serves exactly the twelve D4 routes, each kind general'
+  'D4 boot (P4-3, P4-10) the entry point exports api, and the router built with every layer flag off serves the twelve Phase 4a D4 routes unchanged, each kind general'
   "D4 boot (P4-3, P4-10) the production authority store is EMPTY_AUTHORITY_STORE: a fresh load of the gate's modules runs on it"
   'D4 boot (P4-3, P4-10) firestore.indexes.json exempts the stored text and findings from single-field indexing'
 )

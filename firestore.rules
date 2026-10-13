@@ -249,6 +249,23 @@ service cloud.firestore {
     // reads or writes them; partners see a summary through getDraft and the gate routes.
     match /draft_gate_results/{id} { allow read, write: if false; }
     match /draft_gate_overrides/{id} { allow read, write: if false; }
+    // Phase 4b (P4B-18): the generation store is written by Cloud Functions only, so no client can forge a brief's
+    // `stage`, `approvedOutline`, `inFlight` or `draftId`, or an outline. A brief and an outline are read as a draft
+    // and its versions are (`draft.read`, P4-10): an author role (partner, associate, clerk; interns stay denied) who is
+    // a member of the row's matter (R-2), cleared for the row's own label and for the matter's current label, so a label
+    // raised after a row was written binds it too. The sections are server-only: they reach the advocate in the
+    // assembled draft, which is gated, and no client reads them.
+    match /draft_generations/{id} {
+      allow read: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && cleared(resource.data.classification)
+        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification);
+      allow create, update, delete: if false;
+    }
+    match /draft_outlines/{id} {
+      allow read: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && cleared(resource.data.classification)
+        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification);
+      allow create, update, delete: if false; // immutable, and written by Cloud Functions only
+    }
+    match /draft_sections/{id} { allow read, write: if false; }
     match /change_proposals/{id} {
       allow read: if sameFirm() && isStaff();
       allow create: if sameFirmNew() && isAuthor() && clearedNew() && request.resource.data.proposedBy == request.auth.uid

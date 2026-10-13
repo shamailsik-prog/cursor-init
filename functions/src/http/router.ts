@@ -25,6 +25,7 @@ import { cancelJobOp, getJobOp, listJobsOp, retryFailedJobOp } from "../p2/ops"
 import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, setPlatformAiKillSwitchOp } from "../p1/ops"
 import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDraftVersionOp, saveDraftVersionOp } from "../d4/drafts"
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
+import { getGenerationOp, listGenerationsOp, startDraftOp } from "../d4/generations"
 import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult } from "./idempotency"
@@ -141,6 +142,10 @@ export const ROUTES: readonly Route[] = [
   get(`${D4_DRAFTING}/listDraftVersions`, listDraftVersionsOp),
   post(`${D4_DRAFTING}/overrideGate`, overrideGateOp),
   post(`${D4_DRAFTING}/approveDraft`, approveDraftOp),
+  // Phase 4b (P4B-1): draft generation. The generation store's entry routes; the P1 steps are added by the tasks that build them.
+  post(`${D4_DRAFTING}/startDraft`, startDraftOp),
+  get(`${D4_DRAFTING}/getGeneration`, getGenerationOp),
+  get(`${D4_DRAFTING}/listGenerations`, listGenerationsOp),
   get(`${D4_INTELLIGENCE}/listDocumentTypes`, listDocumentTypesOp),
   get(`${D4_INTELLIGENCE}/getTypeProfile`, getTypeProfileOp),
   post(`${D4_INTELLIGENCE}/gateDraft`, gateDraftOp),

@@ -22,16 +22,18 @@ const MATRIX: Record<string, Role[]> = {
   "draft.read": PAC,
   "draft.override": P,
   "draft.approve": P,
+  "draft.generate": PAC,
+  "draft.outline.approve": ["partner", "associate"],
   "doctype.read": PAC,
 }
-const MATTER_LEVEL = ["draft.create", "draft.edit", "draft.gate", "draft.read", "draft.override", "draft.approve"]
+const MATTER_LEVEL = ["draft.create", "draft.edit", "draft.gate", "draft.read", "draft.override", "draft.approve", "draft.generate", "draft.outline.approve"]
 
 const caller = (role: Role): DecisionCaller => ({ role, firmId: "f1", clearanceLevel: "privileged-restricted" })
 const matter = { firmId: "f1", classification: "confidential" }
 const ALL = [...DRAFT_ACTIONS, ...DOCTYPE_ACTIONS]
 
 describe("draft permission actions (P4-10)", () => {
-  it("exports the 6 draft actions and doctype.read", () => {
+  it("exports the 8 draft actions and doctype.read", () => {
     expect([...DRAFT_ACTIONS].sort()).toEqual(MATTER_LEVEL.slice().sort())
     expect([...DOCTYPE_ACTIONS]).toEqual(["doctype.read"])
     expect(ALL.slice().sort()).toEqual(Object.keys(MATRIX).sort())
@@ -84,6 +86,13 @@ describe("draft permission actions (P4-10)", () => {
       expect(decide(caller("associate"), action, matter, true)).toEqual({ allow: false, reason: "role-not-permitted" })
       expect(decide(caller("clerk"), action, matter, true)).toEqual({ allow: false, reason: "role-not-permitted" })
     }
+  })
+
+  it("draft.generate is partner, associate and clerk; draft.outline.approve is partner and associate; an intern member is intern-channel-denied (P4B-16, P4B-10)", () => {
+    expect(decide(caller("clerk"), "draft.generate", matter, true)).toEqual({ allow: true, reason: "ok" })
+    expect(decide(caller("clerk"), "draft.outline.approve", matter, true)).toEqual({ allow: false, reason: "role-not-permitted" })
+    expect(decide(caller("associate"), "draft.outline.approve", matter, true)).toEqual({ allow: true, reason: "ok" })
+    expect(decide(caller("intern"), "draft.generate", matter, true)).toEqual({ allow: false, reason: "intern-channel-denied" })
   })
 
   it("a matter-level action names no matter: fails closed, even for a partner", () => {

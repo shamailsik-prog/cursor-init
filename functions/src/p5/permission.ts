@@ -52,7 +52,8 @@ export async function checkPermission(
 
 /**
  * Authorises a firm-administration action (identity and MFA administration: partner only), a D1 action (matter-level ones take the matterId), a job action (P3-11; job.read takes an optional matterId),
- * an AI action (P3-70, P3-71, P3-66; ai.call takes the matterId), a D4 draft action (P4-10; every one takes the matterId)
+ * an AI action (P3-70, P3-71, P3-66; ai.call takes the matterId), a D4 draft action (P4-10, P4B-16: the eight actions of
+ * `DRAFT_ACTIONS`, `draft.generate` and `draft.outline.approve` included; every one takes the matterId)
  * or doctype.read (firm-level)
  * through checkPermission, so it is decided by the shared table and audited like every other
  * decision. Deny → 403 partner_only (the operations' existing error code); an audit failure →

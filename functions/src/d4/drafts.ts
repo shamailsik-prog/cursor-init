@@ -75,7 +75,7 @@ export type DraftView = {
   updatedAt: string | null
 }
 
-const iso = (value: unknown): string | null => (value instanceof Timestamp ? value.toDate().toISOString() : null)
+export const iso = (value: unknown): string | null => (value instanceof Timestamp ? value.toDate().toISOString() : null)
 
 function gateSummary(raw: unknown): GateSummary | null {
   if (raw === null || typeof raw !== "object") return null
@@ -113,7 +113,7 @@ export function draftView(draftId: string, d: DocumentData): DraftView {
   }
 }
 
-const withinClearance = (raw: unknown, clearance: Classification): boolean => isKnownClassification(raw) && rankOf(raw) <= rankOf(clearance)
+export const withinClearance = (raw: unknown, clearance: Classification): boolean => isKnownClassification(raw) && rankOf(raw) <= rankOf(clearance)
 
 /** The document id of a stored version. */
 export const versionId = (draftId: string, version: number): string => `${draftId}_${version}`
@@ -223,7 +223,7 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/
  * A title is a string with something in it, and no control character anywhere (400 `invalid_title`): not a line break,
  * a tab, any other C0 or C1 control or DEL. It is judged as sent, before the trim and before the charset functions.
  */
-function parseTitle(value: unknown): string {
+export function parseTitle(value: unknown): string {
   if (typeof value !== "string") throw badRequest("invalid_title")
   if (CONTROL_CHARACTER.test(value)) throw badRequest("invalid_title")
   if (value.trim() === "") throw badRequest("invalid_title")
@@ -281,7 +281,7 @@ function parseCreateInput(data: Data): CreateInput {
 const FREE_TEXT_FLOOR: Classification = "internal"
 
 /** The strictest label by rank, never by string comparison. */
-function strictest(labels: Classification[]): Classification {
+export function strictest(labels: Classification[]): Classification {
   return labels.reduce((a, b) => (rankOf(b) > rankOf(a) ? b : a))
 }
 
@@ -293,7 +293,7 @@ function strictest(labels: Classification[]): Classification {
  * label (monotonic, L17.3 #20), and the caller's clearance must reach that result (403 `clearance`). Returns the draft's
  * classification.
  */
-function classifyForMatter(
+export function classifyForMatter(
   caller: Caller,
   matter: DocumentData,
   documentTypeId: string,
@@ -582,7 +582,7 @@ const SCAN_BATCH = 100
  * The `updatedAt` cursor of listDrafts: `<seconds>.<nanos>` in decimal digits, exactly two parts, and the draft id
  * (400 `invalid_cursor`). Extra or empty parts, a sign or an exponent are refused, not read as a moved boundary.
  */
-function parseTimeCursor(cursor: string): { updatedAt: Timestamp; id: string } {
+export function parseTimeCursor(cursor: string): { updatedAt: Timestamp; id: string } {
   const { sortKey, id } = decodeCursor(cursor)
   const parts = /^(\d{1,12})\.(\d{1,9})$/.exec(sortKey)
   if (!parts || !isSafeDocId(id)) throw badRequest("invalid_cursor")

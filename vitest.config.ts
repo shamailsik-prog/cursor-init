@@ -29,6 +29,7 @@ export default defineConfig({
             "tests/firestore.rules.d1-phase2b.test.ts",
             "tests/firestore.rules.p1-phase3d.test.ts",
             "tests/firestore.rules.d4-phase4a.test.ts",
+            "tests/firestore.rules.d4-phase4b.test.ts",
             "tests/persistence.repositories.test.ts",
             "tests/persistence.runtime-mode.test.ts",
           ]),

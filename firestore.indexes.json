@@ -229,6 +229,16 @@
         { "fieldPath": "version", "order": "DESCENDING" },
         { "fieldPath": "__name__", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "draft_generations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "matterId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [
@@ -255,6 +265,36 @@
     {
       "collectionGroup": "draft_gate_overrides",
       "fieldPath": "reason",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_generations",
+      "fieldPath": "facts",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_generations",
+      "fieldPath": "verbatim",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_generations",
+      "fieldPath": "partyNames",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_outlines",
+      "fieldPath": "sections",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_outlines",
+      "fieldPath": "missingFacts",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "draft_sections",
+      "fieldPath": "text",
       "indexes": []
     }
   ]

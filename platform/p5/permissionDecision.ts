@@ -17,7 +17,7 @@
  *     matter -> cross-firm / not-member / clearance; then the role table -> role-not-permitted
  *   - an AI action (AI_ACTIONS): client or own_matters -> client-denied; ai.call is matter-level
  *     (must name a matter: cross-firm / not-member / clearance); then the role table -> role-not-permitted
- *   - a D4 drafting action (DRAFT_ACTIONS: draft.create ... draft.approve) or doctype.read: client or
+ *   - a D4 drafting action (DRAFT_ACTIONS: draft.create ... draft.outline.approve) or doctype.read: client or
  *     own_matters -> client-denied; the draft actions are matter-level (cross-firm / not-member /
  *     clearance), doctype.read is firm-level; then the role table -> intern-channel-denied for an
  *     intern (as the legacy `draft` action), role-not-permitted otherwise
@@ -170,14 +170,25 @@ const AI_ROLES: Record<AiAction, readonly string[]> = {
 const AI_MATTER_LEVEL: ReadonlySet<string> = new Set(["ai.call"])
 
 /**
- * D4 drafting (Phase 4a, P4-10): create, edit, gate and read a draft (`draft.create`, `draft.edit`, `draft.gate`,
- * `draft.read`: partner, associate, clerk), override a gate result and approve a draft (`draft.override`,
- * `draft.approve`: partner). All six are matter-level: they must name a matter the caller is a cleared member of
- * (R-2: no role is exempt), so a partner who is not a member is refused. Staff only; a client or an own_matters
- * scope is denied (client-denied) and accounts hit accounts-register-only before this table. An intern stays
- * denied as the legacy `draft` action denies it (intern-channel-denied).
+ * D4 drafting (Phase 4a, P4-10; Phase 4b, P4B-16): create, edit, gate and read a draft (`draft.create`, `draft.edit`,
+ * `draft.gate`, `draft.read`: partner, associate, clerk), override a gate result and approve a draft (`draft.override`,
+ * `draft.approve`: partner). Phase 4b adds the two generation actions: run an outline or section step through P1
+ * (`draft.generate`: partner, associate, clerk) and approve an outline (`draft.outline.approve`: partner, associate).
+ * All eight are matter-level: they must name a matter the caller is a cleared member of (R-2: no role is exempt), so a
+ * partner who is not a member is refused. Staff only; a client or an own_matters scope is denied (client-denied) and
+ * accounts hit accounts-register-only before this table. An intern stays denied as the legacy `draft` action denies
+ * it (intern-channel-denied).
  */
-export const DRAFT_ACTIONS = ["draft.create", "draft.edit", "draft.gate", "draft.read", "draft.override", "draft.approve"] as const
+export const DRAFT_ACTIONS = [
+  "draft.create",
+  "draft.edit",
+  "draft.gate",
+  "draft.read",
+  "draft.override",
+  "draft.approve",
+  "draft.generate",
+  "draft.outline.approve",
+] as const
 export type DraftAction = (typeof DRAFT_ACTIONS)[number]
 const DRAFT_ACTION_SET: ReadonlySet<string> = new Set(DRAFT_ACTIONS)
 
@@ -201,6 +212,8 @@ const DRAFT_ROLES: Record<DraftAction | DocTypeAction, readonly string[]> = {
   "draft.read": ["partner", "associate", "clerk"],
   "draft.override": ["partner"],
   "draft.approve": ["partner"],
+  "draft.generate": ["partner", "associate", "clerk"],
+  "draft.outline.approve": ["partner", "associate"],
   "doctype.read": ["partner", "associate", "clerk"],
 }
 

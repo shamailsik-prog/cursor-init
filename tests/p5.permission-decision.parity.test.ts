@@ -71,6 +71,11 @@ const CASES: Case[] = [
   { name: "draft.approve by a member partner", role: "partner", action: "draft.approve", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
   { name: "draft.create by a client", role: "client", action: "draft.create", matter: OWN, member: true, expected: { allow: false, reason: "client-denied" } },
   { name: "draft.create by accounts", role: "accounts", action: "draft.create", matter: OWN, member: true, expected: { allow: false, reason: "accounts-register-only" } },
+  // P4B-16: the two Phase 4b actions.
+  { name: "draft.generate by a member clerk", role: "clerk", action: "draft.generate", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "draft.generate by an intern member", role: "intern", action: "draft.generate", matter: OWN, member: true, expected: { allow: false, reason: "intern-channel-denied" } },
+  { name: "draft.outline.approve by a member associate", role: "associate", action: "draft.outline.approve", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "draft.outline.approve by a member clerk", role: "clerk", action: "draft.outline.approve", matter: OWN, member: true, expected: { allow: false, reason: "role-not-permitted" } },
   { name: "doctype.read by a clerk", role: "clerk", action: "doctype.read", expected: { allow: true, reason: "ok" } },
   { name: "doctype.read by an intern", role: "intern", action: "doctype.read", expected: { allow: false, reason: "intern-channel-denied" } },
   { name: "doctype.read by a client", role: "client", action: "doctype.read", expected: { allow: false, reason: "client-denied" } },
