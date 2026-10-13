@@ -17,7 +17,7 @@ jobs:
         run: python3 ci_gates/check_compose_policy.py corpus_service/docker-compose.yml
       - name: Policy rejects the pre-fix (insecure) compose
         run: |
-          if python3 ci_gates/check_compose_policy.py ci_gates/fixtures/compose_insecure.yml; then
+          if python3 ci_gates/check_compose_policy.py ci_gates/fixtures/compose_insecure.yml || python3 ci_gates/check_compose_policy.py ci_gates/fixtures/compose_trust.yml; then
             echo "policy failed to reject insecure fixture"; exit 1; fi
       - name: Compose refuses to start without secrets
         working-directory: corpus_service
@@ -37,13 +37,15 @@ jobs:
           # 1. No host listener on store ports.
           if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then echo "postgres reachable on host"; exit 1; fi
           if (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; then echo "redis reachable on host"; exit 1; fi
-          docker compose ps --format json | grep -q '"PublishedPort":[1-9]' && { echo "published port found"; exit 1; } || true
+          if docker compose ps --format json | grep -q '"PublishedPort":[1-9]'; then echo "published port found"; exit 1; fi
           NET=$(docker network ls --format '{{.Name}}' | grep '_data$')
           # 2. Redis rejects unauthenticated clients, accepts the secret.
           out=$(docker run --rm --network "$NET" redis:7-alpine redis-cli -h redis ping 2>&1 || true)
           echo "$out" | grep -q NOAUTH || { echo "redis allowed unauthenticated ping: $out"; exit 1; }
           docker run --rm --network "$NET" redis:7-alpine redis-cli -h redis -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
-          # 3. Postgres rejects the old default and wrong passwords, accepts the secret.
+          # 3. Postgres rejects the old default and a wrong password, accepts the secret.
+          if docker run --rm --network "$NET" -e PGPASSWORD=wrong-password postgres:16-alpine psql -h postgres -U "$POSTGRES_USER" -d legal_scraper -c 'select 1' 2>/dev/null; then
+            echo "wrong password accepted (trust auth?)"; exit 1; fi
           if docker run --rm --network "$NET" -e PGPASSWORD=legal postgres:16-alpine psql -h postgres -U legal -d legal_scraper -c 'select 1' 2>/dev/null; then
             echo "default legal/legal login works"; exit 1; fi
           docker run --rm --network "$NET" -e PGPASSWORD="$POSTGRES_PASSWORD" postgres:16-alpine psql -h postgres -U "$POSTGRES_USER" -d legal_scraper -tAc 'select 1' | grep -q 1
@@ -52,4 +54,28 @@ jobs:
           echo "F30 e2e PASS"
       - if: always()
         working-directory: corpus_service
+        env: {POSTGRES_USER: x, POSTGRES_PASSWORD: x, REDIS_PASSWORD: x}
+        run: docker compose down -v || true
+      - name: E2E - upgrade an existing pre-fix legal/legal volume and rotate credentials
+        working-directory: corpus_service
+        run: |
+          set -euo pipefail
+          # Pre-fix state: data volume initialised as legal/legal.
+          export POSTGRES_USER=legal POSTGRES_PASSWORD=legal REDIS_PASSWORD=$(openssl rand -hex 24)
+          docker compose up -d --wait postgres
+          docker compose exec -T postgres psql -U legal -d legal_scraper -c "create table keep(v int); insert into keep values (42);"
+          docker compose down
+          # Upgrade: rotate in place, then restart with the new secret.
+          NEW=$(openssl rand -hex 24)
+          POSTGRES_PASSWORD="$NEW" bash ./scripts/rotate_postgres_password.sh
+          export POSTGRES_PASSWORD="$NEW"
+          docker compose up -d --wait postgres
+          NET=$(docker network ls --format '{{.Name}}' | grep '_data$')
+          if docker run --rm --network "$NET" -e PGPASSWORD=legal postgres:16-alpine psql -h postgres -U legal -d legal_scraper -c 'select 1' 2>/dev/null; then
+            echo "old legal/legal still works after rotation"; exit 1; fi
+          docker run --rm --network "$NET" -e PGPASSWORD="$NEW" postgres:16-alpine psql -h postgres -U legal -d legal_scraper -tAc 'select v from keep' | grep -qx 42
+          echo "F30 upgrade e2e PASS (data kept, default password rejected)"
+      - if: always()
+        working-directory: corpus_service
+        env: {POSTGRES_USER: x, POSTGRES_PASSWORD: x, REDIS_PASSWORD: x}
         run: docker compose down -v || true
