@@ -3,7 +3,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-
 from pathlib import Path
 
 
@@ -59,7 +58,7 @@ class ClaudeActionDiagnosticTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0)
         self.assertIn("first Claude API request was rejected", result.stdout)
-        self.assertIn("credential, credit, or model access", result.stdout)
+        self.assertIn("credentials, credits, and model access", result.stdout)
 
     def test_missing_result_is_a_non_failing_diagnostic(self):
         result = diagnose([])

@@ -50,7 +50,14 @@ cannot authenticate to GitHub to push its branch and open its PR, so the build s
 
 ## Diagnosing a failed run
 
-The Claude action hides its output by default, so a failure shows only `is_error: true`.
-A run that fails in under a second with `num_turns: 1` and `total_cost_usd: 0` means the API
-rejected the very first call (key, credit or model access). To read the actual error, start
-the workflow by hand with `debug` set to `true` and `max_turns` set to `3`.
+The Claude action hides its output by default. On failure, the workflow prints a sanitized
+diagnostic from the execution file: HTTP status when available and next steps, without logging
+the prompt, response text, or credentials. A run that fails in under a second with `num_turns: 1`
+and `total_cost_usd: 0` means the API rejected the first call. Check the diagnostic first:
+
+- `401`: repair or rotate the configured Claude secret.
+- `403`: check account and model access.
+- `429`: wait for the usage/rate limit to reset before rerunning.
+- Other or unavailable status: check the Claude account's credits, credentials, and model access.
+
+For additional details, start a manual run with `debug` set to `true` and `max_turns` set to `3`.

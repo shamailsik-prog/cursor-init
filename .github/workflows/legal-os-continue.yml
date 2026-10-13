@@ -226,6 +226,12 @@ jobs:
             slice within this run, push what is verified, open the PR as a draft, and list the remaining
             plan tasks in the body.
 
+      - name: Diagnose Claude API failure
+        if: always() && steps.claude.outcome == 'failure'
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: python3 ci_gates/claude_action_diagnostic.py "${EXECUTION_FILE:-}"
+
       - name: Ensure the pushed branch has a PR
         if: always()
         env:
