@@ -203,6 +203,7 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
       create: vi.fn(),
+      delete: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
       update: vi.fn().mockResolvedValue(null),
     },

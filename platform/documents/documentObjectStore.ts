@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
-import { copyFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises"
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { SpineStore } from "@/platform/spine/store"
 
@@ -32,6 +32,12 @@ export class DocumentObjectConfigurationError extends Error {
   }
 }
 
+function isMemoryBackend(): boolean {
+  if (process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) return false
+  if (process.env.NODE_ENV === "production") return false
+  return process.env.VITEST === "true" || process.env.NODE_ENV === "test"
+}
+
 function encryptionKey(): Buffer {
   const raw = process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY?.trim()
   if (!raw) {
@@ -47,15 +53,14 @@ function encryptionKey(): Buffer {
 }
 
 export function assertDocumentObjectIngestAllowed(): void {
-  if (process.env.NODE_ENV !== "production") return
   if (!process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY?.trim()) {
     throw new DocumentObjectConfigurationError(
-      "document object encryption key is required in production before ingest is accepted"
+      "document object encryption key is required before ingest is accepted"
     )
   }
-  if (!process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) {
+  if (!isMemoryBackend() && !process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) {
     throw new DocumentObjectConfigurationError(
-      "SIKANDER_DOCUMENT_OBJECT_ROOT is required in production before ingest is accepted"
+      "SIKANDER_DOCUMENT_OBJECT_ROOT is required before ingest is accepted"
     )
   }
 }
@@ -111,12 +116,6 @@ function assertExpectedHash(
 
 const memoryObjects = new Map<string, Buffer>()
 
-function useMemoryBackend(): boolean {
-  if (process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) return false
-  if (process.env.NODE_ENV === "production") return false
-  return process.env.VITEST === "true" || process.env.NODE_ENV === "test"
-}
-
 function objectRoot(): string {
   const root = process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()
   if (!root) {
@@ -146,7 +145,7 @@ export function filesystemPathForStoragePath(storagePath: string): string {
 }
 
 async function writePayload(storagePath: string, payload: Buffer): Promise<void> {
-  if (useMemoryBackend()) {
+  if (isMemoryBackend()) {
     if (memoryObjects.has(storagePath)) {
       throw new Error("document object already exists (immutable)")
     }
@@ -159,7 +158,7 @@ async function writePayload(storagePath: string, payload: Buffer): Promise<void>
 }
 
 async function readPayload(storagePath: string): Promise<Buffer> {
-  if (useMemoryBackend()) {
+  if (isMemoryBackend()) {
     const payload = memoryObjects.get(storagePath)
     if (!payload) throw new Error(`document object not found: ${storagePath}`)
     return payload
@@ -168,7 +167,7 @@ async function readPayload(storagePath: string): Promise<Buffer> {
 }
 
 export async function deleteDocumentObject(storagePath: string): Promise<void> {
-  if (useMemoryBackend()) {
+  if (isMemoryBackend()) {
     memoryObjects.delete(storagePath)
     return
   }
@@ -224,7 +223,10 @@ export async function restoreDocumentObjectFile(
   backupFilePath: string
 ): Promise<void> {
   const payload = await readFile(path.resolve(backupFilePath))
-  if (useMemoryBackend()) {
+  if (isMemoryBackend()) {
+    if (memoryObjects.has(storagePath)) {
+      throw new Error("document object already exists (immutable)")
+    }
     memoryObjects.set(storagePath, payload)
     return
   }

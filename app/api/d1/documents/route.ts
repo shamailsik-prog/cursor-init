@@ -30,6 +30,7 @@ import {
   DocumentObjectConfigurationError,
   getImmutableDocumentObject,
 } from "@/platform/documents/documentObjectStore"
+import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { rollbackDocumentIngest, uploadDocument } from "@/services/d1-6/uploadDocument"
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
@@ -66,6 +67,17 @@ function defaultIngestClassification(matterClassification: unknown): Classificat
   return rankOf(matterClassification) > rankOf(DEFAULT_INGEST_CLASSIFICATION)
     ? matterClassification
     : DEFAULT_INGEST_CLASSIFICATION
+}
+
+async function rollbackFailedIngest(
+  store: SpineStore,
+  repos: SpineRepositories,
+  docId: string,
+  reused: boolean
+): Promise<void> {
+  if (reused) return
+  await rollbackDocumentIngest(store, docId)
+  await repos.documents.delete(docId)
 }
 
 function canViewDocument(
@@ -301,7 +313,7 @@ async function handlePost(request: Request) {
       try {
         await repos.documents.create(inMemoryDoc)
       } catch (persistErr) {
-        if (!write.reused) await rollbackDocumentIngest(store, write.docId)
+        await rollbackFailedIngest(store, repos, write.docId, write.reused)
         throw persistErr
       }
     }
@@ -311,7 +323,7 @@ async function handlePost(request: Request) {
         await repos.jobs.create(job)
       }
     } catch (persistErr) {
-      if (!write.reused) await rollbackDocumentIngest(store, write.docId)
+      await rollbackFailedIngest(store, repos, write.docId, write.reused)
       throw persistErr
     }
     const doc = (await repos.documents.get(write.docId)) ?? inMemoryDoc
@@ -336,6 +348,9 @@ async function handlePost(request: Request) {
     claim.complete(payload)
     return NextResponse.json({ result: payload, idempotencyKey: key, reused: write.reused })
   } catch (err) {
+    if (err instanceof DocumentObjectConfigurationError) {
+      return NextResponse.json({ error: err.message }, { status: 503 })
+    }
     const message = publicErrorMessage(err, "document ingest failed")
     return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }

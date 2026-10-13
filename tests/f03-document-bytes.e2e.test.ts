@@ -27,6 +27,8 @@ beforeEach(() => {
 afterEach(() => {
   if (objectRoot) rmSync(objectRoot, { recursive: true, force: true })
   delete process.env.SIKANDER_DOCUMENT_OBJECT_ROOT
+  process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY =
+    "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00"
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
   resetRuntimeStoreForTests()
@@ -52,6 +54,13 @@ function getContent(docId: string, userId: string) {
       `http://127.0.0.1/api/d1/documents?userId=${userId}&docId=${docId}&includeContent=true`
     )
   )
+}
+
+/** Object store must use filesystem (root required); persistence stays in-memory for the route. */
+function requireFilesystemObjectBackend() {
+  vi.stubEnv("NODE_ENV", "development")
+  vi.stubEnv("VITEST", "false")
+  process.env.SIKANDER_PERSISTENCE_MODE = "memory"
 }
 
 function seedMatter() {
@@ -170,8 +179,8 @@ describe("F03: uploaded document bytes are retained and integrity-checked", () =
     expect(Buffer.from(json.contentBase64, "base64").equals(original)).toBe(true)
   })
 
-  it("refuses ingest in production when object store env is missing", async () => {
-    vi.stubEnv("NODE_ENV", "production")
+  it("refuses ingest when object root is required but missing (non-memory mode)", async () => {
+    requireFilesystemObjectBackend()
     delete process.env.SIKANDER_DOCUMENT_OBJECT_ROOT
     const matterId = seedMatter()
     const res = await post(
@@ -187,6 +196,29 @@ describe("F03: uploaded document bytes are retained and integrity-checked", () =
       "d6f03f03-f03f-4111-8111-f03f03f03f06"
     )
     expect(res.status).toBe(503)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/SIKANDER_DOCUMENT_OBJECT_ROOT/)
+  })
+
+  it("refuses ingest when encryption key is missing (non-memory mode)", async () => {
+    requireFilesystemObjectBackend()
+    delete process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY
+    const matterId = seedMatter()
+    const res = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: Buffer.from("x").toString("base64"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      "e6f03f03-f03f-4111-8111-f03f03f03f06"
+    )
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/encryption key/)
   })
 
   it("legacy metadata without bytes: duplicate upload backfills; read without bytes stays unavailable", async () => {
@@ -267,5 +299,38 @@ describe("F03: uploaded document bytes are retained and integrity-checked", () =
     await expect(
       getImmutableDocumentObject(store, "firmA", storagePath, doc!.contentHash)
     ).rejects.toThrow()
+  })
+
+  it("route rollback removes persisted document when repos.jobs.create throws", async () => {
+    const matterId = seedMatter()
+    const store = getRuntimeStore()
+    const actualGet = runtimeRepositories.getRuntimeRepositories
+    vi.spyOn(runtimeRepositories, "getRuntimeRepositories").mockImplementation(async (s) => {
+      const repos = await actualGet(s)
+      repos.jobs.create = async () => {
+        throw new Error("simulated jobs persist failure")
+      }
+      return repos
+    })
+    const res = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: Buffer.from("%PDF-jobs-persist-fail%").toString("base64"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      "a9f03f03-f03f-4111-8111-f03f03f03f09"
+    )
+    expect(res.status).toBe(400)
+    expect(store.documents.size).toBe(0)
+    expect(store.jobs.filter((j) => j.jobType === "ocr")).toHaveLength(0)
+    const repos = await actualGet(store)
+    const ids = [...store.documents.keys()]
+    for (const id of ids) {
+      expect(await repos.documents.get(id)).toBeNull()
+    }
   })
 })
