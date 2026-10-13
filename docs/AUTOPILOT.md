@@ -47,6 +47,8 @@ cannot authenticate to GitHub to push its branch and open its PR, so the build s
 - One slice per run, `--max-turns 200` by default (override on a manual run).
 - No run while a `claude/*` PR is open.
 - The watchdog runs at most every 6 hours.
+- When both Claude credentials are configured, the workflow uses OAuth; otherwise it falls back to the API key.
+- An API response of `Credit balance is too low` requires a usable OAuth token or restoring credit on the Anthropic API account; it is not a repository build failure.
 
 ## Diagnosing a failed run
 

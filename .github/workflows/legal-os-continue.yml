@@ -52,6 +52,7 @@ jobs:
       issues: write
     outputs:
       should_run: ${{ steps.guard.outputs.should_run }}
+      auth_mode: ${{ steps.guard.outputs.auth_mode }}
     steps:
       - name: Guard
         id: guard
@@ -106,6 +107,13 @@ jobs:
             should_run=false
           fi
 
+          # Prefer OAuth when both credentials are configured; otherwise use the API key.
+          auth_mode=api_key
+          if [ "$HAS_OAUTH" = "true" ]; then
+            auth_mode=oauth
+          fi
+          echo "Claude authentication mode: $auth_mode"
+          echo "auth_mode=$auth_mode" >> "$GITHUB_OUTPUT"
           echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
 
   # anthropics/claude-code-action rejects the push event ("Unsupported event type: push"), so a
@@ -161,8 +169,8 @@ jobs:
         id: claude
         uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ needs.preflight.outputs.auth_mode == 'api_key' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ needs.preflight.outputs.auth_mode == 'oauth' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           # The watchdog dispatches this workflow with GITHUB_TOKEN (actor github-actions[bot]).
           allowed_bots: "github-actions[bot]"
           # Off unless a run is dispatched with debug=true; the action hides its output by default.
