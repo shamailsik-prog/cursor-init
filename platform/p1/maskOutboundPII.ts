@@ -36,8 +36,12 @@ export const NTN = /\bNTN[:\s-]*\d{7}-\d\b/gi
 export const PASSPORT = /\b(?:passport|ppt\.?)[:\s-]*[A-Z]{2}\d{7}\b/gi
 
 /**
- * The patterns above, in the order `maskOutboundPII` applies them. The indexed pseudonymiser walks the same list,
- * so the two never drift apart. Party names are not here: they are matched from the caller's own list.
+ * The patterns above, in the order `maskOutboundPII` applies them, and so the order the indexed pseudonymiser
+ * numbers its tokens in (D16: `PHONE_n` follows it). tests/p1.pseudonymise.test.ts pins this sequence, the regexes
+ * themselves and not only their kinds; it does not read `maskOutboundPII`'s body, so a change of order there is
+ * made here by hand, and that test is then changed with it. The regexes are global, so each carries a `lastIndex`:
+ * iterate a copy (`new RegExp(re.source, re.flags)`), not the shared one. Party names are not here: they are matched
+ * from the caller's own list.
  */
 export const MASK_PATTERNS: ReadonlyArray<{ kind: "cnic" | "phone" | "email" | "iban" | "ntn" | "passport"; re: RegExp }> = Object.freeze([
   Object.freeze({ kind: "cnic", re: CNIC_SEPARATED } as const),

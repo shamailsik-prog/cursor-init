@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest"
-import { LOSSY_TOKENS, MASK_PATTERNS, maskOutboundPII } from "@/platform/p1/maskOutboundPII"
-import { INDEXED_TOKEN, applyMap, pseudonymise, rehydrate } from "@/platform/p1/pseudonymiseOutboundPII"
+import {
+  CNIC_PLAIN as CNIC_PLAIN_RE,
+  CNIC_SEPARATED,
+  EMAIL,
+  LOSSY_TOKENS,
+  MASK_PATTERNS,
+  NTN,
+  PASSPORT,
+  PK_IBAN,
+  PK_MOBILE,
+  PK_MOBILE_PAREN,
+  maskOutboundPII,
+} from "@/platform/p1/maskOutboundPII"
+import { INDEXED_TOKEN, applyMap, assertPseudonymised, pseudonymise, rehydrate } from "@/platform/p1/pseudonymiseOutboundPII"
 
 // The Phase 4b fixtures (P4B-21): citations use 2099, CNICs and phones are all nines, parties are fictitious.
 const PERSON = "Ardeshir Testani"
@@ -101,22 +113,59 @@ describe("P1 indexed pseudonymiser (P4B-6)", () => {
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
       return seed % n
     }
-    const pieces = [PERSON, PERSON.toUpperCase(), INSTITUTION.toLowerCase(), CNIC, CNIC_PLAIN, PHONE, LAND, "Plot 99-T", "x@example.test", "99999", "-", " ", ", ", ". ", "v.", "the", "9", "0399"]
-    const names = [INSTITUTION, PERSON, "Absent Party"]
-    for (let i = 0; i < 300; i++) {
-      // Odd rounds glue the pieces together; even rounds keep them apart, as prose does.
-      const text = Array.from({ length: 1 + roll(12) }, () => pieces[roll(pieces.length)]).join(i % 2 === 0 ? " " : "")
+    // Pieces in the case the names were supplied in, among them words that merely contain a name (maintainable holds
+    // nab, the statement holds the state), which must come back untouched.
+    const exact = [PERSON, INSTITUTION, "NAB", "NAB's", "(NAB)", "The State", "maintainable", "unreasonable", "the statement", CNIC, CNIC_PLAIN, PHONE, LAND, "Plot 99-T", "x@example.test", "99999", "-", " ", ", ", ". ", "v.", "the", "9", "0399"]
+    // And the same with a name in another case, which a party name always brings back as supplied.
+    const cased = [...exact, PERSON.toUpperCase(), INSTITUTION.toLowerCase(), "nab", "THE STATE"]
+    const names = [INSTITUTION, PERSON, "Absent Party", "NAB", "The State"]
+    const wholeWord = (name: string) => new RegExp(`(?<![\\p{L}\\p{N}_])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "iu")
+    for (let i = 0; i < 400; i++) {
+      // Odd rounds glue the pieces together; even rounds keep them apart, as prose does. Rounds 2 and 3 of every four use
+      // the pieces with a name in another case.
+      const glued = i % 2 === 1
+      const anyCase = i % 4 >= 2
+      const pool = anyCase ? cased : exact
+      const text = Array.from({ length: 1 + roll(12) }, () => pool[roll(pool.length)]).join(glued ? "" : " ")
       const r = pseudonymise(text, { partyNames: names, verbatim: ["Plot 99-T", LAND] })
-      // Case aside (a party name comes back as supplied), nothing is lost, added or moved.
-      expect(rehydrate(r.text, r.map).toLowerCase(), text).toBe(text.toLowerCase())
-      // And no verbatim string or party name is left in what goes out (a pattern value can be: the patterns need word
-      // boundaries, and these texts glue pieces together).
-      for (const v of [PERSON, INSTITUTION, LAND, "Plot 99-T"]) expect(r.text.toLowerCase(), text).not.toContain(v.toLowerCase())
+      // Nothing is lost, added or moved: the same text back, case-exact wherever no name was written in another case.
+      const back = rehydrate(r.text, r.map)
+      if (anyCase) expect(back.toLowerCase(), text).toBe(text.toLowerCase())
+      else expect(back, text).toBe(text)
+      // No verbatim string is left in what goes out; nor is a party name that stands as a whole word (a pattern value can
+      // be left, and a name can be part of a longer word: these texts glue pieces together).
+      for (const v of ["Plot 99-T", LAND]) expect(r.text.toLowerCase(), text).not.toContain(v.toLowerCase())
+      if (!glued) for (const n of names.slice(0, 2).concat(names.slice(3))) expect(wholeWord(n).test(r.text), text).toBe(false)
       // Echoed back, the tokens survive applyMap untouched. (Glued texts are left out: a pattern the mask could not see
       // for want of a word boundary can be seen once the name beside it is a token, and then becomes a lossy token, which is
       // the safe direction.)
-      if (i % 2 === 0) expect(rehydrate(applyMap(r.text, r.map, { partyNames: names }), r.map), text).toBe(rehydrate(r.text, r.map))
+      if (!glued) expect(rehydrate(applyMap(r.text, r.map, { partyNames: names }), r.map), text).toBe(back)
     }
+  })
+  it("a party name inside another word is left alone: NAB in maintainable and The State in the statement round-trip case-exact", () => {
+    const names = ["NAB", "The State"]
+    const text = "NAB held the appeal not maintainable and unreasonable; The State disputes the statement."
+    const r = pseudonymise(text, { partyNames: names })
+    expect(r.text).toBe("⟦PARTY_1⟧ held the appeal not maintainable and unreasonable; ⟦PARTY_2⟧ disputes the statement.")
+    expect(rehydrate(r.text, r.map)).toBe(text)
+    // The model's answer is read the same way: a name in any case at a word edge is a token, inside a word it is not.
+    const answer = applyMap("It is maintainable. nab and THE STATE, unreasonable, the statement.", r.map, { partyNames: names })
+    expect(answer).toBe("It is maintainable. ⟦PARTY_1⟧ and ⟦PARTY_2⟧, unreasonable, the statement.")
+    expect(rehydrate(answer, r.map)).toBe("It is maintainable. NAB and The State, unreasonable, the statement.")
+    // And a supplied name the map does not hold is read that way too.
+    expect(applyMap("NAB is maintainable", [], { partyNames: ["NAB"] })).toBe("[PARTY] is maintainable")
+  })
+  it("a party name at word edges is still replaced, next to punctuation and possessives (NAB's, (NAB), NAB.)", () => {
+    const r = pseudonymise("NAB's case; (NAB); NAB. Then NAB, NAB: \"NAB\" and NAB-led.", { partyNames: ["NAB"] })
+    expect(r.text).toBe("⟦PARTY_1⟧'s case; (⟦PARTY_1⟧); ⟦PARTY_1⟧. Then ⟦PARTY_1⟧, ⟦PARTY_1⟧: \"⟦PARTY_1⟧\" and ⟦PARTY_1⟧-led.")
+    expect(r.redactionCounts.party).toBe(7)
+    expect(applyMap("nab's, (Nab) and NAB.", r.map, { partyNames: ["NAB"] })).toBe("⟦PARTY_1⟧'s, (⟦PARTY_1⟧) and ⟦PARTY_1⟧.")
+    expect(rehydrate(r.text, r.map)).toBe("NAB's case; (NAB); NAB. Then NAB, NAB: \"NAB\" and NAB-led.")
+  })
+  it("a letter, digit or underscore beside a party name keeps it part of that word, in any script", () => {
+    expect(pseudonymise("Ali and Alié and Ali2 and Ali_b and 2Ali and Ali.", { partyNames: ["Ali"] }).text).toBe("⟦PARTY_1⟧ and Alié and Ali2 and Ali_b and 2Ali and ⟦PARTY_1⟧.")
+    // Urdu: a name followed by a letter is part of a longer word; followed by the Arabic comma it stands alone.
+    expect(pseudonymise("علیہ اور علی، اور علی", { partyNames: ["علی"] }).text).toBe("علیہ اور ⟦PARTY_1⟧، اور ⟦PARTY_1⟧")
   })
   it("party names that overlap are replaced longest first and numbered in the order given, in the request and in the answer", () => {
     const names = ["Ali Raza", "Ali Raza Khan"]
@@ -132,5 +181,60 @@ describe("P1 indexed pseudonymiser (P4B-6)", () => {
       ["⟦VERBATIM_1⟧", "verbatim", LAND],
       ["⟦PARTY_1⟧", "party", PERSON],
     ])
+  })
+  it("assertPseudonymised passes a tokenised body whose words merely contain a party name or spell a token word, and fails on a leftover pattern value or a whole-word party name", () => {
+    const names = ["Tim", "Nic", "Party", "Phone", "NAB", "The State"]
+    // Tokens are blanked first, so Tim in VERBATIM, Nic in CNIC and Party in PARTY are not found; words that contain a name are not either.
+    expect(assertPseudonymised("⟦PARTY_1⟧ v. ⟦PARTY_2⟧ owns ⟦VERBATIM_1⟧, ⟦CNIC_1⟧, ⟦PHONE_1⟧, ⟦EMAIL_1⟧; Timothy found it maintainable, in the statement.", names)).toBe(true)
+    expect(assertPseudonymised("Nothing to find here.", undefined)).toBe(true)
+    expect(assertPseudonymised("", names)).toBe(true)
+    // A pattern value left in the body fails it, whatever the kind, and whatever sits beside a token.
+    for (const left of [CNIC, CNIC_PLAIN, PHONE, "(0399) 9999999", "x@example.test", "PK36SCBL0000001123456702", "NTN 1234567-8", "passport AB1234567"]) {
+      expect(assertPseudonymised(`⟦PARTY_1⟧ ${left} ⟦VERBATIM_1⟧`, names), left).toBe(false)
+      expect(assertPseudonymised(`⟦PARTY_1⟧${left}⟦VERBATIM_1⟧`, names), left).toBe(false)
+    }
+    // A party name standing as a whole word fails it, in any case.
+    for (const left of ["NAB", "nab's appeal", "(The State)", "Tim.", "a party", "the PHONE"]) expect(assertPseudonymised(`⟦CNIC_1⟧ ${left}`, names), left).toBe(false)
+    // The words a token is built from are only found outside a token, and a name that spells a whole token goes with it.
+    expect(assertPseudonymised("⟦PARTY_1⟧", ["Party"])).toBe(true)
+    expect(assertPseudonymised("⟦PARTY_1⟧ and ⟦CNIC_1⟧", ["PARTY_1", "CNIC_1"])).toBe(true)
+    expect(assertPseudonymised("[PARTY]", ["Party"])).toBe(false)
+  })
+  it("the shared regexes are safe after a stray test(): INDEXED_TOKEN.lastIndex set to 5 before applyMap and pseudonymise changes nothing", () => {
+    const text = `${CNIC} ${PERSON} ${PHONE} x@example.test`
+    const answer = `⟦PARTY_1⟧ holds ⟦CNIC_1⟧ and ${CNIC_PLAIN}; ⟦PHONE_1⟧`
+    const opts = { partyNames: [PERSON], verbatim: [] }
+    const first = pseudonymise(text, opts)
+    const applied = applyMap(answer, first.map, { partyNames: [PERSON] })
+    const restored = rehydrate(answer, first.map)
+    // A name that spells a token is the one thing that would rewrite a token the module failed to see.
+    const spelled = ["PARTY_1", PERSON]
+    const spelledMap = pseudonymise("x", { partyNames: spelled }).map
+    const spelledAnswer = "⟦PARTY_1⟧ and ⟦PARTY_2⟧ and PARTY_1"
+    const spelledApplied = applyMap(spelledAnswer, spelledMap, { partyNames: spelled })
+    const spelledIn = pseudonymise("⟦PARTY_1⟧ and PARTY_1", { partyNames: ["PARTY_1"] }).text
+    expect([spelledApplied, spelledIn]).toEqual(["⟦PARTY_1⟧ and ⟦PARTY_2⟧ and ⟦PARTY_1⟧", "⟦PARTY_1⟧ and ⟦PARTY_1⟧"])
+    try {
+      // What a stray `.test()` or `.exec()` by a consumer leaves behind.
+      INDEXED_TOKEN.lastIndex = 5
+      for (const { re } of MASK_PATTERNS) re.lastIndex = 5
+      expect(applyMap(spelledAnswer, spelledMap, { partyNames: spelled })).toBe(spelledApplied)
+      expect(pseudonymise("⟦PARTY_1⟧ and PARTY_1", { partyNames: ["PARTY_1"] }).text).toBe(spelledIn)
+      expect(pseudonymise(text, opts)).toEqual(first)
+      expect(applyMap(answer, first.map, { partyNames: [PERSON] })).toBe(applied)
+      expect(rehydrate(answer, first.map)).toBe(restored)
+      expect(assertPseudonymised(`⟦PARTY_1⟧ ${PHONE}`, [PERSON])).toBe(false)
+      expect(assertPseudonymised("⟦PARTY_1⟧ ⟦CNIC_1⟧ fine", [PERSON])).toBe(true)
+      // The module reads copies, so it does not move the shared regex either.
+      expect(INDEXED_TOKEN.lastIndex).toBe(5)
+    } finally {
+      INDEXED_TOKEN.lastIndex = 0
+      for (const { re } of MASK_PATTERNS) re.lastIndex = 0
+    }
+    expect([applied, restored]).toEqual(["⟦PARTY_1⟧ holds ⟦CNIC_1⟧ and [CNIC]; ⟦PHONE_1⟧", `${PERSON} holds ${CNIC} and ${CNIC_PLAIN}; ${PHONE}`])
+  })
+  it("MASK_PATTERNS holds the exported regexes in the mask's order, not only its kinds", () => {
+    expect(MASK_PATTERNS.map((p) => p.re)).toEqual([CNIC_SEPARATED, CNIC_PLAIN_RE, PK_MOBILE_PAREN, PK_MOBILE, EMAIL, PK_IBAN, NTN, PASSPORT])
+    expect(MASK_PATTERNS.map((p) => p.re)).not.toEqual([CNIC_SEPARATED, CNIC_PLAIN_RE, PK_MOBILE, PK_MOBILE_PAREN, EMAIL, PK_IBAN, NTN, PASSPORT])
   })
 })

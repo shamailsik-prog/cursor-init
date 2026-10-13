@@ -8,7 +8,12 @@
  * traced, logged, or put in a row, an event, an audit row, an error or a response (P4B-6).
  *
  * Every replacement runs only on the text between tokens already placed, so a token is never rewritten, and a
- * pattern or a name never matches across one.
+ * pattern or a name never matches across one. A party name matches at word edges only (see `partyPattern`), so a
+ * name that also spells part of a longer word (NAB in maintainable) is left alone and the word is not cut open.
+ *
+ * Nothing here reads or moves the `lastIndex` of a shared regex: the module-level global regexes (`INDEXED_TOKEN`
+ * and the mask's patterns) are always copied first (`own`), so a stray `test()` or `exec()` by a consumer cannot
+ * change what these functions do.
  */
 
 import { MASK_PATTERNS, escapeRegExp, maskOutboundPII } from "@/platform/p1/maskOutboundPII"
@@ -21,12 +26,24 @@ export type Pseudonym = Readonly<{ token: string; kind: PseudonymKind; value: st
 export type PseudonymMap = readonly Pseudonym[]
 
 /**
- * An indexed token: a kind and an index from 1, in `⟦` and `⟧`. Global, so read it with `replace`, `match` or
- * `matchAll`, which start from the beginning; never `test` or `exec`, which keep a position between calls.
+ * An indexed token: a kind and an index from 1, in `⟦` and `⟧`. It is global, so it carries a `lastIndex`: `test`
+ * and `exec` move it, and `matchAll` starts from its current value (it copies the regex with it), so a consumer
+ * that uses it that way must copy it first with `new RegExp(INDEXED_TOKEN.source, INDEXED_TOKEN.flags)`. The
+ * functions of this module always do.
  */
 export const INDEXED_TOKEN = /⟦(VERBATIM|CNIC|PHONE|EMAIL|IBAN|NTN|PASSPORT|PARTY)_([1-9]\d*)⟧/g
 
 const KINDS: readonly PseudonymKind[] = ["verbatim", "cnic", "phone", "email", "iban", "ntn", "passport", "party"]
+
+/** A fresh copy of a regex, with `lastIndex` 0, so nothing a shared regex has been used for can reach the copy. */
+const own = (re: RegExp): RegExp => new RegExp(re.source, re.flags)
+
+/**
+ * A party name at word edges: not directly after, and not directly before, a letter, a digit or an underscore (in
+ * any script), case-insensitive. A name stands alone when punctuation, a space, a token or an end of text is beside
+ * it (`NAB's`, `(NAB)`, `NAB.`), and is part of a longer word otherwise (`maintainable`, `the statement`).
+ */
+const partyPattern = (name: string): RegExp => new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(name)}(?![\\p{L}\\p{N}_])`, "giu")
 
 /** A run of text that is either one whole token already placed or a gap between tokens. */
 type Segment = { text: string; token: boolean }
@@ -34,7 +51,7 @@ type Segment = { text: string; token: boolean }
 function tokenise(text: string): Segment[] {
   const out: Segment[] = []
   let at = 0
-  for (const m of text.matchAll(INDEXED_TOKEN)) {
+  for (const m of text.matchAll(own(INDEXED_TOKEN))) {
     if (m.index > at) out.push({ text: text.slice(at, m.index), token: false })
     out.push({ text: m[0], token: true })
     at = m.index + m[0].length
@@ -44,7 +61,8 @@ function tokenise(text: string): Segment[] {
 }
 
 /** Replaces every match of `re` (global) in the gaps only; each match becomes the token `tokenFor` gives. */
-function replaceInGaps(segments: Segment[], re: RegExp, tokenFor: (match: string) => string): Segment[] {
+function replaceInGaps(segments: Segment[], pattern: RegExp, tokenFor: (match: string) => string): Segment[] {
+  const re = own(pattern)
   const out: Segment[] = []
   for (const seg of segments) {
     if (seg.token) {
@@ -75,7 +93,8 @@ const namesOf = (partyNames: readonly string[] | undefined): string[] => (partyN
  *  1. each verbatim string (exact match, longest first) with `⟦VERBATIM_n⟧`;
  *  2. each distinct match of the mask's patterns, pattern by pattern in the mask's order, with `⟦CNIC_n⟧`,
  *     `⟦PHONE_n⟧`, `⟦EMAIL_n⟧`, `⟦IBAN_n⟧`, `⟦NTN_n⟧` or `⟦PASSPORT_n⟧`: a value found again keeps its token;
- *  3. each supplied party name (trimmed, case-insensitive, longest first) with `⟦PARTY_n⟧`, one token per name.
+ *  3. each supplied party name (trimmed, case-insensitive, at word edges, longest first) with `⟦PARTY_n⟧`, one
+ *     token per name.
  *
  * n counts from 1 per kind: `VERBATIM_n` and `PARTY_n` in the order the lists are given, a pattern's in the order
  * its values are found. The map holds every supplied name and verbatim string, present in the text or not (an
@@ -122,7 +141,7 @@ export function pseudonymise(
 
   const parties = namesOf(opts.partyNames).map((value) => ({ value, token: issue("party", value) }))
   for (const p of longestFirst(parties)) {
-    segments = replaceInGaps(segments, new RegExp(escapeRegExp(p.value), "gi"), () => {
+    segments = replaceInGaps(segments, partyPattern(p.value), () => {
       redactionCounts.party += 1
       return p.token
     })
@@ -132,21 +151,34 @@ export function pseudonymise(
 }
 
 /**
- * Handles a model's answer. A mapped value becomes its token, longest first: a party value in any case, every
- * other value exactly. A token the answer already holds is left as it is, and so is text inside one. What is
- * left between tokens then gets the lossy mask, so any other pattern match becomes its lossy token (`[CNIC]`,
- * `[PHONE]`, ...), which the caller refuses. A name in `opts.partyNames` that the map does not hold becomes
- * `[PARTY]` the same way, so it never comes back in plain text; `callP1` passes the list the map was made from,
- * and then there is none.
+ * Handles a model's answer. A mapped value becomes its token, longest first: a party value in any case and at word
+ * edges (as `pseudonymise` finds it), every other value exactly. A token the answer already holds is left as it
+ * is, and so is text inside one. What is left between tokens then gets the lossy mask, so any other pattern match
+ * becomes its lossy token (`[CNIC]`, `[PHONE]`, ...), which the caller refuses. A name in `opts.partyNames` that
+ * the map does not hold becomes `[PARTY]`, found the same way, so it never comes back in plain text; `callP1`
+ * passes the list the map was made from, and then there is none.
  */
 export function applyMap(text: string, map: PseudonymMap, opts: { partyNames?: readonly string[] }): string {
   let segments = tokenise(text)
   for (const p of longestFirst(map.filter((e) => e.value.length > 0))) {
-    segments = replaceInGaps(segments, new RegExp(escapeRegExp(p.value), p.kind === "party" ? "gi" : "g"), () => p.token)
+    segments = replaceInGaps(segments, p.kind === "party" ? partyPattern(p.value) : new RegExp(escapeRegExp(p.value), "g"), () => p.token)
   }
   const held = new Set(map.filter((e) => e.kind === "party").map((e) => e.value.toLowerCase()))
   const unmapped = namesOf(opts.partyNames).filter((n) => !held.has(n.toLowerCase()))
-  return segments.map((s) => (s.token ? s.text : maskOutboundPII(s.text, { partyNames: unmapped }).masked)).join("")
+  for (const n of longestFirst(unmapped.map((value) => ({ value })))) segments = replaceInGaps(segments, partyPattern(n.value), () => "[PARTY]")
+  return segments.map((s) => (s.token ? s.text : maskOutboundPII(s.text, { partyNames: [] }).masked)).join("")
+}
+
+/**
+ * The minimisation check for a pseudonymised body (rank 3 and above), in place of `assertMinimised`, which would
+ * find `Tim` in `⟦VERBATIM_1⟧` and `Party` in `⟦PARTY_1⟧`. Every token is blanked to a space first. The body then
+ * must hold no match of the mask's patterns and no party name as a whole word (the rule of `pseudonymise`);
+ * a name that is part of a longer word does not count.
+ */
+export function assertPseudonymised(body: string, partyNames: readonly string[] | undefined): boolean {
+  const bare = body.replace(own(INDEXED_TOKEN), " ")
+  if (MASK_PATTERNS.some(({ re }) => own(re).test(bare))) return false
+  return !namesOf(partyNames).some((name) => partyPattern(name).test(bare))
 }
 
 /**
@@ -156,5 +188,5 @@ export function applyMap(text: string, map: PseudonymMap, opts: { partyNames?: r
  */
 export function rehydrate(text: string, map: PseudonymMap): string {
   const valueOf = new Map(map.map((p) => [p.token, p.value]))
-  return text.replace(INDEXED_TOKEN, (token) => valueOf.get(token) ?? token)
+  return text.replace(own(INDEXED_TOKEN), (token) => valueOf.get(token) ?? token)
 }

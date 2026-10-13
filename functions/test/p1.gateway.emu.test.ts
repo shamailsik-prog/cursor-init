@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
+import { rehydrate } from "@/platform/p1/pseudonymiseOutboundPII"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { THRESHOLDS, alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
@@ -1106,6 +1107,41 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect([r.outcome, r.blockReason]).toEqual(["ok", null])
       expect(sent).toHaveLength(1)
       expect(sent[0]!.body).toBe("⟦PARTY_1⟧ ⟦CNIC_1⟧")
+    })
+
+    it("a pseudonymised confidential call whose body holds maintainable for a NAB party passes minimisation and goes out with maintainable intact", async () => {
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: false } })
+      const firmId = await seedFirm()
+      const sent = fakeTransport({ text: "⟦PARTY_1⟧ finds the appeal maintainable but unreasonable; nab agrees." })
+      const body = "NAB says the appeal is maintainable, not unreasonable."
+      const r = await callP1(req(firmId, { taskType: "drafting", classification: "confidential", body, partyNames: ["NAB"], pseudonymise: { verbatim: [] } }), at)
+      expect([r.outcome, r.blockReason]).toEqual(["ok", null])
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body).toContain("maintainable")
+      expect(sent[0]!.body).toBe("⟦PARTY_1⟧ says the appeal is maintainable, not unreasonable.")
+      // The answer is read the same way, and re-hydrates case-exact: no word is cut open.
+      expect(r.text).toBe("⟦PARTY_1⟧ finds the appeal maintainable but unreasonable; ⟦PARTY_1⟧ agrees.")
+      expect(rehydrate(r.text!, r.pseudonyms!)).toBe("NAB finds the appeal maintainable but unreasonable; NAB agrees.")
+    })
+
+    it("a pseudonymised privileged call whose party name spells part of a token word (Tim in VERBATIM) passes minimisation and goes out", async () => {
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: false } })
+      const firmId = await seedFirm()
+      const sent = fakeTransport()
+      const body = `Tim owns ${LAND}; Timothy agrees.`
+      const r = await callP1(req(firmId, { taskType: "drafting", classification: "privileged", body, partyNames: ["Tim"], pseudonymise: { verbatim: [LAND] } }), at)
+      expect([r.outcome, r.blockReason]).toEqual(["ok", null])
+      expect(sent[0]!.body).toBe("⟦PARTY_1⟧ owns ⟦VERBATIM_1⟧; Timothy agrees.")
+    })
+
+    it("a pseudonymised privileged call keeps the purpose check: a purpose holding a party name that spells part of a lossy token is blocked not_minimised", async () => {
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: false } })
+      const firmId = await seedFirm()
+      const sent = fakeTransport()
+      // The body is tokens only and passes; the purpose is masked to "[PARTY] matter", which the mask would match again.
+      const r = await callP1(req(firmId, { taskType: "drafting", classification: "privileged", body: "Party agrees.", purpose: "Party matter", partyNames: ["Party"], pseudonymise: { verbatim: [] } }), at)
+      expect([r.outcome, r.blockReason, r.outbound.body]).toEqual(["blocked", "not_minimised", "⟦PARTY_1⟧ agrees."])
+      expect(sent).toHaveLength(0)
     })
 
     // Beyond the brief's list: the map is returned on an ok result only, and no failure path carries it.

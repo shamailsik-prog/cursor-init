@@ -1,7 +1,7 @@
 import { FieldValue, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
-import { applyMap, pseudonymise, type PseudonymMap } from "@/platform/p1/pseudonymiseOutboundPII"
+import { applyMap, assertPseudonymised, pseudonymise, type PseudonymMap } from "@/platform/p1/pseudonymiseOutboundPII"
 import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolicy"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
@@ -203,13 +203,23 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
     redactionCounts,
   }
 
+  /**
+   * Rank 3 and above (step 5). A pseudonymised body is checked by `assertPseudonymised`, which blanks its tokens first
+   * (`assertMinimised` would find `Tim` in `⟦VERBATIM_1⟧`), and its purpose, still the lossy-masked one, by `assertMinimised`
+   * on its own; any other body and purpose by `assertMinimised`, as before.
+   */
+  const minimised = (): boolean =>
+    pseudo
+      ? assertPseudonymised(outbound.body, partyNames) && assertMinimised({ body: "", metadata: { purpose: outbound.purpose } }, partyNames)
+      : assertMinimised({ body: outbound.body, metadata: { purpose: outbound.purpose } }, partyNames)
+
   /** Steps 2 and 5 to 7, in order; the first refusal wins. */
   const refusal = (): BlockReason | null => {
     if (killSwitchBlocks(platformSnap.get("killSwitch"), model)) return "kill_switch_platform"
     if (killSwitchBlocks(config?.killSwitch, model)) return "kill_switch_firm"
     const policy = providerAllowedFor(PROVIDER_ID, classification)
     if (!policy.allowed) return "policy_denied"
-    if (policy.requirements && !assertMinimised({ body: outbound.body, metadata: { purpose: outbound.purpose } }, partyNames)) return "not_minimised"
+    if (policy.requirements && !minimised()) return "not_minimised"
     if (costMicroUsd(model, 0, 0) === null) return "model_unpriced"
     const budget = budgetOf(config)
     if (budget === null) return "budget_not_set"
