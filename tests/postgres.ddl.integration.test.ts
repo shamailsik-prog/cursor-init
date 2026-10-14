@@ -228,14 +228,12 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       reason: "Client waived for filing",
     });
     const actorComment = await admin.query(
-      `SELECT pg_catalog.obj_description(
-         (SELECT attrelid FROM pg_catalog.pg_attribute
-          WHERE attrelid = 'public.judgment_classification_declassify_audit'::regclass
-            AND attname = 'actor_id' AND NOT attisdropped),
-         (SELECT attnum FROM pg_catalog.pg_attribute
-          WHERE attrelid = 'public.judgment_classification_declassify_audit'::regclass
-            AND attname = 'actor_id' AND NOT attisdropped)
-       ) AS comment`,
+      `SELECT d.description AS comment
+       FROM pg_catalog.pg_description d
+       JOIN pg_catalog.pg_class c ON c.oid = d.objoid
+       JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid
+       WHERE c.relname = 'judgment_classification_declassify_audit'
+         AND a.attname = 'actor_id'`,
     );
     expect(actorComment.rows[0].comment).toMatch(/application-asserted/i);
     await partner.end();
@@ -264,9 +262,13 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     ).rejects.toMatchObject({ code: "42501" });
 
     const publicExec = await admin.query(
-      `SELECT has_function_privilege('public', 'declassify(uuid,text,text,text)', 'EXECUTE') AS ok`,
+      `SELECT count(*)::int AS n
+       FROM pg_catalog.aclexplode(
+         (SELECT proacl FROM pg_catalog.pg_proc WHERE proname = 'declassify' LIMIT 1)
+       ) acl
+       WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'`,
     );
-    expect(publicExec.rows[0].ok).toBe(false);
+    expect(publicExec.rows[0].n).toBe(0);
 
     const partner = roleClient("corpus_declassify", "declass");
     await partner.connect();
@@ -336,14 +338,17 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       ),
     ).rejects.toMatchObject({ message: expect.stringMatching(/downgrades only/i) });
 
+    const sameRankId = "00000000-0000-0000-0000-000000000101";
+    await admin.query("DELETE FROM judgment WHERE id = $1", [sameRankId]);
     await admin.query(
-      "UPDATE judgment SET classification = 'internal' WHERE id = $1",
-      [DECLASSIFY_ID_B],
+      `INSERT INTO judgment (id, case_title, classification, review_status)
+       VALUES ($1, 'same-rank', 'internal', 'promoted')`,
+      [sameRankId],
     );
     await expect(
       partner.query(
         `SELECT declassify($1::uuid, 'internal', 'partner-1', 'same rank')`,
-        [DECLASSIFY_ID_B],
+        [sameRankId],
       ),
     ).rejects.toMatchObject({ message: expect.stringMatching(/downgrades only/i) });
 
