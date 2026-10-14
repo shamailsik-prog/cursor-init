@@ -69,6 +69,8 @@ export function createFakeS3(): FakeS3 {
       cache: init.cache,
     }
     requests.push(recorded)
+    // Like fetch: a request whose signal has already fired (timeout) gets no response.
+    if (init.signal?.aborted) throw init.signal.reason
     for (const fn of interceptors) {
       const response = await fn(recorded)
       if (response) return response
@@ -157,4 +159,26 @@ export function verifySigV4(
     svc === service &&
     amzDate.startsWith(date)
   return { ok, scope, signedHeaders }
+}
+
+/**
+ * A request that never answers until its signal aborts, like a hung connection. Node's
+ * AbortSignal.timeout() holds its signal only weakly: real fetch keeps an in-flight request's
+ * signal alive, but a bare promise does not, and a garbage-collected signal never fires (seen
+ * under Stryker's single shared worker). The signal is held here until it aborts. Like fetch, a
+ * signal that fired before the call (its time ran out while the request was signed) rejects at
+ * once: the abort event fires only once, so waiting for it would hang for ever.
+ */
+const pendingSignals = new Set<AbortSignal>()
+
+export function hangUntilAborted(init: RequestInit): Promise<Response> {
+  const signal = init.signal!
+  if (signal.aborted) return Promise.reject(signal.reason)
+  pendingSignals.add(signal)
+  return new Promise<Response>((_resolve, reject) => {
+    signal.addEventListener("abort", () => {
+      pendingSignals.delete(signal)
+      reject(signal.reason)
+    })
+  })
 }

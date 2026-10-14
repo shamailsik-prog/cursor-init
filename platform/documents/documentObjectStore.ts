@@ -33,7 +33,9 @@ export {
 } from "@/platform/documents/localObjectBackends"
 export {
   createR2DocumentObjectBackend,
+  r2HoldBudget,
   type R2DocumentObjectBackendConfig,
+  type R2HoldBudget,
 } from "@/platform/documents/r2ObjectBackend"
 
 /**

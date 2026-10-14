@@ -31,6 +31,14 @@ FA-D16-003 (a failed round-trip check left the written object behind).
   this write's exact bytes count as written, another writer's bytes as "already exists". If
   nothing appears the upload fails and `[documents] document object possible orphan: <key>` is
   logged at ERROR, so the operator can remove it if it lands later.
+- **Time budget** (`r2HoldBudget`): the settle window runs on the monotonic clock and each
+  settling read gets only the time left in it, so a PUT holds the caller for at most the request
+  timeout plus the window (30 s + 60 s by default). A document-object put adds at most one verify
+  read and one delete (150 s); an upload adds at most a duplicate's verify read and one retried
+  delete (210 s). `app/api/d1/documents/route.ts` declares `maxDuration = 300`.
+- **Error text**: an R2 error carries the method, the object key, the HTTP status and an S3 error
+  code only when the code looks like one (PascalCase letters, 3 to 64 long); anything else the
+  server sends is dropped.
 - **Read-after-write**: the object is read back from the backend itself (R2: a signed GET to the
   bucket, never a local copy), decrypted, and its firm-scoped SHA-256 is compared with the upload's.
   If that fails, the object is deleted before the error propagates. If the delete also fails,

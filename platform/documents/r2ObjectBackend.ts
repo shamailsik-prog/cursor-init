@@ -48,6 +48,46 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_SETTLE_INITIAL_DELAY_MS = 250
 
 /**
+ * How long the backend can hold its caller (re-audit R2-D2), for a configuration:
+ * - `putIfAbsentMs`: the PUT's request timeout plus the settle window (the settle phase never
+ *   outlasts its window: each settling read gets only the time left in it);
+ * - `objectPutMs`: a document-object put, that is putIfAbsent, then at most one verify read and
+ *   one delete (each one request timeout);
+ * - `uploadMs`: an upload, that is an object put plus, at most, one read verifying an existing
+ *   duplicate and uploadDocument's one retry of a failed delete.
+ * The upload route's `maxDuration` (app/api/d1/documents/route.ts) is at or above `uploadMs` for
+ * the defaults (30 s timeout, 60 s window: 210 s).
+ */
+export type R2HoldBudget = {
+  requestMs: number
+  settleWindowMs: number
+  putIfAbsentMs: number
+  objectPutMs: number
+  uploadMs: number
+}
+
+export function r2HoldBudget(
+  config: Pick<R2DocumentObjectBackendConfig, "timeoutMs" | "settleWindowMs"> = {}
+): R2HoldBudget {
+  const requestMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const settleWindowMs = config.settleWindowMs ?? 2 * requestMs
+  const putIfAbsentMs = requestMs + settleWindowMs
+  const objectPutMs = putIfAbsentMs + 2 * requestMs
+  return { requestMs, settleWindowMs, putIfAbsentMs, objectPutMs, uploadMs: objectPutMs + 2 * requestMs }
+}
+
+/**
+ * Re-audit R2-D1: the S3 error code comes from the server (or anything in between), so only a
+ * code shaped like a real one may reach a message or a log: a capital, then letters only, 3 to 64
+ * long, with at least one lower-case letter (S3 codes are PascalCase: NoSuchKey,
+ * PreconditionFailed). Anything else (an access-key-shaped or hex string, digits, dots) is dropped.
+ */
+function s3ErrorCode(body: string): string | undefined {
+  // `(?=[A-Z]*[a-z])`: at least one lower-case letter; the <Code> delimiters anchor both ends.
+  return /<Code>(?=[A-Z]*[a-z])([A-Z][A-Za-z]{2,63})<\/Code>/.exec(body)?.[1]
+}
+
+/**
  * No HTTP response arrived (reset, DNS, timeout): a write's outcome is unknown. Like every error
  * this backend throws, its message is built from fixed text, the method, the object key and an
  * error code only, and it carries no `cause`: the underlying error can quote the request.
@@ -86,8 +126,7 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
   })
   const base = config.endpoint.trim().replace(/\/+$/, "")
   const bucket = encodeURIComponent(config.bucket)
-  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const settleWindowMs = config.settleWindowMs ?? 2 * timeoutMs
+  const { requestMs: timeoutMs, settleWindowMs } = r2HoldBudget(config)
   const settleInitialDelayMs = config.settleInitialDelayMs ?? DEFAULT_SETTLE_INITIAL_DELAY_MS
   const send = config.fetchImpl ?? ((url: string, init: RequestInit) => fetch(url, init))
 
@@ -110,10 +149,11 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
     method: Method,
     key: string,
     payload: Buffer | undefined,
-    headers: Record<string, string>
+    headers: Record<string, string>,
+    requestTimeoutMs = timeoutMs
   ): Promise<Response> {
     const body = payload ? new Uint8Array(payload) : undefined
-    const signal = AbortSignal.timeout(timeoutMs)
+    const signal = AbortSignal.timeout(requestTimeoutMs)
     let signed: Request
     try {
       signed = await client.sign(urlFor(key), {
@@ -127,7 +167,7 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
     try {
       return await send(signed.url, { method, headers: signed.headers, body, cache: "no-store", signal })
     } catch (err) {
-      if (signal.aborted) throw new R2TransportError(`R2 ${method} ${key} timed out after ${timeoutMs} ms`)
+      if (signal.aborted) throw new R2TransportError(`R2 ${method} ${key} timed out after ${requestTimeoutMs} ms`)
       throw new R2TransportError(`R2 ${method} ${key} failed: no response (${failureKind(err)})`)
     }
   }
@@ -146,15 +186,15 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
     }
   }
 
-  /** Status and the S3 error code only: the body may echo request details, never credentials. */
+  /** The status and a real-looking S3 error code only (R2-D1); the body is server-controlled. */
   async function failure(method: Method, key: string, res: Response): Promise<Error> {
-    const text = await res.text().catch(() => "")
-    const code = /<Code>([A-Za-z0-9.]+)<\/Code>/.exec(text)?.[1]
+    // An unreadable body has no code to report.
+    const code = await res.text().then(s3ErrorCode, () => undefined)
     return new Error(`R2 ${method} ${key} failed: HTTP ${res.status}${code ? ` ${code}` : ""}`)
   }
 
-  async function get(key: string): Promise<Buffer> {
-    const res = await request("GET", key, undefined, { "cache-control": "no-cache" })
+  async function get(key: string, requestTimeoutMs = timeoutMs): Promise<Buffer> {
+    const res = await request("GET", key, undefined, { "cache-control": "no-cache" }, requestTimeoutMs)
     if (res.ok) return bodyOf("GET", key, res)
     if (res.status === 404) {
       await drain(res)
@@ -172,17 +212,23 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
    * pauses for `settleWindowMs` (2 × the request timeout by default); a read that fails or finds
    * nothing is retried. If nothing appears, the original failure stands and the key is logged as
    * a possible orphan (it is not secret; the object is ciphertext no row references).
+   *
+   * Re-audit R2-D2: the window is a hard budget. It is measured on the monotonic clock
+   * (performance.now), so a wall-clock step cannot stretch it, and each settling read gets only
+   * min(request timeout, time left), so no read runs past the window (see r2HoldBudget).
    */
   async function settleAmbiguousPut(key: string, payload: Buffer, transportError: R2TransportError): Promise<void> {
-    const deadline = Date.now() + settleWindowMs
+    const deadline = performance.now() + settleWindowMs
     let pause = settleInitialDelayMs
     for (;;) {
-      const stored = await get(key).catch(() => undefined)
+      // Whole milliseconds: AbortSignal.timeout() refuses a fractional delay.
+      const left = Math.max(0, Math.floor(deadline - performance.now()))
+      const stored = await get(key, Math.min(timeoutMs, left)).catch(() => undefined)
       if (stored) {
         if (stored.equals(payload)) return
         throw new DocumentObjectExistsError(key)
       }
-      const remaining = deadline - Date.now()
+      const remaining = deadline - performance.now()
       if (remaining <= 0) break
       await sleep(Math.min(pause, remaining))
       pause *= 2

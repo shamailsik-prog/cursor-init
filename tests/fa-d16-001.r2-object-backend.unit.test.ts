@@ -19,7 +19,7 @@ import {
   type R2DocumentObjectBackendConfig,
 } from "@/platform/documents/documentObjectStore"
 import { newStore } from "@/platform/spine/store"
-import { createFakeS3, s3ErrorResponse, sha256Hex, verifySigV4, type FakeS3 } from "@/tests/helpers/fakeS3"
+import { createFakeS3, hangUntilAborted, s3ErrorResponse, sha256Hex, verifySigV4, type FakeS3 } from "@/tests/helpers/fakeS3"
 
 const ACCESS_KEY_ID = "FAKEACCESSKEYFAD16"
 const SECRET = "fake-secret-for-unit-tests-only"
@@ -153,7 +153,9 @@ describe("FA-D16-001: R2 backend status handling", () => {
   it.each([
     ["PUT", 500, "InternalError"],
     ["PUT", 403, "AccessDenied"],
-    ["PUT", 400, "XAmzContentSHA256Mismatch"],
+    // A code with digits (MinIO's XAmzContentSHA256Mismatch) is dropped since R2-D1: see
+    // tests/fa-d16-r2.review-fixes.unit.test.ts.
+    ["PUT", 400, "BadDigest"],
     ["GET", 500, "InternalError"],
     ["GET", 403, "AccessDenied"],
     ["DELETE", 500, "InternalError"],
@@ -190,11 +192,7 @@ describe("FA-D16-001: R2 backend status handling", () => {
   })
 
   it("a request that hangs is aborted after the configured timeout", async () => {
-    const hanging = (_url: string, init: RequestInit) =>
-      new Promise<Response>((_resolve, reject) => {
-        const signal = init.signal!
-        signal.addEventListener("abort", () => reject(signal.reason))
-      })
+    const hanging = (_url: string, init: RequestInit) => hangUntilAborted(init)
     const backend = createR2DocumentObjectBackend(config({ fetchImpl: hanging, timeoutMs: 25 }))
     await expect(backend.get(KEY)).rejects.toThrow(`R2 GET ${KEY} timed out after 25 ms`)
   })

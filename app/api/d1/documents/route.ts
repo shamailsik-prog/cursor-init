@@ -36,6 +36,15 @@ import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
 
 
+/**
+ * Route segment config (seconds; a literal, as Next reads it statically). Re-audit R2-D2: an
+ * upload through the R2 document vault can hold the request for up to r2HoldBudget().uploadMs
+ * (210 s with the defaults: PUT timeout 30 s + settle window 60 s + verify read + delete, plus a
+ * duplicate's verify read and one retried delete); this leaves headroom for the rest of the
+ * request. tests/fa-d16-r2.review-fixes.unit.test.ts keeps it at or above that budget.
+ */
+export const maxDuration = 300
+
 type Body = z.infer<typeof BodySchema>
 
 function requireActor(actorId: string, firmId?: string) {

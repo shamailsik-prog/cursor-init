@@ -24,6 +24,8 @@ on:
     paths:
       - "platform/documents/**"
       - "services/d1-6/**"
+      - "app/api/d1/documents/route.ts"
+      - "platform/spine/store.ts"
       - "tests/fa-d16-*"
       - "tests/f03-*"
       - "tests/api.documents.test.ts"
