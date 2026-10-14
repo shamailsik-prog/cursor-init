@@ -289,7 +289,7 @@ describe("LEGACY_GOVERNANCE_CHAINS off (default)", () => {
       get(opsGet, "/api/d2/ops-reporting", { actorId: "partner_a", view: "alert_waiver_expiry_disputes" })
     // An unknown persistence mode makes the repository lookup, and so the audit write, fail.
     vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "broken-for-test")
-    expect((await refused()).status).toBe(500)
+    expect((await refused()).status).toBe(503)
     expect(store.audit.slice(before)).toHaveLength(0)
     vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "memory")
     expect((await refused()).status).toBe(404)
