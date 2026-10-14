@@ -8,12 +8,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { useConsoleAuth } from "@/app/console-auth-provider"
 import {
   apiCallError,
   runApiCallAllowingStatuses as runApiCallAllowingStatusesImpl,
   stepFailureOutcome,
   type ApiCallResult,
 } from "@/app/ops/api-call-helpers"
+import { executeConsoleApiCall } from "@/lib/console/execute-console-api-call"
+import type { IdempotentUserAction } from "@/lib/console/idempotency"
 
 type ApiLog = {
   id: string
@@ -33,12 +36,14 @@ type ApiCallOptions = {
   path: string
   query?: Record<string, string | number | undefined>
   body?: unknown
+  idempotentAction?: IdempotentUserAction
 }
 
 const DEFAULT_FILE_TEXT =
   "%PDF-ops-audit% this payload proves ingest + workflow + court-ops + filing governance wiring."
 
 export function OperatorAuditConsole() {
+  const consoleAuth = useConsoleAuth()
   const [partnerId, setPartnerId] = useState("partner_a")
   const [secondReviewerId, setSecondReviewerId] = useState("partner_b")
   const [operatorId, setOperatorId] = useState("associate_a")
@@ -70,48 +75,28 @@ export function OperatorAuditConsole() {
   }
 
   async function runApiCallWithStatus(options: ApiCallOptions): Promise<ApiCallResult> {
-    const params = new URLSearchParams()
-    for (const [key, value] of Object.entries(options.query ?? {})) {
-      if (value === undefined || value === "") continue
-      params.set(key, String(value))
-    }
-    const query = params.toString()
-    const url = query ? `${options.path}?${query}` : options.path
-    const headers = new Headers()
-    if (options.method === "POST") {
-      headers.set("Content-Type", "application/json")
-      headers.set("Idempotency-Key", crypto.randomUUID())
-    }
-    const requestInit: RequestInit = {
+    const result = await executeConsoleApiCall(consoleAuth, {
       method: options.method,
-      headers,
-    }
-    if (options.body !== undefined) {
-      requestInit.body = JSON.stringify(options.body)
-    }
-    const response = await fetch(url, requestInit)
-    const text = await response.text()
-    let parsed: unknown = text
-    try {
-      parsed = text ? (JSON.parse(text) as unknown) : null
-    } catch {
-      parsed = text
-    }
+      path: options.path,
+      query: options.query,
+      body: options.body,
+      idempotentAction: options.idempotentAction,
+    })
     appendLog({
       id: crypto.randomUUID(),
       step: options.step,
       method: options.method,
-      url,
+      url: result.url,
       requestBody: options.body ?? null,
-      status: response.status,
-      ok: response.ok,
-      responseBody: parsed,
+      status: result.status,
+      ok: result.ok,
+      responseBody: result.body,
       atIso: new Date().toISOString(),
     })
     return {
-      ok: response.ok,
-      status: response.status,
-      body: parsed,
+      ok: result.ok,
+      status: result.status,
+      body: result.body,
     }
   }
 
@@ -127,10 +112,11 @@ export function OperatorAuditConsole() {
     options: ApiCallOptions,
     allowedStatuses: readonly number[]
   ): Promise<ApiCallResult> {
+    const idempotentAction: IdempotentUserAction = {}
     return runApiCallAllowingStatusesImpl({
       step: options.step,
       allowedStatuses,
-      execute: () => runApiCallWithStatus(options),
+      execute: () => runApiCallWithStatus({ ...options, idempotentAction }),
     })
   }
 

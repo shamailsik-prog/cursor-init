@@ -9,7 +9,7 @@ import {
   setDoc,
   updateDoc,
   type Firestore,
-} from "firebase/firestore"
+} from "@/platform/persistence/firestoreDbModular"
 import type {
   DocumentRecord,
   DraftRecord,

@@ -221,7 +221,7 @@ describe("audit row helpers", () => {
 describe("runtime repositories configuration errors", () => {
   const store = () => newStore()
 
-  it("memory in production is refused with an explanation, unless explicitly allowed", async () => {
+  it("memory in production is refused with an explanation", async () => {
     vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "memory")
     vi.stubEnv("NODE_ENV", "production")
     const err = await getRuntimeRepositories(store()).catch((e: unknown) => e)
@@ -229,7 +229,7 @@ describe("runtime repositories configuration errors", () => {
     expect(err).toMatchObject({ name: "PersistenceConfigurationError" })
     expect((err as Error).message).toBe(
       "SIKANDER_PERSISTENCE_MODE=memory is non-durable (data is lost on restart) and is refused " +
-        "when NODE_ENV=production. Set SIKANDER_ALLOW_MEMORY_IN_PRODUCTION=true to opt in deliberately."
+        "when NODE_ENV=production."
     )
   })
 
@@ -245,10 +245,7 @@ describe("runtime repositories configuration errors", () => {
   it("firestore mode without a database refuses, and with one returns Firestore repositories", async () => {
     vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
     await expect(getRuntimeRepositories(store())).rejects.toThrow(
-      "SIKANDER_PERSISTENCE_MODE=firestore but no Firestore database is configured. " +
-        "Production Firestore persistence (firebase-admin with firm service-account " +
-        "credentials) is not wired yet — TODO(firm); only the test-injected emulator database " +
-        "is supported. Refusing to fall back to in-memory storage."
+      /SIKANDER_PERSISTENCE_MODE=firestore but no Firestore database is configured/
     )
     setFirestorePersistenceForTests({ collection: () => ({}) })
     const repos = await getRuntimeRepositories(store())

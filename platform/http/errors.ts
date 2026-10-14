@@ -6,6 +6,7 @@
  */
 import { NextResponse } from "next/server"
 import { PublicError } from "@/platform/http/publicError"
+import { PersistenceConfigurationError } from "@/platform/persistence/errors"
 
 export { PublicError }
 
@@ -24,6 +25,10 @@ export function errorResponse(status: number, code: string, error: string): Next
 }
 
 export function internalErrorResponse(err: unknown, where: string): NextResponse {
+  if (err instanceof PersistenceConfigurationError) {
+    console.error(`[api] persistence misconfiguration in ${where}:`, err.message)
+    return errorResponse(503, "PERSISTENCE_NOT_CONFIGURED", err.message)
+  }
   console.error(`[api] unhandled error in ${where}:`, err)
   return errorResponse(500, INTERNAL_ERROR_CODE, "internal error")
 }
