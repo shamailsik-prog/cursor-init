@@ -33,13 +33,23 @@ REASON_LOW_CONFIDENCE: Final = "low_confidence"
 REASON_BLOCKED_SOURCE: Final = "blocked_source"
 REASON_UNKNOWN_SOURCE: Final = "unknown_source"
 REASON_CITATION_MISSING: Final = "citation_missing"  # decided by promotion, before trust (F22)
+REASON_DUPLICATE_CITATION: Final = "duplicate_citation"  # promotable, but the citation is already published
 QUARANTINE_REASONS: Final[Tuple[str, ...]] = (
     REASON_REVIEW_SOURCE,
     REASON_LOW_CONFIDENCE,
     REASON_BLOCKED_SOURCE,
     REASON_UNKNOWN_SOURCE,
     REASON_CITATION_MISSING,
+    REASON_DUPLICATE_CITATION,
 )
+# A record whose promotion raised is quarantined as "promotion_error:<ExceptionClass>".
+REASON_PROMOTION_ERROR_PREFIX: Final = "promotion_error:"
+
+
+def promotion_error_reason(exc: BaseException) -> str:
+    """The durable reason for a record whose promotion raised: the exception class only, never its
+    message (which can carry row data)."""
+    return f"{REASON_PROMOTION_ERROR_PREFIX}{type(exc).__name__}"
 
 # The pre-F20 schema allowed these (models.py CHECK on main before this fix). None of them is an
 # explicit approval, so the upgrade maps each to review.

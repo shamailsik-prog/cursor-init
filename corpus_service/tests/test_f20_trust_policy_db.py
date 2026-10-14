@@ -19,6 +19,7 @@ import asyncio
 import logging
 import re
 import sys
+import threading
 import types
 import uuid
 
@@ -478,11 +479,16 @@ def test_d_citation_free_record_is_quarantined_and_the_batch_continues(corpus_db
     by_id = {row[0]: row for row in staging}
     assert by_id[ids["no_citation"]][1:4] == (False, True, "citation_missing")
     assert by_id[ids["blank_citation"]][1:4] == (False, True, "citation_missing")
-    assert {row[1] for row in queue} == {"citation_missing"} and len(queue) == 2
     assert by_id[ids["good"]][1:3] == (True, False)
     assert by_id[ids["good_too"]][1:3] == (True, False)
-    # The failing row is rolled back on its own and left pending for the next run.
-    assert by_id[ids["db_error"]][1:4] == (False, False, None)
+    # The failing row's own work is rolled back, then it is quarantined with a durable reason
+    # (exception class only), so a poison record is not retried forever (re-audit LOW-3).
+    assert by_id[ids["db_error"]][1:4] == (False, True, "promotion_error:IntegrityError")
+    assert sorted((row[0], row[1]) for row in queue) == sorted([
+        (ids["no_citation"], "citation_missing"),
+        (ids["blank_citation"], "citation_missing"),
+        (ids["db_error"], "promotion_error:IntegrityError"),
+    ])
     assert {row[1] for row in master} == {"2099 F20 21", "2099 F20 23"}
     assert result == {"promoted": 2, "quarantined": 2, "failed": 1}
 
@@ -546,3 +552,300 @@ def test_e_dispatcher_never_harvests_blocked_or_unknown_sources(corpus_db, monke
     run(_run_async("PakistanLawSite"))
     run(_run_async("SupremeCourt"))
     assert calls == [("scrape_pakistanlawsite", "PakistanLawSite"), ("scrape_supremecourt", "SupremeCourt")]
+
+
+# ---------------------------------------------------------------------------------------------
+# (h) re-audit round 1 (PR #48): MEDIUM-1, LOW-1 .. LOW-4
+# ---------------------------------------------------------------------------------------------
+def _outcome_by_key(ids):
+    staging = {row[0]: row for row in run(_outcomes())[0]}
+    return {
+        key: ("promoted" if staging[sid][1] and not staging[sid][2]
+              else staging[sid][3] if staging[sid][2] and not staging[sid][1]
+              else "pending")
+        for key, sid in ids.items()
+    }
+
+
+def test_h_a_present_identifier_that_misses_never_falls_through_to_a_trusted_label(corpus_db):
+    """MEDIUM-1: the most specific identifier present decides; if it no longer resolves (source
+    deleted or renamed) the record is unknown_source. It never falls through to a less specific
+    label - here every row also carries a trusted family label, the shape the court harvesters use
+    (source_site "SupremeCourt" for source "SupremeCourtPublic")."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({
+        "family": ("f20-family", "trusted"),
+        "a": ("f20-specific-a", "review"),
+        "b": ("f20-specific-b", "review"),
+        "c": ("f20-specific-c", "review"),
+        "d": ("f20-specific-d", "review"),
+    }))
+    ids = run(_stage({
+        # FK plus the stamps every harvester now writes; FK becomes NULL on delete (ON DELETE SET NULL).
+        "fk_deleted": dict(source_id=src["a"], parsing_metadata={"source_id": str(src["a"]), "source_name": "f20-specific-a"},
+                           source_site="f20-family", extracted_citation="2099 F20 41", confidence_score=0.9),
+        "meta_source_id_deleted": dict(parsing_metadata={"source_id": str(src["b"])}, source_site="f20-family",
+                                       extracted_citation="2099 F20 42", confidence_score=0.9),
+        "meta_source_name_renamed": dict(parsing_metadata={"source_name": "f20-specific-c"}, source_site="f20-family",
+                                         extracted_citation="2099 F20 43", confidence_score=0.9),
+        "meta_source_name_deleted": dict(parsing_metadata={"source_name": "f20-specific-d"}, source_site="f20-family",
+                                         extracted_citation="2099 F20 44", confidence_score=0.9),
+        # A malformed identifier is present and resolves to nothing: also unknown, never the label.
+        "meta_source_id_malformed": dict(parsing_metadata={"source_id": "not-a-uuid"}, source_site="f20-family",
+                                         extracted_citation="2099 F20 45", confidence_score=0.9),
+        # Control: with no more specific identifier, the label itself is the identifier.
+        "label_only": dict(source_site="f20-family", extracted_citation="2099 F20 46", confidence_score=0.9),
+    }))
+    run(execute(
+        "DELETE FROM scraper_sources WHERE id IN (:a, :b, :d)",
+        "UPDATE scraper_sources SET source_name = 'f20-specific-c-v2' WHERE id = :c",
+        params={"a": src["a"], "b": src["b"], "c": src["c"], "d": src["d"]},
+    ))
+
+    result = _promote()
+
+    got = _outcome_by_key(ids)
+    want = {key: "unknown_source" for key in ids}
+    want["label_only"] = "promoted"
+    assert got == want, got
+    _staging, queue, master, _embed = run(_outcomes())
+    assert {row[1] for row in master} == {"2099 F20 46"}, "only the label-only control may be promoted"
+    assert sorted(row[1] for row in queue) == ["unknown_source"] * 5
+    assert result == {"promoted": 1, "quarantined": 5, "failed": 0}
+
+
+def test_h_trust_is_decided_before_the_duplicate_check(corpus_db):
+    """LOW-4: a record that may not be promoted is quarantined with its trust reason whether or not
+    its citation is already published; a promotable duplicate is quarantined duplicate_citation
+    (not left pending forever)."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted"), "b": ("f20-blocked", "blocked"), "r": ("f20-review", "review")}))
+    run(_stage({"original": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D1", confidence_score=0.9)}))
+    assert _promote() == {"promoted": 1, "quarantined": 0, "failed": 0}
+
+    ids = run(_stage({
+        "blocked_dup": dict(source_id=src["b"], source_site="f20-blocked", extracted_citation="2099 F20 D1", confidence_score=0.9),
+        "review_dup": dict(source_id=src["r"], source_site="f20-review", extracted_citation="2099 F20 D1", confidence_score=0.9),
+        "low_conf_dup": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D1", confidence_score=0.3),
+        "trusted_dup": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D1", confidence_score=0.9),
+        # Two promotable rows with the same new citation in one batch: one is published.
+        "pair_1": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D2", confidence_score=0.9),
+        "pair_2": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D2", confidence_score=0.9),
+    }))
+    result = _promote()
+
+    got = _outcome_by_key(ids)
+    pair = sorted([got.pop("pair_1"), got.pop("pair_2")])
+    assert got == {
+        "blocked_dup": "blocked_source",
+        "review_dup": "review_source",
+        "low_conf_dup": "low_confidence",
+        "trusted_dup": "duplicate_citation",
+    }, got
+    assert pair == ["duplicate_citation", "promoted"], pair
+    master = run(_outcomes())[2]
+    assert sorted(row[1] for row in master) == ["2099 F20 D1", "2099 F20 D2"]
+    assert result == {"promoted": 1, "quarantined": 5, "failed": 0}
+
+
+def test_h_a_record_that_raises_is_quarantined_durably_and_the_batch_continues(corpus_db, monkeypatch, caplog):
+    """LOW-3: a non-database exception mid-batch. The record's work is rolled back, it is
+    quarantined as promotion_error:<ExceptionClass> so it is not retried forever, and the rest of
+    the batch is promoted. Reason and log carry the class name only."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
+    ids = run(_stage({
+        f"k{i}": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 F20 P{i}",
+                      confidence_score=0.61 if i == 2 else 0.9)
+        for i in range(5)
+    }))
+    import scraper.tasks.promotion as promo
+
+    real = promo.publication_decision
+
+    def boom(trust, confidence):
+        if confidence == 0.61:
+            raise RuntimeError("boom with row data 2099 F20 P2")
+        return real(trust, confidence)
+
+    monkeypatch.setattr(promo, "publication_decision", boom)
+    with caplog.at_level(logging.INFO):
+        result = _promote()
+
+    assert result == {"promoted": 4, "quarantined": 0, "failed": 1}
+    staging, queue, master, _embed = run(_outcomes())
+    by_id = {row[0]: row for row in staging}
+    assert by_id[ids["k2"]][1:4] == (False, True, "promotion_error:RuntimeError")
+    assert [(row[0], row[1]) for row in queue] == [(ids["k2"], "promotion_error:RuntimeError")]
+    assert len(master) == 4
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert f"promotion.record_failed staging_id={ids['k2']} error=RuntimeError" in messages
+    assert "2099 F20 P2" not in messages, "log carries row data"
+
+    # A second run leaves the quarantined record alone.
+    assert _promote() == {"promoted": 0, "quarantined": 0, "failed": 0}
+
+
+def test_h_if_the_error_quarantine_also_fails_the_batch_still_continues(corpus_db, monkeypatch, caplog):
+    """LOW-3: if even the promotion_error quarantine write fails, that is logged (class only) and the
+    batch continues; the record stays pending."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
+    ids = run(_stage({
+        f"k{i}": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 F20 Q{i}",
+                      confidence_score=0.61 if i == 1 else 0.9)
+        for i in range(3)
+    }))
+    import scraper.tasks.promotion as promo
+
+    real_decision, real_queue = promo.publication_decision, promo.QuarantineQueue
+
+    def boom(trust, confidence):
+        if confidence == 0.61:
+            raise RuntimeError("first failure")
+        return real_decision(trust, confidence)
+
+    def queue_that_refuses_error_rows(**fields):
+        if str(fields.get("reason", "")).startswith("promotion_error:"):
+            raise LookupError("second failure")
+        return real_queue(**fields)
+
+    monkeypatch.setattr(promo, "publication_decision", boom)
+    monkeypatch.setattr(promo, "QuarantineQueue", queue_that_refuses_error_rows)
+    with caplog.at_level(logging.INFO):
+        result = _promote()
+
+    assert result == {"promoted": 2, "quarantined": 0, "failed": 1}
+    staging = {row[0]: row for row in run(_outcomes())[0]}
+    assert staging[ids["k1"]][1:4] == (False, False, None)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(f"promotion.error_quarantine_failed staging_id={ids['k1']} error=LookupError" in m for m in messages), messages
+
+
+def _threaded(fn, n):
+    results, errors = [None] * n, []
+
+    def worker(i):
+        try:
+            results[i] = fn()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(300)
+    return results, errors
+
+
+def test_h_concurrent_runs_never_double_promote(corpus_db):
+    """LOW-1 (re-audit attack, adapted to LOW-4): four promotion runs at once over 160 rows. Every
+    citation is staged twice by a trusted source, so a race could publish both copies."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted"), "r": ("f20-review", "review")}))
+    rows = {}
+    for i in range(120):
+        rows[f"t{i}"] = dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 F20 C{i // 2}", confidence_score=0.9)
+    for i in range(40):
+        rows[f"r{i}"] = dict(source_id=src["r"], source_site="f20-review", extracted_citation=f"2099 F20 R{i}", confidence_score=0.9)
+    run(_stage(rows))
+
+    results, errors = _threaded(_promote, 4)
+    assert not errors, errors
+    staging, queue, master, embed = run(_outcomes())
+    citations = [m[1] for m in master]
+    assert len(citations) == len(set(citations)) == 60, (len(citations), len(set(citations)))
+    assert not [s for s in staging if s[1] and s[2]], "a row is both promoted and quarantined"
+    assert not [s for s in staging if not s[1] and not s[2]], "a row was left undecided"
+    queued = [q[0] for q in queue]
+    assert len(queued) == len(set(queued)) == 100, "a staging row was quarantined twice"
+    reasons = sorted(q[1] for q in queue)
+    assert reasons == ["duplicate_citation"] * 60 + ["review_source"] * 40, reasons[:3]
+    assert len(embed) == 60
+    total = {k: sum(r[k] for r in results) for k in ("promoted", "quarantined", "failed")}
+    assert total == {"promoted": 60, "quarantined": 100, "failed": 0}, (total, results)
+
+
+def test_h_for_update_reread_sees_concurrent_quarantine(corpus_db):
+    """LOW-1 (re-audit attack): another transaction holds the row lock and quarantines the row;
+    promotion waits on the lock, re-reads, and leaves the row alone."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
+    ids = run(_stage({"x": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 L1", confidence_score=0.9)}))
+    locked, release = threading.Event(), threading.Event()
+
+    async def holder():
+        from sqlalchemy import text
+
+        eng = corpus_db.engine_for(corpus_db.url)
+        try:
+            async with eng.begin() as conn:
+                await conn.execute(text("SELECT 1 FROM scraper_staging WHERE id = :i FOR UPDATE"), {"i": ids["x"]})
+                await conn.execute(text("UPDATE scraper_staging SET quarantined = true, quarantine_reason = 'manual' WHERE id = :i"), {"i": ids["x"]})
+                locked.set()
+                while not release.is_set():
+                    await asyncio.sleep(0.05)
+        finally:
+            await eng.dispose()
+
+    th = threading.Thread(target=lambda: asyncio.run(holder()))
+    th.start()
+    assert locked.wait(30)
+    out = {}
+    pt = threading.Thread(target=lambda: out.setdefault("r", _promote()))
+    pt.start()
+    pt.join(2.0)
+    assert pt.is_alive(), "promotion did not wait on the row lock"
+    release.set()
+    th.join(30)
+    pt.join(60)
+    assert out["r"] == {"promoted": 0, "quarantined": 0, "failed": 0}, out
+    _staging, queue, master, _ = run(_outcomes())
+    assert master == [] and queue == []
+
+
+def test_h_a_second_run_waits_for_an_unfinished_publication_of_the_same_citation(corpus_db, monkeypatch):
+    """LOW-1/LOW-4: two runs on *different* staging rows with the same citation, interleaved so the
+    second run checks for a duplicate while the first has inserted but not yet committed the
+    case_law_master row. The second run must wait for the first and then record
+    duplicate_citation - not publish a second copy (refused at commit as a promotion_error)."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
+    first_id = uuid.UUID("ffffffff-ffff-4fff-bfff-ffffffffffff")
+    second_id = uuid.UUID("00000000-0000-4000-8000-000000000001")  # sorts first for run B
+    run(_stage({"first": dict(id=first_id, source_id=src["t"], source_site="f20-trusted",
+                              extracted_citation="2099 F20 RACE", confidence_score=0.9)}))
+
+    import scraper.tasks.promotion as promo
+
+    real_queue = promo.EmbeddingQueue
+    a_paused, b_promoting = threading.Event(), threading.Event()
+
+    def embedding_queue(**fields):
+        # Called after the master row is flushed, before the commit.
+        if threading.current_thread().name == "run-A":
+            a_paused.set()
+            b_promoting.wait(5)  # B gets this long to (wrongly) promote the same citation
+        else:
+            b_promoting.set()
+        return real_queue(**fields)
+
+    monkeypatch.setattr(promo, "EmbeddingQueue", embedding_queue)
+    out = {}
+    run_a = threading.Thread(target=lambda: out.setdefault("A", _promote()), name="run-A")
+    run_a.start()
+    assert a_paused.wait(30), "run A never reached its publication"
+    run(_stage({"second": dict(id=second_id, source_id=src["t"], source_site="f20-trusted",
+                               extracted_citation="2099 F20 RACE", confidence_score=0.9)}))
+    run_b = threading.Thread(target=lambda: out.setdefault("B", _promote()), name="run-B")
+    run_b.start()
+    run_a.join(60)
+    run_b.join(60)
+
+    assert out["A"] == {"promoted": 1, "quarantined": 0, "failed": 0}, out
+    assert out["B"] == {"promoted": 0, "quarantined": 1, "failed": 0}, out
+    staging = {row[0]: row for row in run(_outcomes())[0]}
+    assert staging[first_id][1:3] == (True, False)
+    assert staging[second_id][1:4] == (False, True, "duplicate_citation")
+    assert [row[1] for row in run(_outcomes())[2]] == ["2099 F20 RACE"]
