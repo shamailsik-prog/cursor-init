@@ -965,6 +965,42 @@ describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 
   })
 })
 
+describe("Audit F14 — a job row follows its matter's current label, not only the label it was written with", () => {
+  const CLERK = { firmId: "firmA", role: "clerk", clearanceLevel: "confidential" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "f14m"), { firmId: "firmA", title: "F14", classification: "internal" })
+      for (const uid of ["f14-clerk", "f14-assoc"]) {
+        await setDoc(doc(db, "matter_members", `f14m_${uid}`), { firmId: "firmA", matterId: "f14m", userId: uid })
+      }
+      // The transitional Next.js writer's shape (services/d1-6/uploadDocument.ts -> repos.jobs.create), at the matter's label.
+      const job = { firmId: "firmA", jobType: "ocr", documentId: "d", idempotencyKey: "k", matterId: "f14m", classification: "internal" }
+      await setDoc(doc(db, "jobs", "f14job"), { ...job, id: "f14job" })
+      await setDoc(doc(db, "jobs", "f14jobOrphan"), { ...job, id: "f14jobOrphan", matterId: "f14mMissing" })
+      await setDoc(doc(db, "matter_members", "f14mMissing_f14-clerk"), { firmId: "firmA", matterId: "f14mMissing", userId: "f14-clerk" })
+      await setDoc(doc(db, "jobs", "f14jobLoose"), { ...job, id: "f14jobLoose", matterId: null, classification: "confidential" })
+    })
+  })
+
+  it("a member cleared for the row's label reads it until the matter is raised above their clearance; a member cleared for the raised label still reads it", async () => {
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14job")))
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "matters", "f14m"), { classification: "privileged" })
+    })
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14job")))
+    await assertSucceeds(getDoc(doc(await authed("f14-assoc", ASSOC), "jobs", "f14job")))
+    // A loose-vault row (matterId null) names no matter: its rule is unchanged.
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14jobLoose")))
+  })
+
+  it("a matter-bound row whose matter cannot be read is denied, even to a member cleared for the row", async () => {
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14jobOrphan")))
+  })
+})
+
 describe("L17.6 #41 — accounts reads the intimation register only", () => {
   const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted" }
   const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }

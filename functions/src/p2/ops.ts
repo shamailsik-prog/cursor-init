@@ -1,4 +1,5 @@
-import { FieldPath, Timestamp, type DocumentData, type Query, type Transaction } from "firebase-admin/firestore"
+import { FieldPath, Timestamp, type DocumentData, type DocumentSnapshot, type Query, type Transaction } from "firebase-admin/firestore"
+import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../admin"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../d1/pagination"
 import { HttpError } from "../http/errors"
@@ -10,7 +11,7 @@ import { DISPATCH_GRACE_MS, JOB_STATUSES, MAX_MANUAL_RETRIES } from "./constants
 import { runtimeDeps } from "./dispatch"
 import { jobsRef, stageJobUpdate, type JobActorNote, type JobRow } from "./enqueue"
 import { handlerFor } from "./registry"
-import { jobView, visibilityOf, type JobView, type Visibility } from "./view"
+import { atMatterLabel, jobView, visibilityOf, type JobView, type MatterNow, type Visibility } from "./view"
 import { appendLog } from "./worker"
 
 /**
@@ -20,6 +21,13 @@ import { appendLog } from "./worker"
  * out of a list, so neither route is an existence oracle across firms, matters or clearances; the
  * state codes (409) are decided only after that gate. Views come from `jobView`: never the
  * payload, its hash, the idempotency key or the lease (P3-9, P3-11).
+ *
+ * Audit F14: every route judges a matter job as it stands now (`judge`): its matter and the
+ * caller's membership are read on the call (in the transaction for retry and cancel), the job
+ * takes its effective label (`atMatterLabel`: the stricter of its own and its matter's current
+ * label), and a full view is also `job.read` on the matter decided by the shared table. A matter
+ * raised above the caller's clearance after the job was enqueued therefore hides the job (404 /
+ * left out of a list) and refuses retry and cancel; every view shows the effective label.
  */
 
 const badQuery = () => new HttpError(400, "invalid_query")
@@ -37,10 +45,38 @@ export const listJobsTestSeam: { scanBatch?: number } = {}
 
 const nowOf = (session: Session): number => session.now ?? Date.now()
 const memberRef = (matterId: string, uid: string) => adminDb().collection("matter_members").doc(`${matterId}_${uid}`)
+const matterRef = (matterId: string) => adminDb().collection("matters").doc(matterId)
 
-/** The matter whose membership decides the row's visibility: a same-firm row's safe matterId, else none. */
+/** The matter whose label and membership decide the row's visibility: a same-firm row's safe matterId, else none. */
 function matterOf(caller: Caller, job: DocumentData | undefined): string | null {
   return job && job.firmId === caller.firmId && isSafeDocId(job.matterId) ? job.matterId : null
+}
+
+/** A matter snapshot as `judge` reads it: its firm and current label, or null when it does not exist. */
+function matterNow(snap: DocumentSnapshot): MatterNow {
+  const data = snap.data()
+  return data ? { firmId: data.firmId, classification: data.classification } : null
+}
+
+type Judged = { visibility: "none" } | { visibility: "full" | "restricted"; row: DocumentData }
+const HIDDEN: Judged = { visibility: "none" }
+
+/**
+ * What the caller may see of `job` now (audit F14), given its matter (`matter`, as read on this call; null when the
+ * job names none, or names one that could not be read) and the caller's membership of it (`isMember`, read on this
+ * call). The row is judged at its effective label (`atMatterLabel`), so a matter job whose matter is unreadable or
+ * above the caller's clearance is `none`; a firm-level job keeps its rule (partner only, cleared for its label). A
+ * matter job's full view is also `job.read` on its matter as the shared table decides it now (same firm, member,
+ * cleared, role; R-2), so the P2 rule never grants more than the table. `row` carries the effective label, for the view.
+ */
+function judge(caller: Caller, job: DocumentData | undefined, matter: MatterNow, isMember: boolean): Judged {
+  const row = atMatterLabel(job, matter)
+  const visibility = visibilityOf(caller, row, isMember)
+  if (visibility === "none" || !row) return HIDDEN
+  if (visibility === "full" && row.matterId !== null && row.matterId !== undefined) {
+    if (!matter || !decide(caller, "job.read", { firmId: matter.firmId as string, classification: matter.classification }, isMember).allow) return HIDDEN
+  }
+  return { visibility, row }
 }
 
 function parseJobId(value: unknown): string {
@@ -58,16 +94,21 @@ function parseBody(data: Data): { jobId: string; note: string } {
   return { jobId, note }
 }
 
-/** Reads the job and the caller's membership of its matter in `tx`; answers 404 for `none` and 403 not_member for `restricted`. */
+/**
+ * Reads the job, its matter and the caller's membership of it in `tx`, so the decision is made again on what the
+ * transaction commits against (a label raised or a member removed since the call began is judged, and a change while
+ * it runs retries it; audit F14). Answers 404 for `none` and 403 not_member for `restricted`; returns the row at its
+ * effective label.
+ */
 async function readVisibleTx(tx: Transaction, caller: Caller, jobId: string): Promise<JobRow> {
   const ref = jobsRef().doc(jobId)
   const job = (await tx.get(ref)).data()
   const matterId = matterOf(caller, job)
-  const isMember = matterId !== null && (await tx.get(memberRef(matterId, caller.uid))).exists
-  const visibility = visibilityOf(caller, job, isMember)
-  if (visibility === "none") throw notFound()
-  if (visibility === "restricted") throw new HttpError(403, "not_member")
-  return job as JobRow
+  const [matterSnap, memberSnap] = matterId === null ? [] : await tx.getAll(matterRef(matterId), memberRef(matterId, caller.uid))
+  const judged = judge(caller, job, matterSnap ? matterNow(matterSnap) : null, memberSnap?.exists === true)
+  if (judged.visibility === "none") throw notFound()
+  if (judged.visibility === "restricted") throw new HttpError(403, "not_member")
+  return judged.row as JobRow
 }
 
 type ListQuery = { matterId?: string; status?: string; jobType?: string }
@@ -111,7 +152,10 @@ function parseAfter(cursor: string | null): { createdAt: Timestamp; id: string }
  * listJobs(?matterId&status&jobType&limit&cursor) → { items, nextCursor }, newest first
  * (`createdAt` desc, then id desc). With `matterId`: `job.read` on that matter (403 cross_firm /
  * not_member / clearance), its `full` rows only. Without: the firm queue (`job.queue`, partner),
- * `full` and `restricted` rows. Rows the caller may not see (and rows that are not engine rows)
+ * `full` and `restricted` rows. Each batch reads the current label of every matter its rows name
+ * (and, for the firm queue, the caller's membership of each), so a row is judged at its effective
+ * label (audit F14): one above the caller's clearance, or whose matter is unreadable, is hidden.
+ * Rows the caller may not see (and rows that are not engine rows)
  * are skipped: the scan continues in batches until the page holds `limit` visible rows, as
  * listClients does. `nextCursor` names the last *visible* row, and only when a further visible
  * row exists, so a hidden row is never encoded in a cursor and never signals another page (no
@@ -147,17 +191,17 @@ export const listJobsOp: FirmOperation<Page<JobView>> = {
     let more = false
     for (;;) {
       const snap = await (after ? base.startAfter(after.createdAt, after.id) : base).limit(batch).get()
-      const members = await membershipsOf(caller, filters.matterId, snap.docs.map((d) => d.data()))
+      const current = await mattersNow(caller, filters.matterId, snap.docs.map((d) => d.data()))
       for (const d of snap.docs) {
         const job = d.data()
         const matterId = matterOf(caller, job)
-        const visibility = visibilityOf(caller, job, matterId !== null && members.has(matterId))
-        if (visibility === "none" || !shown.has(visibility) || !(job.createdAt instanceof Timestamp)) continue
+        const judged = matterId === null ? judge(caller, job, null, false) : judge(caller, job, current.matters.get(matterId) ?? null, current.members.has(matterId))
+        if (judged.visibility === "none" || !shown.has(judged.visibility) || !(job.createdAt instanceof Timestamp)) continue
         if (items.length === limit) {
           more = true
           break
         }
-        items.push({ id: d.id, createdAt: job.createdAt, view: jobView(d.id, job, visibility, { logs: false }) })
+        items.push({ id: d.id, createdAt: job.createdAt, view: jobView(d.id, judged.row, judged.visibility, { logs: false }) })
       }
       if (more || snap.size < batch) break
       const last = snap.docs[snap.docs.length - 1]
@@ -176,20 +220,36 @@ export const listJobsOp: FirmOperation<Page<JobView>> = {
   },
 }
 
-/** The matters (of `rows`) the caller is a member of. A matter list is already gated on membership of its matter. */
-async function membershipsOf(caller: Caller, listedMatter: string | undefined, rows: DocumentData[]): Promise<Set<string>> {
-  if (listedMatter !== undefined) return new Set([listedMatter])
-  const matterIds = [...new Set(rows.map((r) => matterOf(caller, r)).filter((m): m is string => m !== null))]
+/**
+ * The matters `rows` name, as they stand now (audit F14): each one's current label (`matters`) and the ones the caller
+ * is a member of (`members`), read in one `getAll`. A matter list (`listedMatter`) is already gated on the caller's
+ * membership of its matter, so only that matter's label is read.
+ */
+async function mattersNow(
+  caller: Caller,
+  listedMatter: string | undefined,
+  rows: DocumentData[]
+): Promise<{ matters: Map<string, MatterNow>; members: Set<string> }> {
+  const matters = new Map<string, MatterNow>()
+  if (listedMatter !== undefined) {
+    if (rows.length > 0) matters.set(listedMatter, matterNow(await matterRef(listedMatter).get()))
+    return { matters, members: new Set([listedMatter]) }
+  }
   const members = new Set<string>()
-  if (matterIds.length === 0) return members
-  const snaps = await adminDb().getAll(...matterIds.map((m) => memberRef(m, caller.uid)))
-  snaps.forEach((snap, i) => {
-    if (snap.exists) members.add(matterIds[i])
+  const matterIds = [...new Set(rows.map((r) => matterOf(caller, r)).filter((m): m is string => m !== null))]
+  if (matterIds.length === 0) return { matters, members }
+  const snaps = await adminDb().getAll(...matterIds.flatMap((m) => [matterRef(m), memberRef(m, caller.uid)]))
+  matterIds.forEach((m, i) => {
+    matters.set(m, matterNow(snaps[2 * i]))
+    if (snaps[2 * i + 1].exists) members.add(m)
   })
-  return members
+  return { matters, members }
 }
 
-/** getJob(?jobId) → the job's view with its logs (`job.read`); a row the caller may not see is 404 not_found. */
+/**
+ * getJob(?jobId) → the job's view with its logs (`job.read`); a row the caller may not see is 404 not_found. The job's
+ * matter and the caller's membership are read on the call and the row is judged at its effective label (audit F14).
+ */
 export const getJobOp: FirmOperation<JobView> = {
   auth: "firm",
   kind: "general",
@@ -203,11 +263,11 @@ export const getJobOp: FirmOperation<JobView> = {
     await requirePermission(caller, "job.read")
     const job = (await jobsRef().doc(jobId).get()).data()
     const matterId = matterOf(caller, job)
-    const isMember = matterId !== null && (await memberRef(matterId, caller.uid).get()).exists
-    const visibility = visibilityOf(caller, job, isMember)
-    if (visibility === "none" || !job) throw notFound()
+    const [matterSnap, memberSnap] = matterId === null ? [] : await adminDb().getAll(matterRef(matterId), memberRef(matterId, caller.uid))
+    const judged = judge(caller, job, matterSnap ? matterNow(matterSnap) : null, memberSnap?.exists === true)
+    if (judged.visibility === "none") throw notFound()
     await audit.allow()
-    return jobView(jobId, job, visibility, { logs: true })
+    return jobView(jobId, judged.row, judged.visibility, { logs: true })
   },
 }
 

@@ -281,10 +281,14 @@ service cloud.firestore {
     // document's matterId (null = loose vault); a row without the field (pre-backfill) is denied.
     // P3-14: a P2 engine row (it carries `engine`) is never read through the SDK, only through the
     // /api/platform/jobs routes (restricted view, firm-level partner-only, never the payload).
+    // Audit F14: a matter-bound row also needs clearance for the matter's current label (as drafts),
+    // so a matter raised after the job was written binds the job too; a loose-vault row is unchanged.
     match /jobs/{id}           { allow read: if sameFirm() && !('engine' in resource.data)
       && role() in ['partner', 'associate', 'clerk']
       && cleared(resource.data.classification)
-      && canAccessScope(resource.data.matterId); allow write: if false; }
+      && canAccessScope(resource.data.matterId)
+      && (resource.data.matterId == null
+        || cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification)); allow write: if false; }
     match /api_keys/{id}       { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /audit_log/{id}      { allow read: if sameFirm() && isPartner(); allow write: if false; }
     // R3 N13: full rows that could not be persisted; written by the server (Admin SDK) only.
