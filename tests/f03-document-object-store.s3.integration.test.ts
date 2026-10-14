@@ -28,6 +28,7 @@ const suite = s3Ready ? describe : describe.skip
 suite("F03 document object store (S3 / R2 integration)", () => {
   beforeAll(async () => {
     process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = "s3"
+    process.env.SIKANDER_DOCUMENT_OBJECT_S3_SSE = "none"
     delete process.env.SIKANDER_DOCUMENT_OBJECT_ROOT
     resetDocumentObjectStoreForTests()
     await ensureDocumentObjectBucketExists()
@@ -180,20 +181,11 @@ suite("F03 document object store (S3 / R2 integration)", () => {
     await deleteDocumentObject(storagePath)
   })
 
-  it("D5: R2 backend omits ServerSideEncryption on PutObject", async () => {
-    const prev = process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND
-    process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = "r2"
-    const { documentObjectS3UsesServerSideEncryptionHeader } = await import(
-      "@/platform/documents/documentObjectS3"
-    )
-    expect(documentObjectS3UsesServerSideEncryptionHeader()).toBe(false)
-    process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = prev
-  })
-
-  it("CI MinIO endpoint omits ServerSideEncryption (no KMS in docker run)", async () => {
-    const { documentObjectS3UsesServerSideEncryptionHeader } = await import(
-      "@/platform/documents/documentObjectS3"
-    )
+  it("D5: SIKANDER_DOCUMENT_OBJECT_S3_SSE=none omits ServerSideEncryption on PutObject", async () => {
+    const { documentObjectS3UsesServerSideEncryptionHeader, resetDocumentObjectS3ClientForTests } =
+      await import("@/platform/documents/documentObjectS3")
+    process.env.SIKANDER_DOCUMENT_OBJECT_S3_SSE = "none"
+    resetDocumentObjectS3ClientForTests()
     expect(documentObjectS3UsesServerSideEncryptionHeader()).toBe(false)
   })
 })

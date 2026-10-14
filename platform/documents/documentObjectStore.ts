@@ -181,13 +181,23 @@ const memoryObjects = new Map<string, Buffer>()
 let testHookFailNextRead = false
 let testHookFailNextDelete = false
 
+function assertDocumentObjectTestHooksAllowed(): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new DocumentObjectConfigurationError(
+      "document object test hooks are not available when NODE_ENV=production"
+    )
+  }
+}
+
 /** Test-only: force the next readPayload call to fail (FA-D16-003 verification). */
 export function __testHookFailNextDocumentObjectRead(): void {
+  assertDocumentObjectTestHooksAllowed()
   testHookFailNextRead = true
 }
 
 /** Test-only: force the next strict delete to fail (FA-D16-003 rollback logging). */
 export function __testHookFailNextDocumentObjectDelete(): void {
+  assertDocumentObjectTestHooksAllowed()
   testHookFailNextDelete = true
 }
 

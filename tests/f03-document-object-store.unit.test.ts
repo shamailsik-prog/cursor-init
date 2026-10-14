@@ -16,6 +16,11 @@ import {
   __testHookFailNextDocumentObjectDelete,
   __testHookFailNextDocumentObjectRead,
 } from "@/platform/documents/documentObjectStore"
+import {
+  documentObjectS3UsesServerSideEncryptionHeader,
+  resetDocumentObjectS3ClientForTests,
+  resolveDocumentObjectS3SseMode,
+} from "@/platform/documents/documentObjectS3"
 import { newStore } from "@/platform/spine/store"
 
 let root: string
@@ -30,7 +35,9 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })
   delete process.env.SIKANDER_DOCUMENT_OBJECT_ROOT
+  delete process.env.SIKANDER_DOCUMENT_OBJECT_S3_SSE
   vi.unstubAllEnvs()
+  resetDocumentObjectS3ClientForTests()
   resetDocumentObjectStoreForTests()
 })
 
@@ -221,6 +228,51 @@ describe("document object store hardening", () => {
     const { access } = await import("node:fs/promises")
     await expect(access(failEnc)).rejects.toThrow()
     await getImmutableDocumentObject(store, "firmA", kept.storagePath, keepHash)
+  })
+
+  it("S3 SSE: none, AES256, and unknown SIKANDER_DOCUMENT_OBJECT_S3_SSE values", () => {
+    process.env.SIKANDER_DOCUMENT_OBJECT_S3_SSE = "none"
+    resetDocumentObjectS3ClientForTests()
+    expect(resolveDocumentObjectS3SseMode()).toBe("none")
+    expect(documentObjectS3UsesServerSideEncryptionHeader()).toBe(false)
+
+    process.env.SIKANDER_DOCUMENT_OBJECT_S3_SSE = "AES256"
+    resetDocumentObjectS3ClientForTests()
+    expect(resolveDocumentObjectS3SseMode()).toBe("AES256")
+    expect(documentObjectS3UsesServerSideEncryptionHeader()).toBe(true)
+
+    process.env.SIKANDER_DOCUMENT_OBJECT_S3_SSE = "bogus"
+    resetDocumentObjectS3ClientForTests()
+    expect(() => resolveDocumentObjectS3SseMode()).toThrow(DocumentObjectConfigurationError)
+    expect(() => resolveDocumentObjectS3SseMode()).toThrow(/SIKANDER_DOCUMENT_OBJECT_S3_SSE/)
+  })
+
+  it("S3 SSE: r2 backend forces none even when AES256 is configured", () => {
+    process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = "r2"
+    process.env.SIKANDER_DOCUMENT_OBJECT_S3_SSE = "AES256"
+    resetDocumentObjectS3ClientForTests()
+    expect(resolveDocumentObjectS3SseMode()).toBe("none")
+    expect(documentObjectS3UsesServerSideEncryptionHeader()).toBe(false)
+    process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = "fs"
+  })
+
+  it("test hooks throw in production and do not arm rollback failures", async () => {
+    vi.stubEnv("NODE_ENV", "production")
+    expect(() => __testHookFailNextDocumentObjectRead()).toThrow(DocumentObjectConfigurationError)
+    expect(() => __testHookFailNextDocumentObjectDelete()).toThrow(DocumentObjectConfigurationError)
+    vi.unstubAllEnvs()
+    const store = newStore()
+    const bytes = Buffer.from("hook-guard")
+    const hash = store.hashKey("firmA", bytes)
+    const stored = await putImmutableDocumentObject({
+      store,
+      firmId: "firmA",
+      docId: "doc_hook_guard",
+      bytes,
+      contentHash: hash,
+      mimeType: "application/octet-stream",
+    })
+    await getImmutableDocumentObject(store, "firmA", stored.storagePath, hash)
   })
 
   it("FA-D16-003: logs rollback delete failure and rethrows the original verify error", async () => {
