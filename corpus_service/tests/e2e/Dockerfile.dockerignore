@@ -1,0 +1,5 @@
+.env
+live/
+imports/
+blackletter_state/
+**/__pycache__
