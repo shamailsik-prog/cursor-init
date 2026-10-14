@@ -223,17 +223,22 @@ class TransientDatabaseErrorTests(unittest.TestCase):
 
 
 TASKS_DIR = PROJECT_ROOT / "scraper" / "tasks"
-SCRAPER_DIR = PROJECT_ROOT / "scraper"
 
 # ---------------------------------------------------------------------------------------------
-# Master-table write scan (round-2 L1). Reviewed allowlists: a module here may touch
-# case_law_master / statutes_master without being a `direct` dispatcher route.
+# Master-table write scan (round-2 L1, round-3 LOW-A/B6). Reviewed allowlists: a module here may
+# touch case_law_master / statutes_master without being a `direct` dispatcher route.
 # ---------------------------------------------------------------------------------------------
 MASTER_WRITER_ALLOWLIST = {
     # (scraper.tasks.promotion is not here: since F19 it writes no master table; it publishes into
     # Annex A through publish_batch, which the Annex A scan below checks.)
     # Manual reviewer promotion endpoint; audit F23, deliberately out of scope for F20.
     "scraper.routers.quarantine": "manual quarantine promotion (F23)",
+}
+# Updaters only: they change rows already in a master table by assigning attributes on instances
+# they loaded, which the scan does not count as a write. Their scanned `writes` must stay empty, so
+# a new insert, instantiation, update()/delete() or write SQL in one of them fails the test (round-3
+# LOW-A, re-audit mutant B8) instead of riding on the module's allowlist entry.
+MASTER_UPDATER_ALLOWLIST = {
     # Writes embedding vectors onto rows that are already in a master table.
     "scraper.tasks.embeddings": "embedding vectors on existing master rows",
     # Updates citation_count / is_landmark on rows that are already in case_law_master.
@@ -329,23 +334,34 @@ def scan_source_for_master_tables(source, module):
     return {"refs": refs, "writes": writes}
 
 
-def scan_scraper_for_master_tables():
-    """scan_source_for_master_tables for every module under scraper/ except the models themselves."""
-    out = {}
-    for path in sorted(SCRAPER_DIR.rglob("*.py")):
-        module = ".".join(path.relative_to(PROJECT_ROOT).with_suffix("").parts)
+def corpus_modules(root=PROJECT_ROOT):
+    """(dotted module, path) for every non-test module under corpus_service/ (scraper/, root scripts
+    such as bootstrap_harvest.py, migrations/), or under a copy of it at ``root`` for mutant tests.
+    Both writer scans (master tables, Annex A) walk exactly these modules."""
+    root = Path(root)
+    for path in sorted(root.rglob("*.py")):
+        if path.relative_to(root).parts[0] == "tests":
+            continue
+        module = ".".join(path.relative_to(root).with_suffix("").parts)
         if module.endswith(".__init__"):
             module = module[: -len(".__init__")]
-        if module == "scraper.models":
-            continue
-        out[module] = scan_source_for_master_tables(path.read_text(), module)
-    return out
+        yield module, path
+
+
+def scan_corpus_for_master_tables():
+    """scan_source_for_master_tables for every non-test module under corpus_service/ (scraper/,
+    root scripts such as bootstrap_harvest.py, migrations/) except the models themselves. A writer
+    outside scraper/ is scanned too (round-3 B6)."""
+    return {module: scan_source_for_master_tables(path.read_text(), module)
+            for module, path in corpus_modules() if module != "scraper.models"}
 
 
 # ---------------------------------------------------------------------------------------------
-# Annex A write scan (merge of PR #48 round 2 into F19). The Annex A corpus contract
+# Annex A write scan (merge of PR #48 rounds 2 and 3 into F19). The Annex A corpus contract
 # (postgres/ddl/001 + 003; the relations of corpus_contract_relations()) is written only by the
-# publication package, scraper/publication/; promotion reaches it only through publish_batch.
+# publication package, scraper/publication/; promotion reaches it only through publish_batch. It walks
+# the same modules as the master-table scan (corpus_modules: every non-test module under
+# corpus_service/), models.py included.
 # ---------------------------------------------------------------------------------------------
 ANNEX_A_TABLES = (
     "court", "judge", "instrument", "statute", "statute_section", "statute_section_version", "judgment",
@@ -370,7 +386,7 @@ _TABLE_ARG_CALLS = ("table", "Table", "copy_to_table", "copy_records_to_table")
 def annex_a_model_classes(models_path=None):
     """Dotted names of the ORM classes in scraper/models.py mapped to an Annex A table (none today;
     test_f19_orm_has_no_annex_a_table... keeps it so). Any added later is scanned as an Annex A class."""
-    tree = ast.parse(Path(models_path or SCRAPER_DIR / "models.py").read_text())
+    tree = ast.parse(Path(models_path or PROJECT_ROOT / "scraper" / "models.py").read_text())
     found = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
@@ -421,18 +437,12 @@ def scan_source_for_annex_a_writes(source, module, annex_classes=frozenset()):
     return writes
 
 
-def scan_scraper_for_annex_a_writes(root=None):
-    """{module: writes} for every module under scraper/ (root: a copy of it, for mutant tests),
-    with the Annex A ORM classes of its models.py."""
-    root = Path(root or SCRAPER_DIR)
-    annex_classes = annex_a_model_classes(root / "models.py")
-    out = {}
-    for path in sorted(root.rglob("*.py")):
-        module = ".".join(path.relative_to(root.parent).with_suffix("").parts)
-        if module.endswith(".__init__"):
-            module = module[: -len(".__init__")]
-        out[module] = scan_source_for_annex_a_writes(path.read_text(), module, annex_classes)
-    return out
+def scan_corpus_for_annex_a_writes(root=PROJECT_ROOT):
+    """{module: writes} for every corpus_modules() module (root: a copy of corpus_service/, for
+    mutant tests), with the Annex A ORM classes of its scraper/models.py."""
+    annex_classes = annex_a_model_classes(Path(root) / "scraper" / "models.py")
+    return {module: scan_source_for_annex_a_writes(path.read_text(), module, annex_classes)
+            for module, path in corpus_modules(root)}
 
 
 def annex_a_policy_violations(scans):
@@ -485,22 +495,29 @@ class HarvesterStaticGuardTests(unittest.TestCase):
         self.assertEqual({name for name, kind in kinds.items() if kind == "direct"}, {"PakistanCode", "NationalAssembly"})
 
     def test_every_master_table_writer_is_a_direct_route_or_explicitly_allowed(self):
-        """Round-2 L1(b): an AST scan of all of scraper/ (import aliases resolved) finds every module
-        that touches case_law_master / statutes_master. Each must be a `direct` route module (gated
-        on trusted) or on the reviewed allowlists below; read-only modules must not write."""
+        """Round-2 L1(b), round-3 LOW-A/B6: an AST scan of every non-test module under
+        corpus_service/ (import aliases resolved) finds every module that touches case_law_master /
+        statutes_master. Each must be a `direct` route module (gated on trusted) or on the reviewed
+        allowlists above; updater-only and read-only modules must show no write at all."""
         from scraper.tasks import dispatcher
 
         direct = {route[0] for route in dispatcher.ROUTES.values() if route[2] == "direct"}
         staging = {route[0] for route in dispatcher.ROUTES.values() if route[2] == "staging"}
-        found = {module: scan for module, scan in scan_scraper_for_master_tables().items() if scan["refs"]}
-        unexpected = sorted(set(found) - direct - set(MASTER_WRITER_ALLOWLIST) - set(MASTER_READ_ONLY_ALLOWLIST))
+        scanned = scan_corpus_for_master_tables()
+        self.assertIn("bootstrap_harvest", scanned, "the scan must cover modules outside scraper/")
+        found = {module: scan for module, scan in scanned.items() if scan["refs"]}
+        allowed = set(MASTER_WRITER_ALLOWLIST) | set(MASTER_UPDATER_ALLOWLIST) | set(MASTER_READ_ONLY_ALLOWLIST)
+        unexpected = sorted(set(found) - direct - allowed)
         self.assertEqual(unexpected, [], {m: sorted(found[m]["refs"])[:5] for m in unexpected})
         self.assertEqual(sorted(staging & set(found)), [], "a staging harvester touches a master table")
+        writing_updaters = {m: sorted(found[m]["writes"]) for m in MASTER_UPDATER_ALLOWLIST if found.get(m, {}).get("writes")}
+        self.assertEqual(writing_updaters, {}, "an updater-only module gained a master-table write")
         writing_readers = {m: sorted(found[m]["writes"]) for m in MASTER_READ_ONLY_ALLOWLIST if found.get(m, {}).get("writes")}
         self.assertEqual(writing_readers, {}, "a read-only module writes a master table")
         # The scan is not vacuous: it sees the known writers.
         self.assertEqual(direct - set(found), set(), "the scan missed a direct publisher")
-        self.assertEqual(set(MASTER_WRITER_ALLOWLIST) - set(found), set(), "stale allowlist entry")
+        stale = (set(MASTER_WRITER_ALLOWLIST) | set(MASTER_UPDATER_ALLOWLIST)) - set(found)
+        self.assertEqual(stale, set(), "stale allowlist entry")
 
     def test_the_scan_sees_aliased_core_sql_and_helper_writes(self):
         """The scanner itself, on the shapes a regex missed (re-audit mutants S1-S6) and more."""
@@ -542,14 +559,15 @@ class AnnexAWriteScanTests(unittest.TestCase):
     Annex A only through publish_batch."""
 
     def test_annex_a_is_written_only_by_the_publication_package(self):
-        scans = scan_scraper_for_annex_a_writes()
+        scans = scan_corpus_for_annex_a_writes()
+        self.assertIn("bootstrap_harvest", scans, "the scan must cover modules outside scraper/")
         self.assertEqual(annex_a_policy_violations(scans), {}, "an Annex A writer outside scraper/publication")
         writers = {module for module, writes in scans.items() if writes}
         # Not vacuous: the scan sees the publication package's own writes.
         self.assertIn("scraper.publication.annex_a", writers)
         # Promotion writes no Annex A table itself; it reaches Annex A through publish_batch only.
         self.assertNotIn("scraper.tasks.promotion", writers)
-        promotion = SCRAPER_DIR / "tasks" / "promotion.py"
+        promotion = PROJECT_ROOT / "scraper" / "tasks" / "promotion.py"
         aliases = _import_aliases(ast.parse(promotion.read_text()), "scraper.tasks.promotion")
         self.assertEqual(aliases.get("publish_batch"), "scraper.publication.annex_a.publish_batch")
         # The ORM maps no Annex A table today; one added later is scanned as an Annex A class.
@@ -558,7 +576,8 @@ class AnnexAWriteScanTests(unittest.TestCase):
     def test_promotion_is_off_the_master_writer_allowlist(self):
         """#49 removes promotion's case_law_master write, so the master allowlist stays minimal."""
         self.assertNotIn("scraper.tasks.promotion", MASTER_WRITER_ALLOWLIST)
-        self.assertEqual(scan_scraper_for_master_tables()["scraper.tasks.promotion"], {"refs": set(), "writes": set()})
+        self.assertNotIn("scraper.tasks.promotion", MASTER_UPDATER_ALLOWLIST)
+        self.assertEqual(scan_corpus_for_master_tables()["scraper.tasks.promotion"], {"refs": set(), "writes": set()})
 
     def test_the_annex_a_scan_catches_every_write_shape(self):
         """Mutants: an ungated Annex A writer in a module outside scraper/publication."""
@@ -595,21 +614,23 @@ class AnnexAWriteScanTests(unittest.TestCase):
         self.assertEqual(noisy, set(), "false positives")
 
     def test_an_ungated_annex_a_writer_placed_outside_publication_is_caught(self):
-        """Mutant on a copy of the real tree: a module outside scraper/publication (including one
-        whose name only starts like it) that writes Annex A fails the policy; the same write inside
-        scraper/publication does not."""
+        """Mutant on a copy of the real corpus_service tree: a module outside scraper/publication
+        (in scraper/tasks, one whose name only starts like the package, or a root script outside
+        scraper/) that writes Annex A fails the policy; the same write inside scraper/publication
+        does not."""
         import shutil
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "scraper"
-            shutil.copytree(SCRAPER_DIR, root, ignore=shutil.ignore_patterns("__pycache__"))
+            root = Path(tmp) / "corpus_service"
+            shutil.copytree(PROJECT_ROOT, root, ignore=shutil.ignore_patterns("tests", "__pycache__"))
             rogue = "from sqlalchemy import text\n\nasync def go(conn):\n    await conn.execute(text(\"UPDATE judgment SET review_status = 'promoted' WHERE id = :i\"), {'i': 1})\n"
-            (root / "tasks" / "rogue_annex_writer.py").write_text(rogue)
-            (root / "publication_backdoor.py").write_text(rogue)
-            (root / "publication" / "sanctioned_writer.py").write_text(rogue)
-            violations = annex_a_policy_violations(scan_scraper_for_annex_a_writes(root))
-        self.assertEqual(set(violations), {"scraper.tasks.rogue_annex_writer", "scraper.publication_backdoor"})
+            (root / "scraper" / "tasks" / "rogue_annex_writer.py").write_text(rogue)
+            (root / "scraper" / "publication_backdoor.py").write_text(rogue)
+            (root / "rogue_bootstrap.py").write_text(rogue)
+            (root / "scraper" / "publication" / "sanctioned_writer.py").write_text(rogue)
+            violations = annex_a_policy_violations(scan_corpus_for_annex_a_writes(root))
+        self.assertEqual(set(violations), {"scraper.tasks.rogue_annex_writer", "scraper.publication_backdoor", "rogue_bootstrap"})
 
 
 if __name__ == "__main__":
