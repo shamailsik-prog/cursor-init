@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing"
 import { doc, getDoc, setLogLevel, updateDoc } from "firebase/firestore"
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { logger } from "firebase-functions"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { adminApp, adminDb } from "../src/admin"
 import { jobRuntime } from "../src/p2/dispatch"
 import type { DiagnosticPayload } from "../src/p2/diagnostic"
+import { fanOutEvent } from "../src/p2/fanout"
+import { jobTestSeam } from "../src/p2/registry"
 import type { JobView } from "../src/p2/view"
 import { apiErrorOf, viaApi, type ApiError } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -215,6 +218,50 @@ describe.skipIf(!EMULATORS)("F14: job routes apply the matter's current label an
     expect(queue).toContain(firmLevel)
     expect(queue).not.toContain(onMatter)
     expect((await getJob(f, f.top, onMatter)).classification).toBe("privileged")
+  })
+
+  it("a matter event fanned out to a subscriber without matterIdOf makes a matter job, judged at the matter's current label; a subscriber that yields no matter makes none (R3-D1)", async () => {
+    const f = await openFirm()
+    // The event openMatter wrote in its transaction (events/<matterId>_created, payload.matterId), as the trigger reads it.
+    const eventId = `${f.matterId}_created`
+    const event = (await adminDb().collection("events").doc(eventId).get()).data()
+    expect(event).toMatchObject({ name: "matter.created", firmId: f.firmId, payload: { matterId: f.matterId } })
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    jobTestSeam.subscribers.push(
+      { id: "f14-r3-no-matter-of", eventNames: ["matter.created"], jobType: "platform.diagnostic" },
+      { id: "f14-r3-null-matter", eventNames: ["matter.created"], jobType: "platform.diagnostic", matterIdOf: () => null }
+    )
+    let created: string[]
+    let warnings: unknown[][]
+    try {
+      created = (await fanOutEvent(eventId, event, { clock: () => clock.now() })).created
+    } finally {
+      jobTestSeam.subscribers = jobTestSeam.subscribers.filter((s) => !s.id.startsWith("f14-r3-"))
+      warnings = [...warn.mock.calls]
+      warn.mockRestore()
+    }
+
+    // One job: the subscriber without matterIdOf takes the event's matter. The one that yields no matter for a matter
+    // event gets no firm-level job (fail closed), logged by subscriber and code, without the event's values.
+    expect(created).toHaveLength(1)
+    const jobId = created[0]
+    expect(await readJob(jobId)).toMatchObject({ matterId: f.matterId, inputRefs: [`events/${eventId}`] })
+    expect(warnings).toContainEqual(["event.fanout_subscriber_skipped", { eventId, subscriber: "f14-r3-null-matter", code: "matter_event_without_matter" }])
+
+    // A non-member partner cleared for the job's label sees only the restricted view: no matter, no event reference.
+    const restricted = await getJob(f, f.outsider, jobId)
+    expect(restricted.matterId).toBe("restricted")
+    expect(JSON.stringify(restricted)).not.toContain(f.matterId)
+
+    // After the raise the job follows the matter: the non-member partner and the confidential member partner below the
+    // new label get 404 and find no row on the firm queue; the cleared member reads it with its event reference.
+    await adminDb().collection("matters").doc(f.matterId).update({ classification: "privileged-restricted" })
+    for (const who of [f.outsider, f.partner]) {
+      expectErr(await apiErrorOf(getJob(f, who, jobId)), 404, "not_found")
+      expect(ids(await listJobs(f, who, { limit: "100" }))).not.toContain(jobId)
+    }
+    expect(await getJob(f, f.top, jobId)).toMatchObject({ jobId, matterId: f.matterId, classification: "privileged-restricted", inputRefs: [`events/${eventId}`] })
+    expect(ids(await listJobs(f, f.top, { limit: "100" }))).toContain(jobId)
   })
 
   describe("the download door: the job's input document through the client SDK (firestore.rules)", () => {
