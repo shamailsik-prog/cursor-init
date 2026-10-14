@@ -21,17 +21,12 @@ CA_VOL="${COMPOSE_PROJECT_NAME}_tls-ca"
 LEGACY="${COMPOSE_PROJECT_NAME}-legacy-postgres"
 PG_CLIENT=postgres:16-alpine
 
-# New credentials. The bootstrap role keeps its pre-F30 name, as on a real upgrade.
-export POSTGRES_USER=legal POSTGRES_PASSWORD="$(rand_secret)"
-export APP_DB_USER=corpus_app APP_DB_PASSWORD="$(rand_secret)"
-export MIGRATE_DB_USER=corpus_migrate MIGRATE_DB_PASSWORD="$(rand_secret)"
-export REDIS_APP_USER=corpus_redis REDIS_APP_PASSWORD="$(rand_secret)"
-export REDIS_PASSWORD="$(rand_secret)"   # only read by the pre-F30 compose
-export E2E_ENCRYPTION_KEY="$(fernet_key)" E2E_ADMIN_API_KEY="$(rand_secret)" E2E_SECRET_KEY="$(rand_secret)"
+# New credentials, written to .env as the README's upgrade steps say (never exported). The
+# bootstrap role keeps its pre-F30 name, as on a real upgrade.
+new_store_secrets
+POSTGRES_USER=legal
 COMPOSE=(docker compose -f docker-compose.yml -f "$HERE/compose.e2e.yml")
 
-CREATED_ENV=0
-[ -e .env ] || { : >.env; CREATED_ENV=1; }
 NEW_DIRS=()
 for d in live blackletter_state; do [ -e "$d" ] || NEW_DIRS+=("$d"); done  # api bind mounts
 cleanup() {
@@ -40,9 +35,10 @@ cleanup() {
   docker volume rm "$CA_VOL" >/dev/null 2>&1 || true   # created by the clients if compose lacks it
   docker volume rm "${COMPOSE_PROJECT_NAME}_pgdata" >/dev/null 2>&1 || true
   for d in "${NEW_DIRS[@]}"; do rmdir "$d" 2>/dev/null || true; done
-  if [ "$CREATED_ENV" -eq 1 ]; then rm -f .env; fi
+  restore_dotenv
 }
 trap cleanup EXIT
+write_dotenv
 
 psql_c() { # conninfo sql [extra docker args...]
   local conninfo=$1 sql=$2; shift 2
@@ -111,6 +107,6 @@ fi
 expect_ok "migrate service creates the current schema on the upgraded volume" \
   timeout 600 "${COMPOSE[@]}" run --rm -T migrate python -m scraper.migrate
 run_probe "runtime role on the upgraded volume" \
-  timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps api python tests/e2e/probe.py db-runtime
+  timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -e E2E_BOOTSTRAP_USER="$POSTGRES_USER" api python tests/e2e/probe.py db-runtime
 
 summary "F30 upgrade e2e"

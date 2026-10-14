@@ -138,6 +138,51 @@ class ProductionRequiresVerifiedRedisTLSTests(unittest.TestCase):
             with self.subTest(reqs=reqs), self.assertRaisesRegex(ValidationError, "ssl_cert_reqs"):
                 prod_settings(REDIS_URL=url)
 
+    def test_redis_password_must_be_strong_and_non_default(self):
+        """Re-audit D3: the Redis ACL password gets the database password rule."""
+        for pw in ("x", "changeme", "short-pw-15char", "legal_scraper_pass", "PASSWORD"):
+            url = f"rediss://corpus_redis:{pw}@redis:6379/0"
+            with self.subTest(pw=pw), self.assertRaisesRegex(ValidationError, "ACL password of at least 16"):
+                prod_settings(REDIS_URL=url)
+
+    def test_redis_password_must_differ_from_the_database_password(self):
+        url = f"rediss://corpus_redis:{DB_PW}@redis:6379/0"
+        with self.assertRaisesRegex(ValidationError, "differ from the DATABASE_URL password"):
+            prod_settings(REDIS_URL=url)
+
+    def test_url_query_cannot_weaken_redis_tls(self):
+        """Re-audit D4: no ssl_* query override may switch off certificate or hostname checks."""
+        for query in (
+            "ssl_check_hostname=false", "ssl_check_hostname=0", "ssl_check_hostname=no",
+            "ssl_cert_reqs=none", "ssl_cert_reqs=CERT_OPTIONAL", "ssl_ca_certs=/tmp/other-ca.pem",
+            "SSL_CHECK_HOSTNAME=False", "ssl_cert_reqs=required&ssl_check_hostname=false",
+        ):
+            with self.subTest(query=query), self.assertRaisesRegex(ValidationError, "must not override TLS verification"):
+                prod_settings(REDIS_URL=f"{TLS_REDIS_URL}?{query}")
+        prod_settings(REDIS_URL=f"{TLS_REDIS_URL}?ssl_cert_reqs=required&ssl_check_hostname=true")
+        for key in ("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
+            with self.subTest(key=key), self.assertRaisesRegex(ValidationError, key):
+                prod_settings(**{key: f"{TLS_REDIS_URL}?ssl_check_hostname=false"})
+
+    def test_weak_redis_query_is_still_allowed_in_development(self):
+        Settings(_env_file=None, ENVIRONMENT="development", REDIS_URL="rediss://u:p@localhost:6379/0?ssl_check_hostname=false")
+
+    def test_empty_redis_url_means_this_process_uses_no_redis(self):
+        """The migrate service holds no Redis credential: REDIS_URL="" is accepted in production,
+        yields no TLS options, and the Celery app refuses to load rather than fall back to amqp."""
+        import importlib
+
+        from scraper import config
+
+        s = prod_settings(REDIS_URL="")
+        self.assertIsNone(s.redis_ssl_options())
+        sys.modules.pop("scraper.tasks.celery_app", None)
+        try:
+            with mock.patch.object(config, "settings", s), self.assertRaisesRegex(RuntimeError, "REDIS_URL is not configured"):
+                importlib.import_module("scraper.tasks.celery_app")
+        finally:
+            sys.modules.pop("scraper.tasks.celery_app", None)
+
     def test_celery_overrides_held_to_the_same_rule(self):
         for key in ("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
             with self.subTest(key=key), self.assertRaisesRegex(ValidationError, key):

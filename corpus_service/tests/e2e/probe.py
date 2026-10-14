@@ -7,6 +7,7 @@ Prints one "PASS <label>" / "FAIL <label>" line per assertion and exits 1 if any
 
     python tests/e2e/probe.py db-runtime          # as APP_DB_USER (api service environment)
     python tests/e2e/probe.py db-migrate          # as MIGRATE_DB_USER (migrate service environment)
+    python tests/e2e/probe.py env-escalation      # inside a running app container (re-audit D1)
     python tests/e2e/probe.py db-must-fail REGEX  # DATABASE_URL overridden to a bad CA / host
     python tests/e2e/probe.py redis-must-fail REGEX
     python tests/e2e/probe.py api-health          # inside the running api container
@@ -91,7 +92,11 @@ PRIVILEGED = [
     ("CREATE SCHEMA", "CREATE SCHEMA f30_probe_schema"),
     ("COPY ... TO PROGRAM", "COPY (SELECT 1) TO PROGRAM 'true'"),
     ("pg_read_file", "SELECT pg_read_file('/etc/passwd')"),
+    ("creating a large object (lo_create)", "SELECT lo_create(0)"),
 ]
+
+# Errors that mean "this credential cannot do it": no privilege, or no login at all.
+REFUSED = {INSUFFICIENT_PRIVILEGE, "28000", "28P01"}
 
 
 async def db_runtime():
@@ -152,6 +157,64 @@ async def db_migrate():
             await _must_be_denied(engine, label, sql)
     finally:
         await engine.dispose()
+
+
+async def _attempt(url, sql):
+    """Run `sql` in a transaction that is always rolled back; return 'SUCCEEDED' or the SQLSTATE /
+    exception that stopped it."""
+    from sqlalchemy import text
+
+    from scraper.database import build_engine
+
+    engine = build_engine(url)
+    try:
+        async with engine.connect() as conn:
+            trans = await conn.begin()
+            try:
+                await conn.execute(text(sql))
+                return "SUCCEEDED"
+            finally:
+                await trans.rollback()
+    except Exception as exc:  # noqa: BLE001 - classified by the caller
+        return sqlstate(exc) or type(exc).__name__
+    finally:
+        await engine.dispose()
+
+
+async def env_escalation():
+    """Re-audit D1: from inside a running app container, using only what its own environment
+    holds, nobody can destroy or alter the schema. Every database credential found in the env is
+    tried over verify-full TLS; the container must hold only its own (runtime) credential."""
+    from urllib.parse import quote
+
+    from scraper.config import settings, split_postgres_tls
+
+    env = os.environ
+    own_user = urlsplit(settings.DATABASE_URL).username
+    rootcert = split_postgres_tls(settings.DATABASE_URL)[1].get("sslrootcert", "/run/tls-ca/ca.crt")
+    found = []
+    for prefix in ("POSTGRES", "MIGRATE_DB", "APP_DB"):
+        user, pw = env.get(f"{prefix}_USER"), env.get(f"{prefix}_PASSWORD")
+        if user and pw:
+            found.append((f"{prefix}_USER/{prefix}_PASSWORD", user, pw))
+    for key, val in env.items():
+        if key != "DATABASE_URL" and val.startswith("postgresql"):
+            parts = urlsplit(val)
+            if parts.username and parts.password:
+                found.append((key, parts.username, parts.password))
+    check("container env holds no database credential besides its own DATABASE_URL",
+          not found, ", ".join(label for label, _u, _p in found))
+    candidates = [("own DATABASE_URL", own_user, None)] + found
+    for label, user, pw in candidates:
+        if pw is None:
+            url = settings.DATABASE_URL
+        else:
+            url = (f"postgresql+asyncpg://{quote(user, safe='')}:{quote(pw, safe='')}@postgres:5432/legal_scraper"
+                   f"?sslmode=verify-full&sslrootcert={rootcert}")
+        for what, sql in (("DROP TABLE scraper_jobs", "DROP TABLE scraper_jobs CASCADE"),
+                          ("ALTER TABLE scraper_sources", "ALTER TABLE scraper_sources ADD COLUMN f30_probe int")):
+            result = await _attempt(url, sql)
+            check(f"{what} as {label} ({user}) is refused", result in REFUSED, f"result={result}")
 
 
 async def db_must_fail(pattern):
@@ -235,6 +298,8 @@ def main(argv):
         asyncio.run(db_runtime())
     elif cmd == "db-migrate":
         asyncio.run(db_migrate())
+    elif cmd == "env-escalation":
+        asyncio.run(env_escalation())
     elif cmd == "db-must-fail":
         asyncio.run(db_must_fail(args[0]))
     elif cmd == "redis-must-fail":

@@ -34,16 +34,34 @@ Public bootstrap sources:
 ## Full stack (when Docker is available)
 
 ```bash
-cp .env.example .env   # fill secrets; leave ALLOW_LOGIN_SCRAPING=false
+cp .env.example .env   # fill the store and app secrets (non-secret settings live in app.env)
+python3 ../ci_gates/check_compose_policy.py docker-compose.yml   # needs PyYAML + docker compose
 docker compose up -d --build
 ```
 
 ### Data-store security (audit F30)
 
-`docker-compose.yml` refuses to start unless all eight store credentials are set
-(`POSTGRES_USER/PASSWORD`, `APP_DB_USER/PASSWORD`, `MIGRATE_DB_USER/PASSWORD`,
-`REDIS_APP_USER/PASSWORD`; see `.env.example`). Use unique, URL-safe values
-(`openssl rand -hex 24`).
+**Secrets and who gets them.** `.env` holds the store credentials (`POSTGRES_USER/PASSWORD`,
+`APP_DB_USER/PASSWORD`, `MIGRATE_DB_USER/PASSWORD`, `REDIS_APP_USER/PASSWORD`) and the app
+secrets (`ENCRYPTION_KEY`, `ADMIN_API_KEY`, `SECRET_KEY`, optional `OPENAI_API_KEY`); see
+`.env.example`. Compose reads `.env` **only** to fill the `${VAR}` references in
+`docker-compose.yml`; no service uses it as an `env_file`, and `.dockerignore` keeps it out of the
+image. Each container gets only what it uses:
+
+| Container | Store credentials it receives |
+|---|---|
+| `api`, `worker-embed`, `celery-beat` | runtime role (`APP_DB_*`) inside `DATABASE_URL`, Redis ACL user inside `REDIS_URL` |
+| `migrate` (one-shot) | migration role (`MIGRATE_DB_*`) inside `DATABASE_URL`; no Redis |
+| `worker-a`, `worker-b` (idle seats) | none (and no data-network access) |
+| `postgres` | `POSTGRES_USER`, `APP_DB_USER`, `MIGRATE_DB_USER`; the three passwords as files under `/run/secrets` |
+| `redis` | its ACL rules (on the command line) and its password as a `/run/secrets` file |
+| `secrets-preflight` (one-shot, no network) | the four store passwords as files, to check them |
+
+Non-secret app settings (`ENVIRONMENT=production`, log level, CORS, scraper tuning) live in the
+committed `app.env`, which must never hold a credential. Compose refuses to start unless every
+credential is set, and the `secrets-preflight` one-shot refuses to let the stores start unless
+each store password is at least 16 URL-safe characters (`openssl rand -hex 24`), not a known
+default, and all four differ.
 
 - **No exposure.** Postgres and Redis publish no host ports and sit on an internal-only
   network; the API binds to `127.0.0.1` (put a TLS reverse proxy in front).
@@ -51,21 +69,33 @@ docker compose up -d --build
   (`DNS:postgres`, `DNS:redis`) into the `tls-*` volumes on first start and keeps them while
   valid; the CA key is discarded after signing. Postgres runs `ssl=on` with
   `docker/postgres/pg_hba.conf` (TLS + SCRAM only, `hostnossl` rejected); Redis runs with
-  `--port 0 --tls-port 6379`. Every client verifies the server certificate and hostname against
-  the CA: `DATABASE_URL` carries `sslmode=verify-full&sslrootcert=/run/tls-ca/ca.crt`, Celery's
-  broker and result backend use `rediss://` with `REDIS_TLS_CA_FILE`. In production/staging the
-  service refuses a `DATABASE_URL` without `verify-full` or a non-`rediss://` `REDIS_URL`.
+  `--port 0 --tls-port 6379`. Every client verifies the server certificate and hostname:
+  `DATABASE_URL` carries `sslmode=verify-full&sslrootcert=/run/tls-ca/ca.crt` and the app's
+  asyncpg context trusts **only** that CA; Celery's broker and result backend use `rediss://`
+  with `REDIS_TLS_CA_FILE`, which redis-py loads **in addition to** the system trust store (a
+  public CA cannot issue a certificate for the single-label name `redis`, but see the residual
+  notes in the F30 report). In production/staging the service refuses a `DATABASE_URL` without
+  `verify-full`, a non-`rediss://` `REDIS_URL`, a weak or reused Redis password, and any
+  `ssl_*` URL parameter that would weaken Redis verification.
 - **Least privilege.** The bootstrap superuser is used only by the image's init and by
   `scripts/rotate_postgres_password.sh`, over the container's local socket; it cannot log in over
   the network. The one-shot `migrate` service creates the schema as `MIGRATE_DB_USER` (schema
-  owner); api, workers and beat run as `APP_DB_USER`, which has SELECT/INSERT/UPDATE/DELETE only
-  (no DDL, no CREATE on the database or schema, no extension, role or system changes). Redis's
-  `default` user is disabled; the app's ACL user has no `@admin`/`@dangerous` commands.
+  owner); api, worker-embed and beat run as `APP_DB_USER`, which has SELECT/INSERT/UPDATE/DELETE
+  only (no DDL, no CREATE on the database or schema, no extension, role, system or large-object
+  changes). Redis's `default` user is disabled; the app's ACL user has no `@admin`/`@dangerous`
+  commands, cannot flush scripts/functions, and cannot switch databases.
+- **Policy before every deployment.** `python3 ../ci_gates/check_compose_policy.py
+  docker-compose.yml` checks the deployment as `docker compose config` resolves it, **merged with
+  any `docker-compose.override.yml` next to it** (compose loads that file automatically), with all
+  profiles enabled. It refuses `include:`/`extends:`, unknown services, store images given by
+  variable, and any flag that weakens the stores. CI runs it on the repository; run it on the
+  deployment host too, after adding an override.
 - **Your own certificates.** Bind the three TLS volumes to host directories holding
   `ca.crt`, `postgres/server.{crt,key}` and `redis/server.{crt,key}` (server certs must name
   `postgres` / `redis` and chain to `ca.crt`), and set `TLS_CERTS_MODE=external`; the `certs`
   service then only validates them and fixes key ownership (uid 999, mode 0600), and fails
-  instead of generating anything. Example `docker-compose.override.yml`:
+  instead of generating anything. Example `docker-compose.override.yml` (re-run the policy
+  afterwards; it checks the merged result):
 
   ```yaml
   volumes:
@@ -77,7 +107,7 @@ docker compose up -d --build
   expiry on the next `docker compose up`; run `docker compose up -d --force-recreate` so every
   container reloads the new CA.
 - **Upgrading an existing install** (data volume created before F30, e.g. with `legal/legal`):
-  stop the stack, set the eight values in `.env` (keep `POSTGRES_USER` as the existing role name),
+  stop the stack, set the values in `.env` (keep `POSTGRES_USER` as the existing role name),
   run `./scripts/rotate_postgres_password.sh`, then `docker compose up -d`. The script enables TLS
   on the old volume, re-hashes the superuser password as SCRAM, creates or updates the two roles,
   moves existing application tables to the migration role and grants the runtime role DML only.

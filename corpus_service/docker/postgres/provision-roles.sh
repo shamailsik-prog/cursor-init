@@ -18,9 +18,18 @@
 # application tables it owns (pre-F30 installs created them as the superuser) move to
 # MIGRATE_DB_USER.
 #
-# Secrets are read from the container environment with psql's \getenv, never from argv.
+# Passwords come from files (compose secrets: APP_DB_PASSWORD_FILE, MIGRATE_DB_PASSWORD_FILE,
+# POSTGRES_PASSWORD_FILE) or, failing that, the variable itself. They reach psql through its
+# environment (\getenv), never argv.
 provision_corpus_roles() (
   set -euo pipefail
+  for v in APP_DB_PASSWORD MIGRATE_DB_PASSWORD POSTGRES_PASSWORD; do
+    f="${v}_FILE"
+    if [[ -z ${!v:-} && -n ${!f:-} ]]; then
+      [[ -r ${!f} ]] || { echo "provision-roles: $f=${!f} is not readable" >&2; exit 1; }
+      export "$v=$(<"${!f}")"
+    fi
+  done
   : "${POSTGRES_USER:?POSTGRES_USER required}"
   : "${APP_DB_USER:?APP_DB_USER required}"
   : "${APP_DB_PASSWORD:?APP_DB_PASSWORD required}"
@@ -146,6 +155,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"mig_user" IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_user";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"mig_user" IN SCHEMA public
   GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO :"app_user";
+
+-- Large objects live outside the tables' grants; the app never uses them, so only the superuser
+-- may create them (re-audit D8).
+REVOKE EXECUTE ON FUNCTION lo_creat(integer), lo_create(oid), lo_from_bytea(oid, bytea),
+  lo_import(text), lo_import(text, oid) FROM PUBLIC;
 
 COMMIT;
 SQL

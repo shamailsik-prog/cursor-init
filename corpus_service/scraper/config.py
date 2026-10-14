@@ -32,6 +32,7 @@ _DEFAULT_DB_PASSWORDS = frozenset(
     {"legal_scraper_pass", "legal", "postgres", "password", "changeme", "change_me", "admin", "secret"}
 )
 _MIN_PROD_DB_PASSWORD_LENGTH = 16
+_DEFAULT_REDIS_PASSWORDS = _DEFAULT_DB_PASSWORDS | {"redis", "default", ""}
 
 # ---------------------------------------------------------------------------------------------
 # Store TLS (audit F30)
@@ -95,20 +96,43 @@ def asyncpg_engine_args(url: str) -> Tuple[str, Dict[str, Any]]:
     return clean_url, {"ssl": ctx}
 
 
-def _redis_url_problem(name: str, url: str) -> Optional[str]:
+# URL query parameters that may appear on a production Redis URL, with the only values allowed.
+# Anything else starting with ssl_ is refused: TLS for Redis is configured by REDIS_TLS_CA_FILE and
+# redis_ssl_options(), and a URL query must not be able to override it (re-audit D4).
+_REDIS_STRICT_SSL_QUERY = {
+    "ssl_cert_reqs": ("required", "cert_required"),
+    "ssl_check_hostname": ("true", "1", "yes", "on"),
+}
+
+
+def _redis_url_problem(name: str, url: str, db_password: str = "") -> Optional[str]:
     """Why a Redis URL is unacceptable in production/staging, or None."""
     parts = urlsplit(url)
     if parts.scheme != "rediss":
         return f"{name} must use rediss:// (TLS) in production/staging"
     username = unquote(parts.username or "")
-    if not username or username == "default" or not parts.password:
+    password = unquote(parts.password or "")
+    if not username or username == "default" or not password:
         return (
             f"{name} must authenticate as a named Redis ACL user with a password "
             "(rediss://<user>:<password>@host:port/db); the default user is disabled"
         )
-    for key, value in parse_qsl(parts.query):
-        if key == "ssl_cert_reqs" and value.strip().lower() not in ("required", "cert_required"):
-            return f"{name} must not lower ssl_cert_reqs below required in production/staging"
+    if len(password) < _MIN_PROD_DB_PASSWORD_LENGTH or password.lower() in _DEFAULT_REDIS_PASSWORDS:
+        return (
+            f"{name} must carry a non-default Redis ACL password of at least "
+            f"{_MIN_PROD_DB_PASSWORD_LENGTH} characters in production/staging"
+        )
+    if db_password and password == db_password:
+        return f"{name} password must differ from the DATABASE_URL password"
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if not key.lower().startswith("ssl_"):
+            continue
+        allowed = _REDIS_STRICT_SSL_QUERY.get(key.lower())
+        if allowed is None or value.strip().lower() not in allowed:
+            return (
+                f"{name} must not override TLS verification ({key}={value}) in production/staging; "
+                "configure the CA with REDIS_TLS_CA_FILE"
+            )
     return None
 
 
@@ -342,7 +366,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def require_verified_store_tls(self):
         """Audit F30: in production/staging both stores must be reached over TLS that verifies
-        the server certificate and hostname, and Redis through a named ACL user."""
+        the server certificate and hostname, and Redis through a named ACL user with a strong
+        password distinct from the database one. An explicitly empty REDIS_URL means this process
+        uses no Redis (the one-shot migrate service) and is allowed."""
         _, tls = split_postgres_tls(self.DATABASE_URL)  # also rejects unknown/conflicting modes
         if not self.is_prodish():
             return self
@@ -351,11 +377,12 @@ class Settings(BaseSettings):
                 "DATABASE_URL must use TLS with server verification in production/staging: add "
                 "sslmode=verify-full (and sslrootcert=<CA file> for a private CA)"
             )
+        db_password = unquote(urlsplit(self.DATABASE_URL).password or "")
         for name in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
             url = getattr(self, name)
-            if name != "REDIS_URL" and not url:
+            if not url:
                 continue
-            problem = _redis_url_problem(name, url)
+            problem = _redis_url_problem(name, url, db_password)
             if problem:
                 raise ValueError(problem)
         return self
@@ -393,7 +420,9 @@ class Settings(BaseSettings):
     @field_validator("REDIS_URL")
     @classmethod
     def validate_redis_url(cls, v: str) -> str:
-        if not v.startswith("redis://") and not v.startswith("rediss://"):
+        # "" = this process uses no Redis (e.g. the one-shot migrate service gets no Redis
+        # credentials); scraper.tasks.celery_app refuses to load without a URL.
+        if v and not v.startswith("redis://") and not v.startswith("rediss://"):
             raise ValueError("REDIS_URL must start with redis:// or rediss://")
         return v
 

@@ -3,8 +3,10 @@
 #
 #   corpus_service/tests/e2e/store_security_e2e.sh [CORPUS_SERVICE_DIR]
 #
-# Brings up the shipped docker-compose.yml (certs, postgres, redis, then the app's own migrate /
-# api / worker-embed services) with random secrets and asserts every clause from the outside:
+# Brings up the shipped docker-compose.yml (secrets-preflight, certs, postgres, redis, then the
+# app's own migrate / api / worker-embed / celery-beat / worker-a / worker-b services) with random
+# secrets written to .env exactly as the README tells operators (never exported to compose), and
+# asserts every clause from the outside, including which credentials each container ends up with:
 # real clients (psql, redis-cli) and the app's own code path (tests/e2e/probe.py through
 # scraper.config, scraper.database, scraper.tasks.celery_app). Each check prints PASS/FAIL with
 # the reason it observed; the script exits 1 if any check failed. CORPUS_SERVICE_DIR defaults to
@@ -25,19 +27,12 @@ CA_VOL="${COMPOSE_PROJECT_NAME}_tls-ca"
 PG_CLIENT=postgres:16-alpine
 REDIS_CLIENT=redis:7-alpine
 
-export POSTGRES_USER="boot_$(openssl rand -hex 3)" POSTGRES_PASSWORD="$(rand_secret)"
-export APP_DB_USER=corpus_app APP_DB_PASSWORD="$(rand_secret)"
-export MIGRATE_DB_USER=corpus_migrate MIGRATE_DB_PASSWORD="$(rand_secret)"
-export REDIS_APP_USER=corpus_redis REDIS_APP_PASSWORD="$(rand_secret)"
-# Consumed only by the pre-F30 compose (requirepass); lets this script run unchanged against it.
-export REDIS_PASSWORD="$(rand_secret)"
-export E2E_ENCRYPTION_KEY="$(fernet_key)" E2E_ADMIN_API_KEY="$(rand_secret)" E2E_SECRET_KEY="$(rand_secret)"
-
+# Secrets go into .env exactly as README/.env.example tell operators (re-audit D1); they are plain
+# shell variables here, never exported, so compose can only get them from .env.
+new_store_secrets
 WRONG_CA=$(mktemp -d)
 chmod 0755 "$WRONG_CA"
 make_wrong_ca "$WRONG_CA"
-CREATED_ENV=0
-[ -e .env ] || { : >.env; CREATED_ENV=1; }
 NEW_DIRS=()
 for d in live blackletter_state; do [ -e "$d" ] || NEW_DIRS+=("$d"); done  # api bind mounts
 
@@ -47,9 +42,10 @@ cleanup() {
   docker volume rm "$CA_VOL" "${COMPOSE_PROJECT_NAME}_tls-postgres" "${COMPOSE_PROJECT_NAME}_tls-redis" >/dev/null 2>&1 || true
   rm -rf "$WRONG_CA"
   for d in "${NEW_DIRS[@]}"; do rmdir "$d" 2>/dev/null || true; done
-  if [ "$CREATED_ENV" -eq 1 ]; then rm -f .env; fi
+  restore_dotenv
 }
 trap cleanup EXIT
+write_dotenv
 
 psql_c() { # conninfo sql [extra docker args...]: a psql client on the data network
   local conninfo=$1 sql=$2; shift 2
@@ -147,7 +143,8 @@ SETGET=$(REDISCLI_AUTH="$REDIS_APP_PASSWORD" redis_c --tls --cacert /ca/ca.crt -
          REDISCLI_AUTH="$REDIS_APP_PASSWORD" redis_c --tls --cacert /ca/ca.crt --user "$REDIS_APP_USER" GET f30:e2e 2>&1)
 if printf '%s' "$SETGET" | tr '\n' ' ' | grep -Eq '^OK ok-over-tls'; then pass "redis: app ACL user over TLS can SET/GET"; else fail "redis: app ACL user over TLS can SET/GET" "$SETGET"; fi
 set -f # the commands below contain '*': word-split them, never glob them
-for cmd in "CONFIG GET *" "FLUSHALL" "ACL LIST" "ACL SETUSER f30probe on >x +@all" "KEYS *"; do
+for cmd in "CONFIG GET *" "FLUSHALL" "ACL LIST" "ACL SETUSER f30probe on >x +@all" "KEYS *" \
+           "SCRIPT FLUSH" "FUNCTION FLUSH" "SELECT 1"; do
   # shellcheck disable=SC2086
   REDISCLI_AUTH="$REDIS_APP_PASSWORD" expect_reply "redis: app ACL user is refused '$cmd' (NOPERM)" 'NOPERM' \
     redis_c --tls --cacert /ca/ca.crt --user "$REDIS_APP_USER" $cmd
@@ -172,7 +169,7 @@ expect_out "postgres: application tables are owned by the migration role, none b
 run_probe "migration role (migrate service env)" \
   timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps migrate python tests/e2e/probe.py db-migrate
 run_probe "runtime role (api service env)" \
-  timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps api python tests/e2e/probe.py db-runtime
+  timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -e E2E_BOOTSTRAP_USER="$POSTGRES_USER" api python tests/e2e/probe.py db-runtime
 WRONG_CA_URL="postgresql+asyncpg://$APP_DB_USER:$APP_DB_PASSWORD@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/wrongca/ca.crt"
 run_probe "app engine, wrong CA" \
   timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -v "$WRONG_CA:/wrongca:ro" -e DATABASE_URL="$WRONG_CA_URL" \
@@ -189,14 +186,52 @@ run_probe "app redis client, wrong hostname" \
   timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps \
   -e REDIS_URL="rediss://$REDIS_APP_USER:$REDIS_APP_PASSWORD@$REDIS_IP:6379/0" \
   api python tests/e2e/probe.py redis-must-fail 'mismatch|not valid for'
-if "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 180 api worker-embed; then
-  pass "api and worker-embed start (after migrate completes) under the runtime role"
+APP_SERVICES="api worker-embed celery-beat worker-a worker-b"
+# shellcheck disable=SC2086
+if "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 180 $APP_SERVICES; then
+  pass "app services start (after migrate completes): $APP_SERVICES"
 else
-  fail "api and worker-embed start (after migrate completes) under the runtime role" \
-    "$("${COMPOSE[@]}" logs --no-color migrate api worker-embed 2>&1 | tail -n 60)"
+  fail "app services start (after migrate completes): $APP_SERVICES" \
+    "$("${COMPOSE[@]}" logs --no-color migrate $APP_SERVICES 2>&1 | grep -v -i -e password -e secret | tail -n 60)"
 fi
 run_probe "running api container" timeout 300 "${COMPOSE[@]}" exec -T api python tests/e2e/probe.py api-health
 run_probe "celery" timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps api python tests/e2e/probe.py celery
-if [ "$FAILS" -ne 0 ]; then "${COMPOSE[@]}" logs --no-color --tail 40 migrate api worker-embed postgres redis 2>&1 | tail -n 120; fi
+
+echo "-- re-audit D1: each container holds only the credentials it uses (all secrets in .env, as documented)"
+exec_env() { timeout 60 "${COMPOSE[@]}" exec -T "$1" env 2>/dev/null; }
+inspect_env() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${COMPOSE_PROJECT_NAME}-$1-1" 2>/dev/null; }
+for svc in api worker-embed celery-beat; do
+  scope_check "D1: $svc env holds only its runtime URLs' credentials (no POSTGRES_*/MIGRATE_*; APP/REDIS passwords only inside DATABASE_URL/REDIS_URL)" \
+    "$(exec_env "$svc")" 1 APP_DB_PASSWORD@DATABASE_URL REDIS_APP_PASSWORD@REDIS_URL
+done
+for svc in worker-a worker-b; do
+  scope_check "D1: $svc (idle seat) env holds no store credential at all" "$(exec_env "$svc")" 1
+done
+scope_check "D1: migrate env holds only the migration role, inside DATABASE_URL (no Redis, app or superuser credential)" \
+  "$(inspect_env migrate)" 1 MIGRATE_DB_PASSWORD@DATABASE_URL
+scope_check "D5: postgres container env holds no password value (POSTGRES/APP/MIGRATE passwords arrive as /run/secrets files)" \
+  "$(inspect_env postgres)" 0
+scope_check "D5: redis container env holds no password value (healthcheck reads the secret file)" "$(inspect_env redis)" 0
+expect_ok "D1: the app image carries no .env (/app/.env absent in the api container)" \
+  timeout 60 "${COMPOSE[@]}" exec -T api test ! -e /app/.env
+for svc in api worker-embed celery-beat; do
+  run_probe "D1: $svc container, using only its own env" \
+    timeout 300 "${COMPOSE[@]}" exec -T "$svc" python tests/e2e/probe.py env-escalation
+done
+
+echo "-- re-audit D3: secrets-preflight refuses weak or reused store passwords"
+expect_refused "secrets-preflight refuses a Redis password reused from the app DB role" 'must differ' \
+  env REDIS_APP_PASSWORD="$APP_DB_PASSWORD" timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
+expect_refused "secrets-preflight refuses a password shorter than 16 characters" 'at least 16' \
+  env MIGRATE_DB_PASSWORD=short-pw-15char timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
+expect_refused "secrets-preflight refuses a known default password" 'known default' \
+  env POSTGRES_PASSWORD=legal_scraper_pass timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
+expect_refused "secrets-preflight refuses a password that is not URL-safe" 'URL-safe' \
+  env APP_DB_PASSWORD='not/url@safe:password-0123' timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
+
+if [ "$FAILS" -ne 0 ]; then
+  "${COMPOSE[@]}" logs --no-color --tail 40 secrets-preflight migrate api worker-embed postgres redis 2>&1 \
+    | grep -v -i -e password -e secret | tail -n 120
+fi
 
 summary "F30 store security e2e"

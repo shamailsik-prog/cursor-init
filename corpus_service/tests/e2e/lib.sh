@@ -82,3 +82,67 @@ make_wrong_ca() {
     -subj "/CN=f30-e2e-wrong-ca" -keyout "$dir/ca.key" -out "$dir/ca.crt" >/dev/null 2>&1
   chmod 0644 "$dir/ca.crt"
 }
+
+# --- re-audit D1: secrets live in .env exactly as the README says, never in the shell ----------
+STORE_SECRET_VARS="POSTGRES_PASSWORD MIGRATE_DB_PASSWORD APP_DB_PASSWORD REDIS_APP_PASSWORD"
+STORE_CRED_KEYS="POSTGRES_USER POSTGRES_PASSWORD MIGRATE_DB_USER MIGRATE_DB_PASSWORD APP_DB_USER APP_DB_PASSWORD REDIS_APP_USER REDIS_APP_PASSWORD REDISCLI_AUTH PGPASSWORD"
+
+# new_store_secrets: random credentials as plain (non-exported) shell variables.
+new_store_secrets() {
+  POSTGRES_USER="boot_$(openssl rand -hex 3)" POSTGRES_PASSWORD="$(rand_secret)"
+  APP_DB_USER=corpus_app APP_DB_PASSWORD="$(rand_secret)"
+  MIGRATE_DB_USER=corpus_migrate MIGRATE_DB_PASSWORD="$(rand_secret)"
+  REDIS_APP_USER=corpus_redis REDIS_APP_PASSWORD="$(rand_secret)"
+  REDIS_PASSWORD="$(rand_secret)"   # read only by the pre-F30 compose (requirepass)
+  ENCRYPTION_KEY="$(fernet_key)" ADMIN_API_KEY="$(rand_secret)" SECRET_KEY="$(rand_secret)"
+  # If the caller exported any of these, un-export them: compose must get them from .env only.
+  export -n POSTGRES_USER POSTGRES_PASSWORD APP_DB_USER APP_DB_PASSWORD MIGRATE_DB_USER MIGRATE_DB_PASSWORD \
+    REDIS_APP_USER REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY 2>/dev/null || true
+}
+
+# write_dotenv: the operator's .env as README/.env.example describe it (mode 0600). An existing
+# .env is set aside and put back by restore_dotenv.
+ENV_BACKUP=""
+write_dotenv() {
+  if [ -e .env ] && [ -z "$ENV_BACKUP" ]; then ENV_BACKUP=$(mktemp); cp -p .env "$ENV_BACKUP"; fi
+  ( umask 077
+    printf '%s\n' \
+      "POSTGRES_USER=$POSTGRES_USER" "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" \
+      "APP_DB_USER=$APP_DB_USER" "APP_DB_PASSWORD=$APP_DB_PASSWORD" \
+      "MIGRATE_DB_USER=$MIGRATE_DB_USER" "MIGRATE_DB_PASSWORD=$MIGRATE_DB_PASSWORD" \
+      "REDIS_APP_USER=$REDIS_APP_USER" "REDIS_APP_PASSWORD=$REDIS_APP_PASSWORD" \
+      "ENCRYPTION_KEY=$ENCRYPTION_KEY" "ADMIN_API_KEY=$ADMIN_API_KEY" "SECRET_KEY=$SECRET_KEY" \
+      "OPENAI_API_KEY=" "TLS_CERTS_MODE=auto" \
+      "REDIS_PASSWORD=$REDIS_PASSWORD" >.env )
+}
+restore_dotenv() {
+  if [ -n "$ENV_BACKUP" ]; then mv -f "$ENV_BACKUP" .env; else rm -f .env; fi
+}
+
+# scope_check LABEL ENV_TEXT KEYS_TOO [SECRET@KEY ...]
+# ENV_TEXT is a container's environment (KEY=VALUE lines). Each store password may appear only
+# inside the value of the key named for it (e.g. APP_DB_PASSWORD@DATABASE_URL) and nowhere else;
+# with KEYS_TOO=1 no store credential variable may be present at all. Reports key names only,
+# never values.
+scope_check() {
+  local label=$1 envtext=$2 keys_too=$3; shift 3
+  local problems="" name value allowed spec line k
+  if [ -z "$envtext" ]; then fail "$label" "could not read the container environment"; return; fi
+  if [ "$keys_too" = 1 ]; then
+    for k in $STORE_CRED_KEYS; do
+      if printf '%s\n' "$envtext" | grep -q "^$k="; then problems+="has $k; "; fi
+    done
+  fi
+  for name in $STORE_SECRET_VARS; do
+    value=${!name}
+    allowed=""
+    for spec in "$@"; do
+      if [ "${spec%@*}" = "$name" ]; then allowed=${spec#*@}; fi
+    done
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      if [ -z "$allowed" ] || [ "${line%%=*}" != "$allowed" ]; then problems+="${line%%=*} carries $name; "; fi
+    done < <(printf '%s\n' "$envtext" | grep -F -- "$value")
+  done
+  if [ -z "$problems" ]; then pass "$label"; else fail "$label" "$problems"; fi
+}
