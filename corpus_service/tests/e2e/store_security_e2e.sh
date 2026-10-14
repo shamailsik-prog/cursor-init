@@ -208,6 +208,26 @@ writer_membership() {
 }
 expect_out "re-running 20-provision-roles.sh on the running stack succeeds (prints ready)" 'ready in legal_scraper' provision
 annex_a_checks "after re-provisioning"
+# The grants 001/003 make to corpus_writer, corpus_reader and corpus_declassify, as initialised (object:grantee:
+# privilege:grantor). Every reset below (REVOKE ... CASCADE included, #50 round 2) must leave exactly these.
+ddl_role_grants() {
+  as_superuser_local "select coalesce(string_agg(x, ',' order by x collate \"C\"), 'none') from (
+      select a::text || ':' || g.rolname || ':' || e.privilege_type || ':' || pg_get_userbyid(e.grantor) as x
+        from public.corpus_contract_relations() a join pg_class c on c.oid = a
+        cross join lateral aclexplode(c.relacl) e join pg_roles g on g.oid = e.grantee
+       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify')
+      union all
+      select f.routine::text || ':' || g.rolname || ':' || e.privilege_type || ':' || pg_get_userbyid(e.grantor)
+        from public.corpus_contract_routines() f join pg_proc p on p.oid = f.routine
+        cross join lateral aclexplode(p.proacl) e join pg_roles g on g.oid = e.grantee
+       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify')) s"
+}
+DDL_ROLE_GRANTS=$(ddl_role_grants 2>&1)
+for want in 'corpus_publication_begin\(text,text,text,text\):corpus_writer:EXECUTE:' \
+            'declassify\(uuid,text,text,text\):corpus_declassify:EXECUTE:' 'v_judgment:corpus_reader:SELECT:' \
+            'judgment:corpus_writer:INSERT:'; do
+  expect_out "control: the DDL's own grants are read ($want)" "$want" printf '%s' "$DDL_ROLE_GRANTS"
+done
 # Drift an operator (or an older script) could leave behind; a re-run must put every one of them back.
 DECLASSIFY='public.declassify(uuid,text,text,text)'
 BEGIN_FN='public.corpus_publication_begin(text,text,text,text)'
@@ -257,6 +277,113 @@ drift_case "Annex A relation grants through corpus_clients and PUBLIC" \
   "grant select on public.judgment to corpus_clients" \
   "grant select, insert on public.corpus_publication_grant to public" \
   "grant select on public.v_judgment to public"
+# Re-audit L1 (#50 round 2): grant-option chains. A role holding a privilege WITH GRANT OPTION passes it on;
+# the reset takes every chain down (REVOKE ... CASCADE) instead of failing on the dependent grants, and still
+# prints "ready". On Annex A the migration role passes EXECUTE on declassify(), SELECT on judgment and USAGE
+# on corpus_publication's identity sequence to the runtime role; beyond it, it passes USAGE on schema public
+# and CONNECT on the database, and the runtime role passes SELECT on a table of the migration role, and
+# USAGE on its sequence, to corpus_clients.
+ANNEX_SEQ=$(as_superuser_local "select pg_get_serial_sequence('public.corpus_publication', 'seq')" 2>&1)
+expect_out "L1 setup: corpus_publication.seq is backed by an Annex A identity sequence" '^public\.corpus_publication_seq_seq$' \
+  printf '%s' "$ANNEX_SEQ"
+as_role_local "$MIGRATE_DB_USER" "create table public.f19_l1_t (i serial)" >/dev/null 2>&1 \
+  || fail "L1 setup: a table of the migration role"
+for sql in "grant execute on function $DECLASSIFY to \"$MIGRATE_DB_USER\" with grant option" \
+           "grant select on public.judgment to \"$MIGRATE_DB_USER\" with grant option" \
+           "grant usage on sequence $ANNEX_SEQ to \"$MIGRATE_DB_USER\" with grant option" \
+           "grant usage on schema public to \"$MIGRATE_DB_USER\" with grant option" \
+           "grant connect on database legal_scraper to \"$MIGRATE_DB_USER\" with grant option" \
+           "grant select on public.f19_l1_t to \"$APP_DB_USER\" with grant option" \
+           "grant usage on sequence public.f19_l1_t_i_seq to \"$APP_DB_USER\" with grant option"; do
+  as_superuser_local "$sql" >/dev/null 2>&1 || fail "L1 setup failed: $sql"
+done
+for sql in "grant execute on function $DECLASSIFY to \"$APP_DB_USER\"" "grant select on public.judgment to \"$APP_DB_USER\"" \
+           "grant usage on sequence $ANNEX_SEQ to \"$APP_DB_USER\"" "grant usage on schema public to \"$APP_DB_USER\"" \
+           "grant connect on database legal_scraper to \"$APP_DB_USER\""; do
+  as_role_local "$MIGRATE_DB_USER" "$sql" >/dev/null 2>&1 || fail "L1 setup failed as the migration role: $sql"
+done
+for sql in "grant select on public.f19_l1_t to corpus_clients" "grant usage on sequence public.f19_l1_t_i_seq to corpus_clients"; do
+  as_role_local "$APP_DB_USER" "$sql" >/dev/null 2>&1 || fail "L1 setup failed as the runtime role: $sql"
+done
+l1_state() { # ACL entries granted along the chains | the 7 grant options | the runtime role's reach into Annex A
+  as_superuser_local "select ((select count(*) from pg_proc p cross join lateral aclexplode(p.proacl) e
+        where p.oid = '$DECLASSIFY'::regprocedure and e.grantor = '\"$MIGRATE_DB_USER\"'::regrole)
+    + (select count(*) from pg_class c cross join lateral aclexplode(c.relacl) e
+        where c.oid in ('public.judgment'::regclass, '$ANNEX_SEQ'::regclass) and e.grantor = '\"$MIGRATE_DB_USER\"'::regrole)
+    + (select count(*) from pg_namespace n cross join lateral aclexplode(n.nspacl) e
+        where n.nspname = 'public' and e.grantor = '\"$MIGRATE_DB_USER\"'::regrole)
+    + (select count(*) from pg_database d cross join lateral aclexplode(d.datacl) e
+        where d.datname = 'legal_scraper' and e.grantor = '\"$MIGRATE_DB_USER\"'::regrole)
+    + (select count(*) from pg_class c cross join lateral aclexplode(c.relacl) e
+        where c.oid in ('public.f19_l1_t'::regclass, 'public.f19_l1_t_i_seq'::regclass)
+          and e.grantor = '\"$APP_DB_USER\"'::regrole))::text || '|'
+    || has_function_privilege('$MIGRATE_DB_USER', '$DECLASSIFY', 'EXECUTE WITH GRANT OPTION') || '|'
+    || has_table_privilege('$MIGRATE_DB_USER', 'public.judgment', 'SELECT WITH GRANT OPTION') || '|'
+    || has_sequence_privilege('$MIGRATE_DB_USER', '$ANNEX_SEQ', 'USAGE WITH GRANT OPTION') || '|'
+    || has_schema_privilege('$MIGRATE_DB_USER', 'public', 'USAGE WITH GRANT OPTION') || '|'
+    || has_database_privilege('$MIGRATE_DB_USER', 'legal_scraper', 'CONNECT WITH GRANT OPTION') || '|'
+    || has_table_privilege('$APP_DB_USER', 'public.f19_l1_t', 'SELECT WITH GRANT OPTION') || '|'
+    || has_sequence_privilege('$APP_DB_USER', 'public.f19_l1_t_i_seq', 'USAGE WITH GRANT OPTION') || '|'
+    || has_function_privilege('$APP_DB_USER', '$DECLASSIFY', 'EXECUTE') || '|'
+    || has_table_privilege('$APP_DB_USER', 'public.judgment', 'SELECT') || '|'
+    || has_sequence_privilege('$APP_DB_USER', '$ANNEX_SEQ', 'USAGE')"
+}
+expect_out "drift control (L1): seven grants along the chains, every grant option held, the runtime role reaches declassify, judgment and the identity sequence" \
+  '^7\|true\|true\|true\|true\|true\|true\|true\|true\|true\|true$' l1_state
+expect_out "re-provisioning after the grant-option chains succeeds (prints ready)" 'ready in legal_scraper' provision
+expect_out "re-provisioning takes every chain down (REVOKE ... CASCADE): no chained grant, no grant option, no reach" \
+  '^0\|false\|false\|false\|false\|false\|false\|false\|false\|false\|false$' l1_state
+expect_out "the runtime role keeps its DML on the migration role's table and its sequence after the cascade" '^true\|true$' \
+  as_superuser_local "select has_table_privilege('$APP_DB_USER', 'public.f19_l1_t', 'SELECT,INSERT,UPDATE,DELETE') || '|'
+    || has_sequence_privilege('$APP_DB_USER', 'public.f19_l1_t_i_seq', 'USAGE,SELECT,UPDATE')"
+as_role_local "$MIGRATE_DB_USER" "drop table public.f19_l1_t" >/dev/null 2>&1 || fail "L1: dropping the migration role's table"
+# Re-audit L2 (#50 round 2): the bootstrap role's default privileges. Objects it creates later (in public, in
+# another schema, or anywhere) grant nothing to the application roles or corpus_clients, and no table or
+# sequence of it grants anything to PUBLIC.
+as_superuser_local "create schema f19_l2_s" >/dev/null 2>&1 || fail "L2 setup: another schema"
+for sql in "alter default privileges for role \"$POSTGRES_USER\" in schema public grant execute on functions to \"$APP_DB_USER\"" \
+           "alter default privileges for role \"$POSTGRES_USER\" in schema public grant select on tables to public" \
+           "alter default privileges for role \"$POSTGRES_USER\" in schema f19_l2_s grant select on tables to \"$APP_DB_USER\"" \
+           "alter default privileges for role \"$POSTGRES_USER\" in schema public grant select on tables to \"$MIGRATE_DB_USER\"" \
+           "alter default privileges for role \"$POSTGRES_USER\" in schema public grant usage on sequences to corpus_clients" \
+           "alter default privileges for role \"$POSTGRES_USER\" grant select on tables to \"$APP_DB_USER\"" \
+           "alter default privileges for role \"$POSTGRES_USER\" grant create on schemas to \"$APP_DB_USER\""; do
+  as_superuser_local "$sql" >/dev/null 2>&1 || fail "L2 setup failed: $sql"
+done
+boot_default_acl() { # default-ACL entries of the bootstrap role granting to the app, migration role or corpus_clients,
+                    # or tables or sequences to PUBLIC
+  as_superuser_local "select count(*) from pg_default_acl d cross join lateral aclexplode(d.defaclacl) e
+    where d.defaclrole = '\"$POSTGRES_USER\"'::regrole
+      and (e.grantee in (select oid from pg_roles where rolname in ('$APP_DB_USER', '$MIGRATE_DB_USER', 'corpus_clients'))
+           or (e.grantee = 0 and d.defaclobjtype in ('r', 'S')))"
+}
+expect_out "drift control (L2): seven default-privilege entries of the bootstrap role (public, f19_l2_s, global) grant to the app, migration role, corpus_clients or PUBLIC" \
+  '^7$' boot_default_acl
+expect_out "re-provisioning after default-privilege drift succeeds (prints ready)" 'ready in legal_scraper' provision
+expect_out "re-provisioning removes those default-privilege entries (pg_default_acl)" '^0$' boot_default_acl
+as_superuser_local "create function public.f19_l2_probe() returns int language sql as 'select 1';
+  create table public.f19_l2_probe_t (i int); create sequence public.f19_l2_probe_s;
+  create table f19_l2_s.probe_t (i int); create schema f19_l2_s2" >/dev/null 2>&1 || fail "L2: probe objects"
+expect_out "a function, table, sequence and schema the superuser creates afterwards grant nothing to the app, migration role, corpus_clients or PUBLIC" \
+  '^0\|false\|false\|false\|false\|false\|false\|false$' \
+  as_superuser_local "select (select count(*) from pg_proc p cross join lateral aclexplode(p.proacl) e
+        where p.oid = 'public.f19_l2_probe()'::regprocedure
+          and e.grantee in (select oid from pg_roles where rolname in ('$APP_DB_USER', '$MIGRATE_DB_USER', 'corpus_clients'))) || '|'
+    || has_table_privilege('$APP_DB_USER', 'public.f19_l2_probe_t', 'SELECT') || '|'
+    || has_table_privilege('$MIGRATE_DB_USER', 'public.f19_l2_probe_t', 'SELECT') || '|'
+    || has_sequence_privilege('corpus_clients', 'public.f19_l2_probe_s', 'USAGE') || '|'
+    || has_table_privilege('corpus_clients', 'public.f19_l2_probe_t', 'SELECT') || '|'
+    || has_table_privilege('public', 'public.f19_l2_probe_t', 'SELECT') || '|'
+    || has_table_privilege('$APP_DB_USER', 'f19_l2_s.probe_t', 'SELECT') || '|'
+    || has_schema_privilege('$APP_DB_USER', 'f19_l2_s2', 'CREATE')"
+as_superuser_local "drop function public.f19_l2_probe(); drop table public.f19_l2_probe_t; drop sequence public.f19_l2_probe_s;
+  drop schema f19_l2_s cascade; drop schema f19_l2_s2" >/dev/null 2>&1 || fail "L2: dropping the probe objects"
+if [ "$(ddl_role_grants 2>&1)" = "$DDL_ROLE_GRANTS" ]; then
+  pass "corpus_writer, corpus_reader and corpus_declassify keep exactly the DDL's grants after every reset (CASCADE removed none)"
+else
+  fail "corpus_writer, corpus_reader and corpus_declassify keep exactly the DDL's grants after every reset (CASCADE removed none)" \
+    "before: $DDL_ROLE_GRANTS; after: $(ddl_role_grants 2>&1)"
+fi
 expect_out "corpus_reader still reads v_judgment after the resets (its own grant is untouched)" '^true$' \
   as_superuser_local "select has_table_privilege('corpus_reader', 'public.v_judgment', 'SELECT')::text"
 expect_out "corpus_writer still executes corpus_publication_begin/finish and corpus_declassify declassify after the resets" \

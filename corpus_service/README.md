@@ -294,7 +294,13 @@ default, and all four differ.
   role's DML grants. On every run it resets any grant on those relations (and the sequences they
   own) to either application role, `corpus_clients` or `PUBLIC`, and any `EXECUTE` on the routines
   `corpus_contract_routines()` lists to those roles (to `PUBLIC` too, except 001's trigger function,
-  which keeps PostgreSQL's default). It then fails closed if either role still owns or holds any of
+  which keeps PostgreSQL's default). These resets, and those on the database, schema `public` and the
+  runtime role's own tables, are `REVOKE … CASCADE`. A grant that one of these roles held `WITH GRANT
+  OPTION` and passed on is taken down with it, so the run does not abort. It also resets the
+  bootstrap superuser's default privileges, in `public`, globally and in any other schema. No object
+  that role creates later goes to either application role or `corpus_clients`, and no table or
+  sequence goes to `PUBLIC`. Functions keep PostgreSQL's default `EXECUTE` for `PUBLIC`, which
+  extension functions created later need. It then fails closed if either role still owns or holds any of
   it, directly or through `corpus_clients`, `PUBLIC` or an inherited role, or if an Annex A relation
   or routine is not a superuser's. The grants the DDL makes to `corpus_reader`, `corpus_writer`
   and `corpus_declassify` are untouched. The migration role could not apply 001 anyway (it creates
