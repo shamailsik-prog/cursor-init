@@ -1068,6 +1068,8 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       p1TestSeam.modelOverride = "x/unpriced-model"
       p1TestSeam.failCommit = true
       p1TestSeam.beforeCommit = async () => void ran.push("beforeCommit")
+      // Re-audit R4-D1: the reservation barrier too.
+      p1TestSeam.beforeReserve = async () => void ran.push("beforeReserve")
       p1TestSeam.wallClock = () => {
         ran.push("wallClock")
         return 0

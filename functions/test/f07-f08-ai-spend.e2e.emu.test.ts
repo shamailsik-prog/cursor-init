@@ -280,9 +280,48 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(reservations.map((r) => r.id).sort()).toEqual(ok.map((r) => r.usageLogId).sort())
     })
 
-    it("calls on separate instances (no shared ledger queue) still never over-admit: the transaction alone keeps spent plus reserved within the budget", { timeout: 240_000 }, async () => {
+    it("ten calls on separate instances, all past the first look and then reserving one at a time, admit exactly the three that fit: the reservation transaction alone keeps spent plus reserved within the budget (re-audit R4-D1)", { timeout: 120_000 }, async () => {
+      // Ten calls of one firm, each as on its own instance (no ledger queue). Each does its first reads and passes the
+      // first look (nothing is spent or held yet, so all ten would fit by it), then waits at a barrier just before its
+      // reservation transaction (p1TestSeam.beforeReserve). Once all ten wait there, their reservations run one at a
+      // time, each after the last has been admitted or refused. Nothing contends and nothing is retried, so the only
+      // thing that can refuse the fourth and later calls is the transaction's own re-read of what the earlier ones hold.
+      // With that check removed (the auditor's mutant, `> budget * 100`), all ten are admitted and this test fails.
+      const budget = 3 * WORST + Math.floor(WORST / 2)
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: budget, maxConcurrentCalls: 10 })
+      seam().unqueued = "all"
+      const { sent, release } = heldTransport()
+      const waiting: Array<() => void> = []
+      seam().beforeReserve = () => new Promise<void>((resolve) => waiting.push(resolve))
+      const run = concurrently(10, () => callP1(req(firmId), at(T)))
+      try {
+        await waitFor("all ten calls to reach the reservation barrier", () => waiting.length >= 10, 60_000)
+        // All ten passed the first look on the same figures: none was refused, none was sent, nothing is held.
+        expect([run.done.length, sent.length, reservedOf(await monthOf(firmId))]).toEqual([0, 0, 0])
+        for (let i = 0; i < 10; i++) {
+          waiting[i]!()
+          await waitFor(`reservation ${i + 1} to be admitted or refused`, () => run.done.length + sent.length >= i + 1, 30_000)
+        }
+        expect(sent).toHaveLength(3)
+        expect(run.done.map((r) => [r.outcome, r.blockReason])).toEqual(Array(7).fill(["blocked", "budget_exhausted"]))
+        const held = await monthOf(firmId)
+        expect([spentOf(held), reservedOf(held)]).toEqual([0, 3 * WORST])
+        expect(spentOf(held) + reservedOf(held)).toBeLessThanOrEqual(budget)
+      } finally {
+        for (const go of waiting) go()
+        release()
+      }
+      const ok = (await run.all).flatMap((s) => (s.status === "fulfilled" && s.value.outcome === "ok" ? [s.value] : []))
+      expect(ok).toHaveLength(3)
+      const month = await monthOf(firmId)
+      expect([spentOf(month), reservedOf(month)]).toEqual([3 * REPLY_COST, 0])
+    })
+
+    it("calls on separate instances (no shared ledger queue) contending at once, retried like a client's, still admit at least one and never more than fit: liveness and the upper bound under contention", { timeout: 240_000 }, async () => {
       // Each call's reservation and commit transactions contend directly, as calls on different instances do. Under
-      // the emulator's lock timeouts some reservations run out of time; those calls are refused, never admitted.
+      // the emulator's lock timeouts some reservations run out of time; those calls are refused, never admitted. This
+      // shows liveness and the upper bound under contention; the test above is the one that isolates the reservation
+      // transaction's own budget check (re-audit R4-D1).
       const budget = 3 * WORST + Math.floor(WORST / 2)
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: budget, maxConcurrentCalls: 10 })
       seam().unqueued = "all"

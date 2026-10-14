@@ -148,7 +148,10 @@ SPEND_TESTS=(
   # provider bills more input than bytes + overhead, which is recorded, raised and learned
   'F07 through callP1 the audit scenario: ten concurrent calls against a 100 micro-USD budget dispatch nothing and commit no spend'
   'F07 through callP1 of ten concurrent calls only those whose worst case fits are dispatched, and spent plus reserved never exceeds the budget'
-  'F07 through callP1 calls on separate instances (no shared ledger queue) still never over-admit: the transaction alone keeps spent plus reserved within the budget'
+  # re-audit R4-D1: the reservation transaction's own budget check, isolated (calls held, then reserving one at a time);
+  # and, renamed for what it shows, liveness and the upper bound when the calls contend at once
+  'F07 through callP1 ten calls on separate instances, all past the first look and then reserving one at a time, admit exactly the three that fit: the reservation transaction alone keeps spent plus reserved within the budget (re-audit R4-D1)'
+  "F07 through callP1 calls on separate instances (no shared ledger queue) contending at once, retried like a client's, still admit at least one and never more than fit: liveness and the upper bound under contention"
   'F07 through callP1 a single request whose worst case exceeds the remaining budget is refused before dispatch; one that fits exactly is sent'
   # re-audit R1-D1 (provider usage discrepancy), R1-D3 (kill switch in the reservation transaction)
   'F07 through callP1 provider usage discrepancy, one call: a provider billing one input token per byte never takes spent above the budget'

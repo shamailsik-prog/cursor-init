@@ -104,10 +104,13 @@ export type P1Result = {
  * attempts and for the provider-attempt record. `crashAt` makes the call throw at that point, leaving what an
  * instance that died there leaves: `reserved` after the reservation commits, `dispatched` after the provider answers.
  * `unqueued` runs ledger transactions outside the per-firm queue, as calls on separate instances do: "all" of them, or
- * only the commits ("commit"), so that commits race as they would from separate instances.
+ * only the commits ("commit"), so that commits race as they would from separate instances. `beforeReserve` runs after
+ * the call's first reads and first look, just before its reservation transaction (step 8b), so a test can hold calls
+ * there and let their reservations run in an order it chooses (re-audit R4-D1).
  */
 export const p1TestSeam: {
   beforeCommit?: () => Promise<void>
+  beforeReserve?: () => Promise<void>
   failCommit?: boolean
   modelOverride?: string
   wallClock?: () => number
@@ -468,6 +471,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   const resRef = reservationRef(usageRef.id)
   let reservation: CommitArgs["reservation"] = null
   if (blockReason === null) {
+    await t.beforeReserve?.()
     const reserveArgs: ReserveArgs = {
       firmId,
       monthKey,

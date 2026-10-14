@@ -192,7 +192,7 @@ One trace per decision, posted to `{OPIK_BASE_URL}/v1/private/traces/batch`. The
 
 ## Test seams
 
-`p1TestSeam` (`gateway.ts`: `beforeCommit`, `failCommit`, `modelOverride`, `wallClock`, `commitAttemptFailures`, `lostCommitAnswers`, and for audit F07/F08 `reserveAttemptFailures`, `attemptMarkFailures`, `crashAt`, `unqueued`), `p1OpsTestSeam` (`ops.ts`: `outputWriteFailures`, `lostCommitAnswers`, `sleep`, `wallClock`, `preCallClock`), `setP1TransportForTests` (`transport.ts`) and `setOpikFetchForTests` (`opik.ts`) exist for tests only. Production code never references them. As defence in depth, the first two are inert and the last two throw when `NODE_ENV` is `production`, and the deployable bundle (`lib/index.js`) is built with `NODE_ENV` defined as `"production"` (`functions/build.mjs`), so they stay inert there whatever the host sets.
+`p1TestSeam` (`gateway.ts`: `beforeCommit`, `beforeReserve` (re-audit R4-D1), `failCommit`, `modelOverride`, `wallClock`, `commitAttemptFailures`, `lostCommitAnswers`, and for audit F07/F08 `reserveAttemptFailures`, `attemptMarkFailures`, `crashAt`, `unqueued`), `p1OpsTestSeam` (`ops.ts`: `outputWriteFailures`, `lostCommitAnswers`, `sleep`, `wallClock`, `preCallClock`), `setP1TransportForTests` (`transport.ts`) and `setOpikFetchForTests` (`opik.ts`) exist for tests only. Production code never references them. As defence in depth, the first two are inert and the last two throw when `NODE_ENV` is `production`, and the deployable bundle (`lib/index.js`) is built with `NODE_ENV` defined as `"production"` (`functions/build.mjs`), so they stay inert there whatever the host sets.
 
 ## Tests and gate
 
