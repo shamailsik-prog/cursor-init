@@ -1,5 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { execSync } from "node:child_process"
 import { describe, expect, it } from "vitest"
 import { bindRouteRepos } from "@/platform/persistence/forFirm"
 import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
@@ -20,19 +19,11 @@ function routeWouldReturnUnknownSessionReference(input: {
 
 describe("tenancy session replay guard", () => {
   it("getForSessionReplay is only referenced from the p5 tenancy route (plus adapters)", () => {
-    const root = process.cwd()
-    const hits: string[] = []
-    const walk = (dir: string) => {
-      for (const name of readdirSync(dir)) {
-        if (name === "node_modules" || name === ".git") continue
-        const full = join(dir, name)
-        if (statSync(full).isDirectory()) walk(full)
-        else if (/\.(ts|tsx|mts|js|mjs)$/.test(name) && readFileSync(full, "utf8").includes("getForSessionReplay")) {
-          hits.push(full.slice(root.length + 1))
-        }
-      }
-    }
-    walk(root)
+    const out = execSync('git grep -l "getForSessionReplay" -- "*.ts" "*.tsx"', {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    })
+    const hits = out.trim().split("\n").filter(Boolean)
     const allowed = new Set([
       "app/api/p5/tenancy/route.ts",
       "platform/persistence/spineRepositories.ts",
