@@ -60,6 +60,7 @@ function getContent(docId: string, userId: string) {
 function requireFilesystemObjectBackend() {
   vi.stubEnv("NODE_ENV", "development")
   vi.stubEnv("VITEST", "false")
+  process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = "fs"
   process.env.SIKANDER_PERSISTENCE_MODE = "memory"
 }
 

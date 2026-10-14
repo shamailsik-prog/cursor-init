@@ -31,6 +31,9 @@ export default defineConfig({
             "tests/postgres.ddl.integration.test.ts",
             "tests/probe-fa-data-001.regression.test.ts",
           ]),
+      ...(process.env.SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT
+        ? []
+        : ["tests/f03-document-object-store.s3.integration.test.ts"]),
       ...(process.env.FIRESTORE_EMULATOR_HOST
         ? []
         : [
