@@ -148,6 +148,19 @@ class ModuleSurfaceTests(unittest.TestCase):
         self.assertNotIn("2099", reason)
 
 
+class MayPublishDirectlyTests(unittest.TestCase):
+    """FINAL_2 :897 (review -> always quarantine): a harvester that writes a master table itself
+    bypasses promotion, so only a trusted source may run it."""
+
+    def test_only_trusted_may_publish_without_promotion(self):
+        from scraper.trust import may_publish_directly
+
+        self.assertTrue(may_publish_directly("trusted"))
+        for raw in ("review", "blocked", None, "", "TRUSTED", " trusted", "semi_trusted", 1, True):
+            with self.subTest(raw=raw):
+                self.assertFalse(may_publish_directly(raw))
+
+
 class SourceStampTests(unittest.TestCase):
     """Harvesters stamp the scraper_sources row a staged record came from (audit F20 MEDIUM-1)."""
 
@@ -202,6 +215,30 @@ class HarvesterStaticGuardTests(unittest.TestCase):
             if sid != "source.id" or not meta.startswith("stamp_metadata(source")
         }
         self.assertEqual(unstamped, {}, "staging rows written without the source stamp")
+
+    def test_every_direct_master_writer_is_gated_on_trusted(self):
+        import re
+
+        from scraper.tasks import dispatcher
+
+        writes = re.compile(r"\b(?:StatutesMaster|CaseLawMaster)\s*\(|INSERT\s+INTO\s+(?:case_law_master|statutes_master)", re.I)
+        writers = {
+            f"scraper.tasks.{path.stem}"
+            for path in TASKS_DIR.glob("*.py")
+            if path.name != "promotion.py" and writes.search(path.read_text())
+        }
+        self.assertEqual(writers, {"scraper.tasks.pakistancode", "scraper.tasks.nationalassembly"})
+        self.assertTrue(writers <= set(dispatcher.DIRECT_PUBLISHER_MODULES), writers)
+        routed = {module for module, _func in dispatcher.ROUTES.values()}
+        self.assertTrue(writers <= routed)
+        self.assertEqual(
+            set(dispatcher.ROUTES),
+            {"PakistanLawSite", "NasirLawSite", "PakistanCode", "SindhHighCourt", "SindhHighCourtPublic",
+             "SupremeCourt", "SupremeCourtPublic", "LahoreHighCourt", "PeshawarHighCourt",
+             "PeshawarHighCourtPublic", "BalochistanHighCourt", "BalochistanHighCourtPublic",
+             "IslamabadHighCourt", "IslamabadHighCourtPublic", "NationalAssembly"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

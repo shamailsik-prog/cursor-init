@@ -107,6 +107,13 @@ def may_harvest(trust_raw: Optional[str]) -> bool:
     return _known(trust_raw) in (TRUSTED, REVIEW)
 
 
+def may_publish_directly(trust_raw: Optional[str]) -> bool:
+    """Whether a harvester that writes a master table itself (no staging, so no promotion decision)
+    may run for this source. Only trusted: a review source's output must always be quarantined
+    (FINAL_2 :897), and such a harvester has no quarantine step."""
+    return _known(trust_raw) == TRUSTED
+
+
 def normalise_legacy_trust(value: Optional[str]) -> str:
     """Map a stored value onto TRUST_LEVELS for the upgrade: current values are kept, every other
     value (the legacy semi_trusted/untrusted/quarantined, None, '', any other spelling) becomes

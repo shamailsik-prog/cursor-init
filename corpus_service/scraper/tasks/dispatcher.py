@@ -1,10 +1,36 @@
 from celery import shared_task
+import importlib
 import logging, asyncio
 from scraper.database import SessionLocal
 from sqlalchemy import select
 from scraper.models import ScraperSource
-from scraper.trust import may_harvest
+from scraper.trust import may_harvest, may_publish_directly
 logger = logging.getLogger(__name__)
+
+# source_name -> (harvester module, function).
+ROUTES = {
+    "PakistanLawSite": ("scraper.tasks.pakistanlawsite", "scrape_pakistanlawsite"),
+    "NasirLawSite": ("scraper.tasks.nasirlawsite", "scrape_nasirlawsite"),
+    "PakistanCode": ("scraper.tasks.pakistancode", "scrape_pakistancode"),
+    "SindhHighCourt": ("scraper.tasks.shc", "scrape_shc"),
+    "SindhHighCourtPublic": ("scraper.tasks.shc", "scrape_shc"),
+    "SupremeCourt": ("scraper.tasks.supremecourt", "scrape_supremecourt"),
+    "SupremeCourtPublic": ("scraper.tasks.supremecourt", "scrape_supremecourt"),
+    "LahoreHighCourt": ("scraper.tasks.lahorehighcourt", "scrape_lahorehighcourt"),
+    "PeshawarHighCourt": ("scraper.tasks.peshawarhighcourt", "scrape_peshawarhighcourt"),
+    "PeshawarHighCourtPublic": ("scraper.tasks.peshawarhighcourt", "scrape_peshawarhighcourt"),
+    "BalochistanHighCourt": ("scraper.tasks.balochistanhighcourt", "scrape_balochistanhighcourt"),
+    "BalochistanHighCourtPublic": ("scraper.tasks.balochistanhighcourt", "scrape_balochistanhighcourt"),
+    "IslamabadHighCourt": ("scraper.tasks.islamabadhighcourt", "scrape_islamabadhighcourt"),
+    "IslamabadHighCourtPublic": ("scraper.tasks.islamabadhighcourt", "scrape_islamabadhighcourt"),
+    "NationalAssembly": ("scraper.tasks.nationalassembly", "scrape_nationalassembly"),
+}
+
+# Harvesters that write statutes_master / case_law_master themselves: no staging row, so no
+# promotion decision and no quarantine. Audit F20 (FINAL_2 :897, review -> always quarantine): they
+# run only for a trusted source. tests/test_trust_policy.py checks that every master writer under
+# scraper/tasks is listed here.
+DIRECT_PUBLISHER_MODULES = frozenset({"scraper.tasks.pakistancode", "scraper.tasks.nationalassembly"})
 
 @shared_task(name="scraper.tasks.dispatcher.run_source_job", bind=True, max_retries=3)
 def run_source_job(self, source_name: str):
@@ -30,34 +56,16 @@ async def _run_async(source_name: str):
         if not may_harvest(source.trust_level):
             logger.info("%s trust_level %r is not harvestable, skip", source_name, source.trust_level)
             return
-        # route
-        if source_name=="PakistanLawSite":
-            from scraper.tasks.pakistanlawsite import scrape_pakistanlawsite
-            await scrape_pakistanlawsite(source, db)
-        elif source_name=="NasirLawSite":
-            from scraper.tasks.nasirlawsite import scrape_nasirlawsite
-            await scrape_nasirlawsite(source, db)
-        elif source_name=="PakistanCode":
-            from scraper.tasks.pakistancode import scrape_pakistancode
-            await scrape_pakistancode(source, db)
-        elif source_name in {"SindhHighCourt", "SindhHighCourtPublic"}:
-            from scraper.tasks.shc import scrape_shc
-            await scrape_shc(source, db)
-        elif source_name in {"SupremeCourt", "SupremeCourtPublic"}:
-            from scraper.tasks.supremecourt import scrape_supremecourt
-            await scrape_supremecourt(source, db)
-        elif source_name=="LahoreHighCourt":
-            from scraper.tasks.lahorehighcourt import scrape_lahorehighcourt
-            await scrape_lahorehighcourt(source, db)
-        elif source_name in {"PeshawarHighCourt", "PeshawarHighCourtPublic"}:
-            from scraper.tasks.peshawarhighcourt import scrape_peshawarhighcourt
-            await scrape_peshawarhighcourt(source, db)
-        elif source_name in {"BalochistanHighCourt", "BalochistanHighCourtPublic"}:
-            from scraper.tasks.balochistanhighcourt import scrape_balochistanhighcourt
-            await scrape_balochistanhighcourt(source, db)
-        elif source_name in {"IslamabadHighCourt", "IslamabadHighCourtPublic"}:
-            from scraper.tasks.islamabadhighcourt import scrape_islamabadhighcourt
-            await scrape_islamabadhighcourt(source, db)
-        elif source_name=="NationalAssembly":
-            from scraper.tasks.nationalassembly import scrape_nationalassembly
-            await scrape_nationalassembly(source, db)
+        route = ROUTES.get(source_name)
+        if route is None:
+            logger.info("%s has no harvester, skip", source_name)
+            return
+        module_name, function_name = route
+        if module_name in DIRECT_PUBLISHER_MODULES and not may_publish_directly(source.trust_level):
+            logger.info(
+                "%s publishes to statutes_master/case_law_master directly; trust_level %r is not trusted, skip",
+                source_name, source.trust_level,
+            )
+            return
+        harvest = getattr(importlib.import_module(module_name), function_name)
+        await harvest(source, db)

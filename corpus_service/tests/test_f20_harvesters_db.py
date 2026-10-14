@@ -172,3 +172,40 @@ def test_f_a_harvested_record_of_a_deleted_source_is_unknown_even_if_the_name_re
     assert result == {"promoted": 0, "quarantined": staged, "failed": 0}
 
 
+def test_f_direct_publishers_write_master_rows_only_for_a_trusted_source(corpus_db, monkeypatch, caplog):
+    """MEDIUM-2: PakistanCode and NationalAssembly write statutes_master themselves. A review or
+    unknown source writes nothing; a trusted one does."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    install_offline_harvesters(monkeypatch)
+    from scraper.tasks.dispatcher import _run_async
+
+    def rows_written(name, trust):
+        run(execute(
+            "DELETE FROM statutes_master",
+            "UPDATE scraper_sources SET trust_level = :t WHERE source_name = :n",
+            params={"t": trust, "n": name},
+        ))
+        with caplog.at_level(logging.INFO):
+            run(_run_async(name))
+        return run(fetch("SELECT count(*) FROM statutes_master WHERE source_site = :n", n=name))[0][0]
+
+    got = {}
+    for name in ("PakistanCode", "NationalAssembly"):
+        got[(name, "review")] = rows_written(name, "review")
+        got[(name, "blocked")] = rows_written(name, "blocked")
+        got[(name, "trusted")] = rows_written(name, "trusted")
+    # Unknown values need the CHECK gone (a drifted or un-migrated database).
+    run(execute("ALTER TABLE scraper_sources DROP CONSTRAINT ck_trust_level_values"))
+    for name in ("PakistanCode", "NationalAssembly"):
+        got[(name, "TRUSTED")] = rows_written(name, "TRUSTED")
+        got[(name, "semi_trusted")] = rows_written(name, "semi_trusted")
+
+    published = {key: count > 0 for key, count in got.items()}
+    assert published == {
+        ("PakistanCode", "review"): False, ("PakistanCode", "blocked"): False, ("PakistanCode", "trusted"): True,
+        ("NationalAssembly", "review"): False, ("NationalAssembly", "blocked"): False, ("NationalAssembly", "trusted"): True,
+        ("PakistanCode", "TRUSTED"): False, ("PakistanCode", "semi_trusted"): False,
+        ("NationalAssembly", "TRUSTED"): False, ("NationalAssembly", "semi_trusted"): False,
+    }, got
+    skips = [r.getMessage() for r in caplog.records if "publishes to statutes_master/case_law_master directly" in r.getMessage()]
+    assert any(m.startswith("PakistanCode ") for m in skips) and any(m.startswith("NationalAssembly ") for m in skips), skips
