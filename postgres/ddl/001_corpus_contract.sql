@@ -108,6 +108,7 @@ DECLARE
   v_new_rank SMALLINT;
   v_audit_id UUID;
   v_xid BIGINT;
+  v_session_user TEXT;
 BEGIN
   IF p_reason IS NULL OR btrim(p_reason) = '' THEN
     RAISE EXCEPTION 'declassify requires a recorded reason';
@@ -129,10 +130,11 @@ BEGIN
     RAISE EXCEPTION 'declassify applies only to downgrades';
   END IF;
   v_audit_id := pg_catalog.gen_random_uuid();
+  SELECT session_user INTO STRICT v_session_user;
   INSERT INTO public.judgment_classification_declassify_audit (
     id, judgment_id, from_classification, to_classification, actor_id, declassify_session_user, reason
   ) VALUES (
-    v_audit_id, p_judgment_id, v_old, p_new_classification, btrim(p_actor_id), pg_catalog.session_user, btrim(p_reason)
+    v_audit_id, p_judgment_id, v_old, p_new_classification, btrim(p_actor_id), v_session_user, btrim(p_reason)
   );
   INSERT INTO public.judgment_declassify_grant (judgment_id, xid, to_classification)
   VALUES (p_judgment_id, v_xid, p_new_classification);
