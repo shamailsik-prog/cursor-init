@@ -140,6 +140,10 @@ GATE_UNIT_TESTS=(
   'runGate: an unavailable authority fails closed (F05) runGate: an unavailable lookup keeps the dedup: the same unreachable citation written twice is one finding'
   'runGate: an unavailable authority fails closed (F05) runGate: any other error from the store rejects (it is not swallowed)'
   'runGate: an unavailable authority fails closed (F05) runGate: unavailable lookups never give OK, and a run with nothing to check stays NOT_ASSESSED'
+  # F05 (#51 R1 D-1, plan D22): an overruling still pending review is reported, never hidden, and never hides another
+  'runGate: a pending overruling (F05, #51 R1 D-1) a pending overruling alone leaves the found judgment UNVERIFIED, never VERIFIED (ruling 3)'
+  'runGate: a pending overruling (F05, #51 R1 D-1) a pending overruling never hides a qualifying one: a larger-bench overruling stays OVERRULED (P4-2)'
+  'runGate: a pending overruling (F05, #51 R1 D-1) PENDING_OVERRULING is an overruling whose bench cannot be relied on, and is frozen'
 )
 
 # --- functions/test/d4.doctypes.test.ts (the verified document-type catalogue and the court rule; no emulator) ---
