@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { POST as mattersPost } from "@/app/api/d1/matters/route"
 import { GET as documentsGet, POST as documentsPost } from "@/app/api/d1/documents/route"
 import { POST as workflowPost } from "@/app/api/d1/document-workflow/route"
+import { GET as reportingGet } from "@/app/api/d1/reporting/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
@@ -23,6 +24,34 @@ import { testAdminFirestore } from "@/tests/helpers/admin-firestore"
 // The first case pays for the Admin SDK's first emulator connection (about 10 s on a loaded machine), as the
 // rules suites do: the same generous timeout they set.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 })
+
+/**
+ * A seam on the Firestore repositories the routes create (audit F14 NEW-1): once armed, the next matter_members listing
+ * signals `reached`, waits until `opened`, and answers `rows`, a listing read before then. Unarmed, it passes through.
+ */
+const memberListing = vi.hoisted(() => ({
+  armed: null as null | { reached: () => void; opened: Promise<void>; rows: unknown[] },
+}))
+
+vi.mock("@/platform/persistence/firestoreSpineRepositories", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("@/platform/persistence/firestoreSpineRepositories")>()
+  return {
+    ...mod,
+    createFirestoreRepositories: (...args: Parameters<typeof mod.createFirestoreRepositories>) => {
+      const repos = mod.createFirestoreRepositories(...args)
+      const listByFirm = repos.members.listByFirm.bind(repos.members)
+      repos.members.listByFirm = async (firmId: string) => {
+        const armed = memberListing.armed
+        if (!armed) return listByFirm(firmId)
+        memberListing.armed = null
+        armed.reached()
+        await armed.opened
+        return armed.rows as Awaited<ReturnType<typeof listByFirm>>
+      }
+      return repos
+    },
+  }
+})
 
 const PROJECT = "sikander-f14-runtime"
 const db = () => testAdminFirestore(PROJECT)
@@ -325,6 +354,46 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
     for (const userId of ["partner_a", "associate_a", "clerk_a"]) {
       expect({ userId, cached: store.members.has(store.memberKey(matterId, userId)) }).toEqual({ userId, cached: true })
     }
+  })
+
+  it("a court-ops request whose member listing predates a matter create keeps the new memberships cached (NEW-1)", async () => {
+    const store = getRuntimeStore()
+    const repos = await getRuntimeRepositories(store)
+    const stale = await repos.members.listByFirm("firmA")
+    const staleKeys = new Set(stale.map((row) => store.memberKey(row.matterId, row.userId)))
+    // The court-ops request starts first and reads its member listing before the create below; that listing lands only
+    // once the create route has cached the creator's new membership (the auditor's probe CO1).
+    const reached = gated()
+    const gate = gated()
+    memberListing.armed = { reached: reached.open, opened: gate.opened, rows: stale }
+    const queue = courtOpsGet(new Request(`${B}/api/d2/court-ops?userId=partner_a&limit=50&cursor=0`))
+    await reached.opened
+    const hook = releaseAfterSet(store.members, (key) => key.endsWith("_partner_a") && !staleKeys.has(key), gate.open)
+    let res: Response
+    try {
+      res = await createMatter("NEW-1 court-ops member race")
+    } finally {
+      hook.restore()
+      gate.open()
+      memberListing.armed = null
+    }
+    expect((await queue).status).toBe(200)
+    expect(hook.fired()).toBe(true)
+    expect(res.status).toBe(200)
+    const matterId = ((await res.json()) as { result: { matter: { id: string } } }).result.matter.id
+    expect((await db().collection("matter_members").where("matterId", "==", matterId).get()).size).toBe(3)
+    for (const userId of ["partner_a", "associate_a", "clerk_a"]) {
+      expect({ userId, cached: store.members.has(store.memberKey(matterId, userId)) }).toEqual({ userId, cached: true })
+    }
+  })
+
+  it("the reporting GET reconciles the cached matters too: a matter deleted elsewhere leaves this process's cache (NEW-1)", async () => {
+    const { matterId } = await seed("reporting")
+    await db().collection("matters").doc(matterId).delete()
+    expect(getRuntimeStore().matters.has(matterId)).toBe(true)
+    const res = await reportingGet(new Request(`${B}/api/d1/reporting?view=matter_report_export_analytics&actorId=partner_a&limit=10&cursor=0`))
+    expect(res.status).toBe(200)
+    expect(getRuntimeStore().matters.has(matterId)).toBe(false)
   })
 
   it("a document row whose matterId is missing or empty is not the loose vault: the clerk's download is 403 and the list leaves it out (C2)", async () => {

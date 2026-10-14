@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { POST as workflowPost } from "@/app/api/d1/document-workflow/route"
+import { GET as mattersGet } from "@/app/api/d1/matters/route"
 import { GET as opsReportingGet, POST as opsReportingPost } from "@/app/api/d2/ops-reporting/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 
 /**
- * Audit F14, Copilot C4: the ops-reporting routes refresh the firm's matters through `syncFirmMatters` (audit F14
- * R2-D1). That sync is the request's one listing of the firm's matters; the handlers reuse its result instead of
- * listing the firm's matters again. Counted on the repository the routes get (memory mode, where it is the store).
+ * Audit F14, Copilot C4 and NEW-1: the ops-reporting and matters routes refresh the firm's matters through
+ * `syncFirmMatters` (audit F14 R2-D1). That sync is the request's one listing of the firm's matters; the handlers reuse
+ * its result instead of listing the firm's matters again. Counted on the repository the routes get (memory mode, where
+ * it is the store).
  */
 
 const listings = vi.hoisted(() => ({ firms: [] as string[] }))
@@ -33,6 +35,10 @@ afterEach(() => {
   resetRuntimeStoreForTests()
 })
 
+let keySeq = 0
+/** A fresh idempotency key per request: the idempotency cache outlives the store reset between cases. */
+const key = () => `c4c4c4c4-0000-4000-8000-${String(++keySeq).padStart(12, "0")}`
+
 /** A matter with workflow activity (a document moved to processing), so the ops views have a digest to seed. */
 async function seedMatter(): Promise<string> {
   const store = getRuntimeStore()
@@ -45,13 +51,13 @@ async function seedMatter(): Promise<string> {
     bytes: Buffer.from("%PDF-f14-c4%"),
     sourceChannel: "web",
     classification: "internal",
-    idempotencyKey: "c4c4c4c4-0000-4000-8000-000000000010",
+    idempotencyKey: key(),
     uploadedBy: "partner_a",
   })
   const moved = await workflowPost(
     new Request("http://127.0.0.1/api/d1/document-workflow", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": "c4c4c4c4-0000-4000-8000-000000000011" },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key() },
       body: JSON.stringify({ action: "transition", actorId: "associate_a", documentId: doc.docId, nextStatus: "processing" }),
     })
   )
@@ -75,11 +81,22 @@ describe("Audit F14 C4: an ops-reporting request lists the firm's matters once",
     const acknowledged = await opsReportingPost(
       new Request("http://127.0.0.1/api/d2/ops-reporting", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": "c4c4c4c4-0000-4000-8000-000000000001" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": key() },
         body: JSON.stringify({ action: "acknowledge_workflow_ops_alert_digest", actorId: "partner_a", matterId, reason: "partner acknowledged digest" }),
       })
     )
     expect(acknowledged.status).toBe(200)
+    expect(listings.firms).toEqual(["firmA"])
+  })
+})
+
+describe("Audit F14 NEW-1: the matters list GET lists the firm's matters once", () => {
+  it("GET /api/d1/matters reuses the sync's listing instead of listing the firm's matters again", async () => {
+    const matterId = await seedMatter()
+    listings.firms.length = 0
+    const res = await mattersGet(new Request("http://127.0.0.1/api/d1/matters?userId=partner_a&limit=10&cursor=0"))
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { items: Array<{ id: string }> }).items.map((row) => row.id)).toContain(matterId)
     expect(listings.firms).toEqual(["firmA"])
   })
 })

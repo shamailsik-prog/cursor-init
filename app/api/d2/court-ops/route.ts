@@ -14,7 +14,7 @@ import {
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMatters } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildCourtOpsActivityRow, buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import { WHATSAPP_GRAMMAR_HELP, handleWhatsApp, whatsAppCommandName } from "@/services/d2-1/whatsapp"
 import {
@@ -78,15 +78,9 @@ async function syncCourtOpsState(
     store.documents.set(row.id, row)
   }
 
-  const firmMembers = await repos.members.listByFirm(actor.firmId)
-  for (const [key, row] of store.members.entries()) {
-    if (row.firmId === actor.firmId) {
-      store.members.delete(key)
-    }
-  }
-  for (const row of firmMembers) {
-    store.members.set(store.memberKey(row.matterId, row.userId), row)
-  }
+  // Audit F14 NEW-1: the shared member sync, which keeps a membership another request caches while this listing is in
+  // flight (R5-D1), in place of this route's own copy that dropped every cached membership of the firm first.
+  await syncFirmMembers(store, repos, actor.firmId)
   // Audit F14 R2-D1/R2-D2: the queue's matter gate and resolve_workflow's document check read each matter's current label.
   await syncFirmMatters(store, repos, actor.firmId)
 

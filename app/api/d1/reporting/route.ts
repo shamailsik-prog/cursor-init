@@ -281,8 +281,9 @@ async function handleGet(request: Request) {
   if (!refreshedActor) {
     return NextResponse.json({ error: "unknown actor" }, { status: 404 })
   }
-  const matters = await repos.matters.listByFirm(refreshedActor.firmId)
-  for (const matter of matters) store.matters.set(matter.id, matter)
+  // Audit F14 NEW-1: the shared matter sync (reconciles the cache as every other route does) in place of this route's
+  // own upsert loop; its listing is reused below.
+  const matters = await syncFirmMatters(store, repos, refreshedActor.firmId)
 
   if (view === "search") {
     const rowType = parseRowType(getQuery(REPORTING_SURFACE, url, "rowType"))

@@ -102,12 +102,12 @@ async function handleGet(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
   await syncFirmMembers(store, repo, user.firmId)
-  await syncFirmMatters(store, repo, user.firmId)
+  // Audit F14 NEW-1: the sync's listing is the request's one listing of the firm's matters (as C4 for ops-reporting).
+  const firmMatters = await syncFirmMatters(store, repo, user.firmId)
   const perm = checkPermission(store, userId, "list_matters")
   if (!perm.allow) {
     return deny(`permission denied: ${perm.reason}`)
   }
-  const firmMatters = await repo.matters.listByFirm(user.firmId)
   const all = firmMatters
     .filter((matter) => {
       if (user.role === "client") return matter.clientId === user.id
