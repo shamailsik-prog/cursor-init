@@ -27,6 +27,42 @@ export interface AuthorityStore {
   getSectionAsAt(sectionId: string, asAtDate: string, jurisdiction: string): Promise<{ text: string } | "no_history">
 }
 
+/**
+ * Why an adapter could not answer (F05). Every failure of the corpus reader, from the network to data that breaks the
+ * Annex A contract, is one of these; the gate reads it as "not proven" (UNVERIFIED / TEMPORAL_UNAVAILABLE), never OK.
+ */
+export const AUTHORITY_UNAVAILABLE_REASONS = Object.freeze([
+  "unreachable",
+  "timeout",
+  "auth",
+  "tls",
+  "permission",
+  "schema_missing",
+  "contract_missing",
+  "stale",
+  "wrong_role",
+  "pending_review",
+  "inconsistent",
+  "circuit_open",
+  "error",
+] as const)
+export type AuthorityUnavailableReason = (typeof AUTHORITY_UNAVAILABLE_REASONS)[number]
+
+/**
+ * The one error an adapter throws when it cannot answer (F05). The gate catches this class, and only this class: any
+ * other error is a bug and still fails the request. The message is the reason token only, never driver text, a host
+ * or a credential.
+ */
+export class AuthorityUnavailableError extends Error {
+  readonly reason: AuthorityUnavailableReason
+
+  constructor(reason: AuthorityUnavailableReason) {
+    super(`authority_unavailable:${reason}`)
+    this.name = "AuthorityUnavailableError"
+    this.reason = reason
+  }
+}
+
 /** The production adapter until O-59: it knows nothing, so the gate fails closed. */
 export const EMPTY_AUTHORITY_STORE: AuthorityStore = Object.freeze({
   async findJudgment() {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { extractCitations, normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
 import {
+  AuthorityUnavailableError,
   EMPTY_AUTHORITY_STORE,
   InMemoryAuthorityStore,
   activeAuthorityStore,
@@ -578,5 +579,101 @@ describe("the test seam (P4-3)", () => {
     expect(() => setAuthorityStoreForTests(new InMemoryAuthorityStore())).toThrow("setAuthorityStoreForTests is test-only")
     expect(() => setAuthorityStoreForTests(null)).toThrow("test-only")
     expect(activeAuthorityStore()).toBe(EMPTY_AUTHORITY_STORE)
+  })
+})
+
+describe("runGate: an unavailable authority fails closed (F05)", () => {
+  /** A store whose `methods` throw `error`; every other method answers from `inner`. */
+  function throwingStore(inner: AuthorityStore, error: unknown, ...methods: Array<keyof AuthorityStore>): AuthorityStore {
+    const fail = (name: keyof AuthorityStore) => methods.includes(name)
+    return {
+      async findJudgment(canonical) {
+        if (fail("findJudgment")) throw error
+        return inner.findJudgment(canonical)
+      },
+      async listTreatments(judgmentId) {
+        if (fail("listTreatments")) throw error
+        return inner.listTreatments(judgmentId)
+      },
+      async getSectionAsAt(sectionId, asAtDate, jurisdiction) {
+        if (fail("getSectionAsAt")) throw error
+        return inner.getSectionAsAt(sectionId, asAtDate, jurisdiction)
+      },
+    }
+  }
+
+  function knownStore(): InMemoryAuthorityStore {
+    const store = sectionStore()
+    store.addJudgment("j_101", "PLD 2099 SC 101", "division")
+    return store
+  }
+
+  it("AuthorityUnavailableError carries its reason, a fixed name and a message with no driver text", () => {
+    const e = new AuthorityUnavailableError("timeout")
+    expect(e).toBeInstanceOf(Error)
+    expect({ name: e.name, message: e.message, reason: e.reason }).toEqual({
+      name: "AuthorityUnavailableError",
+      message: "authority_unavailable:timeout",
+      reason: "timeout",
+    })
+  })
+
+  it("runGate: a store that throws AuthorityUnavailableError on findJudgment gives UNVERIFIED with judgmentId null", async () => {
+    const store = throwingStore(knownStore(), new AuthorityUnavailableError("unreachable"), "findJudgment")
+    const out = await runGate({ title: "T", body: "See PLD 2099 SC 101.", temporalChecks: [] }, store)
+    expect(out).toEqual({
+      status: "UNVERIFIED",
+      citations: [{ ref: "PLD 2099 SC 101", judgmentId: null, status: "UNVERIFIED" }],
+      temporal: [],
+      scope: { citations: 1, temporalChecks: 0, assessed: true },
+    })
+  })
+
+  it("runGate: a store that throws AuthorityUnavailableError on listTreatments gives UNVERIFIED with the found judgmentId", async () => {
+    const store = throwingStore(knownStore(), new AuthorityUnavailableError("pending_review"), "listTreatments")
+    const out = await runGate({ title: "T", body: "See PLD 2099 SC 101.", temporalChecks: [] }, store)
+    expect(out).toEqual({
+      status: "UNVERIFIED",
+      citations: [{ ref: "PLD 2099 SC 101", judgmentId: "j_101", status: "UNVERIFIED" }],
+      temporal: [],
+      scope: { citations: 1, temporalChecks: 0, assessed: true },
+    })
+  })
+
+  it("runGate: a store that throws AuthorityUnavailableError on getSectionAsAt gives TEMPORAL_UNAVAILABLE with inForceText null", async () => {
+    const store = throwingStore(knownStore(), new AuthorityUnavailableError("stale"), "getSectionAsAt")
+    const out = await runGate({ title: "T", body: TEXT_A, temporalChecks: [check(TEXT_A)] }, store)
+    expect(out).toEqual({
+      status: "TEMPORAL_UNAVAILABLE",
+      citations: [],
+      temporal: [{ ...check(TEXT_A), status: "TEMPORAL_UNAVAILABLE", inForceText: null }],
+      scope: { citations: 0, temporalChecks: 1, assessed: true },
+    })
+  })
+
+  it("runGate: an unavailable lookup keeps the dedup: the same unreachable citation written twice is one finding", async () => {
+    const store = throwingStore(knownStore(), new AuthorityUnavailableError("circuit_open"), "findJudgment")
+    const out = await runGate({ title: "T", body: "PLD 2099 SC 101 and P.L.D. 2099 S.C. 101.", temporalChecks: [] }, store)
+    expect(out.citations).toEqual([{ ref: "PLD 2099 SC 101", judgmentId: null, status: "UNVERIFIED" }])
+  })
+
+  it("runGate: any other error from the store rejects (it is not swallowed)", async () => {
+    for (const method of ["findJudgment", "listTreatments", "getSectionAsAt"] as const) {
+      const store = throwingStore(knownStore(), new TypeError(`bug in ${method}`), method)
+      await expect(runGate({ title: "T", body: `See PLD 2099 SC 101. ${TEXT_A}`, temporalChecks: [check(TEXT_A)] }, store)).rejects.toThrow(TypeError)
+    }
+    // An error that only looks like one (same name, another class) is not trusted either.
+    const lookalike = Object.assign(new Error("authority_unavailable:timeout"), { name: "AuthorityUnavailableError", reason: "timeout" })
+    await expect(runGate({ title: "T", body: "See PLD 2099 SC 101.", temporalChecks: [] }, throwingStore(knownStore(), lookalike, "findJudgment"))).rejects.toBe(lookalike)
+  })
+
+  it("runGate: unavailable lookups never give OK, and a run with nothing to check stays NOT_ASSESSED", async () => {
+    const down = throwingStore(knownStore(), new AuthorityUnavailableError("unreachable"), "findJudgment", "listTreatments", "getSectionAsAt")
+    const both = await runGate({ title: "T", body: `See PLD 2099 SC 101. ${TEXT_A}`, temporalChecks: [check(TEXT_A)] }, down)
+    expect(both.status).toBe("UNVERIFIED")
+    expect(both.citations.map((c) => c.status)).toEqual(["UNVERIFIED"])
+    expect(both.temporal.map((t) => [t.status, t.inForceText])).toEqual([["TEMPORAL_UNAVAILABLE", null]])
+    const nothing = await runGate({ title: "T", body: "The petitioner prays for relief.", temporalChecks: [] }, down)
+    expect(nothing).toEqual({ status: "NOT_ASSESSED", citations: [], temporal: [], scope: { citations: 0, temporalChecks: 0, assessed: false } })
   })
 })

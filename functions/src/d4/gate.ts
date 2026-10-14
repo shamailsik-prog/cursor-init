@@ -9,7 +9,7 @@
 import { extractCitations, isUnrecognisedRef, normaliseCitation } from "@/services/d4-2/citations"
 import { verdictFromTreatments } from "@/services/d4-2/citationVerdict"
 import { normaliseDraftBody } from "@/services/d4-2/draftCharset"
-import type { AuthorityStore } from "./authority"
+import { AuthorityUnavailableError, type AuthorityStore } from "./authority"
 import {
   GATE_SEVERITY,
   type CitationFinding,
@@ -19,6 +19,19 @@ import {
   type TemporalCheck,
   type TemporalFinding,
 } from "./types"
+
+/**
+ * `lookup()`, or `fallback` when the store throws AuthorityUnavailableError (F05): an authority that cannot answer has
+ * proven nothing, so the finding fails closed. Any other error is not caught: it is a bug and fails the request.
+ */
+async function orUnavailable<T, F>(lookup: () => Promise<T>, fallback: F): Promise<T | F> {
+  try {
+    return await lookup()
+  } catch (e) {
+    if (e instanceof AuthorityUnavailableError) return fallback
+    throw e
+  }
+}
 
 async function checkCitations(text: string, store: AuthorityStore): Promise<CitationFinding[]> {
   const findings: CitationFinding[] = []
@@ -36,21 +49,24 @@ async function checkCitations(text: string, store: AuthorityStore): Promise<Cita
     // The store is asked for the canonical form only. A ref that does not normalise cannot be resolved.
     const canonical = normaliseCitation(ref)
     const displayRef = canonical ?? ref
-    const found = canonical ? await store.findJudgment(canonical) : null
+    // An unavailable store finds nothing: UNVERIFIED with no judgment id (F05).
+    const found = canonical ? await orUnavailable(() => store.findJudgment(canonical), null) : null
     const key = found ? `j:${found.judgmentId}` : `r:${displayRef}`
     if (seen.has(key)) continue
     seen.add(key)
-    findings.push({
-      ref: displayRef,
-      judgmentId: found?.judgmentId ?? null,
-      status: found ? verdictFromTreatments(found.benchType, await store.listTreatments(found.judgmentId)) : "UNVERIFIED",
-    })
+    // Treatments it cannot list (unreachable, or an overruling still pending review) leave the found judgment
+    // UNVERIFIED, never VERIFIED (F05).
+    const status = found
+      ? await orUnavailable(async () => verdictFromTreatments(found.benchType, await store.listTreatments(found.judgmentId)), "UNVERIFIED" as const)
+      : "UNVERIFIED"
+    findings.push({ ref: displayRef, judgmentId: found?.judgmentId ?? null, status })
   }
   return findings
 }
 
 async function checkTemporal(check: TemporalCheck, store: AuthorityStore): Promise<TemporalFinding> {
-  const inForce = await store.getSectionAsAt(check.sectionId, check.asAtDate, check.jurisdiction)
+  // An unavailable store reads as no history: TEMPORAL_UNAVAILABLE (F05).
+  const inForce = await orUnavailable(() => store.getSectionAsAt(check.sectionId, check.asAtDate, check.jurisdiction), "no_history" as const)
   // No history is "verify manually", never a silent pass (L6900, E-39(2)). A null from an adapter reads the same way.
   // The finding is built from the four check fields and the outcome only, never by spreading the input: nothing
   // else a caller sent (an extra property, a forged status) can reach the stored result.
