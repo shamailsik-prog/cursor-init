@@ -423,13 +423,241 @@ async def _publish_judgment(run: _Run, item: JudgmentItem) -> None:
         await run.audit(item.item_key, "citation", cid, "updated", creason, chash, prev)
 
 
-# ---- treatments and statute histories (Task 6) --------------------------------------------------
+# ---- treatments (B-7) -------------------------------------------------------------------------
+async def _resolve_ref(run: _Run, ref: Any) -> Optional[uuid.UUID]:
+    """A judgment item of this batch (unless it was rejected), or the judgment behind an exact
+    canonical citation key."""
+    item_key = getattr(ref, "item_key", None)
+    if item_key is not None:
+        return run.judgment_by_item.get(item_key)
+    citation = getattr(ref, "citation", None)
+    if not isinstance(citation, str) or not is_canonical(citation):
+        return None
+    return await run.scalar(
+        "SELECT judgment_id FROM public.citation WHERE citation_text = :c AND judgment_id IS NOT NULL", c=citation)
+
+
 async def _publish_treatment(run: _Run, item: TreatmentItem) -> None:
-    raise NotImplementedError("treatment items are published from plan Task 6")
+    if not _provenance_complete(item.provenance):
+        raise _ItemRejected(v.REASON_PROVENANCE_INCOMPLETE)
+    treating = await _resolve_ref(run, item.treating)
+    treated = await _resolve_ref(run, item.treated)
+    if treating is None or treated is None:
+        raise _ItemRejected(v.REASON_UNRESOLVABLE_JUDGMENT)
+    kind = v.canonical_treatment(item.treatment)
+    if kind is None:
+        raise _ItemRejected(v.REASON_INVALID_TREATMENT_KIND)
+    bench = v.canonical_bench(item.treating_bench_type)
+    if bench is None and not v.bench_is_missing(item.treating_bench_type):
+        raise _ItemRejected(v.REASON_INVALID_BENCH)
+
+    decision = publication_decision(item.trust.level, item.trust.confidence)
+    held = []
+    if not decision.promote:
+        held.append(decision.reason)
+    if bench is None:
+        held.append(v.REASON_MISSING_BENCH)
+    if item.confidence < v.TREATMENT_MIN_CONFIDENCE:
+        held.append(v.REASON_TREATMENT_UNCERTAIN)
+    reason = v.first_quarantine_reason(held)
+    status = "promoted" if reason is None else "quarantined"
+
+    existing = (await run.conn.execute(text(
+        "SELECT id, review_status, source_id FROM public.treatment WHERE treating_judgment_id = :a "
+        "AND treated_judgment_id = :b AND treatment = :k AND coalesce(passage_anchor, '') = :anchor"
+    ), {"a": treating, "b": treated, "k": kind, "anchor": item.passage_anchor or ""})).first()
+    if existing is not None and existing[1] == "promoted" and status != "promoted":
+        raise _ItemRejected(v.REASON_PROMOTED_ROW_PROTECTED, existing[0])
+
+    content = entity_sha256("treatment", {
+        "treating_judgment_id": str(treating), "treated_judgment_id": str(treated), "treatment": kind,
+        "passage_anchor": item.passage_anchor, "treating_bench_type": bench, "confidence": item.confidence,
+        "provenance": _provenance_identity(item.provenance), "review_status": status,
+    })
+    params = {"a": treating, "b": treated, "k": kind, "anchor": item.passage_anchor, "bench": bench,
+              "confidence": item.confidence, "status": status, "pid": run.publication_id}
+    if existing is None:
+        tid = await run.scalar(
+            "INSERT INTO public.treatment (treating_judgment_id, treated_judgment_id, treatment, passage_anchor, "
+            "treating_bench_type, confidence, source_id, review_status, publication_id) VALUES (:a, :b, :k, "
+            ":anchor, :bench, :confidence, :source_id, :status, :pid) RETURNING id",
+            **params, source_id=await run.insert_provenance(item.provenance),
+        )
+        await run.audit(item.item_key, "treatment", tid, status, reason, content, None)
+        return
+    tid = existing[0]
+    prev, prev_reason = await run.latest_hash("treatment", tid)
+    if prev == content:
+        await run.audit(item.item_key, "treatment", tid, "unchanged", prev_reason, content, prev)
+        return
+    await run.conn.execute(text(
+        "UPDATE public.treatment SET passage_anchor = :anchor, treating_bench_type = :bench, confidence = :confidence, "
+        "source_id = :source_id, review_status = :status, publication_id = :pid, updated_at = now() WHERE id = :id"
+    ), {**params, "source_id": await run.insert_provenance(item.provenance), "id": tid})
+    await run.audit(item.item_key, "treatment", tid, "updated", reason, content, prev)
+
+
+# ---- statute section histories (B-5) ----------------------------------------------------------
+def _history_problem(item: StatuteSectionHistoryItem) -> Optional[str]:
+    """The first B-5 rule a history breaks, in the plan's order, or None."""
+    versions = sorted(item.versions, key=lambda ver: ver.version_no)
+    if len({ver.version_no for ver in versions}) != len(versions):
+        return v.REASON_INVALID_HISTORY
+    if any(ver.effective_from is None for ver in versions):
+        return v.REASON_HISTORY_MISSING_EFFECTIVE_FROM
+    for index, ver in enumerate(versions):
+        if ver.effective_to is not None and ver.effective_to <= ver.effective_from:
+            return v.REASON_HISTORY_OUT_OF_ORDER
+        if ver.effective_to is None and index != len(versions) - 1:
+            return v.REASON_HISTORY_OUT_OF_ORDER
+        if index and ver.effective_from <= versions[index - 1].effective_from:
+            return v.REASON_HISTORY_OUT_OF_ORDER
+    for earlier, later in zip(versions, versions[1:]):
+        if earlier.effective_to is None or earlier.effective_to > later.effective_from:
+            return v.REASON_HISTORY_OVERLAP
+    if item.history == "current_text_only":
+        only = versions[0]
+        if len(versions) != 1 or only.effective_to is not None or only.version_confidence not in (
+                None, v.CURRENT_TEXT_ONLY_CONFIDENCE):
+            return v.REASON_INVALID_HISTORY
+    return None
+
+
+async def _upsert(run: _Run, item_key: str, entity_type: str, existing: Optional[Any], content: str, reason: Optional[str],
+                  insert_sql: str, update_sql: str, params: Mapping[str, Any], provenance_id) -> uuid.UUID:
+    """Insert, update or leave one row by its content hash; write its audit row. ``existing`` is
+    (id, review_status) or None."""
+    status = params["status"]
+    if existing is None:
+        entity_id = await run.scalar(insert_sql, **params, source_id=await provenance_id())
+        await run.audit(item_key, entity_type, entity_id, status, reason, content, None)
+        return entity_id
+    entity_id = existing[0]
+    prev, prev_reason = await run.latest_hash(entity_type, entity_id)
+    if prev == content and existing[1] == status:
+        await run.audit(item_key, entity_type, entity_id, "unchanged", prev_reason, content, prev)
+        return entity_id
+    await run.conn.execute(text(update_sql), {**params, "source_id": await provenance_id(), "id": entity_id})
+    await run.audit(item_key, entity_type, entity_id, "updated", reason, content, prev)
+    return entity_id
 
 
 async def _publish_history(run: _Run, item: StatuteSectionHistoryItem) -> None:
-    raise NotImplementedError("statute history items are published from plan Task 6")
+    if not _provenance_complete(item.provenance):
+        raise _ItemRejected(v.REASON_PROVENANCE_INCOMPLETE)
+    jurisdiction = v.canonical_jurisdiction(item.statute.jurisdiction)
+    if jurisdiction is None:
+        raise _ItemRejected(v.REASON_INVALID_JURISDICTION)
+    statute_status = v.canonical_statute_status(item.statute.status)
+    if statute_status is None:
+        raise _ItemRejected(v.REASON_INVALID_STATUTE_STATUS)
+    problem = _history_problem(item)
+    if problem is not None:
+        raise _ItemRejected(problem)
+
+    decision = publication_decision(item.trust.level, item.trust.confidence)
+    reason = None if decision.promote else decision.reason
+    status = "promoted" if reason is None else "quarantined"
+    identity = _provenance_identity(item.provenance)
+    trust_confidence = item.trust.confidence
+    name = item.statute.name.strip()
+    section_number = item.section.section_number.strip()
+
+    statute = (await run.conn.execute(text(
+        "SELECT id, review_status FROM public.statute WHERE name = :name AND jurisdiction = :j"
+    ), {"name": name, "j": jurisdiction})).first()
+    section = None
+    existing_versions: Dict[int, Any] = {}
+    if statute is not None:
+        section = (await run.conn.execute(text(
+            "SELECT id, review_status FROM public.statute_section WHERE statute_id = :s AND section_number = :n"
+        ), {"s": statute[0], "n": section_number})).first()
+    if section is not None:
+        existing_versions = {row[2]: row for row in await run.rows(
+            "SELECT id, review_status, version_no FROM public.statute_section_version WHERE section_id = :s",
+            s=section[0])}
+    versions = sorted(item.versions, key=lambda ver: ver.version_no)
+    if status != "promoted":
+        named = [statute, section, *(existing_versions.get(ver.version_no) for ver in versions)]
+        protected = next((row for row in named if row is not None and row[1] == "promoted"), None)
+        if protected is not None:
+            raise _ItemRejected(v.REASON_PROMOTED_ROW_PROTECTED, protected[0])
+
+    source_id: Optional[uuid.UUID] = None
+
+    async def provenance_id() -> uuid.UUID:
+        nonlocal source_id
+        if source_id is None:
+            source_id = await run.insert_provenance(item.provenance)
+        return source_id
+
+    statute_fields = {"name": name, "short_name": item.statute.short_name, "year_enacted": item.statute.year_enacted,
+                      "jurisdiction": jurisdiction, "status_value": statute_status, "confidence": trust_confidence}
+    statute_hash = entity_sha256("statute", {**statute_fields, "provenance": identity, "review_status": status})
+    statute_id = await _upsert(
+        run, item.item_key, "statute", statute, statute_hash, reason,
+        "INSERT INTO public.statute (name, short_name, year_enacted, jurisdiction, status, confidence, source_id, "
+        "review_status, publication_id) VALUES (:name, :short_name, :year_enacted, :jurisdiction, :status_value, "
+        ":confidence, :source_id, :status, :pid) RETURNING id",
+        "UPDATE public.statute SET short_name = :short_name, year_enacted = :year_enacted, status = :status_value, "
+        "confidence = :confidence, source_id = :source_id, review_status = :status, publication_id = :pid, "
+        "updated_at = now() WHERE id = :id",
+        {**statute_fields, "status": status, "pid": run.publication_id}, provenance_id,
+    )
+
+    section_fields = {"statute_id": statute_id, "section_number": section_number, "chapter": item.section.chapter,
+                      "current_title": item.section.current_title, "confidence": trust_confidence}
+    section_hash = entity_sha256("statute_section", {
+        **section_fields, "statute_id": str(statute_id), "provenance": identity, "review_status": status})
+    section_id = await _upsert(
+        run, item.item_key, "statute_section", section, section_hash, reason,
+        "INSERT INTO public.statute_section (statute_id, section_number, chapter, current_title, confidence, "
+        "source_id, review_status, publication_id) VALUES (:statute_id, :section_number, :chapter, :current_title, "
+        ":confidence, :source_id, :status, :pid) RETURNING id",
+        "UPDATE public.statute_section SET chapter = :chapter, current_title = :current_title, "
+        "confidence = :confidence, source_id = :source_id, review_status = :status, publication_id = :pid, "
+        "updated_at = now() WHERE id = :id",
+        {**section_fields, "status": status, "pid": run.publication_id}, provenance_id,
+    )
+
+    planned = []
+    for ver in versions:
+        confidence = (v.CURRENT_TEXT_ONLY_CONFIDENCE if item.history == "current_text_only" or ver.version_confidence is None
+                      else ver.version_confidence)
+        fields = {"section_id": section_id, "version_no": ver.version_no, "effective_from": ver.effective_from,
+                  "effective_to": ver.effective_to, "title": ver.title, "text": ver.text,
+                  "version_confidence": confidence, "confidence": trust_confidence}
+        content = entity_sha256("statute_section_version", {
+            **fields, "section_id": str(section_id), "effective_from": _iso(ver.effective_from),
+            "effective_to": _iso(ver.effective_to), "provenance": identity, "review_status": status})
+        existing = existing_versions.get(ver.version_no)
+        prev = (await run.latest_hash("statute_section_version", existing[0]))[0] if existing is not None else None
+        planned.append((fields, content, existing, prev))
+
+    # D23: demote this section's promoted versions that this item changes, so a shifted boundary never
+    # trips over its own old range; promoted versions the item does not name stay, and an overlap with
+    # them is refused by the guard (SKP06 -> history_overlap).
+    changing = {existing[0] for _f, content, existing, prev in planned
+                if existing is not None and existing[1] == "promoted" and prev != content}
+    if changing:
+        await run.conn.execute(text(
+            "UPDATE public.statute_section_version SET review_status = 'quarantined', publication_id = :pid "
+            "WHERE id = ANY(:ids)"
+        ), {"pid": run.publication_id, "ids": list(changing)})
+
+    for fields, content, existing, _prev in planned:
+        current = None if existing is None else (existing[0], "quarantined" if existing[0] in changing else existing[1])
+        await _upsert(
+            run, item.item_key, "statute_section_version", current, content, reason,
+            "INSERT INTO public.statute_section_version (section_id, version_no, effective_from, effective_to, title, "
+            "text, version_confidence, confidence, source_id, review_status, publication_id) VALUES (:section_id, "
+            ":version_no, :effective_from, :effective_to, :title, :text, :version_confidence, :confidence, "
+            ":source_id, :status, :pid) RETURNING id",
+            "UPDATE public.statute_section_version SET effective_from = :effective_from, effective_to = :effective_to, "
+            "title = :title, text = :text, version_confidence = :version_confidence, confidence = :confidence, "
+            "source_id = :source_id, review_status = :status, publication_id = :pid, updated_at = now() WHERE id = :id",
+            {**fields, "status": status, "pid": run.publication_id}, provenance_id,
+        )
 
 
 # ---- the publication --------------------------------------------------------------------------

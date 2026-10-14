@@ -461,3 +461,209 @@ def test_f19_writer_cannot_bypass_the_publication(corpus_db):
         # The runtime role still has its own tables.
         assert run(attempt("SELECT count(*) FROM scraper_staging", set_role=False)) == "SUCCEEDED"
     assert admin_fetch(corpus_db, "SELECT count(*) FROM judgment") == [(0,)]
+
+
+# ---------------------------------------------------------------------------------------------
+# treatments (B-7) and statute section histories (B-5)
+# ---------------------------------------------------------------------------------------------
+def treatment_item(item_key, *, treating="PLD 2099 SC 1", treated="2099 SCMR 2", kind="Overruled", confidence=0.9,
+                   bench="larger", anchor=None, trust=("trusted", 0.9), provenance=None):
+    ref = lambda r: r if isinstance(r, dict) else {"citation": r}  # noqa: E731
+    return {
+        "kind": "treatment", "item_key": item_key,
+        "trust": {"level": trust[0], "confidence": trust[1]},
+        "provenance": dict(PROVENANCE if provenance is None else provenance),
+        "treating": ref(treating), "treated": ref(treated), "treatment": kind,
+        "passage_anchor": anchor, "treating_bench_type": bench, "confidence": confidence,
+    }
+
+
+def version(no, start, end, text=None, confidence=0.9, title=None):
+    return {"version_no": no, "effective_from": start, "effective_to": end, "title": title,
+            "text": text or f"Test Act 2099 section text v{no}", "version_confidence": confidence}
+
+
+def history_item(item_key, *versions, section="5", statute="Test Act 2099", jurisdiction="Federal", status=None,
+                 history="amendment_history", trust=("trusted", 0.9), provenance=None):
+    return {
+        "kind": "statute_section_history", "item_key": item_key,
+        "trust": {"level": trust[0], "confidence": trust[1]},
+        "provenance": dict(PROVENANCE if provenance is None else provenance),
+        "statute": {"name": statute, "short_name": "TA 2099", "year_enacted": 2099, "jurisdiction": jurisdiction,
+                    "status": status},
+        "section": {"section_number": section, "chapter": "II", "current_title": f"Test section {section}"},
+        "history": history,
+        "versions": list(versions),
+    }
+
+
+def _two_judgments():
+    return publish(batch_doc(
+        "curated/f19-t6-judgments",
+        judgment_item("j1", citations=[parts("PLD", 1, court="SC")], bench="larger"),
+        judgment_item("j2", citations=[{"text": "2099 SCMR 2"}], bench="division"),
+    ))
+
+
+def test_f19_treatments_follow_the_b7_rules(corpus_db):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    with corpus_db.app_engine_as(writer, writer_pw):
+        judgments = _two_judgments()
+        result = publish(batch_doc(
+            "curated/f19-t6-treatments",
+            treatment_item("t-ok"),
+            treatment_item("t-low", kind="followed", confidence=0.6),
+            treatment_item("t-kind", kind="reversed", anchor="para 3"),
+            treatment_item("t-unresolved", treated="2099 SCMR 999", anchor="para 4"),
+            treatment_item("t-panel", bench="panel", anchor="para 5"),
+            treatment_item("t-no-bench", kind="distinguished", bench=None),
+            treatment_item("t-review", kind="applied", trust=("review", 0.99)),
+            treatment_item("t-no-provenance", kind="doubted", provenance={}),
+        ))
+    j1 = judgments.primary("j1").entity_id
+    j2 = judgments.primary("j2").entity_id
+    keys = ("t-ok", "t-low", "t-kind", "t-unresolved", "t-panel", "t-no-bench", "t-review", "t-no-provenance")
+    got = {key: (result.primary(key).decision, result.primary(key).reason) for key in keys}
+    assert got == {
+        "t-ok": ("promoted", None),
+        "t-low": ("quarantined", "treatment_uncertain"),
+        "t-kind": ("rejected", "invalid_treatment_kind"),
+        "t-unresolved": ("rejected", "unresolvable_judgment"),
+        "t-panel": ("rejected", "invalid_bench"),
+        "t-no-bench": ("quarantined", "missing_bench"),
+        "t-review": ("quarantined", "review_source"),
+        "t-no-provenance": ("rejected", "provenance_incomplete"),
+    }
+    assert result.counts == counts(items=8, promoted=1, quarantined=3, rejected=4)
+    stored = admin_fetch(
+        corpus_db,
+        "SELECT treating_judgment_id, treated_judgment_id, treatment, treating_bench_type, confidence, review_status "
+        "FROM treatment ORDER BY review_status, treatment",
+    )
+    assert stored == [
+        (j1, j2, "overruled", "larger", 0.9, "promoted"),
+        (j1, j2, "applied", "larger", 0.9, "quarantined"),
+        (j1, j2, "distinguished", None, 0.9, "quarantined"),
+        (j1, j2, "followed", "larger", 0.6, "quarantined"),
+    ]
+    reader, reader_pw = corpus_db.reader_role()
+    seen = fetch_as(corpus_db, reader, reader_pw, "SELECT treated_judgment_id, treatment, treating_bench_type FROM v_treatment")
+    assert seen == [(j2, "overruled", "larger")]
+
+
+def test_f19_treatment_refs_by_item_key_resolve_inside_the_batch(corpus_db):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    with corpus_db.app_engine_as(writer, writer_pw):
+        result = publish(batch_doc(
+            "curated/f19-t6-item-refs",
+            treatment_item("t", treating={"item_key": "a"}, treated={"item_key": "b"}),
+            judgment_item("a", citations=[{"text": "2099 SCMR 61"}], bench="full"),
+            judgment_item("b", citations=[{"text": "2099 SCMR 62"}], bench="single"),
+            judgment_item("bad", citations=[{"text": "2099 SCMR 63"}], bench="panel"),
+            treatment_item("t-bad", treating={"item_key": "a"}, treated={"item_key": "bad"}),
+        ))
+    t = result.primary("t")
+    assert (t.decision, t.review_status) == ("promoted", "promoted")
+    assert admin_fetch(corpus_db, "SELECT treating_judgment_id, treated_judgment_id FROM treatment") == [
+        (result.primary("a").entity_id, result.primary("b").entity_id)]
+    assert (result.primary("t-bad").decision, result.primary("t-bad").reason) == ("rejected", "unresolvable_judgment")
+
+
+def test_f19_statute_histories_follow_the_b5_rules(corpus_db):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    with corpus_db.app_engine_as(writer, writer_pw):
+        result = publish(batch_doc(
+            "curated/f19-t6-histories",
+            history_item("h-ok", version(1, "2099-01-01", "2099-07-01"), version(2, "2099-07-01", None), section="5"),
+            history_item("h-overlap", version(1, "2099-01-01", "2099-08-01"), version(2, "2099-07-01", None), section="6"),
+            history_item("h-missing", version(1, None, "2099-07-01"), version(2, "2099-07-01", None), section="7"),
+            history_item("h-order", version(1, "2099-07-01", None), version(2, "2099-01-01", "2099-07-01"), section="8"),
+            history_item("h-open-early", version(1, "2099-01-01", None), version(2, "2099-07-01", None), section="9"),
+            history_item("h-pk", version(1, "2099-01-01", None), section="10", jurisdiction="PK"),
+            history_item("h-cto", version(1, "2099-01-01", None, confidence=None), section="11", history="current_text_only"),
+            history_item("h-cto-bad", version(1, "2099-01-01", None, confidence=0.9), section="12", history="current_text_only"),
+            history_item("h-status", version(1, "2099-01-01", None), section="13", status="in force"),
+            history_item("h-repealed", version(1, "2099-01-01", None), section="14", statute="Test Repealed Act 2099",
+                         status="Repealed"),
+        ))
+    keys = ("h-ok", "h-overlap", "h-missing", "h-order", "h-open-early", "h-pk", "h-cto", "h-cto-bad", "h-status",
+            "h-repealed")
+    got = {key: (result.primary(key).decision, result.primary(key).reason) for key in keys}
+    assert got == {
+        "h-ok": ("promoted", None),
+        "h-overlap": ("rejected", "history_overlap"),
+        "h-missing": ("rejected", "history_missing_effective_from"),
+        "h-order": ("rejected", "history_out_of_order"),
+        "h-open-early": ("rejected", "history_out_of_order"),
+        "h-pk": ("rejected", "invalid_jurisdiction"),
+        "h-cto": ("promoted", None),
+        "h-cto-bad": ("rejected", "invalid_history"),
+        "h-status": ("rejected", "invalid_statute_status"),
+        "h-repealed": ("promoted", None),
+    }
+    statutes = admin_fetch(corpus_db, "SELECT name, jurisdiction, status, review_status FROM statute ORDER BY name")
+    assert statutes == [("Test Act 2099", "Federal", "in_force", "promoted"),
+                        ("Test Repealed Act 2099", "Federal", "repealed", "promoted")]
+    versions = admin_fetch(
+        corpus_db,
+        "SELECT s.section_number, v.version_no, v.effective_from::text, v.effective_to::text, v.version_confidence, "
+        "v.review_status FROM statute_section_version v JOIN statute_section s ON s.id = v.section_id "
+        "ORDER BY s.section_number, v.version_no",
+    )
+    assert versions == [
+        ("11", 1, "2099-01-01", None, 0.5, "promoted"),  # current text only: B-5's 0.5, which the reader ignores
+        ("14", 1, "2099-01-01", None, 0.9, "promoted"),
+        ("5", 1, "2099-01-01", "2099-07-01", 0.9, "promoted"),
+        ("5", 2, "2099-07-01", None, 0.9, "promoted"),
+    ]
+    reader, reader_pw = corpus_db.reader_role()
+    seen = fetch_as(
+        corpus_db, reader, reader_pw,
+        "SELECT v.version_no FROM v_statute_section_version v JOIN v_statute_section s ON s.id = v.section_id "
+        "JOIN v_statute st ON st.id = s.statute_id WHERE s.section_number = '5' ORDER BY 1",
+    )
+    assert seen == [(1,), (2,)]
+    # The audit has the statute, the section and each version of the published item.
+    h_ok = [o.entity_type for o in result.outcomes if o.item_key == "h-ok"]
+    assert h_ok == ["statute", "statute_section", "statute_section_version", "statute_section_version"]
+
+
+def test_f19_republishing_a_statute_history_shifts_boundaries_without_overlap(corpus_db):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    with corpus_db.app_engine_as(writer, writer_pw):
+        publish(batch_doc("curated/f19-t6-shift-1",
+                          history_item("h", version(1, "2099-01-01", "2099-07-01"), version(2, "2099-07-01", None))))
+        shifted = publish(batch_doc("curated/f19-t6-shift-2",
+                                    history_item("h", version(1, "2099-01-01", "2099-08-01"), version(2, "2099-08-01", None))))
+        assert [(o.entity_type, o.decision, o.review_status) for o in shifted.outcomes] == [
+            ("statute", "unchanged", "promoted"), ("statute_section", "unchanged", "promoted"),
+            ("statute_section_version", "updated", "promoted"), ("statute_section_version", "updated", "promoted")]
+        assert admin_fetch(
+            corpus_db,
+            "SELECT version_no, effective_from::text, effective_to::text, review_status FROM statute_section_version ORDER BY 1",
+        ) == [(1, "2099-01-01", "2099-08-01", "promoted"), (2, "2099-08-01", None, "promoted")]
+
+        # A second section whose promoted v3 is seeded through a publication (a writer, not a superuser).
+        publish(batch_doc("curated/f19-t6-shift-3", history_item(
+            "s2", version(1, "2099-01-01", "2099-07-01"), version(2, "2099-07-01", "2099-09-01"),
+            version(3, "2099-09-01", None), section="6")))
+        before = snapshot(corpus_db)
+        # Naming only v1 and v2, with v2 left open, overlaps the unnamed v3: the guard (SKP06) refuses it.
+        refused = publish(batch_doc("curated/f19-t6-shift-4", history_item(
+            "s2", version(1, "2099-01-01", "2099-07-01"), version(2, "2099-07-01", None), section="6")))
+    outcome = refused.primary("s2")
+    assert (outcome.decision, outcome.reason) == ("rejected", "history_overlap")
+    assert refused.counts == counts(items=1, rejected=1)
+    after = snapshot(corpus_db)
+    for table in ANNEX_A_TABLES:
+        if table not in ("corpus_publication", "corpus_publication_item", "corpus_metadata"):
+            assert after[table] == before[table], table
+    assert admin_fetch(
+        corpus_db,
+        "SELECT v.version_no, v.effective_to::text, v.review_status FROM statute_section_version v "
+        "JOIN statute_section s ON s.id = v.section_id WHERE s.section_number = '6' ORDER BY 1",
+    ) == [(1, "2099-07-01", "promoted"), (2, "2099-09-01", "promoted"), (3, None, "promoted")]
