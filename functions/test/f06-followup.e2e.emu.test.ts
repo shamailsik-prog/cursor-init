@@ -2,6 +2,7 @@ import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
 import { InMemoryAuthorityStore, setAuthorityStoreForTests } from "../src/d4/authority"
+import { LAW_DEPENDENT_BY_RULING } from "../src/d4/doctypes"
 import { ApiError, apiErrorOf, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
@@ -25,6 +26,11 @@ import { EMULATORS, mintIdToken, uniq } from "./emu"
  *    yet "Dispositions within the permitted third or heirs' consent" is a condition of the will's validity (the limit
  *    on bequests). Approval accepted no review checklist for a will. Now the code-side ruling map
  *    (LAW_DEPENDENT_BY_RULING in functions/src/d4/doctypes.ts) makes it law-dependent: approval needs its checklist.
+ *    The review on 48e1bab found that the ruling's reason never reached that checklist: a ruled type whose seed names
+ *    no rule (a non-compete, a gift) could be approved on evidence for its clerical items alone. Now a ruled type's
+ *    review checklist ends with one required item, "Legal verification (ruling): <the ruling's reason>", which
+ *    getTypeProfile returns as reviewChecklistItems (case vi; the will's cases iii and iv answer it too; case vii
+ *    proves it for every ruled type, with evidence aimed at the rule on a seed item not answering it).
  *
  * Fixtures follow P4-13: the year 2099, a test statute, no real judgment, statute or party.
  */
@@ -37,7 +43,7 @@ type ChecklistEntry = { item: string; evidence: string }
 type Approved = { draft: DraftView; gateResult: GateResult; reviewChecklist: ChecklistEntry[] | null }
 type Overridden = { override: { cleared: Array<Record<string, unknown>>; by: string; reason: string }; draft: DraftView }
 type Report = { gateResult: GateResult | null; override: Overridden["override"] | null; current: boolean }
-type TypeProfile = { id: string; courtIds: string[]; checklist: string[] }
+type TypeProfile = { id: string; courtIds: string[]; checklist: string[]; reviewChecklistItems?: string[]; lawDependent?: boolean }
 
 const createApi = viaApi<DraftView>("createDraft")
 const gateApi = viaApi<GateResult>("gateDraft")
@@ -51,6 +57,16 @@ const PETITION_TYPE = "constitutional_petition_199"
 /** A NON_FORUM instrument whose validity turns on the limit on bequests (finding 2). */
 const WILL_TYPE = "will_wasiyat"
 const WILL_THIRD_ITEM = "Dispositions within the permitted third or heirs' consent"
+/** The will's ruling item: the one review item a ruled type adds after its seed items, from LAW_DEPENDENT_BY_RULING. */
+const WILL_RULING_ITEM =
+  "Legal verification (ruling): \"Dispositions within the permitted third or heirs' consent\": a bequest beyond the third, or to an heir, fails without the heirs' consent"
+/** A ruled NON_FORUM type whose seed checklist names no rule at all: only the ruling item asks for the legal check. */
+const NON_COMPETE_TYPE = "non_compete_agreement"
+const NON_COMPETE_RULING_ITEM =
+  "Legal verification (ruling): the covenant itself: an agreement in restraint of a lawful profession, trade or business is void except as the law saves it"
+const NON_COMPETE_PROSE = "The seller shall not carry on a business of the same kind within the district for two years after the sale of the goodwill."
+/** Uncited prose any ruled type can carry (case vii). */
+const GENERIC_PROSE = "The executant declares the terms stated below, in the presence of the attesting witnesses who sign."
 
 /** The two texts of test_act_s1 in PK: in force 2010-01-01 to 2018-06-01, and from 2018-06-01. */
 const TEXT_2015 = "Test Act s.1 as it stood in 2015: the limit is thirty days."
@@ -106,9 +122,15 @@ const override = async (f: Firm, draftId: string) =>
 const approve = async (f: Firm, draftId: string, extra: Record<string, unknown> = {}) =>
   send(approveApi, f, f.P, { draftId, version: 1, resultId: await reviewedResultId(f, draftId), ...extra })
 
-/** The type's review checklist as the type profile route returns it, each distinct item once, in the type's order. */
+/** The type's seed checklist as the type profile route returns it, each distinct item once, in the seed's order. */
 async function checklistOf(f: Firm, typeId: string): Promise<string[]> {
   return [...new Set((await send(profileApi, f, f.P, { typeId })).checklist)]
+}
+/** The review checklist an approval must answer, as the type profile route returns it (`reviewChecklistItems`). */
+async function reviewItemsOf(f: Firm, typeId: string): Promise<string[]> {
+  const items = (await send(profileApi, f, f.P, { typeId })).reviewChecklistItems
+  expect(Array.isArray(items)).toBe(true)
+  return items as string[]
 }
 const fullChecklist = (items: readonly string[]): ChecklistEntry[] =>
   items.map((item, i) => ({ item, evidence: `Reviewed against the file, point ${i + 1}: confirmed by the partner on the record.` }))
@@ -233,8 +255,9 @@ describe.skipIf(!EMULATORS)("F06 follow-up: approval holds recorded checks to th
 
   it("(iii) a will_wasiyat draft approved with no review checklist, after the partner's override, answers 422 review_checklist_incomplete and stays unapproved", async () => {
     const f = await newFirm()
-    const items = await checklistOf(f, WILL_TYPE)
+    const items = await reviewItemsOf(f, WILL_TYPE)
     expect(items).toContain(WILL_THIRD_ITEM)
+    expect(items.at(-1)).toBe(WILL_RULING_ITEM)
     const draftId = await overriddenWill(f)
 
     // The override clears the gate, not the review: a will's validity turns on the limit on bequests.
@@ -255,9 +278,13 @@ describe.skipIf(!EMULATORS)("F06 follow-up: approval holds recorded checks to th
 
   it("(iv) the same will, with every checklist item and evidence of 20 or more characters, passes the checklist requirement and is approved", async () => {
     const f = await newFirm()
-    const items = await checklistOf(f, WILL_TYPE)
+    // Every item: the distinct seed items, then the ruling item.
+    const items = await reviewItemsOf(f, WILL_TYPE)
+    expect(items).toEqual([...(await checklistOf(f, WILL_TYPE)), WILL_RULING_ITEM])
     const draftId = await overriddenWill(f)
     expectErr(await apiErrorOf(approve(f, draftId)), 422, "review_checklist_incomplete")
+    // The seed items alone, each with evidence, leave the ruling item unanswered.
+    expectErr(await apiErrorOf(approve(f, draftId, { reviewChecklist: fullChecklist(items.slice(0, -1)) })), 422, "review_checklist_incomplete")
     // Evidence of 19 characters once trimmed is not evidence (ruling B).
     expect([...EVIDENCE_19]).toHaveLength(19)
     const short = items.map((item) => ({ item, evidence: item === WILL_THIRD_ITEM ? EVIDENCE_19 : `  ${EVIDENCE_20}\n` }))
@@ -270,6 +297,7 @@ describe.skipIf(!EMULATORS)("F06 follow-up: approval holds recorded checks to th
     expect(a.draft).toMatchObject({ status: "approved", locked: true, approvedBy: f.P.uid, approvedVersion: 1 })
     expect(a.draft.gateResult).toMatchObject({ status: "NOT_ASSESSED", overridden: true })
     expect(a.reviewChecklist).toEqual(stored)
+    expect(a.reviewChecklist?.at(-1)?.item).toBe(WILL_RULING_ITEM)
     expect(await draftDoc(draftId)).toMatchObject({ status: "approved", locked: true, reviewChecklist: stored })
     expect(await approvedEvents(f.firmId, draftId)).toHaveLength(1)
   })
@@ -317,4 +345,79 @@ describe.skipIf(!EMULATORS)("F06 follow-up: approval holds recorded checks to th
     expect(await overrideExists(cited.draftId)).toBe(false)
     expect(await overrideAudit(cited.draftId)).toEqual([["deny", "temporal_check_not_in_draft"]])
   })
+
+  it("(vi) a ruled type whose seed checklist names no rule (a non-compete) is not approved on evidence for its seed items alone: the ruling item needs evidence too, and is stored last", async () => {
+    const f = await newFirm()
+    const seedItems = await checklistOf(f, NON_COMPETE_TYPE)
+    // The seed asks about parties, recitals, consideration, execution, registration and stamp duty: nothing on the
+    // restraint of trade that makes the covenant law-dependent.
+    expect(seedItems.filter((item) => /restrain|restraint|trade|compet/i.test(item))).toEqual([])
+    const d = await create(f, f.A, NON_COMPETE_TYPE, NON_COMPETE_PROSE)
+    expect((await gate(f, f.A, d.draftId)).status).toBe("NOT_ASSESSED")
+    await override(f, d.draftId)
+
+    // Evidence on every seed item, none on the ruled legal verification: refused, nothing approved.
+    const seedOnly = fullChecklist(seedItems)
+    expectErr(await apiErrorOf(approve(f, d.draftId, { reviewChecklist: seedOnly })), 422, "review_checklist_incomplete")
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+    expect(await draftDoc(d.draftId)).not.toHaveProperty("reviewChecklist")
+    expect(await approvedEvents(f.firmId, d.draftId)).toHaveLength(0)
+
+    // A client learns the item before any approval: the type profile adds the review checklist and whether it is
+    // required, and keeps the seed row's own fields as they were.
+    const profile = await send(profileApi, f, f.P, { typeId: NON_COMPETE_TYPE })
+    expect(profile.reviewChecklistItems).toEqual([...seedItems, NON_COMPETE_RULING_ITEM])
+    expect(profile.lawDependent).toBe(true)
+    expect([...new Set(profile.checklist)]).toEqual(seedItems)
+    expect(profile.checklist).not.toContain(NON_COMPETE_RULING_ITEM)
+
+    // The ruling item goes through the same rule as every other item: evidence under 20 characters, the item twice, or
+    // a ruling item the type does not have, is 422.
+    const ruling = { item: NON_COMPETE_RULING_ITEM, evidence: "The restraint is limited to the goodwill sold, within the district, for two years: within the saving." }
+    expectErr(await apiErrorOf(approve(f, d.draftId, { reviewChecklist: [...seedOnly, { ...ruling, evidence: EVIDENCE_19 }] })), 422, "review_checklist_incomplete")
+    expectErr(await apiErrorOf(approve(f, d.draftId, { reviewChecklist: [...seedOnly, ruling, ruling] })), 422, "review_checklist_incomplete")
+    expectErr(
+      await apiErrorOf(approve(f, d.draftId, { reviewChecklist: [...seedOnly, { ...ruling, item: WILL_RULING_ITEM }] })),
+      422,
+      "review_checklist_incomplete"
+    )
+    expect(await approvedEvents(f.firmId, d.draftId)).toHaveLength(0)
+
+    // With the ruling item answered (sent first: any order), it is approved; the stored checklist keeps the type's
+    // order, the ruling item last.
+    const a = await approve(f, d.draftId, { reviewChecklist: [ruling, ...seedOnly] })
+    expect(a.draft).toMatchObject({ status: "approved", locked: true, approvedBy: f.P.uid, approvedVersion: 1 })
+    expect(a.reviewChecklist).toEqual([...seedOnly, ruling])
+    expect(a.reviewChecklist?.at(-1)).toEqual(ruling)
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "approved", locked: true, reviewChecklist: [...seedOnly, ruling] })
+    expect(await approvedEvents(f.firmId, d.draftId)).toHaveLength(1)
+  })
+
+  // Every ruled type, not one example: the ruling item is its own distinct item, so evidence on the seed items (even
+  // evidence that names the ruled rule) never answers it.
+  it.each([...LAW_DEPENDENT_BY_RULING.keys()].sort())(
+    "(vii) %s requires its own ruling item: evidence on every seed item, even evidence aimed at the rule, is 422; with the ruling item it is approved and stored last",
+    async (typeId) => {
+      const f = await newFirm()
+      const seedItems = await checklistOf(f, typeId)
+      const d = await create(f, f.A, typeId, GENERIC_PROSE)
+      expect((await gate(f, f.A, d.draftId)).status).toBe("NOT_ASSESSED")
+      await override(f, d.draftId)
+      const ruling = `Legal verification (ruling): ${LAW_DEPENDENT_BY_RULING.get(typeId)}`
+
+      // Evidence on every seed item, the first one aimed at the ruled rule itself: the ruling item is still unanswered.
+      const seedOnly = fullChecklist(seedItems).map((e, i) => (i === 0 ? { ...e, evidence: `${ruling}: checked against the file by the partner.` } : e))
+      expectErr(await apiErrorOf(approve(f, d.draftId, { reviewChecklist: seedOnly })), 422, "review_checklist_incomplete")
+      expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+      expect(await approvedEvents(f.firmId, d.draftId)).toHaveLength(0)
+
+      // The type profile names the item; answered as itself, the approval passes and stores it last.
+      expect(await reviewItemsOf(f, typeId)).toEqual([...seedItems, ruling])
+      const answer = { item: ruling, evidence: "The partner verified the ruled rule against the file and the law in force." }
+      const a = await approve(f, d.draftId, { reviewChecklist: [answer, ...seedOnly] })
+      expect(a.draft).toMatchObject({ status: "approved", locked: true, approvedBy: f.P.uid })
+      expect(a.reviewChecklist).toEqual([...seedOnly, answer])
+      expect(await draftDoc(d.draftId)).toMatchObject({ status: "approved", reviewChecklist: [...seedOnly, answer] })
+    }
+  )
 })

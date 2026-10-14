@@ -403,7 +403,11 @@ describe("the review checklist of a law-dependent type (F06)", () => {
       "sale_deed",
       "tenancy_agreement",
     ])
-    for (const t of property) expect([t.id, LAW_DEPENDENT_BY_RULING.has(t.id), isLawDependent(t)]).toEqual([t.id, true, true])
+    for (const t of property) {
+      expect([t.id, LAW_DEPENDENT_BY_RULING.has(t.id), isLawDependent(t)]).toEqual([t.id, true, true])
+      // Each one's review ends with its own ruling item, after its distinct seed items.
+      expect([t.id, reviewChecklistOf(t)]).toEqual([t.id, [...new Set(t.checklist), `Legal verification (ruling): ${LAW_DEPENDENT_BY_RULING.get(t.id)}`]])
+    }
   })
 
   it("the ruling is read by the type's id: a copy of a ruled row is law-dependent, the same row under another id is not", () => {
@@ -442,13 +446,75 @@ describe("the review checklist of a law-dependent type (F06)", () => {
   it("lists every distinct seed item once, in the seed's order", () => {
     const petition = byId("constitutional_petition_199")
     expect(reviewChecklistOf(petition)).toEqual([...petition.checklist])
+    // A seed row that repeats an item is answered once: land_regularization_application lists the court-fee line twice.
+    const application = byId("land_regularization_application")
+    expect(application.checklist.filter((c) => c === "Court fee: MANUAL — do not compute")).toHaveLength(2)
+    expect(reviewChecklistOf(application)).toEqual([...new Set(application.checklist)])
+    expect(reviewChecklistOf(application)).toHaveLength(application.checklist.length - 1)
+    // So is a ruled row's (sale_deed lists the stamp-duty line twice), before its one ruling item.
     const deed = byId("sale_deed")
     expect(deed.checklist.filter((c) => c === "Stamp duty: MANUAL — do not compute")).toHaveLength(2)
-    expect(reviewChecklistOf(deed)).toEqual([...new Set(deed.checklist)])
-    expect(reviewChecklistOf(deed)).toHaveLength(deed.checklist.length - 1)
+    expect(reviewChecklistOf(deed)).toEqual([...new Set(deed.checklist), `Legal verification (ruling): ${LAW_DEPENDENT_BY_RULING.get("sale_deed")}`])
+    expect(reviewChecklistOf(deed)).toHaveLength(deed.checklist.length)
   })
 
   it("every verified type has at least one review item, so a law-dependent approval always has something to answer", () => {
     for (const t of rows.filter((r) => r.status === "VERIFIED")) expect(reviewChecklistOf(t).length).toBeGreaterThan(0)
+  })
+
+  it("a ruled type's review checklist is its distinct seed items, then exactly one ruling item carrying the ruling's reason", () => {
+    for (const [id, reason] of LAW_DEPENDENT_BY_RULING) {
+      const type = byId(id)
+      const items = reviewChecklistOf(type)
+      const ruling = `Legal verification (ruling): ${reason}`
+      // The seed items keep their order; the ruling item comes last, once.
+      expect([id, items.slice(0, -1)]).toEqual([id, [...new Set(type.checklist)]])
+      expect([id, items.at(-1)]).toEqual([id, ruling])
+      expect([id, items.filter((item) => item.startsWith("Legal verification (ruling): "))]).toEqual([id, [ruling]])
+      // Deterministic, single-line, and short enough to send back: an approval's item is at most 500 characters.
+      expect([id, reviewChecklistOf(type)]).toEqual([id, items])
+      expect([id, ruling.includes("\n"), [...ruling].length <= 500]).toEqual([id, false, true])
+      // Its own distinct item: no seed line is it, so evidence aimed at a seed line never answers it.
+      expect([id, type.checklist.includes(ruling), items.length]).toEqual([id, false, new Set(type.checklist).size + 1])
+    }
+    // The will's ruling item names the limit on bequests its seed item already asks about; the gift's names hiba.
+    expect(reviewChecklistOf(byId("will_wasiyat")).at(-1)).toContain("Dispositions within the permitted third or heirs' consent")
+    expect(reviewChecklistOf(byId("gift_deed")).at(-1)).toContain("hiba")
+    expect(reviewChecklistOf(byId("non_compete_agreement")).at(-1)).toBe(
+      "Legal verification (ruling): the covenant itself: an agreement in restraint of a lawful profession, trade or business is void except as the law saves it"
+    )
+  })
+
+  it("no seed checklist line of any type is, or starts like, a ruling item, so a ruling item can only be answered as itself", () => {
+    expect(rows).toHaveLength(159)
+    for (const t of rows) {
+      expect([t.id, t.checklist.filter((line) => line.startsWith("Legal verification (ruling)"))]).toEqual([t.id, []])
+    }
+  })
+
+  it("the ruled types whose seed names no line for their rule get it only from the ruling item (re-audit list)", () => {
+    // [type, what the rule is about]: the seed checklist names none of it, the ruling item does.
+    const cases: Array<[string, RegExp]> = [
+      ["non_compete_agreement", /restraint|restrain|trade/i],
+      ["secp_response", /limitation|maintainab/i],
+      ["gift_deed", /hiba|possession/i],
+      ["sale_deed", /pre-emption/i],
+      ["tenancy_agreement", /rent law/i],
+    ]
+    for (const [id, rule] of cases) {
+      const type = byId(id)
+      expect([id, type.checklist.filter((line) => rule.test(line))]).toEqual([id, []])
+      const items = reviewChecklistOf(type)
+      expect([id, items.filter((item) => rule.test(item))]).toEqual([id, [items.at(-1)]])
+      expect([id, isLawDependent(type)]).toEqual([id, true])
+    }
+  })
+
+  it("a type outside the ruling map (a forum type, a checklist-rule type, any other NON_FORUM type) has its distinct seed items and no ruling item", () => {
+    const unruled = rows.filter((t) => !LAW_DEPENDENT_BY_RULING.has(t.id))
+    expect(unruled).toHaveLength(159 - 17)
+    for (const t of unruled) {
+      expect([t.id, reviewChecklistOf(t)]).toEqual([t.id, [...new Set(t.checklist)]])
+    }
   })
 })

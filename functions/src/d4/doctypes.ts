@@ -67,8 +67,10 @@ export const LEGAL_VERIFICATION_ITEM =
  * a type here. "Registration where compulsory" does so only for the instruments of immovable property, whose own
  * transaction a statute requires to be registered; in a contract on the general law of contract the same template line
  * names no rule that applies to the type. The seed (data/documentTypes.json, L18 Annex C) is partner-approved and is
- * not edited for this: the ruling lives here. functions/test/d4.doctypes.test.ts pins the set and checks that every id
- * is a VERIFIED NON_FORUM seed id the checklist rule leaves out.
+ * not edited for this: the ruling lives here. Each reason also becomes the type's last review item
+ * (`reviewChecklistOf`: `Legal verification (ruling): <reason>`), so the approval records evidence for the legal
+ * verification the ruling names. functions/test/d4.doctypes.test.ts pins the set and checks that every id is a VERIFIED
+ * NON_FORUM seed id the checklist rule leaves out.
  */
 export const LAW_DEPENDENT_BY_RULING: ReadonlyMap<string, string> = new Map([
   // The limit on bequests.
@@ -114,12 +116,22 @@ export function isLawDependent(type: DocumentType): boolean {
   )
 }
 
+/** The fixed start of the one review item a ruled type adds after its seed items (`reviewChecklistOf`). */
+export const RULING_REVIEW_ITEM_PREFIX = "Legal verification (ruling): "
+
 /**
- * The type's review checklist (F06): every distinct item of its seed `checklist`, in the seed's order. Some seed rows
+ * The type's review checklist (F06): every distinct item of its seed `checklist`, in the seed's order, and, for a type
+ * in `LAW_DEPENDENT_BY_RULING`, then one more item, `Legal verification (ruling): <the ruling's reason>`. Some seed rows
  * repeat an item (`sale_deed` lists "Stamp duty: MANUAL — do not compute" twice); a reviewer answers each item once.
+ * The ruling item carries the legal verification that made the type law-dependent into the review the approval
+ * requires: a ruled type's seed checklist need not name it (a non-compete's names no rule at all), and evidence on the
+ * clerical items alone must not approve one. It is deterministic and on one line, always last, so a stored review
+ * keeps the type's order; it is answered and checked exactly as the seed items are (`requireReviewChecklist`). Every
+ * other type, forum-filed or law-dependent by its checklist or not law-dependent, has its seed items only.
  */
 export function reviewChecklistOf(type: DocumentType): string[] {
-  return [...new Set(type.checklist)]
+  const reason = LAW_DEPENDENT_BY_RULING.get(type.id)
+  return [...new Set([...type.checklist, ...(reason === undefined ? [] : [`${RULING_REVIEW_ITEM_PREFIX}${reason}`])])]
 }
 
 /**

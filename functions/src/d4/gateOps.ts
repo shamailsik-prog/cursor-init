@@ -202,8 +202,10 @@ export function parseReviewChecklist(value: unknown): ReviewChecklistEntry[] | n
  * A law-dependent type (`isLawDependent`: filed in a forum, its own checklist names a legal-verification item, ruling
  * A, or it is in `LAW_DEPENDENT_BY_RULING`, the follow-up audit) needs one; for any other type it is optional, but one
  * that is sent is held to the same rule. The rule:
- * the entries name every item of the type's checklist (`reviewChecklistOf`) exactly once, by exact string, in any
- * order, and nothing else, and every evidence is at least 20 characters once trimmed (ruling B, the override reason's
+ * the entries name every item of the type's review checklist (`reviewChecklistOf`: the distinct seed items and, for a
+ * type in `LAW_DEPENDENT_BY_RULING`, its last item `Legal verification (ruling): <reason>`, checked like any other)
+ * exactly once, by exact string, in any order, and nothing else, and every evidence is at least 20 characters once
+ * trimmed (ruling B, the override reason's
  * floor); otherwise 422 `review_checklist_incomplete`. Each evidence then passes the draft charset rule (422
  * `unsupported_characters`, R7) and is stored as the override reason is (paste artefacts removed, CRLF as LF, NFC),
  * trimmed, and checked again on that form (under 20 characters: 422 `review_checklist_incomplete`; over 2,000: 400
