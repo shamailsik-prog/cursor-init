@@ -1221,6 +1221,7 @@ Steps:
 ### PR 2b decisions beyond the plan (recorded)
 - `GRANT USAGE ON SCHEMA public TO corpus_writer, corpus_reader` in `provision-roles.sh`. F30 revokes the schema from `PUBLIC`, so without it `SET ROLE corpus_writer` reaches nothing in `public` and `corpus_reader` is refused every `v_*` view. Neither role can log in. `corpus_declassify` gets nothing: no compose service declassifies.
 - `provision-roles.sh` ends with a fail-closed post-check in its transaction: exact memberships, every Annex A relation and function owned by a superuser, no table, column or sequence privilege on Annex A for either application role.
+- Fix round 1 (re-audit D1, D2): 003 gains `corpus_contract_routines()` (routine, `public_execute`). Provisioning resets, on every run, grants on Annex A relations and their sequences to the application roles, `corpus_clients` and `PUBLIC`, and `EXECUTE` on every Annex A routine to those roles (to `PUBLIC` only where the DDL keeps it from `PUBLIC`: all but 001's trigger function). The post-check also refuses `EXECUTE` on a non-PUBLIC routine for either application role, `corpus_clients` or `PUBLIC`; the app's `INHERIT FALSE` `corpus_writer` membership does not count.
 - The DML grant loop covers the relation kinds `GRANT … ON ALL TABLES` covered (`r`, `p`, `v`, `m`, `f`), not only `r`/`p`, so nothing outside Annex A changes for the runtime role.
 - No automatic re-apply on a plain restart: the image runs `/docker-entrypoint-initdb.d` only on an empty volume; `scripts/rotate_postgres_password.sh` is the re-apply path (idempotent).
 

@@ -186,8 +186,10 @@ as_role_local() {
 }
 
 # annex_a_checks PREFIX: Annex A is applied (001 + 003 by 15-apply-annex-a.sh) and owned by the
-# bootstrap superuser; neither application role owns or holds anything of it; the runtime role's only
-# corpus_* membership is corpus_writer WITH INHERIT FALSE, SET TRUE (D14, D25).
+# bootstrap superuser; neither application role owns or holds anything of it (relations, their
+# sequences, and EXECUTE on the routines the DDL keeps from PUBLIC), nor does corpus_clients or PUBLIC;
+# the runtime role's only corpus_* membership is corpus_writer WITH INHERIT FALSE, SET TRUE (D14, D25;
+# PR 2b fix round 1).
 annex_a_checks() {
   local p=$1 roles="(values ('$APP_DB_USER'), ('$MIGRATE_DB_USER')) u(n)"
   expect_out "$p: server is PostgreSQL 16 (pgvector/pgvector:pg16)" '^16$' \
@@ -200,13 +202,22 @@ annex_a_checks() {
     as_superuser_local "select count(*) filter (where t.tgenabled = 'O') || '/' || count(*) from pg_trigger t
       join pg_class c on c.oid = t.tgrelid
       where not t.tgisinternal and t.tgname = c.relname || '_publication_guard' and c.relnamespace = 'public'::regnamespace"
-  expect_out "$p: every Annex A relation and publication function is owned by the bootstrap superuser" '^0$' \
+  expect_out "$p: corpus_contract_routines() lists the 12 Annex A routines" '^12$' \
+    as_superuser_local "select count(*) from public.corpus_contract_routines()"
+  expect_out "$p: every Annex A relation and routine is owned by the bootstrap superuser" '^0$' \
     as_superuser_local "select (select count(*) from public.corpus_contract_relations() r join pg_class c on c.oid = r
         where pg_get_userbyid(c.relowner) <> '$POSTGRES_USER')
-      + (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname in
-        ('corpus_contract_relations', 'corpus_publication_begin', 'corpus_publication_finish',
-         'enforce_promoted_via_publication', 'corpus_publication_commit_check', 'declassify')
-        and pg_get_userbyid(proowner) <> '$POSTGRES_USER')"
+      + (select count(*) from public.corpus_contract_routines() f join pg_proc p on p.oid = f.routine
+        where pg_get_userbyid(p.proowner) <> '$POSTGRES_USER')"
+  expect_out "$p: neither $APP_DB_USER, $MIGRATE_DB_USER, corpus_clients nor PUBLIC may EXECUTE an Annex A routine the DDL keeps from PUBLIC" '^0$' \
+    as_superuser_local "select count(*) from public.corpus_contract_routines() f
+      cross join (values ('$APP_DB_USER'), ('$MIGRATE_DB_USER'), ('corpus_clients'), ('public')) u(n)
+      where not f.public_execute and has_function_privilege(u.n, f.routine, 'EXECUTE')"
+  expect_out "$p: neither corpus_clients nor PUBLIC holds any privilege on an Annex A relation" '^0$' \
+    as_superuser_local "select count(*) from public.corpus_contract_relations() r
+      cross join (values ('corpus_clients'), ('public')) u(n)
+      where has_table_privilege(u.n, r, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+         or has_any_column_privilege(u.n, r, 'SELECT,INSERT,UPDATE,REFERENCES')"
   expect_out "$p: neither $APP_DB_USER nor $MIGRATE_DB_USER owns or holds any privilege on an Annex A relation or sequence" '^0$' \
     as_superuser_local "select (select count(*) from public.corpus_contract_relations() r cross join $roles
         where has_table_privilege(u.n, r, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')

@@ -291,8 +291,13 @@ default, and all four differ.
   superuser, then `20-provision-roles.sh`, which refuses to run without Annex A or on PostgreSQL
   older than 16. Annex A stays the superuser's: provisioning leaves every relation that
   `corpus_contract_relations()` lists out of the move to the migration role and out of the runtime
-  role's DML grants, and fails closed if either role owns or holds any privilege on one, or if an
-  Annex A function is not a superuser's. The migration role could not apply 001 anyway (it creates
+  role's DML grants. On every run it resets any grant on those relations (and the sequences they
+  own) to either application role, `corpus_clients` or `PUBLIC`, and any `EXECUTE` on the routines
+  `corpus_contract_routines()` lists to those roles (to `PUBLIC` too, except 001's trigger function,
+  which keeps PostgreSQL's default). It then fails closed if either role still owns or holds any of
+  it, directly or through `corpus_clients`, `PUBLIC` or an inherited role, or if an Annex A relation
+  or routine is not a superuser's. The grants the DDL makes to `corpus_reader`, `corpus_writer`
+  and `corpus_declassify` are untouched. The migration role could not apply 001 anyway (it creates
   roles and extensions; that role is `NOCREATEROLE`). The runtime role is a member of
   `corpus_writer` `WITH INHERIT FALSE, SET TRUE`: it holds none of `corpus_writer`'s rights until
   `scraper.publication` switches to it (`SET LOCAL ROLE`) for one audited publication, and even then

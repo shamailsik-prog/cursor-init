@@ -206,26 +206,70 @@ writer_membership() {
       || ':admin=' || m.admin_option, ','), 'none') from pg_auth_members m join pg_roles g on g.oid = m.roleid
       join pg_roles u on u.oid = m.member where g.rolname = 'corpus_writer' and u.rolname = '$APP_DB_USER'"
 }
-expect_ok "re-running 20-provision-roles.sh on the running stack succeeds" provision
+expect_out "re-running 20-provision-roles.sh on the running stack succeeds (prints ready)" 'ready in legal_scraper' provision
 annex_a_checks "after re-provisioning"
-# Drift an operator (or an older script) could leave behind; a re-run must put it back.
+# Drift an operator (or an older script) could leave behind; a re-run must put every one of them back.
+DECLASSIFY='public.declassify(uuid,text,text,text)'
+BEGIN_FN='public.corpus_publication_begin(text,text,text,text)'
+FINISH_FN='public.corpus_publication_finish(uuid,jsonb)'
+drift_state() { # SHAPES ("label=expr ..."; each expr a boolean SQL expression without spaces): "label=t/f ..."
+  local shapes=$1 sel="" item
+  for item in $shapes; do sel+="${sel:+ || ' ' || }'${item%%=*}=' || (${item#*=})"; done
+  as_superuser_local "select $sel"
+}
+# drift_case LABEL SHAPES SQL...: apply the grants as the superuser, show they took effect, re-run
+# provisioning, which must print "ready" and leave none of them.
+drift_case() {
+  local label=$1 shapes=$2 sql want_t="" want_f="" item; shift 2
+  for sql in "$@"; do as_superuser_local "$sql" >/dev/null 2>&1 || fail "$label: drift setup failed: $sql"; done
+  for item in $shapes; do want_t+="${want_t:+ }${item%%=*}=true"; want_f+="${want_f:+ }${item%%=*}=false"; done
+  expect_out "drift control ($label): the grants are in place" "^$want_t\$" drift_state "$shapes"
+  expect_out "re-provisioning after drift ($label) succeeds (prints ready)" 'ready in legal_scraper' provision
+  expect_out "re-provisioning resets the drift ($label)" "^$want_f\$" drift_state "$shapes"
+}
 as_superuser_local "grant corpus_writer to \"$APP_DB_USER\" with inherit true, admin true" >/dev/null 2>&1
-as_superuser_local "grant insert, update on public.judgment, public.corpus_publication_grant to \"$APP_DB_USER\"" >/dev/null 2>&1
-as_superuser_local "grant select on public.citation to \"$MIGRATE_DB_USER\"" >/dev/null 2>&1
 expect_out "drift control: the runtime role's membership was widened (INHERIT TRUE, ADMIN TRUE)" '^inherit=true:set=true:admin=true$' \
   writer_membership
-annex_a_grants() {
-  as_superuser_local "select has_table_privilege('$APP_DB_USER', 'public.judgment', 'INSERT,UPDATE') || '|'
-    || has_table_privilege('$APP_DB_USER', 'public.corpus_publication_grant', 'INSERT,UPDATE') || '|'
-    || has_table_privilege('$MIGRATE_DB_USER', 'public.citation', 'SELECT')"
-}
-expect_out "drift control: direct grants on Annex A to the runtime and migration roles are in place" '^true\|true\|true$' \
-  annex_a_grants
-expect_ok "re-provisioning after drift succeeds" provision
+drift_case "direct table grants to the runtime and migration roles" \
+  "app-insert-judgment=has_table_privilege('$APP_DB_USER','public.judgment','INSERT,UPDATE')
+   app-insert-grant=has_table_privilege('$APP_DB_USER','public.corpus_publication_grant','INSERT,UPDATE')
+   mig-select-citation=has_table_privilege('$MIGRATE_DB_USER','public.citation','SELECT')" \
+  "grant insert, update on public.judgment, public.corpus_publication_grant to \"$APP_DB_USER\"" \
+  "grant select on public.citation to \"$MIGRATE_DB_USER\""
 expect_out "re-provisioning resets the runtime role's membership to INHERIT FALSE, SET TRUE, no admin" \
   '^inherit=false:set=true:admin=false$' writer_membership
-expect_out "re-provisioning clears direct grants on Annex A to the runtime and migration roles" '^false\|false\|false$' \
-  annex_a_grants
+# Re-audit D1: EXECUTE on an Annex A routine, to the app or migration role, or through corpus_clients
+# or PUBLIC (declassify() reaching the runtime role would bypass FA-DATA-001's separation).
+drift_case "EXECUTE on Annex A routines: declassify to the app, corpus_publication_begin to the migration role, declassify to corpus_clients, corpus_publication_finish to PUBLIC" \
+  "app-exec-declassify=has_function_privilege('$APP_DB_USER','$DECLASSIFY','EXECUTE')
+   mig-exec-begin=has_function_privilege('$MIGRATE_DB_USER','$BEGIN_FN','EXECUTE')
+   clients-exec-declassify=has_function_privilege('corpus_clients','$DECLASSIFY','EXECUTE')
+   public-exec-finish=has_function_privilege('public','$FINISH_FN','EXECUTE')" \
+  "grant execute on function $DECLASSIFY to \"$APP_DB_USER\"" \
+  "grant execute on function $BEGIN_FN to \"$MIGRATE_DB_USER\"" \
+  "grant execute on function $DECLASSIFY to corpus_clients" \
+  "grant execute on function $FINISH_FN to public"
+# Re-audit D2: grants on Annex A relations through corpus_clients or PUBLIC are reset, not refused.
+drift_case "Annex A relation grants through corpus_clients and PUBLIC" \
+  "clients-select-judgment=has_table_privilege('corpus_clients','public.judgment','SELECT')
+   public-insert-grant=has_table_privilege('public','public.corpus_publication_grant','SELECT,INSERT')
+   public-select-view=has_table_privilege('public','public.v_judgment','SELECT')" \
+  "grant select on public.judgment to corpus_clients" \
+  "grant select, insert on public.corpus_publication_grant to public" \
+  "grant select on public.v_judgment to public"
+expect_out "corpus_reader still reads v_judgment after the resets (its own grant is untouched)" '^true$' \
+  as_superuser_local "select has_table_privilege('corpus_reader', 'public.v_judgment', 'SELECT')::text"
+expect_out "corpus_writer still executes corpus_publication_begin/finish and corpus_declassify declassify after the resets" \
+  '^true\|true\|true$' \
+  as_superuser_local "select has_function_privilege('corpus_writer', '$BEGIN_FN', 'EXECUTE') || '|'
+    || has_function_privilege('corpus_writer', '$FINISH_FN', 'EXECUTE') || '|'
+    || has_function_privilege('corpus_declassify', '$DECLASSIFY', 'EXECUTE')"
+expect_out "the runtime role's INHERIT FALSE corpus_writer membership is not EXECUTE on corpus_publication_begin (member, writer holds it, app does not) and provisioning accepts it" \
+  '^1\|true\|false$' \
+  as_superuser_local "select (select count(*) from pg_auth_members m join pg_roles g on g.oid = m.roleid join pg_roles u on u.oid = m.member
+      where g.rolname = 'corpus_writer' and u.rolname = '$APP_DB_USER' and not m.inherit_option and m.set_option) || '|'
+    || has_function_privilege('corpus_writer', '$BEGIN_FN', 'EXECUTE') || '|'
+    || has_function_privilege('$APP_DB_USER', '$BEGIN_FN', 'EXECUTE')"
 # Fail closed: refusals leave everything as it was (one transaction).
 as_superuser_local "create database f19_no_annex_a" >/dev/null
 expect_refused "provision-roles refuses a database without Annex A" 'Annex A is not applied: run 15-apply-annex-a.sh first' \
@@ -241,7 +285,7 @@ as_superuser_local "alter function public.corpus_contract_relations() owner to \
 expect_refused "provision-roles refuses when an Annex A function has passed to the migration role" \
   'an Annex A function is not owned by a superuser' provision
 as_superuser_local "alter function public.corpus_contract_relations() owner to \"$POSTGRES_USER\"" >/dev/null
-expect_ok "after the operator restores ownership, provision-roles succeeds again" provision
+expect_out "after the operator restores ownership, provision-roles succeeds again (prints ready)" 'ready in legal_scraper' provision
 annex_a_checks "after the fail-closed cases"
 WRONG_CA_URL="postgresql+asyncpg://$APP_DB_USER:$APP_DB_PASSWORD@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/wrongca/ca.crt"
 run_probe "app engine, wrong CA" \

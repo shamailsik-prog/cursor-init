@@ -20,14 +20,29 @@
 #
 # Annex A corpus contract (audit F19, PR 2b). 15-apply-annex-a.sh applies postgres/ddl 001 + 003 as
 # the bootstrap superuser before this script runs, which refuses to run without it. Its relations
-# (public.corpus_contract_relations()) stay owned by the superuser: they are left out of the ownership
-# move and of the runtime role's DML grants, and neither application role may hold any privilege on
-# them. APP_DB_USER is a member of corpus_writer WITH INHERIT FALSE, SET TRUE (D14): it holds none of
-# corpus_writer's rights until scraper.publication switches to it (SET LOCAL ROLE) for one audited
-# publication. MIGRATE_DB_USER gets no corpus_* role. corpus_writer and corpus_reader get USAGE on
-# schema public (revoked from PUBLIC below), which their own grants need; neither can log in.
-# PostgreSQL 16 or later is required (pg_auth_members.inherit_option / set_option); this script
-# fails closed on anything older and checks the final memberships, ownership and privileges.
+# (public.corpus_contract_relations()) and routines (public.corpus_contract_routines()) stay owned by
+# the superuser: the relations are left out of the ownership move and of the runtime role's DML grants.
+# On every run this script resets, on every Annex A relation and the sequences they own, any grant to
+# APP_DB_USER, MIGRATE_DB_USER, corpus_clients or PUBLIC (001/003 grant PUBLIC nothing there), and on
+# every Annex A routine any grant to those three roles, and to PUBLIC wherever the DDL itself keeps
+# EXECUTE from PUBLIC (all but 001's trigger function enforce_monotonic_classification(), which keeps
+# PostgreSQL's default and cannot be called directly). The grants the DDL makes to corpus_reader,
+# corpus_writer and corpus_declassify are left alone. APP_DB_USER is a member of corpus_writer WITH
+# INHERIT FALSE, SET TRUE (D14): it holds none of corpus_writer's rights until scraper.publication
+# switches to it (SET LOCAL ROLE) for one audited publication. MIGRATE_DB_USER gets no corpus_* role.
+# corpus_writer and corpus_reader get USAGE on schema public (revoked from PUBLIC below), which their
+# own grants need; neither can log in. PostgreSQL 16 or later is required
+# (pg_auth_members.inherit_option / set_option).
+#
+# It then checks the result in the same transaction and rolls everything back on any surprise:
+# memberships of the two application roles other than corpus_clients and the app's single
+# corpus_writer membership (INHERIT FALSE, SET TRUE, no admin); an Annex A relation or routine not
+# owned by a superuser; any table or column privilege on an Annex A relation, or any privilege on a
+# sequence one owns, that either application role holds directly, through corpus_clients or PUBLIC, or
+# through a role it inherits; EXECUTE on an Annex A routine the DDL keeps from PUBLIC, for either
+# application role (directly, or through corpus_clients, PUBLIC or an inherited role), corpus_clients
+# or PUBLIC. A membership a role can only SET and does not inherit (the app's corpus_writer) grants
+# nothing here, so corpus_writer's own EXECUTE on corpus_publication_begin/finish does not trip it.
 #
 # Passwords come from files (compose secrets: APP_DB_PASSWORD_FILE, MIGRATE_DB_PASSWORD_FILE,
 # POSTGRES_PASSWORD_FILE) or, failing that, the variable itself. They reach psql through its
@@ -92,7 +107,8 @@ BEGIN
     RAISE EXCEPTION 'PostgreSQL 16 or later is required (GRANT ... WITH INHERIT FALSE, SET TRUE); this server is %',
       pg_catalog.current_setting('server_version');
   END IF;
-  IF pg_catalog.to_regprocedure('public.corpus_contract_relations()') IS NULL THEN
+  IF pg_catalog.to_regprocedure('public.corpus_contract_relations()') IS NULL
+     OR pg_catalog.to_regprocedure('public.corpus_contract_routines()') IS NULL THEN
     RAISE EXCEPTION 'Annex A is not applied: run 15-apply-annex-a.sh first';
   END IF;
 END
@@ -184,7 +200,8 @@ $$;
 -- Runtime role: DML only, on existing and future objects of the migration role. The REVOKEs also
 -- clear any direct grant on an Annex A relation; the GRANT loops cover what GRANT ... ON ALL TABLES /
 -- ALL SEQUENCES IN SCHEMA public did, except the Annex A relations and the sequences they own (the
--- runtime role reaches Annex A only as corpus_writer, through a publication).
+-- runtime role reaches Annex A only as corpus_writer, through a publication). Then every Annex A
+-- relation, sequence and routine is reset for the application roles, corpus_clients and PUBLIC.
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"app_user";
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"app_user";
 SELECT set_config('corpus.app_user', :'app_user', false) AS app_user_setting \gset
@@ -213,9 +230,27 @@ BEGIN
   LOOP
     EXECUTE format('GRANT USAGE, SELECT, UPDATE ON SEQUENCE %s TO %I', r.rel, app);
   END LOOP;
-  -- The migration role is never granted anything on Annex A either; clear what an older state left.
+  -- Nothing of Annex A is ever granted to the application roles, their group or PUBLIC (re-audit D2:
+  -- a grant through corpus_clients or PUBLIC is reset here, not just refused by the check below).
   FOR r IN SELECT a AS rel FROM public.corpus_contract_relations() a LOOP
-    EXECUTE format('REVOKE ALL ON TABLE %s FROM %I', r.rel, mig);
+    EXECUTE format('REVOKE ALL ON TABLE %s FROM %I, %I, corpus_clients, PUBLIC', r.rel, app, mig);
+  END LOOP;
+  FOR r IN
+    SELECT s.oid::regclass AS seq
+      FROM pg_class s
+      JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = s.oid
+                      AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
+     WHERE s.relkind = 'S' AND d.refobjid IN (SELECT a::oid FROM public.corpus_contract_relations() a)
+  LOOP
+    EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM %I, %I, corpus_clients, PUBLIC', r.seq, app, mig);
+  END LOOP;
+  -- Re-audit D1: EXECUTE on the Annex A routines. PUBLIC only where the DDL itself keeps it from PUBLIC
+  -- (public_execute false); corpus_writer's and corpus_declassify's grants are the DDL's and stay.
+  FOR r IN SELECT f.routine, f.public_execute FROM public.corpus_contract_routines() f LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I, %I, corpus_clients', r.routine, app, mig);
+    IF NOT r.public_execute THEN
+      EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', r.routine);
+    END IF;
   END LOOP;
 END
 $$;
@@ -231,9 +266,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"mig_user" IN SCHEMA public
 REVOKE EXECUTE ON FUNCTION lo_creat(integer), lo_create(oid), lo_from_bytea(oid, bytea),
   lo_import(text), lo_import(text, oid) FROM PUBLIC;
 
--- Fail closed (D14, D25): the result, not just the statements above. Any surprise (a membership
--- granted by another grantor, an Annex A relation that changed hands, a privilege reaching an
--- application role some other way) rolls the whole run back.
+-- Fail closed (D14, D25, re-audit D1): the result, not just the statements above. Exactly what it
+-- covers is listed in the header; any surprise (a membership granted by another grantor, an Annex A
+-- relation or routine that changed hands, a privilege reaching an application role some other way)
+-- rolls the whole run back. has_*_privilege counts direct grants, PUBLIC and roles a role inherits
+-- from; a membership with INHERIT FALSE does not count.
 DO $$
 DECLARE
   app text := current_setting('corpus.app_user');
@@ -266,39 +303,46 @@ BEGIN
   IF problem IS NOT NULL THEN
     RAISE EXCEPTION 'an Annex A relation is not owned by a superuser: %', problem;
   END IF;
+  -- Owners first: a role that owned an Annex A routine (corpus_contract_relations() or
+  -- corpus_contract_routines() included) could redefine it.
+  SELECT string_agg(format('%s owned by %s', f.routine, o.rolname), '; ')
+    INTO problem
+    FROM public.corpus_contract_routines() f
+    JOIN pg_proc p ON p.oid = f.routine
+    JOIN pg_roles o ON o.oid = p.proowner
+   WHERE NOT o.rolsuper;
+  IF problem IS NOT NULL THEN
+    RAISE EXCEPTION 'an Annex A function is not owned by a superuser: %', problem;
+  END IF;
   SELECT string_agg(DISTINCT format('%s on %s', u.n, r.rel), '; ')
     INTO problem
     FROM (SELECT a AS rel FROM public.corpus_contract_relations() a) r
-   CROSS JOIN (VALUES (app), (mig)) u(n)
+   CROSS JOIN (VALUES (app), (mig), ('corpus_clients'), ('public')) u(n)
    WHERE has_table_privilege(u.n, r.rel, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
       OR has_any_column_privilege(u.n, r.rel, 'SELECT,INSERT,UPDATE,REFERENCES');
   IF problem IS NOT NULL THEN
-    RAISE EXCEPTION 'an application role holds a privilege on an Annex A relation: %', problem;
+    RAISE EXCEPTION 'an application role, corpus_clients or PUBLIC holds a privilege on an Annex A relation: %', problem;
   END IF;
   SELECT string_agg(DISTINCT format('%s on %s', u.n, s.oid::regclass), '; ')
     INTO problem
     FROM pg_class s
     JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = s.oid
                     AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
-   CROSS JOIN (VALUES (app), (mig)) u(n)
+   CROSS JOIN (VALUES (app), (mig), ('corpus_clients'), ('public')) u(n)
    WHERE s.relkind = 'S' AND d.refobjid IN (SELECT a::oid FROM public.corpus_contract_relations() a)
      AND (pg_catalog.pg_get_userbyid(s.relowner) = u.n OR has_sequence_privilege(u.n, s.oid, 'USAGE,SELECT,UPDATE'));
   IF problem IS NOT NULL THEN
     RAISE EXCEPTION 'an application role owns or holds a privilege on an Annex A sequence: %', problem;
   END IF;
-  -- The functions Annex A's guarantees rest on, corpus_contract_relations() included, are the
-  -- superuser's (a role that owned one could redefine it).
-  SELECT string_agg(format('%s owned by %s', p.oid::regprocedure, o.rolname), '; ')
+  -- Re-audit D1: EXECUTE on an Annex A routine the DDL keeps from PUBLIC. The one routine PUBLIC may
+  -- execute by design (001's trigger function) is left out: every role holds it through PUBLIC.
+  SELECT string_agg(format('%s may execute %s', u.n, f.routine), '; ')
     INTO problem
-    FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
-   WHERE p.pronamespace = 'public'::regnamespace AND NOT o.rolsuper
-     AND p.proname IN ('corpus_contract_relations', 'corpus_session_is_superuser', 'corpus_provenance_complete',
-                       'enforce_promoted_via_publication', 'corpus_publication_commit_check',
-                       'corpus_publication_append_only', 'corpus_publication_item_guard',
-                       'corpus_publication_begin', 'corpus_publication_finish',
-                       'enforce_monotonic_classification', 'declassify');
+    FROM public.corpus_contract_routines() f
+   CROSS JOIN (VALUES (app), (mig), ('corpus_clients'), ('public')) u(n)
+   WHERE NOT f.public_execute AND has_function_privilege(u.n, f.routine, 'EXECUTE');
   IF problem IS NOT NULL THEN
-    RAISE EXCEPTION 'an Annex A function is not owned by a superuser: %', problem;
+    RAISE EXCEPTION 'an application role, corpus_clients or PUBLIC may execute an Annex A routine: %', problem;
   END IF;
 END
 $$;
