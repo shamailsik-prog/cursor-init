@@ -1887,7 +1887,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     expect(await sectionVersions(section)).toEqual([]);
   });
 
-  it("PG-DDL-31 004: a row whose publication is unfinished, or whose provenance lacks content_hash, source_name or both source_url and raw_storage_key, is invisible", async () => {
+  it("PG-DDL-31 004: a row is invisible when it, or any parent it reports, has an unfinished or no publication, no provenance row, or provenance missing source_name, fetched_at, content_hash, extraction_method, or both source_url and raw_storage_key; also when it is not promoted, a judgment is bench-less or not public, or a treatment has no recorded bench; a hidden overruling is pending", async () => {
     // An unfinished publication, built by the superuser (a writer's could not commit: 003 R1 D1).
     const unfinished = randomUUID();
     await admin.query(
@@ -1960,6 +1960,103 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       [keyed.citationSource, keyed.judgmentSource],
     ]);
     expect(await citationRows("2099 SCMR 923199")).toHaveLength(1);
+
+    // #51 R1 D-4: the whole matrix. For each view, the row itself and every parent the view reports, each defect alone,
+    // on a fresh fixture that is visible first. The row disappears; a hidden overruling is pending. This is what kills
+    // a mutant that drops one predicate from one block (for example the row's own finished_at, or the treating
+    // judgment's fetched_at, which the cases above leave to the parent's check).
+    type Owner = { table: string; ids: string[]; source: string; judgment?: boolean; treatment?: boolean };
+    type Fixture = { label: string; owners: Record<string, Owner>; shown: () => Promise<number>; expected: number; pending?: () => Promise<number> };
+    const onRows = (sql: string) => async (o: Owner) => admin.query(`UPDATE ${o.table} SET ${sql} WHERE id = ANY($1::uuid[])`, [o.ids]);
+    const onSource = (sql: string) => async (o: Owner) => admin.query(`UPDATE source_provenance SET ${sql} WHERE id = $1`, [o.source]);
+    const DEFECTS: Array<{ name: string; applies: (o: Owner) => boolean; apply: (o: Owner) => Promise<unknown> }> = [
+      { name: "an unfinished publication", applies: () => true, apply: async (o) => admin.query(`UPDATE ${o.table} SET publication_id = $1 WHERE id = ANY($2::uuid[])`, [unfinished, o.ids]) },
+      { name: "no publication", applies: () => true, apply: onRows("publication_id = NULL") },
+      { name: "no provenance row", applies: () => true, apply: onRows("source_id = NULL") },
+      { name: "a blank source_name", applies: () => true, apply: onSource("source_name = '  '") },
+      { name: "no fetched_at", applies: () => true, apply: onSource("fetched_at = NULL") },
+      { name: "no content_hash", applies: () => true, apply: onSource("content_hash = NULL") },
+      { name: "a blank content_hash", applies: () => true, apply: onSource("content_hash = '  '") },
+      { name: "no extraction_method", applies: () => true, apply: onSource("extraction_method = NULL") },
+      { name: "neither source_url nor raw_storage_key", applies: () => true, apply: onSource("source_url = '  ', raw_storage_key = NULL") },
+      { name: "quarantined", applies: () => true, apply: onRows("review_status = 'quarantined'") },
+      { name: "no bench", applies: (o) => o.judgment === true, apply: onRows("bench_type = NULL") },
+      { name: "an internal classification", applies: (o) => o.judgment === true, apply: onRows("classification = 'internal'") },
+      { name: "no recorded treating bench", applies: (o) => o.treatment === true, apply: onRows("treating_bench_type = NULL") },
+    ];
+    const idOf = async (sql: string, param: string) => (await admin.query(sql, [param])).rows[0].id as string;
+    const fixtures: Record<string, (n: number) => Promise<Fixture>> = {
+      citation: async (n) => {
+        const citation = `2099 SCMR 93${n}`;
+        const c = await publishCitedJudgment(n, citation);
+        const citationId = await idOf("SELECT id FROM citation WHERE citation_text = $1", citation);
+        return {
+          label: "v_authority_citation",
+          owners: {
+            citation: { table: "citation", ids: [citationId], source: c.citationSource },
+            judgment: { table: "judgment", ids: [c.judgment], source: c.judgmentSource, judgment: true },
+          },
+          shown: async () => (await citationRows(citation)).length,
+          expected: 1,
+        };
+      },
+      treatment: async (n) => {
+        const c = await publishTreatmentCase(n, "overruled");
+        const treatmentId = await idOf("SELECT id FROM treatment WHERE treated_judgment_id = $1", c.treated);
+        return {
+          label: "v_authority_treatment",
+          owners: {
+            treatment: { table: "treatment", ids: [treatmentId], source: c.sources.treatment, treatment: true },
+            treating: { table: "judgment", ids: [c.treating], source: c.sources.treating, judgment: true },
+            treated: { table: "judgment", ids: [c.treated], source: c.sources.treated, judgment: true },
+          },
+          shown: async () => (await treatmentRows(c.treated)).length,
+          expected: 1,
+          pending: () => pending(c.treated),
+        };
+      },
+      section: async (n) => {
+        const s = await publishSection(n);
+        const versions = (await admin.query("SELECT id FROM statute_section_version WHERE section_id = $1", [s.section])).rows.map((r) => r.id as string);
+        return {
+          label: "v_authority_section_version",
+          owners: {
+            version: { table: "statute_section_version", ids: versions, source: s.sources.version },
+            section: { table: "statute_section", ids: [s.section], source: s.sources.section },
+            statute: { table: "statute", ids: [s.statute], source: s.sources.statute },
+          },
+          shown: async () => (await sectionVersions(s.section)).length,
+          expected: 2,
+        };
+      },
+    };
+    const OWNERS: Array<[keyof typeof fixtures, string, Pick<Owner, "judgment" | "treatment">]> = [
+      ["citation", "citation", {}], ["citation", "judgment", { judgment: true }],
+      ["treatment", "treatment", { treatment: true }], ["treatment", "treating", { judgment: true }], ["treatment", "treated", { judgment: true }],
+      ["section", "version", {}], ["section", "section", {}], ["section", "statute", {}],
+    ];
+    let m = 4000;
+    let cases = 0;
+    for (const [view, owner, kind] of OWNERS) {
+      for (const defect of DEFECTS) {
+        if (!defect.applies({ table: "", ids: [], source: "", ...kind })) continue;
+        m += 1;
+        const f = await fixtures[view](m);
+        const o = f.owners[owner];
+        const what = `${f.label}: ${defect.name} on the ${owner}`;
+        expect(await f.shown(), `${what} (before)`).toBe(f.expected);
+        if (f.pending) expect(await f.pending(), `${what} (pending before)`).toBe(0);
+        await defect.apply(o);
+        expect(await f.shown(), what).toBe(0);
+        if (f.pending) expect(await f.pending(), `${what} (pending)`).toBe(1);
+        cases += 1;
+      }
+    }
+    expect(cases).toBe(8 * 10 + 3 * 2 + 1);
+    // An overruling with no treated judgment is not a pending fact about any judgment: it is not listed.
+    const orphan = await publishTreatmentCase(4999, "overruled", "quarantined", 0.6);
+    await admin.query("UPDATE treatment SET treated_judgment_id = NULL WHERE treating_judgment_id = $1", [orphan.treating]);
+    expect(await asReader(async (r) => (await r.query("SELECT count(*)::int AS n FROM v_authority_pending_adverse WHERE treated_judgment_id IS NULL")).rows[0].n)).toBe(0);
   });
 
   it("PG-DDL-32 004: the DDL chain re-applies cleanly twice and the inventory is 33 after each full pass (D13)", async () => {
