@@ -1000,7 +1000,31 @@ describe("Audit F14 — a job row follows its matter's current label, not only t
       // C1: a firm-A document and its version naming firm B's matter, which the forged membership above makes "member".
       await setDoc(doc(db, "documents", "f14docCrossFirm"), { ...document, matterId: "f14mOtherFirm" })
       await setDoc(doc(db, "document_versions", "f14docCrossFirm_1"), { firmId: "firmA", matterId: "f14mOtherFirm", documentId: "f14docCrossFirm", version: 1, storagePath: "r2://f14", createdBy: "f14-assoc", classification: "internal" })
+      // R5-D2: a firm-A draft and its version on firm B's matter (the forged membership above), and an own-firm control.
+      await setDoc(doc(db, "matters", "f14draftm"), { firmId: "firmA", title: "F14 drafts", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "f14draftm_f14-clerk"), { firmId: "firmA", matterId: "f14draftm", userId: "f14-clerk" })
+      const draft = { firmId: "firmA", classification: "internal", title: "F14 draft", status: "draft", createdBy: "f14-assoc" }
+      await setDoc(doc(db, "drafts", "f14draftOwn"), { ...draft, matterId: "f14draftm" })
+      await setDoc(doc(db, "draft_versions", "f14draftOwn_1"), { firmId: "firmA", matterId: "f14draftm", draftId: "f14draftOwn", version: 1, classification: "internal" })
+      await setDoc(doc(db, "drafts", "f14draftCrossFirm"), { ...draft, matterId: "f14mOtherFirm" })
+      await setDoc(doc(db, "draft_versions", "f14draftCrossFirm_1"), { firmId: "firmA", matterId: "f14mOtherFirm", draftId: "f14draftCrossFirm", version: 1, classification: "internal" })
+      // Unchanged semantics: a draft whose matter cannot be read (with a forged membership), and one naming no matter.
+      await setDoc(doc(db, "drafts", "f14draftOrphan"), { ...draft, matterId: "f14docmMissing" })
+      await setDoc(doc(db, "draft_versions", "f14draftOrphan_1"), { firmId: "firmA", matterId: "f14docmMissing", draftId: "f14draftOrphan", version: 1, classification: "internal" })
+      await setDoc(doc(db, "drafts", "f14draftNoMatter"), { ...draft, matterId: null })
+      await setDoc(doc(db, "draft_versions", "f14draftNoMatter_1"), { firmId: "firmA", matterId: null, draftId: "f14draftNoMatter", version: 1, classification: "internal" })
     })
+  })
+
+  it("drafts and draft_versions naming another firm's matter are denied even with a (forged) membership of that matter; the own-firm draft reads (R5-D2)", async () => {
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "drafts", "f14draftOwn")))
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "draft_versions", "f14draftOwn_1")))
+    // Otherwise unchanged: a matter that cannot be read still denies, and so does a draft naming no matter.
+    for (const [collection, id] of [["drafts", "f14draftOrphan"], ["draft_versions", "f14draftOrphan_1"], ["drafts", "f14draftNoMatter"], ["draft_versions", "f14draftNoMatter_1"]]) {
+      await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), collection, id)))
+    }
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "drafts", "f14draftCrossFirm")))
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "draft_versions", "f14draftCrossFirm_1")))
   })
 
   it("documents and document_versions naming another firm's matter are denied even with a (forged) membership of that matter (C1)", async () => {

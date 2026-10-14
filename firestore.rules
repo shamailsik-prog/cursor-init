@@ -253,15 +253,21 @@ service cloud.firestore {
     // its versions are created, saved, restored and approved through /api/d4/drafting only. Reads follow the API's
     // `draft.read` (P4-10): an author role (partner, associate, clerk; interns stay denied, O-68 closed) who is a
     // member of the draft's matter (R-2) and is cleared for the row's own label and for the matter's current label,
-    // so a label raised after a draft or a version was written binds it too (final review PROBE-5).
+    // so a label raised after a draft or a version was written binds it too (final review PROBE-5). Audit F14 R5-D2:
+    // the matter must be the row's own firm's, the check clearedForMatterNow makes for documents (C1), written out
+    // beside the clearance clause the P4-11 shape test pins (tests/firestore.rules.d4-phase4a.test.ts). A draft always
+    // names a matter: a null or missing matterId still denies (isMember errors on it), and so does a matter that cannot
+    // be read. The two get()s of one matter are one read.
     match /drafts/{id} {
       allow read: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && cleared(resource.data.classification)
-        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification);
+        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification)
+        && get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.firmId == resource.data.firmId;
       allow create, update, delete: if false;
     }
     match /draft_versions/{id} {
       allow read: if sameFirm() && isAuthor() && isMember(resource.data.matterId) && cleared(resource.data.classification)
-        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification);
+        && cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification)
+        && get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.firmId == resource.data.firmId;
       allow create, update, delete: if false; // append-only, and written by Cloud Functions only
     }
     // Phase 4a (P4-6, P4-7, P4-11): the gate's stored results and the partner's overrides are server-only: no client

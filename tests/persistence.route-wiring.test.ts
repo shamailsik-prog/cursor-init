@@ -6421,9 +6421,17 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
 }))
 
 /**
- * Every repository this fixture does not name is an empty one, as in a fresh database. The routes now see mat_1 in the
- * matters repository (audit F14 C3), so the ops-reporting views seed its digest chain through repositories the
- * fixture never listed; they read nothing back and accept every write.
+ * The one repository a route reads that this fixture does not name. The routes see mat_1 in the matters repository
+ * (audit F14 C3), so the ops-reporting views seed its digest chain, which reads this lattice view's repository; it is
+ * an empty one, as in a fresh database (reads nothing back, accepts every write).
+ */
+const EMPTY_UNNAMED_REPOSITORY =
+  "workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView539"
+
+/**
+ * The named repositories, plus `EMPTY_UNNAMED_REPOSITORY` on first use. Any other unknown repository throws (audit F14
+ * R5-D3), so a route that starts reading a repository this fixture does not provide fails the test instead of being
+ * absorbed by a default. `then` reads as absent, so the awaited value is not taken for a thenable.
  */
 function withEmptyRepositories<T extends object>(named: T): T {
   const empty = () => ({
@@ -6436,7 +6444,11 @@ function withEmptyRepositories<T extends object>(named: T): T {
   })
   return new Proxy(named, {
     get(target, key, receiver) {
-      if (typeof key === "string" && key !== "then" && !Reflect.has(target, key)) Reflect.set(target, key, empty())
+      if (typeof key === "string" && !Reflect.has(target, key)) {
+        if (key === "then") return undefined
+        if (key !== EMPTY_UNNAMED_REPOSITORY) throw new Error(`route-wiring fixture: no repository named "${key}"`)
+        Reflect.set(target, key, empty())
+      }
       return Reflect.get(target, key, receiver)
     },
   })

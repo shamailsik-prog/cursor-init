@@ -4,8 +4,9 @@ import { GET as documentsGet, POST as documentsPost } from "@/app/api/d1/documen
 import { POST as workflowPost } from "@/app/api/d1/document-workflow/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
-import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
+import { getRuntimeRepositories, setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
 import { testAdminFirestore } from "@/tests/helpers/admin-firestore"
 
 /**
@@ -49,9 +50,9 @@ async function raiseElsewhere(matterId: string): Promise<void> {
   expect(getRuntimeStore().matters.get(matterId)?.classification).toBe("internal")
 }
 
-/** An internal matter (partner, associate, clerk) and a plaint on it, created through the routes and cached here. */
-async function seed(title: string, opts: { blockWorkflow?: boolean } = {}): Promise<{ matterId: string; docId: string; bytes: string }> {
-  const created = await post(mattersPost, `${B}/api/d1/matters`, {
+/** The partner creates an internal matter with the associate and the clerk as members, through the matters route. */
+const createMatter = (title: string) =>
+  post(mattersPost, `${B}/api/d1/matters`, {
     action: "create",
     actorId: "partner_a",
     firmId: "firmA",
@@ -61,6 +62,34 @@ async function seed(title: string, opts: { blockWorkflow?: boolean } = {}): Prom
     classification: "internal",
     memberUserIds: ["associate_a", "clerk_a"],
   })
+
+/** A gate another request's in-flight work waits on: `opened` resolves once `open` is called. */
+function gated(): { opened: Promise<void>; open: () => void } {
+  let open: () => void = () => undefined
+  const opened = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  return { opened, open: () => open() }
+}
+
+/** Calls `release` once, right after the first `map.set` that `matches`; `restore` puts the map's own `set` back. */
+function releaseAfterSet<K, V>(map: Map<K, V>, matches: (key: K, value: V) => boolean, release: () => void): { fired: () => boolean; restore: () => void } {
+  const set = map.set.bind(map)
+  let fired = false
+  map.set = (key: K, value: V) => {
+    const result = set(key, value)
+    if (!fired && matches(key, value)) {
+      fired = true
+      release()
+    }
+    return result
+  }
+  return { fired: () => fired, restore: () => void Reflect.deleteProperty(map, "set") }
+}
+
+/** An internal matter (partner, associate, clerk) and a plaint on it, created through the routes and cached here. */
+async function seed(title: string, opts: { blockWorkflow?: boolean } = {}): Promise<{ matterId: string; docId: string; bytes: string }> {
+  const created = await createMatter(title)
   expect(created.status).toBe(200)
   const matterId = ((await created.json()) as { result: { matter: { id: string } } }).result.matter.id
   const bytes = `%PDF-f14-${title}%`
@@ -202,6 +231,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
     expect(await listed("partner_a")).toContain(docId)
 
     // Another process deletes the matter row; this process still holds its copy.
+    const persisted = (await db().collection("matters").doc(matterId).get()).data()
     await db().collection("matters").doc(matterId).delete()
     expect(getRuntimeStore().matters.has(matterId)).toBe(true)
 
@@ -222,6 +252,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
       purpose: "summarise",
     })
     expect(asked.status).toBe(404)
+
+    // Restored elsewhere (R5-D1 check): the next request caches it again and the cleared member reads the document.
+    await db().collection("matters").doc(matterId).set(persisted ?? {})
+    expect((await read("partner_a")).status).toBe(200)
+    expect(getRuntimeStore().matters.has(matterId)).toBe(true)
   })
 
   it("a matter moved to another firm elsewhere leaves this firm's cache: its document is refused and unlisted, its ingest refused (C3)", async () => {
@@ -237,6 +272,59 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
     expect(await list.text()).not.toContain(docId)
     expect(getRuntimeStore().matters.has(matterId)).toBe(false)
     expect((await ingest("partner_a", matterId, "%PDF-f14-after-move%", "privileged-restricted")).status).toBe(404)
+
+    // Moved back elsewhere (R5-D1 check): the next request of the firm caches it again under its firm.
+    await db().collection("matters").doc(matterId).update({ firmId: "firmA" })
+    expect((await read("partner_a")).status).toBe(200)
+    expect(getRuntimeStore().matters.get(matterId)?.firmId).toBe("firmA")
+  })
+
+  it("a matter created while another request's matter sync is in flight keeps its members and its cached copy (R5-D1)", async () => {
+    const store = getRuntimeStore()
+    const repos = await getRuntimeRepositories(store)
+    // Another request's sync is in flight: its listing was read before the create below committed, and it resolves
+    // only after the create route has cached the new matter (the order the auditor's probe forced).
+    const stale = await repos.matters.listByFirm("firmA")
+    const gate = gated()
+    const inFlight = syncFirmMatters(store, { ...repos, matters: { ...repos.matters, listByFirm: () => gate.opened.then(() => stale) } }, "firmA")
+    const hook = releaseAfterSet(store.matters, (_id, row) => row.title === "R5-D1 matter race", gate.open)
+    let res: Response
+    try {
+      res = await createMatter("R5-D1 matter race")
+    } finally {
+      hook.restore()
+    }
+    await inFlight
+    expect(hook.fired()).toBe(true)
+    expect(res.status).toBe(200)
+    const matterId = ((await res.json()) as { result: { matter: { id: string } } }).result.matter.id
+    expect((await db().collection("matter_members").where("matterId", "==", matterId).get()).size).toBe(3)
+    expect(store.matters.has(matterId)).toBe(true)
+  })
+
+  it("a membership added while another request's member sync is in flight stays in this process's cache (R5-D1, syncFirmMembers)", async () => {
+    const store = getRuntimeStore()
+    const repos = await getRuntimeRepositories(store)
+    // Another request's member sync is in flight, with a listing read before the create below committed its members;
+    // it resolves right after the create route caches the new matter's first membership (the creator's).
+    const stale = await repos.members.listByFirm("firmA")
+    const staleKeys = new Set(stale.map((row) => store.memberKey(row.matterId, row.userId)))
+    const gate = gated()
+    const inFlight = syncFirmMembers(store, { ...repos, members: { ...repos.members, listByFirm: () => gate.opened.then(() => stale) } }, "firmA")
+    const hook = releaseAfterSet(store.members, (key) => key.endsWith("_partner_a") && !staleKeys.has(key), gate.open)
+    let res: Response
+    try {
+      res = await createMatter("R5-D1 member race")
+    } finally {
+      hook.restore()
+    }
+    await inFlight
+    expect(hook.fired()).toBe(true)
+    expect(res.status).toBe(200)
+    const matterId = ((await res.json()) as { result: { matter: { id: string } } }).result.matter.id
+    for (const userId of ["partner_a", "associate_a", "clerk_a"]) {
+      expect({ userId, cached: store.members.has(store.memberKey(matterId, userId)) }).toEqual({ userId, cached: true })
+    }
   })
 
   it("a document row whose matterId is missing or empty is not the loose vault: the clerk's download is 403 and the list leaves it out (C2)", async () => {
