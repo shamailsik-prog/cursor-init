@@ -51,21 +51,31 @@ _TRUST_PROBE_TABLE = "f20_trust_vocabulary_probe"
 async def _expected_trust_rendering(conn: AsyncConnection, column_type: str):
     """PostgreSQL's own rendering of the F20 CHECK and default for a trust_level column of
     ``column_type``: built on a throwaway table inside a savepoint that is always rolled back, so
-    nothing persists. (Not a TEMP table: after F30 the migration role has CREATE on public but no
-    TEMP on the database.)"""
+    nothing persists.
+
+    The table is created in scraper_sources' own schema (the one the migration role created the
+    tables in, public under F30), not in whatever schema comes first on the search_path. It is not
+    a TEMP table: after F30 the migration role has CREATE on public but no TEMP on the database.
+    So this needs CREATE on that schema, which only the migration role has: running migrate as the
+    DML-only runtime role exits 1 even on a current database (only the migrate service runs it)."""
+    schema = (await conn.execute(text(
+        "SELECT quote_ident(n.nspname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE c.oid = 'scraper_sources'::regclass"
+    ))).scalar_one()
+    probe = f"{schema}.{_TRUST_PROBE_TABLE}"
     savepoint = await conn.begin_nested()
     try:
         await conn.execute(text(
-            f"CREATE TABLE {_TRUST_PROBE_TABLE} (trust_level {column_type} NOT NULL "
+            f"CREATE TABLE {probe} (trust_level {column_type} NOT NULL "
             f"DEFAULT '{DEFAULT_TRUST_LEVEL}', CONSTRAINT {_TRUST_PROBE_TABLE}_ck CHECK ({trust_check_sql()}))"
         ))
         check = (await conn.execute(text(
             "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c "
             "WHERE c.conrelid = to_regclass(:t) AND c.contype = 'c'"
-        ), {"t": _TRUST_PROBE_TABLE})).scalar_one()
+        ), {"t": probe})).scalar_one()
         default = (await conn.execute(text(
             "SELECT pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d WHERE d.adrelid = to_regclass(:t)"
-        ), {"t": _TRUST_PROBE_TABLE})).scalar_one()
+        ), {"t": probe})).scalar_one()
         return check, default
     finally:
         await savepoint.rollback()
@@ -131,10 +141,14 @@ async def upgrade_staging_bench_type(conn: AsyncConnection) -> None:
 
     Idempotent: when the column is already there, nothing is run. DDL, so like
     upgrade_trust_vocabulary it runs only in `python -m scraper.migrate` as the schema owner, never in
-    the API's init_db(). The Annex A contract itself is never applied here (it needs a superuser; PR 2b)."""
+    the API's init_db(). The Annex A contract itself is never applied here (it needs a superuser; PR 2b).
+
+    The check looks at the same relation the ALTER TABLE resolves to ('scraper_staging'::regclass),
+    not at current_schema(): with the default search_path a schema named after the migration role
+    comes first, while the tables live in public (the case PR #48 round 2's probe fix covers)."""
     present = (await conn.execute(text(
-        "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
-        "AND table_name = 'scraper_staging' AND column_name = 'extracted_bench_type'"
+        "SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid = 'scraper_staging'::regclass "
+        "AND attname = 'extracted_bench_type' AND NOT attisdropped"
     ))).first()
     if present is not None:
         logger.info("staging bench column already present; nothing to upgrade")

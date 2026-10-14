@@ -123,16 +123,22 @@ class StagingOutcome:
     judgment_id: Optional[uuid.UUID]
     reason: Optional[str]
     details: Mapping[str, object] = field(default_factory=dict)  # {"annex_a": {...}}
+    # Attach and skip (PR #48 round 2, FINAL_2 DEDUPLICATION): the judgment is already published and
+    # every entity of the record was `unchanged`, so nothing was written; promoted is also true.
+    attached: bool = False
 
 
 def staging_outcome(result: PublicationResult) -> StagingOutcome:
     """Promoted when the judgment is promoted in Annex A by this publication (promoted, updated or
-    unchanged); otherwise the item's durable reason."""
+    unchanged); attached when, in addition, nothing was written (every entity unchanged); otherwise
+    the item's durable reason."""
     primary = result.primary(STAGING_ITEM_KEY)
     promoted = primary.decision in _PROMOTED_DECISIONS and primary.review_status == "promoted"
+    mine = [o for o in result.outcomes if o.item_key == STAGING_ITEM_KEY]
+    attached = promoted and bool(mine) and all(o.decision == "unchanged" for o in mine)
     details = {"annex_a": {
         "publication_id": str(result.publication_id),
         "decision": primary.decision,
         "judgment_id": str(primary.entity_id) if primary.entity_id is not None else None,
     }}
-    return StagingOutcome(promoted, primary.entity_id, None if promoted else primary.reason, details)
+    return StagingOutcome(promoted, primary.entity_id, None if promoted else primary.reason, details, attached)

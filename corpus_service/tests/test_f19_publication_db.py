@@ -1012,7 +1012,7 @@ def test_f19_promotion_publishes_into_annex_a_and_the_reader_sees_it(corpus_db):
     sid = ids["karachi"]
 
     result, app = _promote_as_runtime_role(corpus_db)
-    assert result == {"promoted": 1, "quarantined": 0, "failed": 0}
+    assert result == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
 
     staging, queue = _staging_state(corpus_db)
     promoted, quarantined, reason, promoted_to = staging[sid]
@@ -1054,7 +1054,7 @@ def test_f19_promotion_outcomes_follow_the_section5_table(corpus_db):
                          source_url="https://f19.example.invalid/judgment/original", raw_text="synthetic F19 original"),
     }))
     first, _app = _promote_as_runtime_role(corpus_db)
-    assert first == {"promoted": 1, "quarantined": 6, "failed": 0}
+    assert first == {"promoted": 1, "attached": 0, "quarantined": 6, "failed": 0}
     original = admin_fetch(corpus_db, "SELECT j.id, j.updated_at, j.source_id FROM judgment j JOIN citation c "
                                       "ON c.judgment_id = j.id WHERE c.citation_text = '2099 SCMR 50'")
     assert len(original) == 1
@@ -1069,7 +1069,7 @@ def test_f19_promotion_outcomes_follow_the_section5_table(corpus_db):
                                   extracted_title="F19 Staged original v. Test 2099"),
     }))
     second, _app = _promote_as_runtime_role(corpus_db)
-    assert second == {"promoted": 1, "quarantined": 1, "failed": 0}
+    assert second == {"promoted": 0, "attached": 1, "quarantined": 1, "failed": 0}
     ids.update(again)
 
     staging, queue = _staging_state(corpus_db)
@@ -1153,7 +1153,7 @@ def test_f19_guard_rejection_inside_promotion_rolls_back_only_that_item(corpus_d
         "after": dict(**trusted, extracted_citation="2099 SCMR 93"),
     }))
     result, _app = _promote_as_runtime_role(corpus_db)
-    assert result == {"promoted": 2, "quarantined": 1, "failed": 0}
+    assert result == {"promoted": 2, "attached": 0, "quarantined": 1, "failed": 0}
     staging, queue = _staging_state(corpus_db)
     assert staging[ids["guarded"]][:3] == (False, True, "missing_bench")
     assert queue[ids["guarded"]][1]["annex_a"]["decision"] == "rejected"
@@ -1264,18 +1264,18 @@ def test_f19_r1_a_citation_key_that_is_not_a_fixed_point_is_not_canonical(corpus
     ids = run(_stage({"kar": dict(source_id=src["trusted"], source_site="f19-trusted",
                                   extracted_citation="NLR 2099 Balochistan (K.A.R.) 15")}))
     promoted, _app = _promote_as_runtime_role(corpus_db)
-    assert promoted == {"promoted": 0, "quarantined": 1, "failed": 0}
+    assert promoted == {"promoted": 0, "attached": 0, "quarantined": 1, "failed": 0}
     staging, queue = _staging_state(corpus_db)
     assert staging[ids["kar"]][:3] == (False, True, "citation_not_canonical")
     assert queue[ids["kar"]][0] == "citation_not_canonical"
 
 
 def test_f19_r1_an_unchanged_restage_is_attached_and_skipped_without_a_review_row(corpus_db):
-    """Attach and skip (FINAL_2's dedup rule, as #48 round 2 applies it to duplicate_citation):
+    """Attach and skip (FINAL_2's dedup rule, as #48 round 2 applies it; merged in Annex A terms):
     re-staging an already published judgment and citation unchanged, in either spelling, links the
-    record to the existing Annex A judgment, writes no review-queue row, is not counted as
-    quarantined and leaves the published rows untouched. Only promoted_row_protected (a conflicting
-    change to a protected promoted row) goes to review."""
+    record to the existing Annex A judgment, writes no review-queue row, is counted `attached` (not
+    promoted, not quarantined) and leaves the published rows untouched. Only promoted_row_protected
+    (a conflicting change to a protected promoted row) goes to review."""
     prepare(corpus_db)
     src = run(_make_sources({"trusted": ("f19-trusted", "trusted")}))
     trusted = dict(source_id=src["trusted"], source_site="f19-trusted")
@@ -1283,7 +1283,7 @@ def test_f19_r1_an_unchanged_restage_is_attached_and_skipped_without_a_review_ro
                 raw_text="synthetic F19 attach", extracted_title="F19 Staged attach v. Test 2099")
     run(_stage({"first": dict(**trusted, **same, extracted_citation="PLD 2099 Sindh 77")}))
     first, _app = _promote_as_runtime_role(corpus_db)
-    assert first == {"promoted": 1, "quarantined": 0, "failed": 0}
+    assert first == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
     published = admin_fetch(corpus_db, "SELECT id, updated_at, source_id FROM judgment")
     assert len(published) == 1
 
@@ -1293,7 +1293,7 @@ def test_f19_r1_an_unchanged_restage_is_attached_and_skipped_without_a_review_ro
         "conflicting": dict(**trusted, **{**same, "extracted_bench_type": None}, extracted_citation="PLD 2099 Sindh 77"),
     }))
     second, _app = _promote_as_runtime_role(corpus_db)
-    assert second == {"promoted": 2, "quarantined": 1, "failed": 0}
+    assert second == {"promoted": 0, "attached": 2, "quarantined": 1, "failed": 0}
     staging, queue = _staging_state(corpus_db)
     for key in ("same_spelling", "other_spelling"):
         assert staging[again[key]] == (True, False, None, published[0][0]), key

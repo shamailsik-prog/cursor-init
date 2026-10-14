@@ -169,7 +169,7 @@ def test_f_a_harvested_record_of_a_deleted_source_is_unknown_even_if_the_name_re
     assert run(fetch("SELECT count(*) FROM case_law_master"))[0][0] == 0
     reasons = run(fetch("SELECT quarantine_reason, count(*) FROM scraper_staging GROUP BY 1"))
     assert reasons == [("unknown_source", staged)], reasons
-    assert result == {"promoted": 0, "quarantined": staged, "failed": 0}
+    assert result == {"promoted": 0, "attached": 0, "quarantined": staged, "failed": 0}
 
 
 def test_f_direct_publishers_write_master_rows_only_for_a_trusted_source(corpus_db, monkeypatch, caplog):

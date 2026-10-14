@@ -21,12 +21,21 @@ Governing build prompt: `FINAL_CORPUS_SERVICE_PROMPT_2.md` (supersedes withdrawn
 (FINAL_2 :252-253). The vocabulary and every decision below live in `scraper/trust.py`; the
 database CHECK and default are built from it. Matching is exact, and anything else fails closed.
 
-| Source trust | Staging harvesters (dispatcher) | Direct publishers: PakistanCode, NationalAssembly (dispatcher) | Staged record at promotion |
+| Source trust | `staging` routes (dispatcher) | `direct` routes: PakistanCode, NationalAssembly (dispatcher) | Staged record at promotion |
 |---|---|---|---|
-| `trusted` | run | run (they write `statutes_master` themselves) | promoted if confidence >= 0.5, else quarantined `low_confidence` |
+| `trusted` | run | run (they write `statutes_master` themselves) | promoted if confidence >= 0.5 (or attached, if its citation is already published), else quarantined `low_confidence` |
 | `review` | run | skipped (FINAL_2 :897: a review source's output is always quarantined, and these write no staging row) | quarantined `review_source` |
 | `blocked` | skipped | skipped | quarantined `blocked_source` |
 | any other value, or a missing, deleted or renamed source | skipped | skipped | quarantined `unknown_source` |
+
+**Dispatcher routes.** Every entry in `scraper/tasks/dispatcher.py` `ROUTES` declares its kind:
+`staging` (writes `scraper_staging` only; promotion decides later) or `direct` (writes a master table
+itself). Every `direct` route runs only for a `trusted` source. A route with no kind, or any other
+kind, is refused and logged. `tests/test_trust_policy.py` scans all of `scraper/` with Python's AST
+(import aliases resolved) for any reference to `CaseLawMaster` / `StatutesMaster` and any write SQL
+naming `case_law_master` / `statutes_master` (schema-qualified or not); every module it finds must be
+a `direct` route module or on the reviewed allowlist in that test: promotion, the F23 quarantine
+router, embeddings and cross_reference write; main (`/health`), search and export only read.
 
 Every staging row a harvester writes carries its source: `source_id` plus
 `parsing_metadata.source_id` and `parsing_metadata.source_name` (`scraper/source_identity.py`).
@@ -46,21 +55,29 @@ Promotion (`scraper/tasks/promotion.py`) decides each normalised record in this 
 4. **Publication (audit F19).** A promotable record is published into the Annex A contract as one
    audited publication, under a per-citation advisory lock keyed by the canonical citation (so
    concurrent runs never publish one citation at once, and "PLD 2099 Karachi 12" and
-   "PLD 2099 Sindh 12" take the same lock). The publication decides an already published citation:
-   identical content is `unchanged` and changed trusted content `updated` (the record is promoted
-   onto the existing judgment either way); a re-scrape that would be quarantined (no bench, for
-   example) never touches the published authority (`promoted_row_protected`). The record is promoted
-   (`promoted`, `promoted_at`, `promoted_to_id` = the Annex A judgment) only if Annex A promoted it;
-   otherwise it is quarantined with the publication's reason (see "Publication into Annex A"
-   below). `duplicate_citation`, which the pre-F19 duplicate check against `case_law_master`
-   produced, is no longer produced; nothing is written to `case_law_master` or `embedding_queue`.
+   "PLD 2099 Sindh 12" take the same lock). The publication decides an already published citation,
+   following FINAL_2 DEDUPLICATION ("attach ... to the existing judgment row and skip the rest") in
+   Annex A terms:
+   - identical content (`unchanged`) is *attached*: `promoted_to_id` points at the existing Annex A
+     judgment and the record is closed (`promoted`, `promoted_at`), with nothing rewritten and no
+     review-queue row; it counts as `attached`;
+   - changed trusted content is `updated` onto the same judgment and counts as `promoted`;
+   - a re-scrape that would be quarantined (no bench, for example) never touches the published
+     authority (`promoted_row_protected`), the only re-stage that goes to review.
+   A new record is promoted (`promoted`, `promoted_at`, `promoted_to_id` = the Annex A judgment) only
+   if Annex A promoted it; otherwise it is quarantined with the publication's reason (see
+   "Publication into Annex A" below). Nothing is written to `case_law_master` or `embedding_queue`.
 
 Each record is re-read `FOR UPDATE` and decided in its own transaction. A record whose promotion
-raises is rolled back, then quarantined `promotion_error:<ExceptionClass>` (class name only, never
-the message) so it is not retried forever; if even that write fails, the failure is logged and the
-record stays pending. The rest of the batch always continues. Every reason is written to the staging
-row's `quarantine_reason` and to a `quarantine_queue` row. The run returns
-`{"promoted", "quarantined", "failed"}` (a `promotion_error` record counts as failed).
+raises is rolled back. A transient database error (connection lost, or SQLSTATE class 08, 40, 53 or
+57, or 55P03) is not the record's fault: the record is left pending for the next run. Any other error
+quarantines it `promotion_error:<ExceptionClass>` (class name only, never the message) so it is not
+retried forever; that includes every Annex A publication refusal that escapes the item (SQLSTATE class
+`SK`) and integrity errors (class 23); if even that write fails, the failure is logged and the record stays pending. The
+rest of the batch always continues. Every quarantine reason is written to the staging row's
+`quarantine_reason` and to a `quarantine_queue` row. The run returns
+`{"promoted", "attached", "quarantined", "failed"}`; a record that raised counts as failed, whether
+it was left pending or quarantined `promotion_error`.
 
 Seeds: PakistanLawSite, PakistanCode and NationalAssembly are `trusted`; every other source is
 `review`.
@@ -69,13 +86,15 @@ Seeds: PakistanLawSite, PakistanCode and NationalAssembly are `trusted`; every o
 `MIGRATE_DB_USER`) replaces the pre-F20 CHECK (`trusted|semi_trusted|untrusted|quarantined`, default
 `trusted`), maps `semi_trusted`, `untrusted`, `quarantined` and any other value to `review`, and sets
 the default to `review`, all before it seeds. It is idempotent: when `ck_trust_level_values` is
-validated and identical to PostgreSQL's own rendering of the F20 CHECK, and the default is `review`,
-it changes nothing. Any other same-named CHECK (NOT VALID, or a different body such as
-`... OR trust_level IS NOT NULL`) is replaced. The comparison builds the expected CHECK on a
-throwaway table in `public` inside a savepoint that is always rolled back, so the migration role
-needs CREATE on `public`, which it has, and no TEMP. The API's startup `init_db()` never runs any
-of this: it is DDL, and the runtime role is DML-only. A row the old default made `trusted` stays
-`trusted`, so review the `trusted` sources after upgrading.
+validated and identical to PostgreSQL's own rendering of the F20 CHECK, and the default is exactly
+`review`, it changes nothing. Any other same-named CHECK (NOT VALID, or a different body such as
+`... OR trust_level IS NOT NULL`) or any other default (`'trusted'`, none) is replaced. The
+comparison builds the expected CHECK on a throwaway table in `scraper_sources`' own schema (`public`)
+inside a savepoint that is always rolled back, so the migration role needs CREATE on that schema,
+which it has, and no TEMP. Because of that probe, running `python -m scraper.migrate` as the
+DML-only runtime role exits 1 even on a current database: only the `migrate` service runs it. The
+API's startup `init_db()` never runs any of this: it is DDL, and the runtime role is DML-only. A row
+the old default made `trusted` stays `trusted`, so review the `trusted` sources after upgrading.
 
 **Tests.** `tests/test_f20_trust_policy_db.py` and `tests/test_f20_harvesters_db.py` run against a
 real Postgres 16 + pgvector named by `CORPUS_TEST_DATABASE_URL` (a `postgresql+asyncpg://` URL for a
@@ -138,8 +157,9 @@ Publishing runs as `corpus_writer` (`SET LOCAL ROLE`); the runtime role reaches 
 published as its own publication (`batch_key = "staging/<id>"`); the staging row is promoted (with
 `promoted_to_id` = the Annex A judgment id) only if Annex A promoted it, and otherwise quarantined with
 the publication's reason. A re-stage identical to what Annex A already holds (`unchanged`, in any
-spelling of the citation) is attached and skipped: promoted, linked to the existing judgment, no
-review-queue row, nothing rewritten; only a conflicting change to a protected promoted row
+spelling of the citation) is attached and skipped: closed as promoted, linked to the existing
+judgment, no review-queue row, nothing rewritten, counted `attached`; only a conflicting change to a
+protected promoted row
 (`promoted_row_protected`) goes to review. Trust-quarantined and citation-free records never reach
 Annex A.
 Promotion no longer writes `case_law_master` and no longer queues embeddings (Annex A embeddings are

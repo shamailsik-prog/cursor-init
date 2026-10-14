@@ -15,6 +15,11 @@ The Annex A corpus contract (postgres/ddl/001 + 003) is never applied here: it n
 CREATE EXTENSION, which this NOCREATEROLE owner role cannot do. A superuser applies it at postgres
 init (audit F19, PR 2b).
 
+Run it only as MIGRATE_DB_USER (the `migrate` service). Deciding whether the trust CHECK is already
+current builds a throwaway table in scraper_sources' schema (rolled back), which needs CREATE on
+that schema, so running this as the DML-only runtime role exits 1 even on a database that is
+already current.
+
     python -m scraper.migrate
 """
 
