@@ -1,12 +1,24 @@
 import { randomUUID } from "node:crypto"
 import fs from "node:fs"
+import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import pg from "pg"
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
+import { logger } from "firebase-functions"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { normaliseCitation } from "@/services/d4-2/citations"
 import { AuthorityUnavailableError } from "../src/d4/authority"
-import { PgAuthorityStore, annexJurisdiction, coveringVersion, versionUsable, type SectionVersionRow } from "../src/d4/corpusAuthorityStore"
+import {
+  BREAKER_OPEN_MS,
+  PgAuthorityStore,
+  STATEMENT_TIMEOUT_MS,
+  annexJurisdiction,
+  classifyPgError,
+  coveringVersion,
+  versionUsable,
+  type SectionVersionRow,
+} from "../src/d4/corpusAuthorityStore"
+import { runGate } from "../src/d4/gate"
 import { readCorpusReaderConfig, type CorpusReaderConfig } from "../src/d4/corpusReaderConfig"
 import { CORPUS_FIXTURES, type CorpusDb, type PublishSummary, createCorpusDb } from "./corpusPg"
 
@@ -246,6 +258,261 @@ describe("PgAuthorityStore lookups (F05 plan Task 6)", () => {
       if (saved === undefined) delete process.env.TZ
       else process.env.TZ = saved
       await raw.end()
+    }
+  })
+})
+
+describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
+  const ANY = "2099 SCMR 9903"
+  const unavailableAs = (reason: string) => ({ name: "AuthorityUnavailableError", reason })
+
+  type Sql = string | [string, unknown[]]
+  const exec = (sql: Sql) => (typeof sql === "string" ? db.admin.query(sql) : db.admin.query(sql[0], sql[1]))
+  /** Superuser SQL now, and its undo after `fn`, whatever happens. */
+  async function withState<T>(apply: Sql, undo: Sql, fn: () => Promise<T>): Promise<T> {
+    await exec(apply)
+    try {
+      return await fn()
+    } finally {
+      await exec(undo)
+    }
+  }
+
+  const metadata = async (key: string) => (await db.admin.query("SELECT value FROM corpus_metadata WHERE key = $1", [key])).rows[0]?.value as string
+  const d30 = (ms: number) => new Date(ms).toISOString().replace(/\.(\d{3})Z$/, ".$1000Z")
+
+  /** A port on 127.0.0.1 that was bound and closed again: nothing listens there. */
+  async function closedPort(): Promise<number> {
+    const server = net.createServer()
+    await new Promise<void>((ok) => server.listen(0, "127.0.0.1", () => ok()))
+    const port = (server.address() as net.AddressInfo).port
+    await new Promise<void>((ok) => server.close(() => ok()))
+    return port
+  }
+
+  /** A server that accepts TCP and never answers; counts the connections it saw. */
+  async function hungServer(): Promise<{ port: number; connections: () => number; close: () => Promise<void> }> {
+    let seen = 0
+    const sockets: net.Socket[] = []
+    const server = net.createServer((socket) => {
+      seen += 1
+      sockets.push(socket)
+      socket.on("error", () => undefined)
+    })
+    await new Promise<void>((ok) => server.listen(0, "127.0.0.1", () => ok()))
+    return {
+      port: (server.address() as net.AddressInfo).port,
+      connections: () => seen,
+      close: () =>
+        new Promise<void>((ok) => {
+          for (const s of sockets) s.destroy()
+          server.close(() => ok())
+        }),
+    }
+  }
+
+  it("contract_missing: no publication contract, or a last_refresh that is missing or not D30's format (D19)", async () => {
+    const contract = await metadata("publication_contract")
+    await withState("DELETE FROM corpus_metadata WHERE key = 'publication_contract'", ["INSERT INTO corpus_metadata (key, value) VALUES ('publication_contract', $1)", [contract]], async () => {
+      await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("contract_missing"))
+    })
+    await withState("UPDATE corpus_metadata SET value = '2' WHERE key = 'publication_contract'", "UPDATE corpus_metadata SET value = '1' WHERE key = 'publication_contract'", async () => {
+      await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("contract_missing"))
+    })
+    const refresh = await metadata("last_refresh")
+    const setRefresh = (value: string): Sql => ["UPDATE corpus_metadata SET value = $1 WHERE key = 'last_refresh'", [value]]
+    for (const garbage of ["yesterday", "2099-01-01", "2099-01-01T00:00:00Z", "2099-13-01T00:00:00.000000Z", "2099-02-30T00:00:00.000000Z"]) {
+      await withState(setRefresh(garbage), setRefresh(refresh), async () => {
+        await expect(store().findJudgment(ANY), garbage).rejects.toMatchObject(unavailableAs("contract_missing"))
+      })
+    }
+    await withState("DELETE FROM corpus_metadata WHERE key = 'last_refresh'", ["INSERT INTO corpus_metadata (key, value) VALUES ('last_refresh', $1)", [refresh]], async () => {
+      await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("contract_missing"))
+    })
+    expect(await store().findJudgment(ANY)).toMatchObject({ benchType: "division" })
+  })
+
+  it("stale: a last_refresh older than SIKANDER_CORPUS_MAX_STALENESS_HOURS, or more than five minutes in the future (ruling 5, D19)", async () => {
+    const refresh = await metadata("last_refresh")
+    const setRefresh = (value: string): Sql => ["UPDATE corpus_metadata SET value = $1 WHERE key = 'last_refresh'", [value]]
+    for (const [label, value] of [
+      ["old", "2000-01-01T00:00:00.000000Z"],
+      ["25 hours ago", d30(Date.now() - 25 * 3600_000)],
+      ["10 minutes ahead", d30(Date.now() + 10 * 60_000)],
+    ] as const) {
+      await withState(setRefresh(value), setRefresh(refresh), async () => {
+        await expect(store().findJudgment(ANY), label).rejects.toMatchObject(unavailableAs("stale"))
+      })
+    }
+    // Inside the bound it reads: 23 hours ago against 24, and 2 minutes ahead (clock skew).
+    for (const value of [d30(Date.now() - 23 * 3600_000), d30(Date.now() + 2 * 60_000)]) {
+      await withState(setRefresh(value), setRefresh(refresh), async () => {
+        expect(await store().findJudgment(ANY), value).toMatchObject({ benchType: "division" })
+      })
+    }
+    // The bound is the configured one: 1 hour refuses what 24 accepted.
+    await withState(setRefresh(d30(Date.now() - 2 * 3600_000)), setRefresh(refresh), async () => {
+      await expect(store(readerConfig({ SIKANDER_CORPUS_MAX_STALENESS_HOURS: "1" })).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("stale"))
+    })
+  })
+
+  it("wrong_role: the writer's login, a superuser, or a session that is not read-only (D7, ruling 13)", async () => {
+    const writer = readCorpusReaderConfig({ SIKANDER_CORPUS_READER_URL: db.writerUrl, SIKANDER_CORPUS_MAX_STALENESS_HOURS: "24" }, false)
+    const superuser = readCorpusReaderConfig({ SIKANDER_CORPUS_READER_URL: db.urlAs(), SIKANDER_CORPUS_MAX_STALENESS_HOURS: "24" }, false)
+    if (!writer.ok || !superuser.ok) throw new Error("config")
+    await expect(store(writer.config).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+    await expect(store(superuser.config).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+    const readWrite = new PgAuthorityStore(readerConfig(), { sessionOptions: "-c default_transaction_read_only=off" })
+    stores.push(readWrite)
+    await expect(readWrite.findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+    // A reader that is also a corpus_writer member is refused too.
+    await withState(`GRANT corpus_writer TO "${db.readerUser}" WITH INHERIT FALSE, SET TRUE`, `REVOKE corpus_writer FROM "${db.readerUser}"`, async () => {
+      await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+    })
+  })
+
+  it("permission and schema_missing: a revoked grant, a renamed view", async () => {
+    await withState("REVOKE SELECT ON public.v_authority_citation FROM corpus_reader", "GRANT SELECT ON public.v_authority_citation TO corpus_reader", async () => {
+      await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("permission"))
+    })
+    await withState("ALTER VIEW public.v_authority_citation RENAME TO v_authority_citation_gone", "ALTER VIEW public.v_authority_citation_gone RENAME TO v_authority_citation", async () => {
+      await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("schema_missing"))
+    })
+  })
+
+  it("unreachable and auth: a closed port, a login the server refuses", async () => {
+    const closed = new URL(db.readerUrl)
+    closed.port = String(await closedPort())
+    await expect(store(readerConfig({ SIKANDER_CORPUS_READER_URL: closed.toString() })).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("unreachable"))
+    // A role that does not exist, and one that may not log in (28000). The server's password check itself (28P01)
+    // depends on its pg_hba (the local test server trusts loopback), so classifyPgError's table covers that code.
+    const nologin = `f05_nologin_${randomUUID().slice(0, 8)}`
+    await withState(`CREATE ROLE "${nologin}" NOLOGIN IN ROLE corpus_reader`, `DROP ROLE "${nologin}"`, async () => {
+      for (const user of [nologin, `f05_absent_${randomUUID().slice(0, 8)}`]) {
+        const refused = new URL(db.readerUrl)
+        refused.username = user
+        await expect(store(readerConfig({ SIKANDER_CORPUS_READER_URL: refused.toString() })).findJudgment(ANY), user).rejects.toMatchObject(unavailableAs("auth"))
+      }
+    })
+  })
+
+  it("timeout: a lock held by another session; the call settles within STATEMENT_TIMEOUT_MS + 2000", async () => {
+    const locker = new pg.Client({ connectionString: db.urlAs() })
+    await locker.connect()
+    try {
+      const s = store()
+      await s.getSectionAsAt(S5, "2099-08-01", "FEDERAL") // warm: the state check is cached, only the lookup blocks
+      await locker.query("BEGIN")
+      await locker.query("LOCK TABLE public.citation IN ACCESS EXCLUSIVE MODE")
+      const started = Date.now()
+      await expect(s.findJudgment(ANY)).rejects.toMatchObject(unavailableAs("timeout"))
+      expect(Date.now() - started).toBeLessThan(STATEMENT_TIMEOUT_MS + 2000)
+    } finally {
+      await locker.query("ROLLBACK").catch(() => undefined)
+      await locker.end()
+    }
+  }, 30_000)
+
+  it("a hung server costs one connect timeout: 25 citations gate in under 10 s, every one UNVERIFIED (Review Focus 3)", async () => {
+    const hung = await hungServer()
+    try {
+      const url = new URL(db.readerUrl)
+      url.port = String(hung.port)
+      const s = store(readerConfig({ SIKANDER_CORPUS_READER_URL: url.toString() }))
+      const body = Array.from({ length: 25 }, (_, i) => `2099 SCMR ${8100 + i}`).join(", ")
+      const started = Date.now()
+      const out = await runGate({ title: "Petition", body: `The petitioner relies on ${body}.`, temporalChecks: [] }, s)
+      expect(Date.now() - started).toBeLessThan(10_000)
+      expect(out.citations).toHaveLength(25)
+      expect(out.citations.every((c) => c.status === "UNVERIFIED" && c.judgmentId === null)).toBe(true)
+      expect(out.status).toBe("UNVERIFIED")
+      expect(hung.connections()).toBe(1)
+    } finally {
+      await hung.close()
+    }
+  }, 30_000)
+
+  it("circuit_open: within the window a second call does not connect; after it the store tries again", async () => {
+    const hung = await hungServer()
+    let now = 1_000_000
+    try {
+      const url = new URL(db.readerUrl)
+      url.port = String(hung.port)
+      const s = new PgAuthorityStore(readerConfig({ SIKANDER_CORPUS_READER_URL: url.toString() }), { now: () => now })
+      stores.push(s)
+      await expect(s.findJudgment(ANY)).rejects.toMatchObject(unavailableAs("timeout"))
+      expect(hung.connections()).toBe(1)
+      now += BREAKER_OPEN_MS - 1
+      await expect(s.findJudgment(ANY)).rejects.toMatchObject(unavailableAs("circuit_open"))
+      await expect(s.listTreatments(byItem.get("t-overruled") as string)).rejects.toMatchObject(unavailableAs("circuit_open"))
+      await expect(s.getSectionAsAt(S5, "2099-08-01", "FEDERAL")).rejects.toMatchObject(unavailableAs("circuit_open"))
+      expect(hung.connections()).toBe(1)
+      now += 1
+      await expect(s.findJudgment(ANY)).rejects.toMatchObject(unavailableAs("timeout"))
+      expect(hung.connections()).toBe(2)
+    } finally {
+      await hung.close()
+    }
+  }, 30_000)
+
+  it("pending_review and inconsistent do not open the breaker: the next call still reads", async () => {
+    const s = store()
+    await expect(s.listTreatments(byItem.get("t-pending") as string)).rejects.toMatchObject(unavailableAs("pending_review"))
+    await expect(s.listTreatments("j_101")).rejects.toMatchObject(unavailableAs("inconsistent"))
+    expect(await s.findJudgment(ANY)).toMatchObject({ benchType: "division" })
+  })
+
+  it("classifyPgError covers SQLSTATEs, Node error codes, timeouts and TLS failures (D6)", () => {
+    const err = (props: Record<string, unknown>, message = "x") => Object.assign(new Error(message), props)
+    const table: Array<[unknown, string]> = [
+      [err({ code: "42501" }), "permission"],
+      [err({ code: "28P01" }), "auth"],
+      [err({ code: "28000" }), "auth"],
+      [err({ code: "57014" }), "timeout"],
+      [err({ code: "42P01" }), "schema_missing"],
+      [err({ code: "42703" }), "schema_missing"],
+      [err({ code: "3D000" }), "schema_missing"],
+      [err({ code: "08006" }), "unreachable"],
+      [err({ code: "08001" }), "unreachable"],
+      [err({ code: "57P01" }), "unreachable"],
+      [err({ code: "ECONNREFUSED" }), "unreachable"],
+      [err({ code: "ENOTFOUND" }), "unreachable"],
+      [err({ code: "EHOSTUNREACH" }), "unreachable"],
+      [err({ code: "ECONNRESET" }), "unreachable"],
+      [err({ code: "ETIMEDOUT" }), "timeout"],
+      [err({}, "timeout exceeded when trying to connect"), "timeout"],
+      [err({}, "Connection terminated due to connection timeout"), "timeout"],
+      [err({}, "timeout expired"), "timeout"],
+      [err({}, "Query read timeout"), "timeout"],
+      [err({ code: "DEPTH_ZERO_SELF_SIGNED_CERT" }), "tls"],
+      [err({ code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" }), "tls"],
+      [err({ code: "ERR_TLS_CERT_ALTNAME_INVALID" }), "tls"],
+      [err({ code: "CERT_HAS_EXPIRED" }), "tls"],
+      [err({ code: "SELF_SIGNED_CERT_IN_CHAIN" }), "tls"],
+      [err({}, "The server does not support SSL connections"), "tls"],
+      [err({ code: "22P02" }), "error"],
+      [err({}, "something else"), "error"],
+      ["not an error", "error"],
+      [null, "error"],
+      [new AuthorityUnavailableError("stale"), "stale"],
+    ]
+    for (const [e, reason] of table) expect(classifyPgError(e), JSON.stringify((e as { code?: unknown })?.code ?? String(e))).toBe(reason)
+  })
+
+  it("the unavailable log carries the reason only, once per opening of the breaker", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    try {
+      const closed = new URL(db.readerUrl)
+      closed.port = String(await closedPort())
+      const s = store(readerConfig({ SIKANDER_CORPUS_READER_URL: closed.toString() }))
+      await expect(s.findJudgment(ANY)).rejects.toMatchObject(unavailableAs("unreachable"))
+      await expect(s.findJudgment(ANY)).rejects.toMatchObject(unavailableAs("circuit_open"))
+      const calls = warn.mock.calls.filter((c) => c[0] === "d4.authority_unavailable")
+      expect(calls).toEqual([["d4.authority_unavailable", { reason: "unreachable" }]])
+      const logged = JSON.stringify(warn.mock.calls)
+      for (const secret of [db.readerPassword, db.readerUser, closed.port, "ECONNREFUSED", "127.0.0.1"]) expect(logged).not.toContain(secret)
+    } finally {
+      warn.mockRestore()
     }
   })
 })

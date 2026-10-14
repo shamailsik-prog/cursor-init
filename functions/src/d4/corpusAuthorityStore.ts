@@ -12,9 +12,13 @@
  * Questions it can refuse without the database (a non-canonical citation, a non-UUID section, an unmapped
  * jurisdiction, a malformed date; D18) answer "not found" / "no_history" directly.
  *
+ * Every failure except one about the data opens a breaker for BREAKER_OPEN_MS (D9), so a gate over many citations
+ * costs one connect timeout, and logs `d4.authority_unavailable {reason}` once per opening (D16), with no driver text.
+ *
  * Dates travel as text (D10): DATE columns are selected as `::text` and compared as YYYY-MM-DD strings, so the process
  * time zone cannot shift a statute's effective date.
  */
+import { logger } from "firebase-functions"
 import pg from "pg"
 import { normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
@@ -92,15 +96,95 @@ SELECT 'treatment', treatment, treating_bench_type, treating_judgment_bench
 const SECTIONS_SQL = `SELECT version_no, effective_from::text AS effective_from, effective_to::text AS effective_to, text, version_confidence
   FROM public.v_authority_section_version WHERE section_id = $1::uuid AND jurisdiction = $2
  ORDER BY effective_from, version_no`
-const STATE_SQL = "SELECT (SELECT value FROM public.corpus_metadata WHERE key = 'publication_contract') AS contract"
+// The session first (D7): a role check reads no table, so a writer or superuser login is wrong_role, not a permission
+// error on corpus_metadata. Then the corpus metadata the reader needs (F19 D30, D19).
+const ROLE_SQL = `SELECT pg_has_role('corpus_reader', 'USAGE') AS reader,
+       coalesce((SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user), true) AS superuser,
+       pg_has_role('corpus_writer', 'MEMBER') OR pg_has_role('corpus_declassify', 'MEMBER') AS writer,
+       current_setting('transaction_read_only') AS read_only`
+const METADATA_SQL = `SELECT (SELECT value FROM public.corpus_metadata WHERE key = 'publication_contract') AS contract,
+       (SELECT value FROM public.corpus_metadata WHERE key = 'last_refresh') AS last_refresh`
+const LAST_REFRESH = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{6})Z$/
+
+/** corpus_metadata.last_refresh (D30: YYYY-MM-DDTHH:MI:SS.ffffffZ, UTC) in epoch ms, or null if it is not exactly that. */
+export function parseLastRefresh(value: unknown): number | null {
+  if (typeof value !== "string") return null
+  const m = LAST_REFRESH.exec(value)
+  if (!m) return null
+  const [y, mo, d, h, mi, s] = m.slice(1, 7).map(Number)
+  const ms = Date.UTC(y, mo - 1, d, h, mi, s, Math.floor(Number(m[7]) / 1000))
+  const back = new Date(ms)
+  // A 30 February or a 25th hour does not round-trip.
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d || back.getUTCHours() !== h || back.getUTCMinutes() !== mi || back.getUTCSeconds() !== s) {
+    return null
+  }
+  return ms
+}
+
+const SQLSTATE_REASONS: Readonly<Record<string, AuthorityUnavailableReason>> = {
+  "42501": "permission",
+  "28P01": "auth",
+  "28000": "auth",
+  "57014": "timeout",
+  "42P01": "schema_missing",
+  "42703": "schema_missing",
+  "3D000": "schema_missing",
+  "57P01": "unreachable",
+  "57P02": "unreachable",
+  "57P03": "unreachable",
+}
+const NODE_REASONS: Readonly<Record<string, AuthorityUnavailableReason>> = {
+  ECONNREFUSED: "unreachable",
+  ENOTFOUND: "unreachable",
+  EHOSTUNREACH: "unreachable",
+  ENETUNREACH: "unreachable",
+  ECONNRESET: "unreachable",
+  EPIPE: "unreachable",
+  EAI_AGAIN: "unreachable",
+  ETIMEDOUT: "timeout",
+}
+const TLS_CODES = /^(ERR_TLS_|ERR_SSL_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|UNABLE_TO_(VERIFY|GET)_|CERT_|ERR_OSSL_)/
+const TIMEOUT_MESSAGES = /^(timeout expired|timeout exceeded when trying to connect|Connection terminated due to connection timeout|Query read timeout)$/
+const TLS_MESSAGES = /^The server does not support SSL connections$/
+
+/**
+ * The reason for a driver error (D6), from its SQLSTATE or Node code, or from node-pg's own timeout and TLS messages.
+ * Total: anything else is "error". Only the reason ever leaves the adapter, never the error itself.
+ */
+export function classifyPgError(err: unknown): AuthorityUnavailableReason {
+  if (err instanceof AuthorityUnavailableError) return err.reason
+  if (err === null || typeof err !== "object") return "error"
+  const { code, message } = err as { code?: unknown; message?: unknown }
+  if (typeof code === "string") {
+    if (SQLSTATE_REASONS[code]) return SQLSTATE_REASONS[code]
+    if (/^08[0-9A-Z]{3}$/.test(code)) return "unreachable"
+    if (NODE_REASONS[code]) return NODE_REASONS[code]
+    if (TLS_CODES.test(code)) return "tls"
+  }
+  if (typeof message === "string") {
+    if (TIMEOUT_MESSAGES.test(message)) return "timeout"
+    if (TLS_MESSAGES.test(message)) return "tls"
+  }
+  return "error"
+}
+
+/** Reasons that describe the data, not the connection: they do not open the breaker. */
+const DATA_REASONS: ReadonlySet<AuthorityUnavailableReason> = new Set(["pending_review", "inconsistent", "circuit_open"])
 
 export class PgAuthorityStore implements AuthorityStore {
   private readonly pool: pg.Pool
   private readonly now: () => number
+  private readonly maxStalenessMs: number
   private stateCheckedAt: number | null = null
+  private openUntil = 0
 
-  constructor(config: CorpusReaderConfig, deps: { now?: () => number } = {}) {
+  /**
+   * `deps.now` is the clock (tests move it). `deps.sessionOptions` replaces the session's startup options; it exists
+   * only so a test can prove that a session which is not read-only is refused (D7). Selection never passes it.
+   */
+  constructor(config: CorpusReaderConfig, deps: { now?: () => number; sessionOptions?: string } = {}) {
     this.now = deps.now ?? Date.now
+    this.maxStalenessMs = config.maxStalenessHours * 3600_000
     // Field by field (D8): nothing from the URL beyond these reaches the driver.
     this.pool = new pg.Pool({
       host: config.host,
@@ -114,7 +198,7 @@ export class PgAuthorityStore implements AuthorityStore {
       idleTimeoutMillis: IDLE_TIMEOUT_MS,
       allowExitOnIdle: true,
       application_name: APPLICATION_NAME,
-      options: "-c default_transaction_read_only=on",
+      options: deps.sessionOptions ?? "-c default_transaction_read_only=on",
       statement_timeout: STATEMENT_TIMEOUT_MS,
       query_timeout: STATEMENT_TIMEOUT_MS + 1000,
     })
@@ -129,46 +213,71 @@ export class PgAuthorityStore implements AuthorityStore {
   async findJudgment(canonical: string): Promise<{ judgmentId: string; benchType: Bench } | null> {
     // D18: the lookup is exact equality on the canonical key, so a non-canonical input can only miss.
     if (normaliseCitation(canonical) !== canonical) return null
-    const rows = await this.query<{ id: string; bench_type: unknown }>(CITATION_SQL, [canonical])
-    if (rows.length === 0) return null
-    if (rows.length > 1 || !isBench(rows[0].bench_type)) throw unavailable("inconsistent")
-    return { judgmentId: rows[0].id, benchType: rows[0].bench_type }
+    return this.guarded(async () => {
+      const rows = await this.query<{ id: string; bench_type: unknown }>(CITATION_SQL, [canonical])
+      if (rows.length === 0) return null
+      if (rows.length > 1 || !isBench(rows[0].bench_type)) throw unavailable("inconsistent")
+      return { judgmentId: rows[0].id, benchType: rows[0].bench_type }
+    })
   }
 
   async listTreatments(judgmentId: string): Promise<TreatmentFact[]> {
-    // Only an id this store returned can be asked about; anything else breaks the contract (D5).
-    if (!UUID.test(judgmentId)) throw unavailable("inconsistent")
-    const rows = await this.query<{ k: string; kind: unknown; recorded: unknown; treating: unknown }>(TREATMENTS_SQL, [judgmentId])
-    if (rows.some((r) => r.k === "pending")) throw unavailable("pending_review")
-    return rows.map((r) => {
-      if (typeof r.kind !== "string" || !TREATMENT_KINDS.has(r.kind) || !isBench(r.recorded) || !isBench(r.treating)) {
-        throw unavailable("inconsistent")
-      }
-      return { kind: r.kind, treatingJudgmentBench: r.treating, recordedTreatingBench: r.recorded }
+    return this.guarded(async () => {
+      // Only an id this store returned can be asked about; anything else breaks the contract (D5).
+      if (!UUID.test(judgmentId)) throw unavailable("inconsistent")
+      const rows = await this.query<{ k: string; kind: unknown; recorded: unknown; treating: unknown }>(TREATMENTS_SQL, [judgmentId])
+      if (rows.some((r) => r.k === "pending")) throw unavailable("pending_review")
+      return rows.map((r) => {
+        if (typeof r.kind !== "string" || !TREATMENT_KINDS.has(r.kind) || !isBench(r.recorded) || !isBench(r.treating)) {
+          throw unavailable("inconsistent")
+        }
+        return { kind: r.kind, treatingJudgmentBench: r.treating, recordedTreatingBench: r.recorded }
+      })
     })
   }
 
   async getSectionAsAt(sectionId: string, asAtDate: string, jurisdiction: string): Promise<{ text: string } | "no_history"> {
     const annex = annexJurisdiction(jurisdiction)
     if (!UUID.test(sectionId) || !ISO_DATE.test(asAtDate) || annex === null) return "no_history"
-    const rows = await this.query<{ version_no: unknown; effective_from: unknown; effective_to: unknown; text: unknown; version_confidence: unknown }>(
-      SECTIONS_SQL,
-      [sectionId, annex]
-    )
-    const versions = rows.map((r): SectionVersionRow => {
-      if (
-        typeof r.version_no !== "number" ||
-        typeof r.effective_from !== "string" ||
-        (r.effective_to !== null && typeof r.effective_to !== "string") ||
-        typeof r.text !== "string" ||
-        (r.version_confidence !== null && typeof r.version_confidence !== "number")
-      ) {
-        throw unavailable("inconsistent")
-      }
-      return { versionNo: r.version_no, effectiveFrom: r.effective_from, effectiveTo: r.effective_to, text: r.text, versionConfidence: r.version_confidence }
+    return this.guarded(async () => {
+      const rows = await this.query<{ version_no: unknown; effective_from: unknown; effective_to: unknown; text: unknown; version_confidence: unknown }>(
+        SECTIONS_SQL,
+        [sectionId, annex]
+      )
+      const versions = rows.map((r): SectionVersionRow => {
+        if (
+          typeof r.version_no !== "number" ||
+          typeof r.effective_from !== "string" ||
+          (r.effective_to !== null && typeof r.effective_to !== "string") ||
+          typeof r.text !== "string" ||
+          (r.version_confidence !== null && typeof r.version_confidence !== "number")
+        ) {
+          throw unavailable("inconsistent")
+        }
+        return { versionNo: r.version_no, effectiveFrom: r.effective_from, effectiveTo: r.effective_to, text: r.text, versionConfidence: r.version_confidence }
+      })
+      const hit = coveringVersion(versions, asAtDate)
+      return hit && versionUsable(hit.versionConfidence) ? { text: hit.text } : "no_history"
     })
-    const hit = coveringVersion(versions, asAtDate)
-    return hit && versionUsable(hit.versionConfidence) ? { text: hit.text } : "no_history"
+  }
+
+  /**
+   * The breaker (D9). While it is open every call throws circuit_open without connecting. Any other failure except
+   * one about the data (pending_review, inconsistent) opens it for BREAKER_OPEN_MS and logs the reason once (D16).
+   */
+  private async guarded<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.now() < this.openUntil) throw unavailable("circuit_open")
+    try {
+      return await fn()
+    } catch (e) {
+      const error = e instanceof AuthorityUnavailableError ? e : unavailable(classifyPgError(e))
+      if (!DATA_REASONS.has(error.reason)) {
+        this.openUntil = this.now() + BREAKER_OPEN_MS
+        this.stateCheckedAt = null
+        logger.warn("d4.authority_unavailable", { reason: error.reason })
+      }
+      throw error
+    }
   }
 
   /** One read, after the corpus state check; every driver error becomes AuthorityUnavailableError. */
@@ -180,17 +289,28 @@ export class PgAuthorityStore implements AuthorityStore {
   private async run(sql: string, params: unknown[]): Promise<pg.QueryResult> {
     try {
       return await this.pool.query(sql, params)
-    } catch {
-      throw unavailable("error")
+    } catch (e) {
+      throw unavailable(classifyPgError(e))
     }
   }
 
-  /** The corpus is one this reader understands: publication_contract '1'. Cached for STATE_TTL_MS. */
+  /**
+   * The session and the corpus, cached for STATE_TTL_MS (D7, D19): a corpus_reader that is neither a superuser nor a
+   * corpus_writer or corpus_declassify member, in a read-only session (wrong_role otherwise); publication contract
+   * '1' and a well-formed last_refresh (contract_missing otherwise); and a last_refresh no older than the configured
+   * staleness and at most FUTURE_SKEW_MS ahead (stale otherwise).
+   */
   private async checkState(): Promise<void> {
     const at = this.now()
     if (this.stateCheckedAt !== null && at - this.stateCheckedAt < STATE_TTL_MS) return
-    const state = (await this.run(STATE_SQL, [])).rows[0] as { contract: unknown } | undefined
-    if (state?.contract !== PUBLICATION_CONTRACT) throw unavailable("contract_missing")
+    const role = (await this.run(ROLE_SQL, [])).rows[0] as { reader: unknown; superuser: unknown; writer: unknown; read_only: unknown } | undefined
+    if (!role || role.reader !== true || role.superuser !== false || role.writer !== false || role.read_only !== "on") throw unavailable("wrong_role")
+    const meta = (await this.run(METADATA_SQL, [])).rows[0] as { contract: unknown; last_refresh: unknown } | undefined
+    if (meta?.contract !== PUBLICATION_CONTRACT) throw unavailable("contract_missing")
+    const refreshed = parseLastRefresh(meta.last_refresh)
+    if (refreshed === null) throw unavailable("contract_missing")
+    const wall = Date.now()
+    if (refreshed - wall > FUTURE_SKEW_MS || wall - refreshed > this.maxStalenessMs) throw unavailable("stale")
     this.stateCheckedAt = at
   }
 }
