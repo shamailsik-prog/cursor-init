@@ -256,6 +256,11 @@
       "collectionGroup": "draft_gate_overrides",
       "fieldPath": "reason",
       "indexes": []
+    },
+    {
+      "collectionGroup": "drafts",
+      "fieldPath": "reviewChecklist",
+      "indexes": []
     }
   ]
 }

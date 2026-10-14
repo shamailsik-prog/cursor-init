@@ -3,6 +3,7 @@ import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
 import { InMemoryAuthorityStore, setAuthorityStoreForTests, type AuthorityStore } from "../src/d4/authority"
+import { getDocumentType } from "../src/d4/doctypes"
 import { requireStillPermitted } from "../src/d4/drafts"
 import { approvalPasses, clearedItemsOf, normaliseEvaluation, parseTemporalChecks } from "../src/d4/gateOps"
 import type { GateEvaluation } from "../src/d4/types"
@@ -71,6 +72,13 @@ const BODY_UNKNOWN = "The petitioner relies on PLD 2099 SC 202 for the rule."
 const BODY_PLAIN = "The petitioner submits as follows. The respondents have failed to act."
 const TEXT_2015 = "Test Act s.1 as it stood in 2015: the limit is thirty days."
 const TEXT_2018 = "Test Act s.1 as amended in 2018: the limit is sixty days."
+/**
+ * F06 ruling C: a temporal check applies only to text the draft pleads (gateDraft refuses any other with 422
+ * temporal_check_not_in_draft), so every body a test gates with checks pleads the statute texts it checks.
+ */
+const PLEADS = `\nThe petition pleads Test Act s.1 as it stood: ${TEXT_2015}\nIn the alternative it pleads: ${TEXT_2018}`
+/** Cites nothing, and pleads both texts of test_act_s1. */
+const BODY_PLEADS = `${BODY_PLAIN}${PLEADS}`
 const REASON = "The overruling bench decided a different question; the partner accepts the risk on the record."
 
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex")
@@ -176,9 +184,14 @@ const currentResultId = async (draftId: string, version: unknown): Promise<strin
 /** An override of the result the partner reviewed: the stored result's id unless `extra` names one (R6). */
 const override = async (f: Firm, m: Member, draftId: string, version: unknown, reason: unknown = REASON, extra: Record<string, unknown> = {}) =>
   send(overrideApi, f, m, { draftId, version, reason, resultId: await currentResultId(draftId, version), ...extra })
-/** An approval of the result the partner reviewed: the stored result's id unless `extra` names one (R9). */
+/**
+ * The review checklist of TYPE (a forum-filed, law-dependent type), complete: every distinct item of the seed row once,
+ * each with evidence (F06). Approval of a law-dependent type requires it, so every approval below supplies it.
+ */
+const FULL_CHECKLIST = [...new Set(getDocumentType(TYPE)?.checklist ?? [])].map((item, i) => ({ item, evidence: `Checked against the file by the partner, point ${i + 1}.` }))
+/** An approval of the result the partner reviewed, with the type's complete review checklist: the stored result's id unless `extra` names one (R9). */
 const approve = async (f: Firm, m: Member, draftId: string, version: unknown, extra: Record<string, unknown> = {}) =>
-  send(approveApi, f, m, { draftId, version, resultId: await currentResultId(draftId, version), ...extra })
+  send(approveApi, f, m, { draftId, version, resultId: await currentResultId(draftId, version), reviewChecklist: FULL_CHECKLIST, ...extra })
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -228,8 +241,25 @@ describe("normaliseEvaluation: the status domain before anything is stored or co
   })
 
   it("never lowers the runner's overall status: a stated OVERRULED stays OVERRULED", () => {
-    const raw: GateEvaluation = { status: "OVERRULED", citations: [], temporal: [] }
+    const raw = { status: "OVERRULED" as const, citations: [], temporal: [] }
     expect(normaliseEvaluation(raw).status).toBe("OVERRULED")
+  })
+
+  it("F06: a stored OK with no findings (a result written before F06) is NOT_ASSESSED, never OK", () => {
+    const legacy = { status: "OK", citations: [], temporal: [] } as unknown as GateEvaluation
+    expect(normaliseEvaluation(legacy)).toEqual({ status: "NOT_ASSESSED", citations: [], temporal: [], scope: { citations: 0, temporalChecks: 0, assessed: false } })
+  })
+
+  it("F06: the scope is derived from the findings, never taken from a stored scope", () => {
+    const forged = { status: "OK", citations: [], temporal: [], scope: { citations: 3, temporalChecks: 1, assessed: true } } as unknown as GateEvaluation
+    expect(normaliseEvaluation(forged)).toMatchObject({ status: "NOT_ASSESSED", scope: { citations: 0, temporalChecks: 0, assessed: false } })
+    const raw = { status: "UNVERIFIED", citations: [{ ref: "PLD 2099 SC 202", judgmentId: null, status: "UNVERIFIED" }], temporal: [], scope: { assessed: false } } as unknown as GateEvaluation
+    expect(normaliseEvaluation(raw).scope).toEqual({ citations: 1, temporalChecks: 0, assessed: true })
+  })
+
+  it("F06: a stated NOT_ASSESSED is never lowered to OK, even beside findings that are all OK", () => {
+    const raw = { status: "NOT_ASSESSED", citations: [{ ref: "2099 SCMR 7", judgmentId: "j_7", status: "VERIFIED" }], temporal: [] } as unknown as GateEvaluation
+    expect(normaliseEvaluation(raw).status).toBe("NOT_ASSESSED")
   })
 
   it("keeps only the named fields of each finding", () => {
@@ -290,6 +320,33 @@ describe("approvalPasses and clearedItemsOf (P4-7, P4-8)", () => {
     const e = normaliseEvaluation({ status: "UNVERIFIED", citations: [], temporal: [] })
     expect(e.status).toBe("UNVERIFIED")
     expect(approvalPasses(e, { bodySha256: hash, cleared: [] }, hash)).toEqual({ pass: false, overrideUsed: false })
+  })
+
+  it("F06: clearedItemsOf names one scope item for a NOT_ASSESSED evaluation, and none for an assessed one", () => {
+    expect(clearedItemsOf(evaluation([]))).toEqual([{ kind: "scope", status: "NOT_ASSESSED" }])
+    expect(clearedItemsOf(evaluation([verified]))).toEqual([])
+    expect(clearedItemsOf(evaluation([unknown]))).toEqual([{ kind: "citation", ref: "PLD 2099 SC 202", status: "UNVERIFIED" }])
+  })
+
+  it("F06: a NOT_ASSESSED evaluation passes only when the override bound to this body cleared the not-assessed scope", () => {
+    const e = evaluation([])
+    expect(e.status).toBe("NOT_ASSESSED")
+    expect(approvalPasses(e, null, hash)).toEqual({ pass: false, overrideUsed: false })
+    expect(approvalPasses(e, { bodySha256: hash, cleared: [] }, hash)).toEqual({ pass: false, overrideUsed: false })
+    expect(approvalPasses(e, { bodySha256: hash, cleared: [{ kind: "scope", status: "NOT_ASSESSED" }] }, hash)).toEqual({ pass: true, overrideUsed: true })
+    expect(approvalPasses(e, { bodySha256: "b".repeat(64), cleared: [{ kind: "scope", status: "NOT_ASSESSED" }] }, hash).pass).toBe(false)
+    // A scope item with another status, or a citation item, does not clear the not-assessed scope.
+    expect(approvalPasses(e, { bodySha256: hash, cleared: [{ kind: "scope", status: "OK" }] }, hash).pass).toBe(false)
+    expect(approvalPasses(e, { bodySha256: hash, cleared: [{ kind: "citation", ref: "PLD 2099 SC 202", status: "UNVERIFIED" }] }, hash).pass).toBe(false)
+  })
+
+  it("F06: a cleared scope item clears nothing else: an UNVERIFIED evaluation, or an UNVERIFIED status with no finding, stays blocked", () => {
+    const scopeOnly = { bodySha256: hash, cleared: [{ kind: "scope", status: "NOT_ASSESSED" }] }
+    expect(approvalPasses(evaluation([unknown]), scopeOnly, hash).pass).toBe(false)
+    const bare = normaliseEvaluation({ status: "UNVERIFIED", citations: [], temporal: [] })
+    expect(bare.status).toBe("UNVERIFIED")
+    expect(clearedItemsOf(bare)).toEqual([])
+    expect(approvalPasses(bare, scopeOnly, hash).pass).toBe(false)
   })
 
   it("a cleared item whose kind or status is outside the domain clears nothing (fails closed)", () => {
@@ -443,7 +500,7 @@ describe.skipIf(!EMULATORS)("G-1 equivalents (P4-14)", () => {
 
   it("G-1 test 5: a 2015-dated check against a section amended in 2018 is TEMPORAL_MISMATCH with both texts; no history is TEMPORAL_UNAVAILABLE", async () => {
     const f = await newFirm()
-    const d = await create(f, f.P, BODY_PLAIN)
+    const d = await create(f, f.P, BODY_PLEADS)
 
     // A 2015 date, pleaded with the 2018 text: a mismatch that carries the text in force in 2015 beside the text used.
     const mismatch = await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])
@@ -476,8 +533,8 @@ describe.skipIf(!EMULATORS)("G-1 equivalents (P4-14)", () => {
 describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
   it("gates the current version: the result, the draft's summary, the draft.gated event and the audit row in one go", async () => {
     const f = await newFirm()
-    const d = await create(f, f.P, `${BODY_OVERRULED}\nSee also 2099 SCMR 7 and PLD 2099 SC 202.`)
-    const body = `${BODY_OVERRULED}\nSee also 2099 SCMR 7 and PLD 2099 SC 202.`
+    const body = `${BODY_OVERRULED}\nSee also 2099 SCMR 7 and PLD 2099 SC 202.${PLEADS}`
+    const d = await create(f, f.P, body)
     const r = await gate(f, f.C, d.draftId, 1, [check(TEXT_2018)])
     expect(r).toEqual({
       draftId: d.draftId,
@@ -490,6 +547,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
         { ref: "PLD 2099 SC 202", judgmentId: null, status: "UNVERIFIED" },
       ],
       temporal: [{ ...check(TEXT_2018), status: "TEMPORAL_MISMATCH", inForceText: TEXT_2015 }],
+      scope: { citations: 3, temporalChecks: 1, assessed: true },
       gatedBy: f.C.uid,
       gatedAt: r.gatedAt,
       resultId: r.resultId,
@@ -507,6 +565,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
       status: "OVERRULED",
       citations: r.citations,
       temporal: r.temporal,
+      scope: { citations: 3, temporalChecks: 1, assessed: true },
       gatedBy: f.C.uid,
       gateRuns: 1,
       resultId: r.resultId,
@@ -609,7 +668,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
 
   it("bad temporal checks are 400 invalid_temporal_checks through the route; 20 good ones are accepted", async () => {
     const f = await newFirm()
-    const d = await create(f, f.P, BODY_PLAIN)
+    const d = await create(f, f.P, BODY_PLEADS)
     for (const bad of [
       null,
       {},
@@ -668,7 +727,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
 
   it("R5 Probe A: after the override the store gains a differing history for the cleared section; a re-gate with no checks is refused, and approval is blocked", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     expect((await gate(f, f.A, d.draftId, 1, [check(TEXT_2015, "2015-03-01", "test_act_s9")])).status).toBe("TEMPORAL_UNAVAILABLE")
     await override(f, f.P, d.draftId, 1)
     store.addSectionVersion("test_act_s9", "PK", "2010-01-01", null, "Test Act s.9 text that differs from the pleaded text.")
@@ -680,7 +739,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
 
   it("R5 Probe C: after the override a re-gate with another usedText under the same key is refused (409 already_overridden)", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     expect((await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])).status).toBe("TEMPORAL_MISMATCH")
     await override(f, f.P, d.draftId, 1)
     // Same sectionId, asAtDate, jurisdiction and status, another pleaded text: the key would still match the cleared item.
@@ -710,7 +769,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
     const dashed = "Short title.\u2014(1) This Act may be called the Test Act, 2099."
     store.addSectionVersion("test_act_s2", "PK", "2010-01-01", null, dashed)
     store.addSectionVersion("test_act_s3", "PK", "2010-01-01", null, "The fee is caf\u00e9 rate.")
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, `${BODY_PLAIN}\nThe Act provides: ${dashed}\nThe schedule says: The fee is caf\u00e9 rate.`)
     const r = await gate(f, f.A, d.draftId, 1, [
       check(dashed, "2015-03-01", "test_act_s2"),
       check("The fee is cafe\u0301 rate.", "2015-03-01", "test_act_s3"),
@@ -725,14 +784,14 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
 
   it("a check recorded on v1 is carried to v2 when v2 is gated without it", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     const s9 = check(TEXT_2015, "2015-03-01", "test_act_s9")
     expect((await gate(f, f.A, d.draftId, 1, [s9])).temporal).toEqual([{ ...s9, status: "TEMPORAL_UNAVAILABLE", inForceText: null }])
     // The partner clears it on version 1 only.
     await override(f, f.P, d.draftId, 1)
     // The store gains a history that differs from the pleaded text; a trivial edit makes version 2, gated with no checks.
     store.addSectionVersion("test_act_s9", "PK", "2010-01-01", null, "Test Act s.9 in force text.")
-    await save(f, f.A, d.draftId, 1, `${BODY_PLAIN} A trivial edit.`)
+    await save(f, f.A, d.draftId, 1, `${BODY_PLEADS} A trivial edit.`)
     const g2 = await gate(f, f.A, d.draftId, 2)
     // Carried and re-checked against the store as it is now: a mismatch, not the cleared UNAVAILABLE.
     expect(g2.temporal).toEqual([{ ...s9, status: "TEMPORAL_MISMATCH", inForceText: "Test Act s.9 in force text." }])
@@ -747,20 +806,20 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
       ["test_act_s1", "OK"],
     ])
     // Version 3, gated with nothing, carries both.
-    await save(f, f.A, d.draftId, 2, `${BODY_PLAIN} A second edit.`)
+    await save(f, f.A, d.draftId, 2, `${BODY_PLEADS} A second edit.`)
     expect((await gate(f, f.A, d.draftId, 3)).temporal.map((t) => t.sectionId)).toEqual(["test_act_s9", "test_act_s1"])
   })
 
   it("the caller's usedText replaces a carried check's usedText on the same key", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     expect((await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])).status).toBe("TEMPORAL_MISMATCH")
     // The same key with the 2015 text: one check, the caller's text, OK.
     const fixed = await gate(f, f.A, d.draftId, 1, [check(TEXT_2015)])
     expect(fixed.temporal).toEqual([{ ...check(TEXT_2015), status: "OK", inForceText: TEXT_2015 }])
     expect(fixed.status).toBe("OK")
     // Carried to version 2 with the caller's text, not the first one.
-    await save(f, f.A, d.draftId, 1, `${BODY_PLAIN} A trivial edit.`)
+    await save(f, f.A, d.draftId, 1, `${BODY_PLEADS} A trivial edit.`)
     const g2 = await gate(f, f.A, d.draftId, 2)
     expect(g2.temporal).toEqual([{ ...check(TEXT_2015), status: "OK", inForceText: TEXT_2015 }])
     // And back on version 2: the caller's 2018 text replaces it again, in place.
@@ -771,9 +830,33 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
     ])
   })
 
-  it("a carried result that is missing, malformed or not this draft's is 409 not_gated, so no recorded check is dropped", async () => {
+  it("F06 ruling C: a check whose text the version does not plead is 422 temporal_check_not_in_draft with nothing stored; a carried one is re-supplied on its key with the text the new version pleads", async () => {
     const f = await newFirm()
     const d = await create(f, f.A, BODY_PLAIN)
+    // A true check on text the draft never pleads: refused before any evaluation, nothing stored, one deny row.
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, [check(TEXT_2015)])), 422, "temporal_check_not_in_draft")
+    expect(await resultDoc(d.draftId, 1)).toBeUndefined()
+    expect(await draftDoc(d.draftId)).toMatchObject({ gateResult: null })
+    expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(0)
+    expect((await auditRows("draft.gate", `drafts/${d.draftId}`)).map((r) => [r.decision, r.reason])).toEqual([["deny", "temporal_check_not_in_draft"]])
+    // Version 2 pleads the 2015 text and is gated with it: OK.
+    await save(f, f.A, d.draftId, 1, `${BODY_PLAIN}\nThe petition pleads: ${TEXT_2015}`)
+    expect((await gate(f, f.A, d.draftId, 2, [check(TEXT_2015)])).status).toBe("OK")
+    // Version 3 drops that text and pleads the 2018 one: the carried check no longer applies, so a gate with no check
+    // is refused, and nothing is stored for version 3.
+    await save(f, f.A, d.draftId, 2, `${BODY_PLAIN}\nThe petition now pleads: ${TEXT_2018}`)
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 3)), 422, "temporal_check_not_in_draft")
+    expect(await resultDoc(d.draftId, 3)).toBeUndefined()
+    // The same key re-supplied with the text version 3 pleads replaces it (R10: the caller's usedText wins); the key
+    // never leaves the set, and the 2018 text for a 2015 date is a mismatch.
+    const g3 = await gate(f, f.A, d.draftId, 3, [check(TEXT_2018)])
+    expect(g3.temporal).toEqual([{ ...check(TEXT_2018), status: "TEMPORAL_MISMATCH", inForceText: TEXT_2015 }])
+    expect(g3.status).toBe("TEMPORAL_MISMATCH")
+  })
+
+  it("a carried result that is missing, malformed or not this draft's is 409 not_gated, so no recorded check is dropped", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, BODY_PLEADS)
     await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])
     const drafts = adminDb().collection("drafts").doc(d.draftId)
     const result1 = adminDb().collection("draft_gate_results").doc(`${d.draftId}_1`)
@@ -798,7 +881,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
 
   it("a merged set over 20 checks is 400 invalid_temporal_checks", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     const all = checks(21, TEXT_2015)
     const first = await gate(f, f.A, d.draftId, 1, all.slice(0, 15))
     expect(first.temporal).toHaveLength(15)
@@ -813,7 +896,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
 
   it("a merged set over 200,000 UTF-8 bytes of usedText is 400 invalid_temporal_checks", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, `${BODY_PLAIN}\nThe section reads: ${"\u0627".repeat(10_000)}\nIn short, it is pleaded.`)
     const all = checks(11, "\u0627".repeat(10_000))
     expect((await gate(f, f.A, d.draftId, 1, all.slice(0, 10))).temporal).toHaveLength(10)
     // An eleventh 20,000-byte usedText on top of the ten recorded is 220,000 bytes in all.
@@ -825,7 +908,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
   it("a CRLF usedText equal to an LF in-force text is OK, not MISMATCH", async () => {
     const f = await newFirm()
     store.addSectionVersion("test_act_s4", "PK", "2010-01-01", null, "Line one of the section.\nLine two of the section.")
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, `${BODY_PLAIN}\nThe section reads:\nLine one of the section.\nLine two of the section.`)
     const r = await gate(f, f.A, d.draftId, 1, [check("Line one of the section.\r\nLine two of the section.", "2015-03-01", "test_act_s4")])
     expect(r.temporal.map((t) => t.status)).toEqual(["OK"])
     expect(r.status).toBe("OK")
@@ -844,7 +927,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
   it("R8: a result over 900,000 bytes is 422 gate_result_too_large; nothing is stored, the in-force text is never truncated", async () => {
     const f = await newFirm()
     store.addSectionVersion("test_act_big", "PK", "2010-01-01", null, "x".repeat(950_000))
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     expectErr(await apiErrorOf(gate(f, f.A, d.draftId, 1, [check(TEXT_2015, "2015-03-01", "test_act_big")])), 422, "gate_result_too_large")
     expect(await byFirm("draft_gate_results", f.firmId)).toHaveLength(0)
     expect(await eventsNamed(f.firmId, d.draftId, "draft.gated")).toHaveLength(0)
@@ -860,7 +943,7 @@ describe.skipIf(!EMULATORS)("gateDraft (P4-6, P4-12)", () => {
 describe.skipIf(!EMULATORS)("overrideGate (P4-7)", () => {
   it("records every non-OK citation and temporal entry with its status, and nothing that passed", async () => {
     const f = await newFirm()
-    const body = "Relying on PLD 2099 SC 101, 2099 SCMR 7 and PLD 2099 SC 202."
+    const body = `Relying on PLD 2099 SC 101, 2099 SCMR 7 and PLD 2099 SC 202.${PLEADS}`
     const d = await create(f, f.A, body)
     await gate(f, f.A, d.draftId, 1, [check(TEXT_2015), check(TEXT_2018, "2015-04-01"), check(TEXT_2015, "2015-03-01", "test_act_s9")])
     const o = await override(f, f.P, d.draftId, 1, `   ${REASON}   `)
@@ -1152,7 +1235,7 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
 
   it("re-runs with the temporal checks recorded in the version's result, against the store as it is now", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     await gate(f, f.A, d.draftId, 1, [check(TEXT_2015, "2015-03-01", "test_act_s9")])
     await override(f, f.P, d.draftId, 1)
     // The section now has a history, and the pleaded text is not it: a cleared TEMPORAL_UNAVAILABLE is now a mismatch.
@@ -1163,7 +1246,7 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
 
   it("R8: an approval run whose result would exceed 900,000 bytes is 422 gate_result_too_large; nothing stored, nothing approved", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     await gate(f, f.A, d.draftId, 1, [check(TEXT_2015, "2015-03-01", "test_act_s9")])
     await override(f, f.P, d.draftId, 1)
     const resultBefore = await resultDoc(d.draftId, 1)
@@ -1199,7 +1282,7 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
 
   it("a re-gate that lands while the approval re-runs the gate is draft_changed: never an approval on the checks it replaced", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_VERIFIED)
+    const d = await create(f, f.A, `${BODY_VERIFIED}${PLEADS}`)
     expect((await gate(f, f.A, d.draftId, 1)).status).toBe("OK")
     // The store fires one re-gate (with a check that mismatches) from inside the approval's own gate run.
     let fired = false
@@ -1238,7 +1321,7 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
 
   it("approval is bound to the reviewed result: a re-gate without the check after the partner reviewed a TEMPORAL_MISMATCH makes approval with the old resultId 409 gate_result_changed", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     const reviewed = await gate(f, f.A, d.draftId, 1, [check(TEXT_2018)])
     expect(reviewed.status).toBe("TEMPORAL_MISMATCH")
     // The partner reads the report: TEMPORAL_MISMATCH, with the result's id.
@@ -1264,7 +1347,7 @@ describe.skipIf(!EMULATORS)("approveDraft (P4-8)", () => {
   it("approval is bound to the reviewed result on the production store: a re-gate without the check after the partner reviewed a TEMPORAL_UNAVAILABLE makes approval with the old resultId 409 gate_result_changed", async () => {
     setAuthorityStoreForTests(null)
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_PLAIN)
+    const d = await create(f, f.A, BODY_PLEADS)
     const reviewed = await gate(f, f.A, d.draftId, 1, [check(TEXT_2015)])
     expect(reviewed.status).toBe("TEMPORAL_UNAVAILABLE")
     expect((await report(f, f.P, d.draftId)).gateResult?.resultId).toBe(reviewed.resultId)
@@ -1423,10 +1506,10 @@ describe.skipIf(!EMULATORS)("getVerificationReport (P4-6, P4-7)", () => {
 })
 
 describe.skipIf(!EMULATORS)("the production store (P4-3: EMPTY_AUTHORITY_STORE until O-59)", () => {
-  it("every draft that cites an authority needs an override to approve; a draft that cites nothing and checks nothing approves", async () => {
+  it("every draft that cites an authority needs an override to approve; a draft that cites nothing and checks nothing is NOT_ASSESSED and needs one too (F06)", async () => {
     setAuthorityStoreForTests(null)
     const f = await newFirm()
-    const d = await create(f, f.A, BODY_VERIFIED)
+    const d = await create(f, f.A, `${BODY_VERIFIED}${PLEADS}`)
     const g = await gate(f, f.A, d.draftId, 1, [check(TEXT_2015)])
     expect(g.status).toBe("UNVERIFIED")
     expect(g.citations).toEqual([{ ref: "2099 SCMR 7", judgmentId: null, status: "UNVERIFIED" }])
@@ -1435,9 +1518,13 @@ describe.skipIf(!EMULATORS)("the production store (P4-3: EMPTY_AUTHORITY_STORE u
     await override(f, f.P, d.draftId, 1)
     expect((await approve(f, f.P, d.draftId, 1)).draft).toMatchObject({ status: "approved", locked: true })
 
+    // F06: before the fix these two lines asserted the defect (status OK, approved with no override). Nothing legal
+    // was checked, so the result is NOT_ASSESSED; it blocks approval until the partner's explicit override clears it.
     const plain = await create(f, f.A, BODY_PLAIN)
-    expect((await gate(f, f.A, plain.draftId, 1)).status).toBe("OK")
-    expect((await approve(f, f.P, plain.draftId, 1)).draft.gateResult).toMatchObject({ status: "OK", overridden: false })
+    expect((await gate(f, f.A, plain.draftId, 1)).status).toBe("NOT_ASSESSED")
+    expectErr(await apiErrorOf(approve(f, f.P, plain.draftId, 1)), 409, "gate_blocked")
+    await override(f, f.P, plain.draftId, 1)
+    expect((await approve(f, f.P, plain.draftId, 1)).draft.gateResult).toMatchObject({ status: "NOT_ASSESSED", overridden: true })
   })
 })
 
@@ -1543,7 +1630,7 @@ describe("approveDraft: a same-key retry of a blocked approval (PR #25 review)",
     expect((await gate(f, f.A, d.draftId, 1)).status).toBe("OVERRULED")
     const reviewed = await currentResultId(d.draftId, 1)
     const key = randomUUID()
-    const call = () => approveApi({ token: f.P.token, headers: { "idempotency-key": key }, data: { firmId: f.firmId, draftId: d.draftId, version: 1, resultId: reviewed } } as never)
+    const call = () => approveApi({ token: f.P.token, headers: { "idempotency-key": key }, data: { firmId: f.firmId, draftId: d.draftId, version: 1, resultId: reviewed, reviewChecklist: FULL_CHECKLIST } } as never)
     expectErr(await apiErrorOf(call()), 409, "gate_blocked")
     const afterFirst = await currentResultId(d.draftId, 1)
     expect(afterFirst).not.toBe(reviewed)

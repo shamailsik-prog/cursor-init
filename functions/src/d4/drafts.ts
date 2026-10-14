@@ -113,6 +113,22 @@ export function draftView(draftId: string, d: DocumentData): DraftView {
   }
 }
 
+/** One answered item of a type's review checklist (F06): the item, exactly as the type lists it, and the reviewer's evidence. */
+export type ReviewChecklistEntry = { item: string; evidence: string }
+
+/**
+ * The review checklist an approval stored on the draft (F06), by its named fields only, or null when it stored none.
+ * It is returned by the draft read and the approval, never by a list.
+ */
+export function reviewChecklistView(raw: unknown): ReviewChecklistEntry[] | null {
+  if (!Array.isArray(raw)) return null
+  return raw.flatMap((e: unknown): ReviewChecklistEntry[] => {
+    if (e === null || typeof e !== "object") return []
+    const { item, evidence } = e as Record<string, unknown>
+    return typeof item === "string" && typeof evidence === "string" ? [{ item, evidence }] : []
+  })
+}
+
 const withinClearance = (raw: unknown, clearance: Classification): boolean => isKnownClassification(raw) && rankOf(raw) <= rankOf(clearance)
 
 /** The document id of a stored version. */
@@ -545,12 +561,13 @@ export const restoreDraftVersionOp: FirmOperation<SavedDraft> = {
 // getDraft
 // ---------------------------------------------------------------------------
 
-export type DraftRead = DraftView & { version: number; body: string }
+export type DraftRead = DraftView & { version: number; body: string; reviewChecklist?: ReviewChecklistEntry[] }
 
 /**
  * getDraft(?draftId=&version=) → the DraftView with the title and body of the requested version (default: the current
- * one) and its number (P4-4). `draft.read` on the draft's matter; a version the draft does not have is 404
- * `version_not_found`, a malformed one 400 `invalid_version`.
+ * one) and its number (P4-4), and, once an approval stored one, the review checklist with its evidence (F06).
+ * `draft.read` on the draft's matter; a version the draft does not have is 404 `version_not_found`, a malformed one
+ * 400 `invalid_version`.
  */
 export const getDraftOp: FirmOperation<DraftRead> = {
   auth: "firm",
@@ -568,7 +585,8 @@ export const getDraftOp: FirmOperation<DraftRead> = {
     const row = typeof version === "number" ? (await versions().doc(versionId(draftId, version)).get()).data() : undefined
     if (!row || row.firmId !== caller.firmId || row.draftId !== draftId) throw new HttpError(404, "version_not_found")
     await audit.allow()
-    return { ...draftView(draftId, draft), version: row.version, title: row.title, body: row.body }
+    const reviewChecklist = reviewChecklistView(draft.reviewChecklist)
+    return { ...draftView(draftId, draft), version: row.version, title: row.title, body: row.body, ...(reviewChecklist ? { reviewChecklist } : {}) }
   },
 }
 
