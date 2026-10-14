@@ -36,3 +36,19 @@ paths = ['''(^|/)\.env\.example$''']
 description = "Firebase emulator fake API key and demo project ids"
 regexTarget = "secret"
 regexes = ['''^fake-api-key$''', '''^demo-[a-z0-9-]+$''']
+
+
+
+# Audit F30 (re-audit D3): commit 126164c on claude/remediate-f30 (PR #36) passed a
+# deliberately weak 15-character store password to the secrets-preflight refusal
+# test, which must reject it as too short. It is a fixture, not a credential; the
+# branch tip now builds its weak values at runtime. The default full-history scan
+# covers every fetched branch, so main needs this entry too. Exact value, that
+# one script, generic-api-key only.
+[[allowlists]]
+description = "F30 D3 weak-password fixture for the secrets-preflight refusal test"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^short-pw-15char$''']
+paths = ['''^corpus_service/tests/e2e/store_security_e2e\.sh$''']
+targetRules = ["generic-api-key"]
