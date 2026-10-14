@@ -44,6 +44,17 @@
 # or PUBLIC. A membership a role can only SET and does not inherit (the app's corpus_writer) grants
 # nothing here, so corpus_writer's own EXECUTE on corpus_publication_begin/finish does not trip it.
 #
+# Every reset REVOKE that could meet a privilege an application role holds WITH GRANT OPTION and passed
+# on (database, schema public, the runtime role's tables and sequences, the Annex A relations, sequences
+# and routines) is CASCADE, so the reset takes the whole chain down instead of failing on it (re-audit
+# L1). It removes only grants that depend on a revoked grant option: the grants the DDL makes to
+# corpus_reader, corpus_writer and corpus_declassify come from the object owner and are untouched. The
+# bootstrap superuser's default privileges are reset as well (re-audit L2): in schema public, globally
+# and in any other schema, none of them may hand a future object to either application role or
+# corpus_clients, nor a future table or sequence to PUBLIC. Functions keep PostgreSQL's default EXECUTE
+# for PUBLIC: without it, a function an extension script (pgvector, pg_trgm, pgcrypto) later creates as
+# this role would not be callable by the runtime role.
+#
 # Passwords come from files (compose secrets: APP_DB_PASSWORD_FILE, MIGRATE_DB_PASSWORD_FILE,
 # POSTGRES_PASSWORD_FILE) or, failing that, the variable itself. They reach psql through its
 # environment (\getenv), never argv.
@@ -93,6 +104,7 @@ provision_corpus_roles() (
 \getenv mig_user MIGRATE_DB_USER
 \getenv mig_pw MIGRATE_DB_PASSWORD
 \getenv db POSTGRES_DB
+\getenv boot POSTGRES_USER
 SET password_encryption = 'scram-sha-256';
 SET client_min_messages = warning;
 BEGIN;
@@ -143,12 +155,12 @@ GRANT corpus_writer TO :"app_user" WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 -- Database: only corpus_clients may connect; nobody but the superuser may CREATE (schemas,
 -- trusted extensions) or use TEMP.
 REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
-REVOKE ALL ON DATABASE :"db" FROM :"app_user", :"mig_user";
+REVOKE ALL ON DATABASE :"db" FROM :"app_user", :"mig_user" CASCADE;
 GRANT CONNECT ON DATABASE :"db" TO corpus_clients;
 
 -- Schema public: usage for clients, CREATE for the migration role only.
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
-REVOKE ALL ON SCHEMA public FROM :"app_user", :"mig_user";
+REVOKE ALL ON SCHEMA public FROM :"app_user", :"mig_user" CASCADE;
 GRANT USAGE ON SCHEMA public TO corpus_clients;
 GRANT CREATE ON SCHEMA public TO :"mig_user";
 -- The Annex A roles' own grants (003: corpus_writer's DML and publication functions, 001: the
@@ -202,8 +214,8 @@ $$;
 -- ALL SEQUENCES IN SCHEMA public did, except the Annex A relations and the sequences they own (the
 -- runtime role reaches Annex A only as corpus_writer, through a publication). Then every Annex A
 -- relation, sequence and routine is reset for the application roles, corpus_clients and PUBLIC.
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"app_user";
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"app_user";
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"app_user" CASCADE;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"app_user" CASCADE;
 SELECT set_config('corpus.app_user', :'app_user', false) AS app_user_setting \gset
 DO $$
 DECLARE
@@ -232,8 +244,9 @@ BEGIN
   END LOOP;
   -- Nothing of Annex A is ever granted to the application roles, their group or PUBLIC (re-audit D2:
   -- a grant through corpus_clients or PUBLIC is reset here, not just refused by the check below).
+  -- CASCADE (re-audit L1): a grant one of them passed on WITH GRANT OPTION goes with it.
   FOR r IN SELECT a AS rel FROM public.corpus_contract_relations() a LOOP
-    EXECUTE format('REVOKE ALL ON TABLE %s FROM %I, %I, corpus_clients, PUBLIC', r.rel, app, mig);
+    EXECUTE format('REVOKE ALL ON TABLE %s FROM %I, %I, corpus_clients, PUBLIC CASCADE', r.rel, app, mig);
   END LOOP;
   FOR r IN
     SELECT s.oid::regclass AS seq
@@ -242,14 +255,14 @@ BEGIN
                       AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
      WHERE s.relkind = 'S' AND d.refobjid IN (SELECT a::oid FROM public.corpus_contract_relations() a)
   LOOP
-    EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM %I, %I, corpus_clients, PUBLIC', r.seq, app, mig);
+    EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM %I, %I, corpus_clients, PUBLIC CASCADE', r.seq, app, mig);
   END LOOP;
   -- Re-audit D1: EXECUTE on the Annex A routines. PUBLIC only where the DDL itself keeps it from PUBLIC
   -- (public_execute false); corpus_writer's and corpus_declassify's grants are the DDL's and stay.
   FOR r IN SELECT f.routine, f.public_execute FROM public.corpus_contract_routines() f LOOP
-    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I, %I, corpus_clients', r.routine, app, mig);
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I, %I, corpus_clients CASCADE', r.routine, app, mig);
     IF NOT r.public_execute THEN
-      EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', r.routine);
+      EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC CASCADE', r.routine);
     END IF;
   END LOOP;
 END
@@ -260,6 +273,42 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"mig_user" IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_user";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"mig_user" IN SCHEMA public
   GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO :"app_user";
+
+-- Re-audit L2: the bootstrap superuser applies Annex A (and later DDL), so a default privilege of it
+-- would hand every object it creates afterwards to whoever it names. None may name an application
+-- role or corpus_clients, and no default table or sequence grant may go to PUBLIC; functions keep
+-- PostgreSQL's default EXECUTE for PUBLIC (header). Schema public first, then every other default of
+-- the role, global or in another schema.
+ALTER DEFAULT PRIVILEGES FOR ROLE :"boot" IN SCHEMA public
+  REVOKE ALL ON TABLES FROM :"app_user", :"mig_user", corpus_clients, PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE :"boot" IN SCHEMA public
+  REVOKE ALL ON SEQUENCES FROM :"app_user", :"mig_user", corpus_clients, PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE :"boot" IN SCHEMA public
+  REVOKE ALL ON FUNCTIONS FROM :"app_user", :"mig_user", corpus_clients;
+SELECT set_config('corpus.boot_user', :'boot', false) AS boot_user_setting \gset
+DO $$
+DECLARE
+  r record;
+  boot text := current_setting('corpus.boot_user');
+  app text := current_setting('corpus.app_user');
+  mig text := current_setting('corpus.mig_user');
+BEGIN
+  FOR r IN
+    SELECT n.nspname, d.defaclobjtype AS objtype
+      FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
+     WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = boot)
+       AND d.defaclobjtype IN ('r', 'S', 'f', 'T', 'n')
+  LOOP
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I %s REVOKE ALL ON %s FROM %I, %I, corpus_clients%s',
+      boot,
+      CASE WHEN r.nspname IS NULL THEN '' ELSE format('IN SCHEMA %I', r.nspname) END,
+      CASE r.objtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS'
+                     WHEN 'T' THEN 'TYPES' ELSE 'SCHEMAS' END,
+      app, mig,
+      CASE WHEN r.objtype IN ('r', 'S') THEN ', PUBLIC' ELSE '' END);
+  END LOOP;
+END
+$$;
 
 -- Large objects live outside the tables' grants; the app never uses them, so only the superuser
 -- may create them (re-audit D8).
