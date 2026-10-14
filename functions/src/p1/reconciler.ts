@@ -1,4 +1,4 @@
-import { FieldPath, FieldValue, type DocumentData, type DocumentReference, type Firestore, type QueryDocumentSnapshot } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, Timestamp, type DocumentData, type DocumentReference, type Firestore, type QueryDocumentSnapshot } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { onSchedule } from "firebase-functions/v2/scheduler"
 import { isClassification, type Classification } from "@/platform/p1/types"
@@ -7,7 +7,7 @@ import { REGION } from "../health"
 import { errorCode } from "../log"
 import { firmConfigRef, monthRef, pkrRateOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
-import { leaseMillis, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
+import { isRetryableCommitError, leaseMillis, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
 import { isMonthKey } from "./month"
 import type { P1Outcome, TaskType } from "./types"
 
@@ -16,12 +16,23 @@ import type { P1Outcome, TaskType } from "./types"
  * scheduling pattern of the P2 job sweeper (`jobSweeper`): a pinned timeout below the one-minute schedule and a
  * wall-clock budget that ends a run between reservations.
  *
- * It pages through every `ai_reservations` record still `reserved`, in document-id order with a cursor (re-audit
- * R1-D2), and acts on those whose lease has passed. The lease is read in code, not in the query, so a lease stored in
- * any shape is seen: a Timestamp or a number of milliseconds is compared with the clock, and anything else counts as
- * lapsed (the gateway always writes a Timestamp, so no live call owns such a record). Records that fail never stop the
- * run: the cursor moves past them. The lease outlives the function timeout by 60 s (RESERVATION_LEASE_MS), so the call
- * that made a lapsed reservation is gone and can no longer settle it. For each one, in its own transaction that
+ * Which records a run reads (re-audit R1-D2, R2-D2). Only lapsed records can be acted on, so a run asks for them
+ * directly and live ones never take its place, however many there are or however their ids sort:
+ *
+ * - Pass C, the sweep, first: a slice of RECONCILE_SWEEP_SIZE records still `reserved`, in document-id order from a
+ *   cursor kept in `platform/p1ReconcileCursor` (server-only), wrapping to the start after the last slice. It acts only
+ *   on records whose `leaseUntil` no index can find: missing, or neither a Timestamp nor a number (the gateway always
+ *   writes a Timestamp, so no live call owns such a record: it counts as lapsed, fail closed). Every open record is
+ *   read within ceil(open / RECONCILE_SWEEP_SIZE) runs.
+ * - Pass B: records whose lease is a number of milliseconds at or before the clock (a malformed record), oldest first.
+ * - Pass A: records whose lease is a Timestamp at or before the clock, oldest first, up to RECONCILE_MAX_PAGES pages of
+ *   RECONCILE_PAGE_SIZE. The query `state == "reserved" and leaseUntil <= now order by leaseUntil` uses the composite
+ *   index (state, leaseUntil) in firestore.indexes.json; Pass B's query is the same with a number, on the same index
+ *   (a Firestore range filter matches only values of its own type). The sweep's query is the state equality with the
+ *   document-id order, which the single-field index serves.
+ *
+ * A record is tried at most once per run. The lease outlives the function timeout by 60 s (RESERVATION_LEASE_MS), so the
+ * call that made a lapsed reservation is gone and can no longer settle it. For each one, in its own transaction that
  * re-reads the reservation:
  *
  * - No provider attempt: nothing was sent. The reservation is released: its hold leaves the month's
@@ -35,33 +46,49 @@ import type { P1Outcome, TaskType } from "./types"
  *   reserved worst case, the input ceiling and the 4,096-token ceiling (`reconciledFrom: "worst_case"`,
  *   `tokensEstimated: true`).
  *
- * Malformed records (re-audit R1-D2). Fields a settlement can do without are defaulted: a missing `traceId` is
- * recorded as null, a missing actor as `system`, an unreadable classification as the strictest label. A record whose
- * firm, month or hold cannot be read cannot be settled without guessing what to take off which month total, so it
- * fails. Each failed run counts on the record (`reconcileFailures`); at RECONCILE_MAX_FAILURES it is quarantined:
- * `state: "reconcile_failed"`, logged `p1.reconcile_quarantined` at error. A quarantined record keeps its hold and
- * keeps its firm refused `accounting_indeterminate` (fail closed) until an operator settles it (README runbook).
+ * Either way, in the same transaction (Codex P2 on PR #40), the call's `committee_outputs` rows (found by their
+ * `usageLogId`) take `accounting: "settled"`, and so does the answer stored for the request's Idempotency-Key (the
+ * reservation's `idempotencyDoc`, when its stored answer carries this call's trace id), so a reader and a same-key
+ * replay see the books completed. Both writes are idempotent: a row or answer already settled is left as it is.
+ *
+ * Failures (re-audit R1-D2, R2-D1). A failure that a later run may not meet (contention, ABORTED, UNAVAILABLE,
+ * DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED and the rest of `isRetryableCommitError`) is logged `p1.reconcile_failed` with
+ * `transient: true` and retried on the next run; it never counts toward quarantine, so a valid record is never
+ * quarantined for contention on its firm's month total. Only a fault of the record itself counts: fields a settlement
+ * can do without are defaulted (a missing `traceId` is recorded as null, a missing actor as `system`, an unreadable
+ * classification as the strictest label), but a record whose firm, month or hold cannot be read cannot be settled
+ * without guessing what to take off which month total (`reservation_malformed`), and any other failure that is not
+ * retryable (an invalid write, an existing usage row) is the record's own. Each such run counts on the record
+ * (`reconcileFailures`); at RECONCILE_MAX_FAILURES it is quarantined: `state: "reconcile_failed"`, logged
+ * `p1.reconcile_quarantined` at error. A quarantined record keeps its hold and keeps its firm refused
+ * `accounting_indeterminate` (fail closed) until an operator settles it (README runbook).
  *
  * The Gateway gives this code no per-request receipt to check a charge against; the attempt keeps the provider's
  * response id and request id for that (O-57: reconcile `costMicroUsd` against the Gateway's records at G-1).
  */
 
-/** Reservations per query page, and pages per run (at most 500 open reservations a minute). */
+/** Pass A's page size, and the pages it may read in a run (at most 500 lapsed reservations a minute). */
 export const RECONCILE_PAGE_SIZE = 100
 export const RECONCILE_MAX_PAGES = 5
+/** Records the sweep (Pass C) reads per run. */
+export const RECONCILE_SWEEP_SIZE = 200
 /** One run's wall-clock budget, checked before each page and each reservation, like the job sweeper's. */
 export const RECONCILE_BUDGET_MS = 30_000
 /** The reconciler function's timeout: below the one-minute schedule, so runs never overlap. */
 export const RECONCILER_TIMEOUT_SECONDS = 45
 /**
- * Failed runs after which a reservation is quarantined (re-audit R1-D2). Three runs, a minute apart, rule out a
- * transient store fault (each run's own transaction already retries contention) without leaving a bad record in
- * every run's way for long.
+ * Runs in which a record's own fault was met, after which it is quarantined (re-audit R1-D2). Store faults that a
+ * later run may not meet are never counted (re-audit R2-D1), so three counted runs mean the record itself is bad.
  */
 export const RECONCILE_MAX_FAILURES = 3
 
 if (!(RECONCILE_BUDGET_MS + 10_000 <= RECONCILER_TIMEOUT_SECONDS * 1000)) {
   throw new Error(`reconcile budget (${RECONCILE_BUDGET_MS} ms) must end at least 10 s before the reconciler timeout (${RECONCILER_TIMEOUT_SECONDS} s)`)
+}
+
+/** Where the sweep (Pass C) resumes: `{ after: <document id> }`, "" for the start. Server-only, like all of `platform/*`. */
+export function reconcileCursorRef(): DocumentReference {
+  return adminDb().collection("platform").doc("p1ReconcileCursor")
 }
 
 export type ReconcileResult = { settled: string[]; released: string[]; quarantined: string[] }
@@ -90,6 +117,8 @@ type Parsed = {
   reservedInputTokens: number
   reservedOutputTokens: number
   attempt: Record<string, unknown> | null
+  /** The `idempotency_keys` doc id of the request the call was made for, when it is a plain doc id. */
+  idempotencyDoc: string | null
 }
 
 /** What a settlement needs from a reservation. The firm, the month and the hold are required; everything else is defaulted. */
@@ -113,6 +142,7 @@ function parseReservation(res: DocumentData): Parsed {
     reservedOutputTokens: count(res.reservedOutputTokens) ?? MAX_OUTPUT_TOKENS,
     // Any attempt, even an unreadable one, means the provider may have been called: it is settled, never released.
     attempt: attempt == null ? null : typeof attempt === "object" && !Array.isArray(attempt) ? (attempt as Record<string, unknown>) : {},
+    idempotencyDoc: typeof res.idempotencyDoc === "string" && /^[A-Za-z0-9_-]{1,400}$/.test(res.idempotencyDoc) ? res.idempotencyDoc : null,
   }
 }
 
@@ -140,12 +170,35 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
     const p = parseReservation(snap.data()!)
     const totalRef = monthRef(p.firmId, p.monthKey)
 
+    // The call's stored output rows and its request's stored answer (Codex P2 on PR #40), read before anything is
+    // staged, and marked settled after: only this firm's rows, and only an answer that carries this call's trace id.
+    const outputs = await tx.get(db.collection("committee_outputs").where("usageLogId", "==", ref.id))
+    const answerRef = p.idempotencyDoc === null ? null : db.collection("idempotency_keys").doc(p.idempotencyDoc)
+    const answer = answerRef === null ? null : await tx.get(answerRef)
+    const markSettled = () => {
+      for (const row of outputs.docs) {
+        if (row.get("firmId") === p.firmId && row.get("accounting") !== "settled") tx.update(row.ref, { accounting: "settled" })
+      }
+      if (
+        answerRef !== null &&
+        answer?.exists === true &&
+        answer.get("firmId") === p.firmId &&
+        answer.get("status") === "done" &&
+        p.traceId !== null &&
+        answer.get("response.body.traceId") === p.traceId &&
+        answer.get("response.body.accounting") === "pending"
+      ) {
+        tx.update(answerRef, { "response.body.accounting": "settled" })
+      }
+    }
+
     if (p.attempt === null) {
       // Nothing was sent: release the hold, charge nothing.
       const now = FieldValue.serverTimestamp()
       tx.set(totalRef, { firmId: p.firmId, monthKey: p.monthKey, reservedMicroUsd: FieldValue.increment(-p.held), updatedAt: now }, { merge: true })
       tx.update(ref, { state: "released", actualMicroUsd: 0, settledAt: now, settledBy: "reconciler" })
-      return { state: "released" as const, staged: { crossings: [], exceeded: null }, firmId: p.firmId, monthKey: p.monthKey }
+      markSettled()
+      return { state: "released" as const, staged: { crossings: [], exceeded: null, learnedOverhead: null }, firmId: p.firmId, monthKey: p.monthKey }
     }
 
     const recorded = recordedCharge(p.attempt)
@@ -186,11 +239,12 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       reservation: { ref, state, mustBeLive: true },
       settledBy: "reconciler",
     })
+    markSettled()
     return { state, staged, firmId: p.firmId, monthKey: p.monthKey }
   })
 }
 
-/** Counts a failed run on a still-reserved record; at RECONCILE_MAX_FAILURES it quarantines it. Its hold is kept either way. */
+/** Counts a run that met the record's own fault; at RECONCILE_MAX_FAILURES it quarantines it. Its hold is kept either way. */
 async function recordFailure(db: Firestore, ref: DocumentReference, err: unknown): Promise<"counted" | "quarantined" | null> {
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(ref)
@@ -207,9 +261,10 @@ async function recordFailure(db: Firestore, ref: DocumentReference, err: unknown
 }
 
 /**
- * One reconciler run: pages through the open reservations with a cursor until a short page, RECONCILE_MAX_PAGES or
- * the budget. `now` is the clock the leases are compared with (the tests drive it). A reservation that fails is
- * logged by code, counted, and quarantined at its RECONCILE_MAX_FAILURES-th failed run; the run moves on past it.
+ * One reconciler run: the sweep (Pass C), then the lapsed numeric leases (Pass B), then the lapsed Timestamp leases
+ * (Pass A), each until its records run out or the budget is spent. `now` is the clock the leases are compared with (the
+ * tests drive it). A record is tried at most once per run; one that fails is logged by code, and only a fault of the
+ * record itself is counted and, at its RECONCILE_MAX_FAILURES-th counted run, quarantined.
  */
 export async function reconcileReservations(opts: { now?: () => number } = {}): Promise<ReconcileResult> {
   const now = opts.now ?? Date.now
@@ -217,44 +272,87 @@ export async function reconcileReservations(opts: { now?: () => number } = {}): 
   const started = Date.now()
   const spent = () => Date.now() - started >= RECONCILE_BUDGET_MS
   const result: ReconcileResult = { settled: [], released: [], quarantined: [] }
-  let cursor: QueryDocumentSnapshot | undefined
-  for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
-    if (spent()) {
-      logger.warn("p1.reconcile_budget_spent", { settled: result.settled.length, released: result.released.length })
-      break
-    }
-    const nowMs = Math.floor(now())
-    let query = db.collection("ai_reservations").where("state", "==", "reserved").orderBy(FieldPath.documentId()).limit(RECONCILE_PAGE_SIZE)
-    if (cursor) query = query.startAfter(cursor)
-    const open = await query.get()
-    for (const doc of open.docs) {
-      if (spent()) break
-      const lease = leaseMillis(doc.get("leaseUntil"))
-      if (lease !== null && lease > nowMs) continue // a live call can still settle it
+  const tried = new Set<string>()
+  const reserved = () => db.collection("ai_reservations").where("state", "==", "reserved")
+
+  const handle = async (doc: QueryDocumentSnapshot, nowMs: number): Promise<void> => {
+    if (tried.has(doc.id)) return
+    tried.add(doc.id)
+    try {
+      const done = await reconcileOne(db, doc.ref, nowMs)
+      if (done === null) return
+      result[done.state].push(doc.id)
+      if (done.state === "released") logger.info("p1.reservation_released", { firmId: done.firmId, usageLogId: doc.id })
+      else logger.warn("p1.reservation_reconciled", { firmId: done.firmId, usageLogId: doc.id })
+      for (const c of done.staged.crossings) logger.warn("p1.budget_threshold", { firmId: done.firmId, monthKey: done.monthKey, ...c })
+      if (done.staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId: done.firmId, usageLogId: doc.id, monthKey: done.monthKey, ...done.staged.exceeded })
+      if (done.staged.learnedOverhead !== null) logger.warn("p1.overhead_learned", { usageLogId: doc.id, ...done.staged.learnedOverhead })
+    } catch (err) {
+      const firmId = typeof doc.get("firmId") === "string" ? (doc.get("firmId") as string) : null
+      // A store fault a later run may not meet is retried then, and never counted (re-audit R2-D1).
+      const transient = isRetryableCommitError(err)
+      logger.error("p1.reconcile_failed", { firmId, usageLogId: doc.id, code: errorCode(err), transient })
+      if (transient) return
       try {
-        const done = await reconcileOne(db, doc.ref, nowMs)
-        if (done === null) continue
-        result[done.state].push(doc.id)
-        if (done.state === "released") logger.info("p1.reservation_released", { firmId: done.firmId, usageLogId: doc.id })
-        else logger.warn("p1.reservation_reconciled", { firmId: done.firmId, usageLogId: doc.id })
-        for (const c of done.staged.crossings) logger.warn("p1.budget_threshold", { firmId: done.firmId, monthKey: done.monthKey, ...c })
-        if (done.staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId: done.firmId, usageLogId: doc.id, monthKey: done.monthKey, ...done.staged.exceeded })
-      } catch (err) {
-        const firmId = typeof doc.get("firmId") === "string" ? (doc.get("firmId") as string) : null
-        logger.error("p1.reconcile_failed", { firmId, usageLogId: doc.id, code: errorCode(err) })
-        try {
-          if ((await recordFailure(db, doc.ref, err)) === "quarantined") {
-            result.quarantined.push(doc.id)
-            logger.error("p1.reconcile_quarantined", { firmId, usageLogId: doc.id, failures: RECONCILE_MAX_FAILURES, code: errorCode(err) })
-          }
-        } catch (countErr) {
-          logger.error("p1.reconcile_failure_uncounted", { firmId, usageLogId: doc.id, code: errorCode(countErr) })
+        if ((await recordFailure(db, doc.ref, err)) === "quarantined") {
+          result.quarantined.push(doc.id)
+          logger.error("p1.reconcile_quarantined", { firmId, usageLogId: doc.id, failures: RECONCILE_MAX_FAILURES, code: errorCode(err) })
         }
+      } catch (countErr) {
+        logger.error("p1.reconcile_failure_uncounted", { firmId, usageLogId: doc.id, code: errorCode(countErr) })
       }
     }
-    if (spent() || open.size < RECONCILE_PAGE_SIZE) break
-    cursor = open.docs[open.docs.length - 1]
   }
+
+  // A pass whose query or cursor fails is logged by code and the run goes on to the next pass.
+  const pass = async (name: "sweep" | "numeric" | "timestamp", body: () => Promise<void>): Promise<void> => {
+    try {
+      await body()
+    } catch (err) {
+      logger.error("p1.reconcile_pass_failed", { pass: name, code: errorCode(err) })
+    }
+  }
+
+  // Pass C, the sweep: a slice from the persisted cursor; it acts only on leases no index can find.
+  await pass("sweep", async () => {
+    if (spent()) return
+    const nowMs = Math.floor(now())
+    const after = (await reconcileCursorRef().get()).get("after")
+    let sweep = reserved().orderBy(FieldPath.documentId()).limit(RECONCILE_SWEEP_SIZE)
+    if (typeof after === "string" && after !== "") sweep = sweep.startAfter(after)
+    const slice = await sweep.get()
+    for (const doc of slice.docs) {
+      if (spent()) break
+      if (leaseMillis(doc.get("leaseUntil")) === null) await handle(doc, nowMs)
+    }
+    const next = slice.size < RECONCILE_SWEEP_SIZE ? "" : slice.docs[slice.docs.length - 1]!.id
+    await reconcileCursorRef().set({ after: next, updatedAt: FieldValue.serverTimestamp() })
+  })
+
+  // Pass B, then Pass A: lapsed leases of each indexable type, oldest first.
+  const passes = [
+    { name: "numeric" as const, bound: (ms: number): number | Timestamp => ms },
+    { name: "timestamp" as const, bound: (ms: number): number | Timestamp => Timestamp.fromMillis(ms) },
+  ]
+  for (const { name, bound } of passes) {
+    await pass(name, async () => {
+      let page: QueryDocumentSnapshot | undefined
+      for (let n = 0; n < RECONCILE_MAX_PAGES; n++) {
+        if (spent()) return
+        const nowMs = Math.floor(now())
+        let query = reserved().where("leaseUntil", "<=", bound(nowMs)).orderBy("leaseUntil").limit(RECONCILE_PAGE_SIZE)
+        if (page) query = query.startAfter(page)
+        const lapsed = await query.get()
+        for (const doc of lapsed.docs) {
+          if (spent()) return
+          await handle(doc, nowMs)
+        }
+        if (lapsed.size < RECONCILE_PAGE_SIZE) return
+        page = lapsed.docs[lapsed.docs.length - 1]
+      }
+    })
+  }
+  if (spent()) logger.warn("p1.reconcile_budget_spent", { settled: result.settled.length, released: result.released.length })
   return result
 }
 

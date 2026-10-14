@@ -233,6 +233,20 @@ describe("P1 Gateway transport errors (I1: billed failures are charged)", () => 
     expect((e as Error).message).toBe("gateway response is not JSON")
   })
 
+  it("a billable 2xx without usable content still carries the provider's response id and the request-id header (Codex P2)", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_9f-01" }).end(JSON.stringify({ id: "gen-9F01", choices: [], usage: { prompt_tokens: 7 } }))
+    }
+    const e = (await failure(gatewayTransport("k", base).send(request))) as P1TransportError
+    expect([e.code, e.billable, e.responseId, e.requestId]).toEqual(["gateway_no_text", true, "gen-9F01", "req_9f-01"])
+  })
+
+  it("a billable 2xx whose body is not JSON still carries the request-id header (Codex P2)", async () => {
+    respond = (_req, res) => res.writeHead(200, { "x-request-id": "req_9f-02" }).end("SECRET not json")
+    const e = (await failure(gatewayTransport("k", base).send(request))) as P1TransportError
+    expect([e.code, e.billable, e.responseId, e.requestId]).toEqual(["gateway_not_json", true, undefined, "req_9f-02"])
+  })
+
   it("a 2xx without usable content is gateway_no_text and billable, carrying the usage figures that are valid counts", async () => {
     respond = json(200, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3 } })
     const e = await failure(gatewayTransport("k", base).send(request))

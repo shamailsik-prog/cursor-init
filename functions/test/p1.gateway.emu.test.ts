@@ -752,7 +752,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
     // The stub bills these charges as output tokens far beyond the 4,096 a real call can return, so each settlement
     // above the call's reservation also takes the excess path (recorded, raised, logged: re-audit R1-D1). That is
     // what a provider over-billing looks like, and it leaves the alert arithmetic, which reads the charge, unchanged.
-    // Audit F07: a call is admitted only when its worst case (82,288 micro-USD for this body: its input ceiling and
+    // Audit F07: a call is admitted only when its worst case (86,128 micro-USD for this body: its input ceiling and
     // the 4,096-token output ceiling) fits beside the month's spend and holds. The budget and every charge below are
     // the earlier 100,000 micro-USD case scaled by 100, so each call the cases make still fits and is sent.
     const BUDGET = 10_000_000
@@ -840,7 +840,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       costing(6_000_000)
       await callP1(req(firmId), at)
       // 6000000 + 10 x 400000 = 10000000: the burst passes 7000000 and 9000000. All ten are reserved before any answers,
-      // and 6000000 spent plus ten worst cases (10 x 82,288) fits the budget. The firm allows ten calls at once
+      // and 6000000 spent plus ten worst cases (10 x 86,128) fits the budget. The firm allows ten calls at once
       // (maxConcurrentCalls), and the ten commits race as from separate instances.
       costingTogether(400_000, 10)
       p1TestSeam.unqueued = "commit"
@@ -969,14 +969,14 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       const logs = spyLogs()
       fakeTransport({ text: "Answer" })
       // Every attempt aborts under contention (gRPC ABORTED, which the SDK retries), and each read of the deadline's
-      // clock is 10 s later than the last: the commit must stop at COMMIT_DEADLINE_MS, not after 3 rounds of 10 attempts.
+      // clock is 5 s later than the last: the commit must stop at COMMIT_DEADLINE_MS, not after 3 rounds of 10 attempts.
       const aborted = () => Object.assign(new Error("aborted"), { code: 10 })
       p1TestSeam.commitAttemptFailures = Array.from({ length: 30 }, aborted)
       let reads = 0
-      p1TestSeam.wallClock = () => 10_000 * reads++
+      p1TestSeam.wallClock = () => 5_000 * reads++
       const r = await callP1(req(firmId), at)
 
-      expect(COMMIT_DEADLINE_MS).toBe(30_000)
+      expect(COMMIT_DEADLINE_MS).toBe(20_000)
       expect(r).toMatchObject({ outcome: "ok", text: "Answer", costMicroUsd: 14000 })
       const remaining = p1TestSeam.commitAttemptFailures.length
       expect(remaining).toBeGreaterThan(0) // it stopped before the attempts ran out
@@ -995,7 +995,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
     })
 
     it("an ambiguous commit followed by ALREADY_EXISTS on the usage row is done: no p1.usage_log_failed, exactly one row, and its threshold warning still logged", async () => {
-      // 140000 of a 200000 budget lands exactly on 70% (the budget leaves room for the call's 82,288 micro-USD worst
+      // 140000 of a 200000 budget lands exactly on 70% (the budget leaves room for the call's 86,128 micro-USD worst
       // case, which audit F07's reservation must fit before the call is sent).
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: 200_000 })
       const logs = spyLogs()
@@ -1026,7 +1026,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       // exists, so the commit is done: no failure is logged for it.
       p1TestSeam.lostCommitAnswers = [Object.assign(new Error("aborted"), { code: 10 })]
       let reads = 0
-      p1TestSeam.wallClock = () => 10_000 * reads++
+      p1TestSeam.wallClock = () => 5_000 * reads++
       const r = await callP1(req(firmId), at)
 
       expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })

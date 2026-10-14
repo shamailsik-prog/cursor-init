@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { MAX_OUTPUT_TOKENS, MODEL_PRICES, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens, priceMicroUsd } from "../src/p1/costTable"
-import { ledgerQueue } from "../src/p1/gateway"
+import { MAX_OUTPUT_TOKENS, MODEL_PRICES, PROVIDER_ID, REQUEST_OVERHEAD_TOKENS, TASK_MODEL, bodyTokenCeiling, costMicroUsd, estimateTokens, inputTokenCeiling, modelInputOverhead, priceMicroUsd } from "../src/p1/costTable"
+import { CALL_WORST_CASE_MS, assertOperationTimeBudget, ledgerQueue } from "../src/p1/gateway"
+import { COMMITTEE_HANDLER_OVERHEAD_MS, REQUEST_TIMEOUT_MARGIN_MS } from "../src/p1/ops"
+import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { isMonthKey, monthKeyPkt } from "../src/p1/month"
 import { buildTrace, opikConfig, type TraceRecord } from "../src/p1/opik"
 import { TRANSPORT_ERROR } from "../src/p1/types"
@@ -16,6 +18,9 @@ describe("P1 cost table (P3-62)", () => {
       outputNanoUsdPerToken: 20000,
       source: "Vercel AI Gateway public model list, GET https://ai-gateway.vercel.sh/v1/models",
       fetchedAt: "2026-10-11",
+      // Audit F07, Copilot finding on PR #40: the input overhead reserved per request, and whether it is verified (G-1).
+      inputOverheadTokens: 1024,
+      inputOverheadVerified: false,
     })
     expect(MAX_OUTPUT_TOKENS).toBe(4096)
     expect(PROVIDER_ID).toBe("ai-gateway")
@@ -70,6 +75,38 @@ describe("P1 cost table (P3-62)", () => {
     expect(estimateTokens("کک")).toBe(2) // 4 bytes
     expect(estimateTokens("€")).toBe(1) // 3 bytes
     expect(estimateTokens("😀")).toBe(2) // 4 bytes
+  })
+
+  it("the reservation's input ceiling is the largest UTF-8 length of the body and its four normal forms, plus the request overhead (re-audit R2-D3)", () => {
+    expect(bodyTokenCeiling("")).toBe(0)
+    expect(bodyTokenCeiling("abc")).toBe(3)
+    // U+FDFA is 3 bytes as written; NFKC and NFKD expand it to the 33-byte phrase it stands for.
+    expect(Buffer.byteLength("ﷺ", "utf8")).toBe(3)
+    expect(bodyTokenCeiling("ﷺ")).toBe(33)
+    // A precomposed letter whose decomposition is longer: NFD of "é" is 3 bytes against 2.
+    expect(bodyTokenCeiling("é")).toBe(3)
+    expect(inputTokenCeiling("ﷺ")).toBe(33 + REQUEST_OVERHEAD_TOKENS)
+  })
+
+  it("every priced model carries its input overhead, and a model without one is not dispatched (Copilot finding, fail closed)", () => {
+    expect(modelInputOverhead(OPUS)).toBe(1024)
+    for (const unknown of ["x/unknown", "", "constructor", "__proto__", "toString"]) expect([unknown, modelInputOverhead(unknown)]).toEqual([unknown, null])
+    // Every routed model is priced and has an overhead: a task can never route to a model it cannot reserve for.
+    for (const model of Object.values(TASK_MODEL)) expect([model, modelInputOverhead(model) !== null, costMicroUsd(model, 0, 0) !== null]).toEqual([model, true, true])
+  })
+})
+
+describe("P1 request time budget (Codex P1 on PR #40: the whole committeeBrain request fits the function timeout)", () => {
+  it("the call's phases, the handler's own work and a margin fit the api function's timeout", () => {
+    expect(CALL_WORST_CASE_MS + COMMITTEE_HANDLER_OVERHEAD_MS + REQUEST_TIMEOUT_MARGIN_MS).toBeLessThanOrEqual(FUNCTION_TIMEOUT_SECONDS * 1000)
+    expect(() => assertOperationTimeBudget({ callMs: CALL_WORST_CASE_MS, handlerMs: COMMITTEE_HANDLER_OVERHEAD_MS, marginMs: REQUEST_TIMEOUT_MARGIN_MS, timeoutMs: FUNCTION_TIMEOUT_SECONDS * 1000 })).not.toThrow()
+  })
+
+  it("the import-time check refuses shares that exceed the function timeout", () => {
+    // The round-1 shares: 116 s of call phases left 4 s for everything else in a 120 s request.
+    expect(() => assertOperationTimeBudget({ callMs: 116_000, handlerMs: COMMITTEE_HANDLER_OVERHEAD_MS, marginMs: REQUEST_TIMEOUT_MARGIN_MS, timeoutMs: 120_000 })).toThrow(/must fit in the function timeout/)
+    expect(() => assertOperationTimeBudget({ callMs: 100_000, handlerMs: 16_000, marginMs: 5_000, timeoutMs: 120_000 })).toThrow(/must fit in the function timeout/)
+    expect(() => assertOperationTimeBudget({ callMs: 99_000, handlerMs: 16_000, marginMs: 5_000, timeoutMs: 120_000 })).not.toThrow()
   })
 })
 

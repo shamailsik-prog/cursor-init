@@ -52,16 +52,23 @@ export function isTransportCode(value: unknown): value is TransportCode {
  * request may have reached the provider), a 2xx whose body is not JSON, and a 2xx without usable message content.
  * It is false when it cannot have been charged: a non-2xx status, and a fetch that failed before any response
  * (refused connection, DNS, a refused redirect). `inputTokens` and `outputTokens` are the usage the response
- * reported, when it reported valid counts; null otherwise. The message is fixed by the code (and, for
- * `gateway_status`, the numeric status).
+ * reported, when it reported valid counts; null otherwise. `responseId` and `requestId` are the provider's ids for a
+ * response that came back (Codex P2 on PR #40): a billed failure keeps them like an answer does, so the charge can be
+ * found in the provider's records; each is present only when it is a plain id (`plainId`). The message is fixed by
+ * the code (and, for `gateway_status`, the numeric status).
  */
 export class P1TransportError extends Error {
   readonly code: TransportCode
   readonly billable: boolean
   readonly inputTokens: number | null
   readonly outputTokens: number | null
+  readonly responseId?: string
+  readonly requestId?: string
 
-  constructor(code: TransportCode, opts: { billable: boolean; status?: number; inputTokens?: number | null; outputTokens?: number | null }) {
+  constructor(
+    code: TransportCode,
+    opts: { billable: boolean; status?: number; inputTokens?: number | null; outputTokens?: number | null; responseId?: unknown; requestId?: unknown }
+  ) {
     const status = code === "gateway_status" && Number.isInteger(opts.status) ? ` ${opts.status}` : ""
     super(`${MESSAGES[code]}${status}`)
     this.name = "P1TransportError"
@@ -69,6 +76,9 @@ export class P1TransportError extends Error {
     this.billable = opts.billable
     this.inputTokens = opts.inputTokens ?? null
     this.outputTokens = opts.outputTokens ?? null
+    const [responseId, requestId] = [plainId(opts.responseId), plainId(opts.requestId)]
+    if (responseId !== undefined) this.responseId = responseId
+    if (requestId !== undefined) this.requestId = requestId
   }
 }
 
@@ -114,18 +124,19 @@ export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts
         await res.body?.cancel().catch(() => undefined)
         throw new P1TransportError("gateway_status", { billable: false, status: res.status })
       }
+      // Read before the body is parsed (Codex P2 on PR #40): a billed failure keeps the request id too.
+      const requestId = REQUEST_ID_HEADERS.map((h) => plainId(res.headers.get(h))).find((v) => v !== undefined)
       let json: GatewayBody
       try {
         json = (await res.json()) as GatewayBody
       } catch (err) {
-        throw isAbort(err) ? timedOut() : new P1TransportError("gateway_not_json", { billable: true })
+        throw isAbort(err) ? timedOut() : new P1TransportError("gateway_not_json", { billable: true, requestId })
       }
       const text = json?.choices?.[0]?.message?.content
       const inputTokens = tokenCount(json?.usage?.prompt_tokens)
       const outputTokens = tokenCount(json?.usage?.completion_tokens)
-      if (typeof text !== "string") throw new P1TransportError("gateway_no_text", { billable: true, inputTokens, outputTokens })
       const responseId = plainId(json?.id)
-      const requestId = REQUEST_ID_HEADERS.map((h) => plainId(res.headers.get(h))).find((v) => v !== undefined)
+      if (typeof text !== "string") throw new P1TransportError("gateway_no_text", { billable: true, inputTokens, outputTokens, responseId, requestId })
       return { text, inputTokens, outputTokens, ...(responseId === undefined ? {} : { responseId }), ...(requestId === undefined ? {} : { requestId }) }
     },
   }

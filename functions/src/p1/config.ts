@@ -4,8 +4,9 @@ import { adminDb } from "../admin"
 /**
  * P1 configuration and totals in Firestore (spec P3-63..P3-66). All of these are server-only in
  * `firestore.rules`: the firm's `ai_config/{firmId}`, the platform's `platform/p1`, the month total
- * `ai_usage_months/{firmId}_{monthKey}`, the alerts `ai_budget_alerts/{firmId}_{monthKey}_{70|90}` and the
- * reservations `ai_reservations/{usageLogId}` (audit F07, F08).
+ * `ai_usage_months/{firmId}_{monthKey}`, the alerts `ai_budget_alerts/{firmId}_{monthKey}_{70|90}`, the
+ * reservations `ai_reservations/{usageLogId}` (audit F07, F08), the learned request overhead `platform/p1Overhead`
+ * and the reconciler's sweep cursor `platform/p1ReconcileCursor`.
  */
 
 /** A kill switch, firm or platform (P3-66). A request replaces the whole state. */
@@ -40,6 +41,34 @@ export function firmConfigRef(firmId: string): DocumentReference {
 /** The platform's P1 doc, which holds the platform kill switch (P3-66). */
 export function platformConfigRef(): DocumentReference {
   return adminDb().collection("platform").doc("p1")
+}
+
+/**
+ * The request overhead learned from breaches, per model (audit F07, Copilot finding on PR #40), server-only like the
+ * rest of `platform/*`: `{ models: { [modelOverheadKey(model)]: { model, inputTokens, usageLogId, learnedAt } } }`.
+ * `inputTokens` is the largest overhead a settlement has seen for the model: the input tokens the provider billed
+ * less the body's ceiling. Only ever raised, in the transaction of the settlement that saw it.
+ */
+export function overheadRef(): DocumentReference {
+  return adminDb().collection("platform").doc("p1Overhead")
+}
+
+/** A model id as one map key: every character outside letters, digits, `_` and `-` becomes `_` ("a/b-1.5" is "a_b-1_5"). */
+export function modelOverheadKey(model: string): string {
+  return model.replace(/[^A-Za-z0-9_-]/g, "_")
+}
+
+/**
+ * The overhead learned for `model` from the `platform/p1Overhead` doc; 0 when there is none or it is malformed. Two
+ * model ids that share a key share the larger figure, which only reserves more.
+ */
+export function learnedOverheadOf(doc: unknown, model: string): number {
+  const models = (doc as { models?: unknown } | null | undefined)?.models
+  if (!models || typeof models !== "object") return 0
+  const key = modelOverheadKey(model)
+  const entry = Object.hasOwn(models, key) ? (models as Record<string, unknown>)[key] : undefined
+  const n = (entry as { inputTokens?: unknown } | null | undefined)?.inputTokens
+  return typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : 0
 }
 
 export function monthRef(firmId: string, monthKey: string): DocumentReference {

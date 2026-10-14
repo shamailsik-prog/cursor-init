@@ -46,7 +46,7 @@ type Usage = {
   spentPkr: number | null
   pkrPerUsd: number | null
   percentUsed: number | null
-  calls: { ok: number; failed: number; blocked: number }
+  calls: { ok: number; failed: number; blocked: number; reconciled: number }
   inputTokens: number
   outputTokens: number
   alerts: Array<{ threshold: number; at: string }>
@@ -588,6 +588,23 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         expect((await auditOf(f.P.uid, "ai.call")).filter((r) => r.decision === "deny" && r.reason === "internal")).toHaveLength(1)
       })
 
+      it("no attempt starts after the output write's deadline: it rethrows with the remaining injected failures unused (Codex P1 on PR #40)", async () => {
+        const f = await newFirm()
+        const sent = fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        p1OpsTestSeam.outputWriteFailures = [new Error("down"), new Error("down"), new Error("down")]
+        // The deadline's clock: the first read starts the window, the next is already past it.
+        const reads = [0, 60_000]
+        p1OpsTestSeam.wallClock = () => reads.shift() ?? 60_000
+        const err = await apiErrorOf(ask(f))
+        expect({ status: err.status, code: err.code }).toEqual({ status: 500, code: "internal" })
+        expect(waits).toEqual([])
+        expect(p1OpsTestSeam.outputWriteFailures).toHaveLength(2)
+        expect(sent).toHaveLength(1)
+        expect(await outputsOf(f.firmId)).toHaveLength(0)
+      })
+
       it("an ambiguous commit (the first attempt commits, its answer is lost, the retry's create hits ALREADY_EXISTS) is a success: 200, one output row, one route allow row and no deny row, one provider call", async () => {
         const f = await newFirm()
         const sent = fakeTransport()
@@ -632,9 +649,13 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
         p1OpsTestSeam.outputWriteFailures = [new Error("injected"), new Error("injected"), new Error("injected")]
         p1OpsTestSeam.lostCommitAnswers = [Object.assign(new Error("lost"), { code: 4 })]
+        // The output write's deadline clock too (Codex P1): a clock already past the deadline is ignored.
+        let clockReads = 0
+        p1OpsTestSeam.wallClock = () => (clockReads += 1) * 60_000
         vi.stubEnv("NODE_ENV", "production")
         const r = (await ask(f)) as Out
         expect(r).toMatchObject({ blocked: false, text: "REPLY" })
+        expect(clockReads).toBe(0)
         expect(waits).toEqual([])
         expect(p1OpsTestSeam.outputWriteFailures).toHaveLength(3)
         expect(p1OpsTestSeam.lostCommitAnswers).toHaveLength(1)
@@ -1031,7 +1052,7 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         spentPkr: null,
         pkrPerUsd: null,
         percentUsed: null,
-        calls: { ok: 0, failed: 0, blocked: 0 },
+        calls: { ok: 0, failed: 0, blocked: 0, reconciled: 0 },
         inputTokens: 0,
         outputTokens: 0,
         alerts: [],
@@ -1057,7 +1078,7 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         spentPkr: 347.22,
         pkrPerUsd: 281.25,
         percentUsed: 41.15,
-        calls: { ok: 5, failed: 1, blocked: 2 },
+        calls: { ok: 5, failed: 1, blocked: 2, reconciled: 0 },
         inputTokens: 1200,
         outputTokens: 340,
         alerts: [],
@@ -1153,6 +1174,8 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         ["alerts", "budgetMicroUsd", "calls", "inputTokens", "killSwitch", "month", "outputTokens", "percentUsed", "pkrPerUsd", "spentMicroUsd", "spentPkr"].sort()
       )
       expect(Object.keys(u.killSwitch).sort()).toEqual(["firm", "platform"])
+      // Codex P2 on PR #40: calls the lease reconciler settled are counted beside the others (additive).
+      expect(Object.keys(u.calls).sort()).toEqual(["blocked", "failed", "ok", "reconciled"])
       const rows = (await auditOf(f.P.uid, "ai.usage.read")).filter((r) => r.target === `ai_usage_months/${f.firmId}_${MONTH}`)
       expect(rows.map((r) => [r.firmId, r.decision, r.reason])).toEqual([[f.firmId, "allow", "ok"]])
     })

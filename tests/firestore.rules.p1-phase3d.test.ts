@@ -143,3 +143,34 @@ describe("platform/p1 is server-only", () => {
     await assertFails(getDoc(doc(db, "platform", "gates")))
   })
 })
+
+describe("platform/p1Overhead and platform/p1ReconcileCursor are server-only (Copilot finding and re-audit R2-D2 on PR #40)", () => {
+  // The learned request overhead raises every later reservation of a model: a client that could lower it could make
+  // reservations smaller than the provider bills. The sweep cursor decides which records the reconciler reads.
+  const DOCS = ["p1Overhead", "p1ReconcileCursor"] as const
+
+  it("no role of either firm, with or without the platformAdmin claim, reads, writes or deletes either", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "platform", "p1Overhead"), { models: { "anthropic_claude-opus-5_5": { model: "anthropic/claude-opus-5.5", inputTokens: 2_000 } } })
+      await setDoc(doc(db, "platform", "p1ReconcileCursor"), { after: "res1" })
+    })
+    for (const c of EVERYONE) {
+      const db = await as(c)
+      for (const name of DOCS) {
+        await assertFails(getDoc(doc(db, "platform", name)))
+        await assertFails(setDoc(doc(db, "platform", name), { models: {}, after: "" }))
+        await assertFails(updateDoc(doc(db, "platform", name), { "models.anthropic_claude-opus-5_5.inputTokens": 0, after: "" }))
+        await assertFails(deleteDoc(doc(db, "platform", name)))
+      }
+    }
+  })
+
+  it("an unauthenticated client is denied", async () => {
+    const db = testEnv.unauthenticatedContext().firestore()
+    for (const name of DOCS) {
+      await assertFails(getDoc(doc(db, "platform", name)))
+      await assertFails(setDoc(doc(db, "platform", name), { models: {} }))
+    }
+  })
+})

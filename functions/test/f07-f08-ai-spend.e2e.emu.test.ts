@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -9,7 +10,7 @@ import { MAX_OUTPUT_TOKENS, costMicroUsd } from "../src/p1/costTable"
 import * as gateway from "../src/p1/gateway"
 import { callP1, ledgerQueue, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
-import { setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import { P1TransportError, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 import { viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
@@ -157,8 +158,8 @@ function resetSeam() {
  * A reservation as a call that died after dispatching leaves it: held, lease lapsed at T, a pending provider attempt,
  * and its hold on the month total. `over` replaces fields; an `undefined` value removes one (a malformed record).
  */
-async function seedLapsedAttempt(firmId: string, over: Record<string, unknown> = {}): Promise<string> {
-  const ref = db().collection("ai_reservations").doc()
+async function seedLapsedAttempt(firmId: string, over: Record<string, unknown> = {}, id?: string): Promise<string> {
+  const ref = id === undefined ? db().collection("ai_reservations").doc() : db().collection("ai_reservations").doc(id)
   const doc: Record<string, unknown> = {
     firmId,
     actorId: "uid-1",
@@ -209,6 +210,8 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
     setProviderConfigForTests(null)
     resetSeam()
     await platformConfigRef().delete()
+    await db().collection("platform").doc("p1Overhead").delete()
+    await db().collection("platform").doc("p1ReconcileCursor").delete()
   })
 
   describe("F07 through callP1", () => {
@@ -374,6 +377,88 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
         expect(await reservationOf(r.usageLogId)).toBeUndefined()
         await platformConfigRef().delete()
       }
+    })
+
+    // Re-audit R2-D3 (N1): U+FDFA, common in Pakistani text, is 3 UTF-8 bytes but its compatibility normalisation
+    // (NFKC, NFKD) is 33. A tokenizer that normalises before splitting bills up to 33 tokens for it.
+    const NFKC_HEAVY = "ﷺ".repeat(20_000)
+    const normalisedBytes = Math.max(...(["NFC", "NFD", "NFKC", "NFKD"] as const).map((f) => Buffer.byteLength(NFKC_HEAVY.normalize(f), "utf8")))
+
+    it("a body whose Unicode normalisation expands is reserved at its largest normal form: spent plus reserved stays within the budget", async () => {
+      const charge = costMicroUsd(OPUS, normalisedBytes, MAX_OUTPUT_TOKENS)!
+      // The provider normalises and bills one token per byte of the normalised text: 660,000 input tokens.
+      const sent = stubTransport({ text: "REPLY", inputTokens: normalisedBytes, outputTokens: MAX_OUTPUT_TOKENS })
+      // 1,000,000 fits a raw-byte reservation (322,176) but not the real charge (2,721,920): before the fix it was sent.
+      const tight = await seedFirm({ monthlyBudgetMicroUsd: 1_000_000 })
+      const refused = await callP1(req(tight, { body: NFKC_HEAVY }), at(T))
+      const month = await monthOf(tight)
+      expect(spentOf(month) + reservedOf(month)).toBeLessThanOrEqual(1_000_000)
+      expect([refused.outcome, refused.blockReason, sent.length]).toEqual(["blocked", "budget_exhausted", 0])
+      // A budget of exactly the normalised ceiling admits it, and the charge stays inside the reservation: no excess.
+      const ceiling = costMicroUsd(OPUS, normalisedBytes + OVERHEAD, MAX_OUTPUT_TOKENS)!
+      const exact = await seedFirm({ monthlyBudgetMicroUsd: ceiling })
+      const allowed = await callP1(req(exact, { body: NFKC_HEAVY }), at(T))
+      expect([allowed.outcome, allowed.costMicroUsd]).toEqual(["ok", charge])
+      const after = await monthOf(exact)
+      expect([spentOf(after), reservedOf(after)]).toEqual([charge, 0])
+      expect(spentOf(after)).toBeLessThanOrEqual(ceiling)
+      expect(await reservationOf(allowed.usageLogId)).toMatchObject({ reservedMicroUsd: ceiling, actualMicroUsd: charge })
+      expect((await reservationOf(allowed.usageLogId))!).not.toHaveProperty("exceededMicroUsd")
+    })
+
+    it("a reservation carries the documented 1,024-token request overhead on top of the body's bytes (Copilot finding on PR #40)", async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      stubTransport()
+      p1TestSeam.failCommit = true // keep the reservation as it was made
+      const r = await callP1(req(firmId), at(T))
+      const bytes = Buffer.byteLength(BODY, "utf8")
+      expect(await reservationOf(r.usageLogId)).toMatchObject({ reservedInputTokens: bytes + 1024, reservedMicroUsd: costMicroUsd(OPUS, bytes + 1024, MAX_OUTPUT_TOKENS) })
+    })
+
+    it("a provider that bills template tokens beyond the overhead teaches the model's overhead: later reservations hold it and stay within the budget (Copilot finding on PR #40)", async () => {
+      // The provider adds 2,000 template tokens to the body's bytes: 976 more than the 1,024 reserved.
+      const bytes = Buffer.byteLength(BODY, "utf8")
+      const charge = costMicroUsd(OPUS, bytes + 2_000, MAX_OUTPUT_TOKENS)!
+      stubTransport({ text: "REPLY", inputTokens: bytes + 2_000, outputTokens: MAX_OUTPUT_TOKENS })
+      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const first = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      const breach = await callP1(req(first), at(T))
+      // The breach is recorded in full, raised, and the learned overhead is kept for the model.
+      expect(await reservationOf(breach.usageLogId)).toMatchObject({ actualMicroUsd: charge, exceededMicroUsd: charge - WORST, exceededInputTokens: 2_000 - OVERHEAD })
+      expect(errors.mock.calls.filter((c) => c[0] === "p1.reservation_exceeded")).toHaveLength(1)
+      expect((await db().collection("platform").doc("p1Overhead").get()).data()?.models).toMatchObject({ "anthropic_claude-opus-5_5": { inputTokens: 2_000, model: OPUS } })
+      // A later call for the model reserves the learned overhead, so its charge fits: a budget of exactly that ceiling holds.
+      const learnedCeiling = costMicroUsd(OPUS, bytes + 2_000, MAX_OUTPUT_TOKENS)!
+      const later = await seedFirm({ monthlyBudgetMicroUsd: learnedCeiling })
+      const ok = await callP1(req(later), at(T))
+      expect(ok.outcome).toBe("ok")
+      expect(await reservationOf(ok.usageLogId)).toMatchObject({ reservedInputTokens: bytes + 2_000, reservedMicroUsd: learnedCeiling, actualMicroUsd: charge })
+      expect((await reservationOf(ok.usageLogId))!).not.toHaveProperty("exceededMicroUsd")
+      const refused = await callP1(req(later), at(T))
+      expect(refused.blockReason).toBe("budget_exhausted")
+      const month = await monthOf(later)
+      expect(spentOf(month) + reservedOf(month)).toBeLessThanOrEqual(learnedCeiling)
+    })
+
+    it("an unknown model is refused before dispatch: model_unpriced, nothing sent, nothing reserved (Copilot finding on PR #40: fail closed)", async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      const sent = stubTransport()
+      p1TestSeam.modelOverride = "x/unverified-model"
+      const r = await callP1(req(firmId), at(T))
+      expect([r.outcome, r.blockReason, sent.length]).toEqual(["blocked", "model_unpriced", 0])
+      expect(await reservationOf(r.usageLogId)).toBeUndefined()
+    })
+
+    it("a billed failure keeps the provider's ids on its attempt (Codex P2 on PR #40)", async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      setP1TransportForTests({
+        send: async () => {
+          throw new P1TransportError("gateway_no_text", { billable: true, inputTokens: 7, outputTokens: 3, responseId: "gen-77AB", requestId: "req-77ab" })
+        },
+      })
+      const r = await callP1(req(firmId), at(T))
+      expect([r.outcome, r.costMicroUsd]).toEqual(["failed", costMicroUsd(OPUS, 7, 3)])
+      expect((await reservationOf(r.usageLogId))?.providerAttempt).toMatchObject({ outcome: "returned", result: "failed", responseId: "gen-77AB", requestId: "req-77ab" })
     })
 
     it("a single request whose worst case exceeds the remaining budget is refused before dispatch; one that fits exactly is sent", async () => {
@@ -644,6 +729,85 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       await reconcileFor(firmId, afterLease() + 360_000)
       expect(await reservationOf(id)).toMatchObject({ state: "reconcile_failed", reconcileFailures: 3 })
     })
+
+    it("a valid record whose reconciliation fails only on contention for its month total is never quarantined: it stays reserved, uncounted, and is settled once the contention ends", { timeout: 240_000 }, async () => {
+      // Re-audit R2-D1 (N2): another transaction holds the firm's month total through each of three runs, so each run's
+      // settlement aborts (gRPC ABORTED). Before the fix each abort counted, and the third quarantined a valid record.
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      stubTransport()
+      const id = await seedLapsedAttempt(firmId)
+      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      for (let run = 1; run <= 3; run++) {
+        const hold = db()
+          .runTransaction(async (tx) => {
+            await tx.get(monthRef(firmId, MONTH))
+            await new Promise((resolve) => setTimeout(resolve, 25_000))
+          })
+          .catch(() => undefined)
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        expect(await reconcileFor(firmId, afterLease() + run * 60_000)).toEqual({ settled: [], released: [] })
+        const held = (await reservationOf(id))!
+        expect([run, held.state, held.reconcileFailures]).toEqual([run, "reserved", undefined])
+        await hold
+      }
+      const mine = (name: string) => errors.mock.calls.filter((c) => c[0] === name && (c[1] as { usageLogId?: string }).usageLogId === id).map((c) => c[1] as Record<string, unknown>)
+      expect(mine("p1.reconcile_quarantined")).toEqual([])
+      // Each failure was logged by its code as transient, and not counted.
+      expect(mine("p1.reconcile_failed").map((l) => [l.code, l.transient])).toEqual(Array(3).fill(["grpc_10", true]))
+      // Contention over: the next run settles it, and the firm is no longer blocked.
+      expect(await reconcileFor(firmId, afterLease() + 240_000)).toEqual({ settled: [id], released: [] })
+      expect((await callP1(req(firmId), at(afterLease() + 300_000))).outcome).toBe("ok")
+    })
+
+    it("five hundred live reservations sorting ahead of a lapsed attempt do not starve it: it is settled in the first run", { timeout: 120_000 }, async () => {
+      // Re-audit R2-D2 (N5): live records (lease in the future) of another firm whose ids sort first. Before the fix the
+      // run's 500-record scan by document id ended inside them and never reached the lapsed attempt.
+      const busy = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      const victim = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      stubTransport()
+      const prefix = `aaaa-${busy}`
+      const live = Array.from({ length: 500 }, (_, i) => `${prefix}-${String(i).padStart(4, "0")}`)
+      for (let i = 0; i < live.length; i += 250) {
+        const batch = db().batch()
+        for (const id of live.slice(i, i + 250)) {
+          batch.set(db().collection("ai_reservations").doc(id), {
+            firmId: busy,
+            state: "reserved",
+            reservedMicroUsd: WORST,
+            monthKey: MONTH,
+            traceId: id,
+            usageLogId: id,
+            leaseUntil: Timestamp.fromMillis(afterLease() + 10 * 60_000),
+          })
+        }
+        await batch.commit()
+      }
+      try {
+        const vid = await seedLapsedAttempt(victim, {}, `zzzz-${victim}`)
+        expect(await reconcileFor(victim, afterLease())).toEqual({ settled: [vid], released: [] })
+        expect((await callP1(req(victim), at(afterLease() + 60_000))).outcome).toBe("ok")
+        // The live records were neither touched nor counted.
+        expect((await db().collection("ai_reservations").doc(live[0]!).get()).data()).not.toHaveProperty("reconcileFailures")
+      } finally {
+        for (let i = 0; i < live.length; i += 250) {
+          const batch = db().batch()
+          for (const id of live.slice(i, i + 250)) batch.delete(db().collection("ai_reservations").doc(id))
+          await batch.commit()
+        }
+      }
+    })
+
+    it("a lapsed attempt whose leaseUntil is missing altogether is found by the rotating sweep and settled, and its firm is unblocked", { timeout: 120_000 }, async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      stubTransport()
+      const id = await seedLapsedAttempt(firmId, { leaseUntil: undefined })
+      expect((await callP1(req(firmId), at(afterLease()))).blockReason).toBe("accounting_indeterminate")
+      // The sweep reads a bounded slice of open records per run and moves on: it reaches every record within a cycle.
+      let settled = false
+      for (let run = 0; run < 40 && !settled; run++) settled = (await reconcileFor(firmId, afterLease() + run * 60_000)).settled.includes(id)
+      expect(settled).toBe(true)
+      expect((await callP1(req(firmId), at(afterLease() + 3_000_000))).outcome).toBe("ok")
+    })
   })
 
   describe("F07 and F08 through the HTTP router (committeeBrain)", () => {
@@ -700,10 +864,13 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       const f = await newFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
       let clock = T
       const brain = viaApi<Out>("committeeBrain", { now: () => clock })
-      const ask = () => brain({ token: f.members[0]!.token, data: { firmId: f.firmId, matterId: f.matterId, body: BODY } } as never)
+      const usage = viaApi<{ calls: Record<string, number> }>("getAiUsage", { now: () => clock })
+      const ask = (headers?: Record<string, string>) =>
+        brain({ token: f.members[0]!.token, data: { firmId: f.firmId, matterId: f.matterId, body: BODY }, ...(headers ? { headers } : {}) } as never)
       const sent = stubTransport()
       p1TestSeam.failCommit = true
-      const first = await ask()
+      const key = randomUUID()
+      const first = await ask({ "idempotency-key": key })
       // Main answers ok with no accounting state: the caller cannot tell the books are incomplete.
       expect([first.blocked, first.text, first.accounting]).toEqual([false, "REPLY", "pending"])
       const [row] = await byFirm("committee_outputs", f.firmId)
@@ -720,6 +887,12 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
 
       expect(await reconcileFor(f.firmId, clock)).toEqual({ settled: [usageLogId], released: [] })
       expect(await usageRowOf(usageLogId)).toMatchObject({ outcome: "reconciled", costMicroUsd: REPLY_COST })
+      // Codex P2 on PR #40: the stored output and the stored answer are refreshed, so a reader and a same-key replay
+      // see the books completed; the month's counts include the reconciled call.
+      expect((await db().collection("committee_outputs").doc(row!.id).get()).data()).toMatchObject({ accounting: "settled" })
+      const replay = (await ask({ "idempotency-key": key })) as Out & { reused?: boolean }
+      expect([replay.reused, replay.outputId, replay.accounting]).toEqual([true, first.outputId, "settled"])
+      expect((await usage({ token: f.members[0]!.token, data: { firmId: f.firmId, month: MONTH } } as never)).calls).toEqual({ ok: 0, failed: 0, blocked: 1, reconciled: 1 })
       const resumed = await ask()
       expect([resumed.blocked, resumed.text, resumed.accounting]).toEqual([false, "REPLY", "settled"])
       expect(sent).toHaveLength(2)

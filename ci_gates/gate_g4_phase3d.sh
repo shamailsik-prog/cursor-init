@@ -35,9 +35,12 @@
 #        NODE_ENV is production
 #      - the deployable bundle: NODE_ENV pinned to production at build time (no runtime read left)
 #      - audit F07 and F08 end to end (f07-f08-ai-spend.e2e.emu.test.ts): the worst case reserved atomically before
-#        dispatch (spent + reserved never over the budget, the firm's concurrent calls bounded), the provider attempt
+#        dispatch (spent + reserved within the budget unless a provider bills more input than bytes + overhead, which
+#        is recorded, raised and raises the model's overhead; the firm's concurrent calls bounded), the provider attempt
 #        recorded before dispatch, accounting pending after a failed usage commit, the accounting_indeterminate block
-#        once a lease lapses, and the lease reconciler settling or releasing what a call left
+#        once a lease lapses, and the lease reconciler settling or releasing what a call left (only record faults
+#        quarantine; lapsed records found by index, never starved by live ones; outputs and stored answers settled)
+#      - the request time budget: the call's phases, the handler's own work and a margin fit the api timeout
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -140,7 +143,8 @@ REFUSAL_TESTS=(
 # --- audit F07 and F08 end to end (functions/test/f07-f08-ai-spend.e2e.emu.test.ts) ---------------------------
 SPEND_SUITE='audit F07 and F08: AI spend is reserved before dispatch and accounted after it (e2e)'
 SPEND_TESTS=(
-  # F07: the worst case is reserved atomically before dispatch; spent + reserved never exceeds the budget
+  # F07: the worst case is reserved atomically before dispatch; spent + reserved stays within the budget unless a
+  # provider bills more input than bytes + overhead, which is recorded, raised and learned
   'F07 through callP1 the audit scenario: ten concurrent calls against a 100 micro-USD budget dispatch nothing and commit no spend'
   'F07 through callP1 of ten concurrent calls only those whose worst case fits are dispatched, and spent plus reserved never exceeds the budget'
   'F07 through callP1 calls on separate instances (no shared ledger queue) still never over-admit: the transaction alone keeps spent plus reserved within the budget'
@@ -150,6 +154,13 @@ SPEND_TESTS=(
   'F07 through callP1 provider usage discrepancy, four parallel calls: spent plus reserved stays within the budget while they are in flight and after they settle'
   'F07 through callP1 a provider that bills beyond the reservation is charged in full, and the excess is recorded on the reservation, raised as ai.reservation.exceeded and logged p1.reservation_exceeded'
   "F07 through callP1 a kill switch set after the call's first read is honoured by the reservation transaction: refused, nothing sent"
+  # re-audit R2-D3 (Unicode normal forms); Copilot finding on PR #40 (1,024 overhead, learned overhead, fail closed);
+  # Codex P2 on PR #40 (provider ids on a billed failure)
+  'F07 through callP1 a body whose Unicode normalisation expands is reserved at its largest normal form: spent plus reserved stays within the budget'
+  "F07 through callP1 a reservation carries the documented 1,024-token request overhead on top of the body's bytes (Copilot finding on PR #40)"
+  "F07 through callP1 a provider that bills template tokens beyond the overhead teaches the model's overhead: later reservations hold it and stay within the budget (Copilot finding on PR #40)"
+  'F07 through callP1 an unknown model is refused before dispatch: model_unpriced, nothing sent, nothing reserved (Copilot finding on PR #40: fail closed)'
+  "F07 through callP1 a billed failure keeps the provider's ids on its attempt (Codex P2 on PR #40)"
   "F07 through callP1 a firm's concurrent calls are bounded: the fifth live reservation is refused concurrency_exhausted by default, and a freed slot admits again"
   "F07 through callP1 the firm's configured maxConcurrentCalls replaces the default, and an invalid value falls back to it"
   'F07 through callP1 a reservation that cannot be written or an attempt that cannot be recorded sends nothing: blocked reservation_failed, and the held amount is released'
@@ -163,6 +174,10 @@ SPEND_TESTS=(
   'F08 through callP1 a reservation whose leaseUntil is stored as a number is found by the reconciler and settled, and its firm is unblocked'
   'F08 through callP1 a hundred unreconcilable lapsed reservations of another firm, ahead of a good one, do not starve it: it is settled in the first run'
   'F08 through callP1 a reservation the reconciler cannot settle is quarantined after three failed runs: reconcile_failed, logged, its hold kept and its firm still blocked'
+  # re-audit R2-D1 (transient failures never quarantine), R2-D2 (live records never starve a lapsed one; the sweep)
+  'F08 through callP1 a valid record whose reconciliation fails only on contention for its month total is never quarantined: it stays reserved, uncounted, and is settled once the contention ends'
+  'F08 through callP1 five hundred live reservations sorting ahead of a lapsed attempt do not starve it: it is settled in the first run'
+  'F08 through callP1 a lapsed attempt whose leaseUntil is missing altogether is found by the rotating sweep and settled, and its firm is unblocked'
   # both, through the HTTP router
   'F07 and F08 through the HTTP router (committeeBrain) ten concurrent committeeBrain requests against a budget for two worst cases dispatch two and refuse the rest; spent plus reserved never exceeds it'
   'F07 and F08 through the HTTP router (committeeBrain) a usage-commit failure answers with the text and accounting pending, stores accounting pending, blocks the firm accounting_indeterminate past the lease, and the reconciler restores service'
@@ -207,6 +222,7 @@ API_TESTS=(
   "committeeBrain: output (P3-70) the output write is retried an ambiguous commit (the first attempt commits, its answer is lost, the retry's create hits ALREADY_EXISTS) is a success: 200, one output row, one route allow row and no deny row, one provider call"
   'committeeBrain: output (P3-70) the output write is retried an ALREADY_EXISTS while no output row of this call exists is not taken as a commit: it is retried like any failure'
   'committeeBrain: output (P3-70) the output write is retried with NODE_ENV production every p1OpsTestSeam field is inert: no injected failure, no lost answer, no wait'
+  "committeeBrain: output (P3-70) the output write is retried no attempt starts after the output write's deadline: it rethrows with the remaining injected failures unused (Codex P1 on PR #40)"
   'committeeBrain: output (P3-70) the output write is retried an HttpError is a decision, not a transient fault: it is not retried'
   'committeeBrain: output (P3-70) a different Idempotency-Key is a new call'
   # setBudgetAlerts (P3-71)
@@ -230,7 +246,9 @@ API_TESTS=(
   # getAiUsage (P3-71)
   'getAiUsage (P3-71) only a partner: associate, clerk, intern, accounts and client are refused 403'
   'getAiUsage (P3-71) the default month is the current PKT month: 19:30Z on 31 October is November'
+  'getAiUsage (P3-71) a month with no calls returns zeros, with the budget and rate not set as null'
   'getAiUsage (P3-71) the exact response from the month total: spend, PKR to 2 decimal places, percent used to 2 decimal places, calls, tokens'
+  'getAiUsage (P3-71) is audited as ai.usage.read, and the response has exactly the documented keys'
   'getAiUsage (P3-71) reports the alerts crossed with their creation time, in threshold order, for the month asked'
   'getAiUsage (P3-71) shows both kill switches as views with an ISO setAt, firm and platform'
   "getAiUsage (P3-71) never shows a firm the operator's identity: the platform view says setBy \"platform\", whoever set it, in any firm's response"
@@ -245,6 +263,15 @@ COST_TESTS=(
   'the price and routing tables are frozen, so nothing can change a price at run time'
   'costMicroUsd returns null for an unpriced model, including inherited object keys'
   'estimateTokens is ceil(UTF-8 bytes / 3)'
+  "the reservation's input ceiling is the largest UTF-8 length of the body and its four normal forms, plus the request overhead (re-audit R2-D3)"
+  'every priced model carries its input overhead, and a model without one is not dispatched (Copilot finding, fail closed)'
+)
+# Codex P1 on PR #40: the whole committeeBrain request (the call's phases, the handler's own work and a margin) fits the
+# api function's timeout, and the import-time check refuses shares that do not.
+TIME_SUITE='P1 request time budget (Codex P1 on PR #40: the whole committeeBrain request fits the function timeout)'
+TIME_TESTS=(
+  "the call's phases, the handler's own work and a margin fit the api function's timeout"
+  'the import-time check refuses shares that exceed the function timeout'
 )
 MONTH_SUITE='P1 PKT month key (P3-64)'
 MONTH_TESTS=(
@@ -276,6 +303,8 @@ TRANSPORT_ERR_TESTS=(
   'a timeout, before the headers or while the body streams, is gateway_timeout and billable'
   'a 2xx whose body is not JSON is gateway_not_json and billable, with no usage'
   'a 2xx without usable content is gateway_no_text and billable, carrying the usage figures that are valid counts'
+  "a billable 2xx without usable content still carries the provider's response id and the request-id header (Codex P2)"
+  'a billable 2xx whose body is not JSON still carries the request-id header (Codex P2)'
   'a redirect is refused: gateway_request_failed, not billable, and the redirect target receives nothing'
   'passes redirect: error to fetch'
 )
@@ -311,6 +340,7 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${REFUSAL_TESTS[@]}"; do names+=("$GW_SUITE $REFUSAL_PREFIX $t$REFUSAL_TAIL"); done
   for t in "${API_TESTS[@]}"; do names+=("$API_SUITE $t"); done
   for t in "${COST_TESTS[@]}"; do names+=("$COST_SUITE $t"); done
+  for t in "${TIME_TESTS[@]}"; do names+=("$TIME_SUITE $t"); done
   for t in "${MONTH_TESTS[@]}"; do names+=("$MONTH_SUITE $t"); done
   for t in "${OPIKCFG_TESTS[@]}"; do names+=("$OPIKCFG_SUITE $t"); done
   for t in "${TRACE_TESTS[@]}"; do names+=("$TRACE_SUITE $t"); done
