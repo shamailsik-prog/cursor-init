@@ -223,17 +223,22 @@ class TransientDatabaseErrorTests(unittest.TestCase):
 
 
 TASKS_DIR = PROJECT_ROOT / "scraper" / "tasks"
-SCRAPER_DIR = PROJECT_ROOT / "scraper"
 
 # ---------------------------------------------------------------------------------------------
-# Master-table write scan (round-2 L1). Reviewed allowlists: a module here may touch
-# case_law_master / statutes_master without being a `direct` dispatcher route.
+# Master-table write scan (round-2 L1, round-3 LOW-A/B6). Reviewed allowlists: a module here may
+# touch case_law_master / statutes_master without being a `direct` dispatcher route.
 # ---------------------------------------------------------------------------------------------
 MASTER_WRITER_ALLOWLIST = {
     # The promotion step itself: the F20 trust decision runs before every master write.
     "scraper.tasks.promotion": "promotion (F20 trust decision)",
     # Manual reviewer promotion endpoint; audit F23, deliberately out of scope for F20.
     "scraper.routers.quarantine": "manual quarantine promotion (F23)",
+}
+# Updaters only: they change rows already in a master table by assigning attributes on instances
+# they loaded, which the scan does not count as a write. Their scanned `writes` must stay empty, so
+# a new insert, instantiation, update()/delete() or write SQL in one of them fails the test (round-3
+# LOW-A, re-audit mutant B8) instead of riding on the module's allowlist entry.
+MASTER_UPDATER_ALLOWLIST = {
     # Writes embedding vectors onto rows that are already in a master table.
     "scraper.tasks.embeddings": "embedding vectors on existing master rows",
     # Updates citation_count / is_landmark on rows that are already in case_law_master.
@@ -329,10 +334,14 @@ def scan_source_for_master_tables(source, module):
     return {"refs": refs, "writes": writes}
 
 
-def scan_scraper_for_master_tables():
-    """scan_source_for_master_tables for every module under scraper/ except the models themselves."""
+def scan_corpus_for_master_tables():
+    """scan_source_for_master_tables for every non-test module under corpus_service/ (scraper/,
+    root scripts such as bootstrap_harvest.py, migrations/) except the models themselves. A writer
+    outside scraper/ is scanned too (round-3 B6)."""
     out = {}
-    for path in sorted(SCRAPER_DIR.rglob("*.py")):
+    for path in sorted(PROJECT_ROOT.rglob("*.py")):
+        if path.relative_to(PROJECT_ROOT).parts[0] == "tests":
+            continue
         module = ".".join(path.relative_to(PROJECT_ROOT).with_suffix("").parts)
         if module.endswith(".__init__"):
             module = module[: -len(".__init__")]
@@ -386,22 +395,29 @@ class HarvesterStaticGuardTests(unittest.TestCase):
         self.assertEqual({name for name, kind in kinds.items() if kind == "direct"}, {"PakistanCode", "NationalAssembly"})
 
     def test_every_master_table_writer_is_a_direct_route_or_explicitly_allowed(self):
-        """Round-2 L1(b): an AST scan of all of scraper/ (import aliases resolved) finds every module
-        that touches case_law_master / statutes_master. Each must be a `direct` route module (gated
-        on trusted) or on the reviewed allowlists below; read-only modules must not write."""
+        """Round-2 L1(b), round-3 LOW-A/B6: an AST scan of every non-test module under
+        corpus_service/ (import aliases resolved) finds every module that touches case_law_master /
+        statutes_master. Each must be a `direct` route module (gated on trusted) or on the reviewed
+        allowlists above; updater-only and read-only modules must show no write at all."""
         from scraper.tasks import dispatcher
 
         direct = {route[0] for route in dispatcher.ROUTES.values() if route[2] == "direct"}
         staging = {route[0] for route in dispatcher.ROUTES.values() if route[2] == "staging"}
-        found = {module: scan for module, scan in scan_scraper_for_master_tables().items() if scan["refs"]}
-        unexpected = sorted(set(found) - direct - set(MASTER_WRITER_ALLOWLIST) - set(MASTER_READ_ONLY_ALLOWLIST))
+        scanned = scan_corpus_for_master_tables()
+        self.assertIn("bootstrap_harvest", scanned, "the scan must cover modules outside scraper/")
+        found = {module: scan for module, scan in scanned.items() if scan["refs"]}
+        allowed = set(MASTER_WRITER_ALLOWLIST) | set(MASTER_UPDATER_ALLOWLIST) | set(MASTER_READ_ONLY_ALLOWLIST)
+        unexpected = sorted(set(found) - direct - allowed)
         self.assertEqual(unexpected, [], {m: sorted(found[m]["refs"])[:5] for m in unexpected})
         self.assertEqual(sorted(staging & set(found)), [], "a staging harvester touches a master table")
+        writing_updaters = {m: sorted(found[m]["writes"]) for m in MASTER_UPDATER_ALLOWLIST if found.get(m, {}).get("writes")}
+        self.assertEqual(writing_updaters, {}, "an updater-only module gained a master-table write")
         writing_readers = {m: sorted(found[m]["writes"]) for m in MASTER_READ_ONLY_ALLOWLIST if found.get(m, {}).get("writes")}
         self.assertEqual(writing_readers, {}, "a read-only module writes a master table")
         # The scan is not vacuous: it sees the known writers.
         self.assertEqual(direct - set(found), set(), "the scan missed a direct publisher")
-        self.assertEqual(set(MASTER_WRITER_ALLOWLIST) - set(found), set(), "stale allowlist entry")
+        stale = (set(MASTER_WRITER_ALLOWLIST) | set(MASTER_UPDATER_ALLOWLIST)) - set(found)
+        self.assertEqual(stale, set(), "stale allowlist entry")
 
     def test_the_scan_sees_aliased_core_sql_and_helper_writes(self):
         """The scanner itself, on the shapes a regex missed (re-audit mutants S1-S6) and more."""
