@@ -6,6 +6,8 @@ auto-promoted, review is always quarantined, blocked is never harvested. Anythin
 vocabulary (None, '', a legacy value, a different case) is unknown and must never publish.
 """
 
+import ast
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -221,6 +223,123 @@ class TransientDatabaseErrorTests(unittest.TestCase):
 
 
 TASKS_DIR = PROJECT_ROOT / "scraper" / "tasks"
+SCRAPER_DIR = PROJECT_ROOT / "scraper"
+
+# ---------------------------------------------------------------------------------------------
+# Master-table write scan (round-2 L1). Reviewed allowlists: a module here may touch
+# case_law_master / statutes_master without being a `direct` dispatcher route.
+# ---------------------------------------------------------------------------------------------
+MASTER_WRITER_ALLOWLIST = {
+    # The promotion step itself: the F20 trust decision runs before every master write.
+    "scraper.tasks.promotion": "promotion (F20 trust decision)",
+    # Manual reviewer promotion endpoint; audit F23, deliberately out of scope for F20.
+    "scraper.routers.quarantine": "manual quarantine promotion (F23)",
+    # Writes embedding vectors onto rows that are already in a master table.
+    "scraper.tasks.embeddings": "embedding vectors on existing master rows",
+    # Updates citation_count / is_landmark on rows that are already in case_law_master.
+    "scraper.tasks.cross_reference": "citation counts on existing master rows",
+}
+MASTER_READ_ONLY_ALLOWLIST = {
+    "scraper.main": "/health counts case_law_master rows",
+    "scraper.routers.search": "read-only search",
+    "scraper.routers.export": "read-only export",
+}
+
+MASTER_CLASSES = {"scraper.models.CaseLawMaster", "scraper.models.StatutesMaster"}
+MASTER_TABLES = ("case_law_master", "statutes_master")
+_IDENT = r'(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)'
+_MASTER_TABLE_RE = r'"?(?:case_law_master|statutes_master)"?'
+_SQL_WRITE_RE = re.compile(
+    r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE(?:\s+TABLE)?|COPY|ALTER\s+TABLE|DROP\s+TABLE)"
+    rf"\s+(?:ONLY\s+)?(?:{_IDENT}\s*\.\s*)?{_MASTER_TABLE_RE}(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_TABLE_NAME_RE = re.compile(rf"^\s*(?:{_IDENT}\s*\.\s*)?{_MASTER_TABLE_RE}\s*$")
+
+
+def _import_aliases(tree, module):
+    """Every name a module binds by import (at any depth), mapped to its dotted target."""
+    package = module.split(".")[:-1]
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for name in node.names:
+                if name.asname:
+                    aliases[name.asname] = name.name
+                else:
+                    aliases[name.name.split(".")[0]] = name.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                parent = package[: len(package) - (node.level - 1)] if node.level > 1 else package
+                base = ".".join(parent + ([node.module] if node.module else []))
+            for name in node.names:
+                if name.name == "*":
+                    if base == "scraper.models":
+                        for cls in MASTER_CLASSES:
+                            aliases[cls.rsplit(".", 1)[1]] = cls
+                    continue
+                aliases[name.asname or name.name] = f"{base}.{name.name}"
+    return aliases
+
+
+def _dotted(node, aliases):
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id)
+    if isinstance(node, ast.Attribute):
+        base = _dotted(node.value, aliases)
+        return f"{base}.{node.attr}" if base else None
+    return None
+
+
+def scan_source_for_master_tables(source, module):
+    """{'refs': ..., 'writes': ...} for one module's source: references to a master ORM class or
+    table name, and the subset that are writes (instantiation, insert/update/delete(...),
+    .__table__.insert/update/delete(), SQL write text, a lightweight table('...') construct)."""
+    tree = ast.parse(source)
+    aliases = _import_aliases(tree, module)
+    refs, writes = set(), set()
+
+    def is_master(expr):
+        return _dotted(expr, aliases) in MASTER_CLASSES or (
+            isinstance(expr, ast.Constant) and isinstance(expr.value, str) and bool(_TABLE_NAME_RE.match(expr.value))
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Name, ast.Attribute)) and _dotted(node, aliases) in MASTER_CLASSES:
+            refs.add(f"class {_dotted(node, aliases)} line {node.lineno}")
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in ("CaseLawMaster", "StatutesMaster") or _TABLE_NAME_RE.match(node.value):
+                refs.add(f"name {node.value!r} line {node.lineno}")
+            if _SQL_WRITE_RE.search(node.value):
+                refs.add(f"sql line {node.lineno}")
+                writes.add(f"sql line {node.lineno}")
+        if isinstance(node, ast.Call):
+            func = node.func
+            if _dotted(func, aliases) in MASTER_CLASSES:
+                writes.add(f"instantiation line {node.lineno}")
+            fname = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            target = (_dotted(func, aliases) or fname).rsplit(".", 1)[-1]
+            if target in ("insert", "update", "delete", "table", "Table") and node.args and is_master(node.args[0]):
+                writes.add(f"{target}() line {node.lineno}")
+            if (isinstance(func, ast.Attribute) and func.attr in ("insert", "update", "delete")
+                    and isinstance(func.value, ast.Attribute) and func.value.attr == "__table__"
+                    and _dotted(func.value.value, aliases) in MASTER_CLASSES):
+                writes.add(f"__table__.{func.attr}() line {node.lineno}")
+    return {"refs": refs, "writes": writes}
+
+
+def scan_scraper_for_master_tables():
+    """scan_source_for_master_tables for every module under scraper/ except the models themselves."""
+    out = {}
+    for path in sorted(SCRAPER_DIR.rglob("*.py")):
+        module = ".".join(path.relative_to(PROJECT_ROOT).with_suffix("").parts)
+        if module.endswith(".__init__"):
+            module = module[: -len(".__init__")]
+        if module == "scraper.models":
+            continue
+        out[module] = scan_source_for_master_tables(path.read_text(), module)
+    return out
 
 
 class HarvesterStaticGuardTests(unittest.TestCase):
@@ -250,21 +369,10 @@ class HarvesterStaticGuardTests(unittest.TestCase):
         }
         self.assertEqual(unstamped, {}, "staging rows written without the source stamp")
 
-    def test_every_direct_master_writer_is_gated_on_trusted(self):
-        import re
-
+    def test_every_route_declares_staging_or_direct(self):
+        """Round-2 L1(a): the dispatcher gates by the kind each route declares, not a deny-list."""
         from scraper.tasks import dispatcher
 
-        writes = re.compile(r"\b(?:StatutesMaster|CaseLawMaster)\s*\(|INSERT\s+INTO\s+(?:case_law_master|statutes_master)", re.I)
-        writers = {
-            f"scraper.tasks.{path.stem}"
-            for path in TASKS_DIR.glob("*.py")
-            if path.name != "promotion.py" and writes.search(path.read_text())
-        }
-        self.assertEqual(writers, {"scraper.tasks.pakistancode", "scraper.tasks.nationalassembly"})
-        self.assertTrue(writers <= set(dispatcher.DIRECT_PUBLISHER_MODULES), writers)
-        routed = {module for module, _func in dispatcher.ROUTES.values()}
-        self.assertTrue(writers <= routed)
         self.assertEqual(
             set(dispatcher.ROUTES),
             {"PakistanLawSite", "NasirLawSite", "PakistanCode", "SindhHighCourt", "SindhHighCourtPublic",
@@ -272,6 +380,61 @@ class HarvesterStaticGuardTests(unittest.TestCase):
              "PeshawarHighCourtPublic", "BalochistanHighCourt", "BalochistanHighCourtPublic",
              "IslamabadHighCourt", "IslamabadHighCourtPublic", "NationalAssembly"},
         )
+        kinds = {name: (route[2] if isinstance(route, tuple) and len(route) == 3 else None)
+                 for name, route in dispatcher.ROUTES.items()}
+        self.assertEqual({k for k in kinds.values()} - {"staging", "direct"}, set(), kinds)
+        self.assertEqual({name for name, kind in kinds.items() if kind == "direct"}, {"PakistanCode", "NationalAssembly"})
+
+    def test_every_master_table_writer_is_a_direct_route_or_explicitly_allowed(self):
+        """Round-2 L1(b): an AST scan of all of scraper/ (import aliases resolved) finds every module
+        that touches case_law_master / statutes_master. Each must be a `direct` route module (gated
+        on trusted) or on the reviewed allowlists below; read-only modules must not write."""
+        from scraper.tasks import dispatcher
+
+        direct = {route[0] for route in dispatcher.ROUTES.values() if route[2] == "direct"}
+        staging = {route[0] for route in dispatcher.ROUTES.values() if route[2] == "staging"}
+        found = {module: scan for module, scan in scan_scraper_for_master_tables().items() if scan["refs"]}
+        unexpected = sorted(set(found) - direct - set(MASTER_WRITER_ALLOWLIST) - set(MASTER_READ_ONLY_ALLOWLIST))
+        self.assertEqual(unexpected, [], {m: sorted(found[m]["refs"])[:5] for m in unexpected})
+        self.assertEqual(sorted(staging & set(found)), [], "a staging harvester touches a master table")
+        writing_readers = {m: sorted(found[m]["writes"]) for m in MASTER_READ_ONLY_ALLOWLIST if found.get(m, {}).get("writes")}
+        self.assertEqual(writing_readers, {}, "a read-only module writes a master table")
+        # The scan is not vacuous: it sees the known writers.
+        self.assertEqual(direct - set(found), set(), "the scan missed a direct publisher")
+        self.assertEqual(set(MASTER_WRITER_ALLOWLIST) - set(found), set(), "stale allowlist entry")
+
+    def test_the_scan_sees_aliased_core_sql_and_helper_writes(self):
+        """The scanner itself, on the shapes a regex missed (re-audit mutants S1-S6) and more."""
+        caught = {
+            "plain": "from scraper.models import StatutesMaster\ndb.add(StatutesMaster(statute_name='x'))\n",
+            "aliased": "from scraper.models import StatutesMaster as _SM\ndb.add(_SM(statute_name='x'))\n",
+            "module_alias": "import scraper.models as m\ndb.add(m.CaseLawMaster())\n",
+            "package_import": "from scraper import models\ndb.add(models.StatutesMaster())\n",
+            "dotted_import": "import scraper.models\ndb.add(scraper.models.CaseLawMaster())\n",
+            "relative": "from ..models import CaseLawMaster as C\nC()\n",
+            "star": "from scraper.models import *\nCaseLawMaster()\n",
+            "core_insert": "from sqlalchemy import insert\nfrom scraper.models import StatutesMaster\ninsert(StatutesMaster)\n",
+            "schema_sql": "text(\"INSERT INTO public.statutes_master (statute_name) VALUES ('x')\")\n",
+            "quoted_schema_sql": "text('UPDATE \"public\".\"case_law_master\" SET is_promoted = true')\n",
+            "update_sql": "text(\"UPDATE case_law_master SET is_promoted = true\")\n",
+            "delete_sql": "q = 'delete from statutes_master where true'\n",
+            "lightweight_table": "from sqlalchemy import table\ntable('statutes_master')\n",
+            "getattr_name": "getattr(models, 'CaseLawMaster')\n",
+        }
+        scans = {name: scan_source_for_master_tables(source, "scraper.tasks.example") for name, source in caught.items()}
+        missed = {name for name, scan in scans.items() if not scan["refs"]}
+        self.assertEqual(missed, set(), "references the scan did not see")
+        # Every shape but the bare getattr name is a write.
+        unwritten = {name for name, scan in scans.items() if name != "getattr_name" and not scan["writes"]}
+        self.assertEqual(unwritten, set(), "writes the scan did not classify as writes")
+        quiet = {
+            "log_text": "logger.info('%s publishes to statutes_master/case_law_master directly; skip', n)\n",
+            "read_sql": "text('SELECT count(*) FROM case_law_master')\n",
+            "other_model": "from scraper.models import ScraperStaging\nScraperStaging()\n",
+        }
+        noisy = {name for name, source in quiet.items()
+                 if any(scan_source_for_master_tables(source, "scraper.tasks.example").values())}
+        self.assertEqual(noisy, set(), "false positives")
 
 
 if __name__ == "__main__":

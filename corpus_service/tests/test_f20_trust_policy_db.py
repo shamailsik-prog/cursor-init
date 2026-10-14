@@ -989,3 +989,37 @@ def test_i_a_transient_database_error_leaves_the_record_pending(corpus_db, termi
 
     # The lock is gone now; the next run promotes the record.
     assert _promote() == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
+
+
+# ---------------------------------------------------------------------------------------------
+# (k) re-audit round 2 (PR #48): L1 route kinds
+# ---------------------------------------------------------------------------------------------
+def test_k_a_route_without_a_valid_kind_is_refused_and_every_direct_route_needs_trusted(corpus_db, monkeypatch, caplog):
+    """Round-2 L1(a): the dispatcher trusts only what a route declares. A route with no kind or an
+    unknown kind is refused (fail closed, logged); any route declared `direct` runs only for a
+    trusted source, whichever module it names."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    calls = install_harvester_spies(monkeypatch)
+    from scraper.tasks import dispatcher
+
+    routes = dict(dispatcher.ROUTES)
+    routes["NasirLawSite"] = ("scraper.tasks.nasirlawsite", "scrape_nasirlawsite")  # no kind
+    routes["SupremeCourt"] = ("scraper.tasks.supremecourt", "scrape_supremecourt", "stagin")  # unknown kind
+    routes["PakistanLawSite"] = ("scraper.tasks.pakistanlawsite", "scrape_pakistanlawsite", None)
+    routes["LahoreHighCourt"] = ("scraper.tasks.lahorehighcourt", "scrape_lahorehighcourt", "direct")  # review source
+    routes["PeshawarHighCourt"] = ("scraper.tasks.peshawarhighcourt", "scrape_peshawarhighcourt", "direct")
+    monkeypatch.setattr(dispatcher, "ROUTES", routes)
+    run(execute("UPDATE scraper_sources SET trust_level = 'trusted' WHERE source_name IN ('PakistanLawSite', 'PeshawarHighCourt')"))
+
+    with caplog.at_level(logging.INFO):
+        for name in ("NasirLawSite", "SupremeCourt", "PakistanLawSite", "LahoreHighCourt"):
+            run(dispatcher._run_async(name))
+    assert calls == [], f"harvested through a route it should have refused: {calls}"
+    refused = [r.getMessage() for r in caplog.records if "route declares no valid kind" in r.getMessage()]
+    assert sorted(m.split()[0] for m in refused) == ["NasirLawSite", "PakistanLawSite", "SupremeCourt"], refused
+    assert any(r.getMessage().startswith("LahoreHighCourt ") and "directly" in r.getMessage() for r in caplog.records)
+
+    # Positive controls: a trusted `direct` route and an untouched `staging` route both run.
+    run(dispatcher._run_async("PeshawarHighCourt"))
+    run(dispatcher._run_async("SindhHighCourt"))
+    assert calls == [("scrape_peshawarhighcourt", "PeshawarHighCourt"), ("scrape_shc", "SindhHighCourt")]
