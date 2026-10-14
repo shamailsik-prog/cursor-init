@@ -121,7 +121,7 @@ services do not depend on the vault.
 | `tests/fa-d16-001.r2-live.o2.test.ts` (`npm run test:r2-live`) | O-2 against real R2. **Skipped** unless `R2_LIVE_*` are set; not run in CI |
 
 Mutation testing: `npm run mutation:documents` (per-file floors in `stryker.documents.config.mjs`);
-in CI the `documents` job of `.github/workflows/mutation.yml` runs it on every pull request that
+in CI the workflow `.github/workflows/mutation-documents.yml` runs it on every pull request that
 touches the vault, its tests or its mutation setup.
 
 Errors and logs: every R2 error message is built from fixed text, the method, the object key, an

@@ -4,7 +4,7 @@
  * file is missing from the report, has no valid mutants at all, or when the report itself is
  * missing; mutants disabled with `// Stryker disable` (status Ignored) count against the score,
  * so silencing a mutant cannot raise it. The CI trigger (pull_request with a paths filter on the
- * vault) is in .github/workflows/mutation.yml.
+ * vault) is in .github/workflows/mutation-documents.yml.
  */
 import { spawnSync } from "node:child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"

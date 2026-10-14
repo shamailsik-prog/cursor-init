@@ -5,7 +5,7 @@
 // `npm run mutation:documents` runs Stryker, then scripts/check-mutation-per-file.mjs, which
 // fails the run when any file below scores under its own floor (`perFileBreak`). The floors are
 // what the FA-D16 tests reach (measured, see the PR); raise them as tests improve, never lower
-// them. Weekly and on demand in .github/workflows/mutation.yml (job `documents`).
+// them. On vault pull requests, weekly and on demand: .github/workflows/mutation-documents.yml.
 //
 // Audit v2 baseline (main@0f72cd8, before FA-D16-002): documentObjectStore.ts 57.65 %,
 // uploadDocument.ts 50.00 %. The fs/memory backends moved from documentObjectStore.ts to

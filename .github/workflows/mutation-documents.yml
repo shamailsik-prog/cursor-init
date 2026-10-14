@@ -1,0 +1,78 @@
+name: Mutation (document vault)
+
+# The document vault's mutation gate (F03, FA-D16-001/002/003; re-audit R1-D3). StrykerJS mutates
+# the vault files (stryker.documents.config.mjs) against the vault's suites
+# (vitest.documents-mutation.config.ts), then scripts/check-mutation-per-file.mjs fails the job
+# when any file scores below its own floor (perFileBreak). About 10 minutes.
+#
+# It is its own workflow because "Mutation testing" (mutation.yml, the hours-long `next` and
+# `functions` runs) is disabled in the repository settings; a job there would never run.
+#
+# Runs on every pull request that touches the vault, its suites and helpers, its mutation setup or
+# this file, weekly, and on demand. The job has no `if:`, so it is never skipped and reported green
+# without running. The two commands are spelled out rather than taken from package.json, so an
+# edited npm script cannot turn the gate into a no-op. The floor check fails on a missing report,
+# a missing file or a file with no valid mutants, and counts Stryker-disabled mutants as not killed.
+# Third-party actions are pinned to commit SHAs (tag in the trailing comment).
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Sundays 02:17 UTC.
+    - cron: "17 2 * * 0"
+  pull_request:
+    paths:
+      - "platform/documents/**"
+      - "services/d1-6/**"
+      - "tests/fa-d16-*"
+      - "tests/f03-*"
+      - "tests/api.documents.test.ts"
+      - "tests/api.document-workflow.test.ts"
+      - "tests/security.dedup-oracle.test.ts"
+      - "tests/security.loose-vault-api.test.ts"
+      - "tests/security.accounts-role.test.ts"
+      - "tests/spine.hardening.test.ts"
+      - "tests/jobs.matter-id.test.ts"
+      - "tests/http.idempotency.test.ts"
+      - "tests/persistence.route-wiring.test.ts"
+      - "tests/helpers/fakeS3.ts"
+      - "tests/setup/**"
+      - "stryker.documents.config.mjs"
+      - "stryker.config.mjs"
+      - "vitest.documents-mutation.config.ts"
+      - "vitest.config.ts"
+      - "scripts/check-mutation-per-file.mjs"
+      - ".github/workflows/mutation-documents.yml"
+      - "package.json"
+      - "package-lock.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-documents-${{ github.event.pull_request.number || github.ref }}
+  # A newer push to a pull request supersedes its older run; scheduled runs always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  documents:
+    name: Mutation (document vault, per-file floors)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Stryker on the vault files (stryker.documents.config.mjs)
+        run: npx stryker run stryker.documents.config.mjs
+      - name: Per-file floors (scripts/check-mutation-per-file.mjs)
+        run: node scripts/check-mutation-per-file.mjs stryker.documents.config.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-documents
+          path: reports/mutation/documents/
+          retention-days: 30
