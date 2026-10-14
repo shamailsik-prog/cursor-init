@@ -1,6 +1,5 @@
 /**
- * FA-CI-002: apply Annex A + platform DDL against real Postgres (pgvector) and exercise
- * classification trigger and corpus_reader grants.
+ * FA-CI-002 / FA-DATA-001: Annex A + platform DDL on real Postgres (pgvector).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -22,6 +21,9 @@ const suite = postgresUrl ? describe : describe.skip;
 const JUDGMENT_ID = "00000000-0000-0000-0000-0000000000fa";
 const PROMOTED_VIEW_ID = "00000000-0000-0000-0000-0000000000fb";
 const QUARANTINED_VIEW_ID = "00000000-0000-0000-0000-0000000000fc";
+const DECLASSIFY_ID = "00000000-0000-0000-0000-0000000000fd";
+const DECLASSIFY_ID_B = "00000000-0000-0000-0000-0000000000ff";
+const DECLASSIFY_CONCURRENCY_ID = "00000000-0000-0000-0000-000000000100";
 
 function roleClient(role: string, password: string): pg.Client {
   const url = new URL(postgresUrl!);
@@ -30,7 +32,7 @@ function roleClient(role: string, password: string): pg.Client {
   return new pg.Client({ connectionString: url.toString() });
 }
 
-suite("Postgres DDL integration (FA-CI-002)", () => {
+suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
   let admin: pg.Client;
 
   beforeAll(async () => {
@@ -43,7 +45,8 @@ suite("Postgres DDL integration (FA-CI-002)", () => {
     await admin.query(platform);
     await admin.query(
       `ALTER ROLE corpus_reader LOGIN PASSWORD 'reader';
-       ALTER ROLE corpus_writer LOGIN PASSWORD 'writer';`,
+       ALTER ROLE corpus_writer LOGIN PASSWORD 'writer';
+       ALTER ROLE corpus_declassify LOGIN PASSWORD 'declass';`,
     );
     await admin.query(
       `DO $$ BEGIN
@@ -54,7 +57,10 @@ suite("Postgres DDL integration (FA-CI-002)", () => {
     );
     await admin.query(
       `GRANT SELECT, INSERT, UPDATE ON judgment TO app_writer;
-       GRANT SELECT ON classification_rank TO app_writer;`,
+       GRANT SELECT ON classification_rank TO app_writer;
+       REVOKE ALL ON judgment_declassify_grant FROM app_writer;
+       REVOKE ALL ON FUNCTION declassify(UUID, TEXT, TEXT, TEXT) FROM app_writer;
+       REVOKE INSERT, UPDATE, DELETE ON judgment_classification_declassify_audit FROM app_writer;`,
     );
   }, 120_000);
 
@@ -151,29 +157,259 @@ suite("Postgres DDL integration (FA-CI-002)", () => {
     expect(flags.rows[0].n).toBeGreaterThan(5);
   });
 
-  it.fails(
-    "FA-DATA-001: SET app.declassify_reason must not bypass downgrade without declassify()",
-    async () => {
-      const rowId = "00000000-0000-0000-0000-0000000000fd";
-      await admin.query("DELETE FROM judgment WHERE id = $1", [rowId]);
-      await admin.query(
-        `INSERT INTO judgment (id, case_title, classification, review_status)
-         VALUES ($1, 'FA-DATA-001 probe', 'privileged', 'promoted')`,
-        [rowId],
-      );
-      const writer = roleClient("app_writer", "writer");
-      await writer.connect();
-      await writer.query("SET app.declassify_reason = 'partner-audit-probe'");
-      await writer.query(
+  it("PG-DDL-5 FA-DATA-001: SET app.declassify_reason cannot bypass downgrade", async () => {
+    const rowId = DECLASSIFY_ID;
+    await admin.query("DELETE FROM judgment WHERE id = $1", [rowId]);
+    await admin.query(
+      `INSERT INTO judgment (id, case_title, classification, review_status)
+       VALUES ($1, 'FA-DATA-001 probe', 'privileged', 'promoted')`,
+      [rowId],
+    );
+    const writer = roleClient("app_writer", "writer");
+    await writer.connect();
+    await writer.query("SET app.declassify_reason = 'partner-audit-probe'");
+    await expect(
+      writer.query(
         `UPDATE judgment SET classification = 'public' WHERE id = $1`,
         [rowId],
-      );
-      const row = await admin.query(
-        "SELECT classification FROM judgment WHERE id = $1",
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/declassify/i),
+    });
+    const row = await admin.query(
+      "SELECT classification FROM judgment WHERE id = $1",
+      [rowId],
+    );
+    expect(row.rows[0].classification).toBe("privileged");
+    await writer.end();
+  });
+
+  it("PG-DDL-6 declassify() downgrades, writes audit row, and requires a reason", async () => {
+    const rowId = "00000000-0000-0000-0000-0000000000fe";
+    await admin.query("DELETE FROM judgment_classification_declassify_audit WHERE judgment_id = $1", [
+      rowId,
+    ]);
+    await admin.query("DELETE FROM judgment WHERE id = $1", [rowId]);
+    await admin.query(
+      `INSERT INTO judgment (id, case_title, classification, review_status)
+       VALUES ($1, 'declassify path', 'privileged', 'promoted')`,
+      [rowId],
+    );
+    const partner = roleClient("corpus_declassify", "declass");
+    await partner.connect();
+    await expect(
+      partner.query(
+        `SELECT declassify($1::uuid, 'public', 'partner-1', '   ')`,
         [rowId],
-      );
-      expect(row.rows[0].classification).toBe("privileged");
-      await writer.end();
-    },
-  );
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/recorded reason/i),
+    });
+    const auditId = await partner.query(
+      `SELECT declassify($1::uuid, 'public', 'partner-1', 'Client waived for filing') AS audit_id`,
+      [rowId],
+    );
+    expect(auditId.rows[0].audit_id).toBeTruthy();
+    const row = await admin.query(
+      "SELECT classification FROM judgment WHERE id = $1",
+      [rowId],
+    );
+    expect(row.rows[0].classification).toBe("public");
+    const audit = await admin.query(
+      `SELECT from_classification, to_classification, actor_id, declassify_session_user, reason
+       FROM judgment_classification_declassify_audit WHERE id = $1`,
+      [auditId.rows[0].audit_id],
+    );
+    expect(audit.rows[0]).toMatchObject({
+      from_classification: "privileged",
+      to_classification: "public",
+      actor_id: "partner-1",
+      declassify_session_user: "corpus_declassify",
+      reason: "Client waived for filing",
+    });
+    const actorComment = await admin.query(
+      `SELECT d.description AS comment
+       FROM pg_catalog.pg_description d
+       JOIN pg_catalog.pg_class c ON c.oid = d.objoid
+       JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid
+       WHERE c.relname = 'judgment_classification_declassify_audit'
+         AND a.attname = 'actor_id'`,
+    );
+    expect(actorComment.rows[0].comment).toMatch(/application-asserted/i);
+    await partner.end();
+  });
+
+  it("PG-DDL-7 corpus_reader cannot execute declassify()", async () => {
+    const reader = roleClient("corpus_reader", "reader");
+    await reader.connect();
+    await expect(
+      reader.query(
+        `SELECT declassify($1::uuid, 'public', 'partner-1', 'reason')`,
+        [DECLASSIFY_ID],
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+    await reader.end();
+  });
+
+  it("PG-DDL-8 FA-DATA-001: declassify execute and audit table writes denied", async () => {
+    const writer = roleClient("app_writer", "writer");
+    await writer.connect();
+    await expect(
+      writer.query(
+        `SELECT declassify($1::uuid, 'public', 'partner-1', 'reason')`,
+        [DECLASSIFY_ID],
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    const publicExec = await admin.query(
+      `SELECT count(*)::int AS n
+       FROM pg_catalog.aclexplode(
+         (SELECT proacl FROM pg_catalog.pg_proc WHERE proname = 'declassify' LIMIT 1)
+       ) acl
+       WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'`,
+    );
+    expect(publicExec.rows[0].n).toBe(0);
+
+    const partner = roleClient("corpus_declassify", "declass");
+    await partner.connect();
+    for (const sql of [
+      `INSERT INTO judgment_classification_declassify_audit
+         (judgment_id, from_classification, to_classification, actor_id, declassify_session_user, reason)
+         VALUES ($1, 'privileged', 'public', 'x', 'x', 'x')`,
+      `UPDATE judgment_classification_declassify_audit SET reason = 'y' WHERE judgment_id = $1`,
+      `DELETE FROM judgment_classification_declassify_audit WHERE judgment_id = $1`,
+    ]) {
+      await expect(partner.query(sql, [DECLASSIFY_ID])).rejects.toMatchObject({
+        code: "42501",
+      });
+    }
+    for (const sql of [
+      `INSERT INTO judgment_classification_declassify_audit
+         (judgment_id, from_classification, to_classification, actor_id, declassify_session_user, reason)
+         VALUES ($1, 'privileged', 'public', 'x', 'x', 'x')`,
+      `UPDATE judgment_classification_declassify_audit SET reason = 'y' WHERE judgment_id = $1`,
+      `DELETE FROM judgment_classification_declassify_audit WHERE judgment_id = $1`,
+    ]) {
+      await expect(writer.query(sql, [DECLASSIFY_ID])).rejects.toMatchObject({
+        code: "42501",
+      });
+    }
+    await writer.end();
+    await partner.end();
+  });
+
+  it("PG-DDL-9 FA-DATA-001: trigger stays enabled; grant scope; downgrade-only", async () => {
+    await admin.query(
+      "DELETE FROM judgment_classification_declassify_audit WHERE judgment_id IN ($1, $2)",
+      [DECLASSIFY_ID, DECLASSIFY_ID_B],
+    );
+    await admin.query("DELETE FROM judgment WHERE id IN ($1, $2)", [
+      DECLASSIFY_ID,
+      DECLASSIFY_ID_B,
+    ]);
+    await admin.query(
+      `INSERT INTO judgment (id, case_title, classification, review_status)
+       VALUES ($1, 'grant-a', 'privileged', 'promoted'),
+              ($2, 'grant-b', 'privileged', 'promoted')`,
+      [DECLASSIFY_ID, DECLASSIFY_ID_B],
+    );
+
+    const partner = roleClient("corpus_declassify", "declass");
+    await partner.connect();
+    await partner.query(
+      `SELECT declassify($1::uuid, 'public', 'partner-1', 'ok')`,
+      [DECLASSIFY_ID],
+    );
+    const trig = await admin.query(
+      `SELECT tgenabled FROM pg_trigger
+       WHERE tgname = 'judgment_monotonic' AND tgrelid = 'public.judgment'::regclass`,
+    );
+    expect(trig.rows[0].tgenabled).toBe("O");
+
+    const grantsLeft = await admin.query(
+      "SELECT count(*)::int AS n FROM judgment_declassify_grant",
+    );
+    expect(grantsLeft.rows[0].n).toBe(0);
+
+    await expect(
+      partner.query(
+        `SELECT declassify($1::uuid, 'privileged-restricted', 'partner-1', 'upgrade attempt')`,
+        [DECLASSIFY_ID_B],
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/applies only to downgrades/i),
+    });
+
+    const sameRankId = "00000000-0000-0000-0000-000000000101";
+    await admin.query("DELETE FROM judgment WHERE id = $1", [sameRankId]);
+    await admin.query(
+      `INSERT INTO judgment (id, case_title, classification, review_status)
+       VALUES ($1, 'same-rank', 'internal', 'promoted')`,
+      [sameRankId],
+    );
+    await expect(
+      partner.query(
+        `SELECT declassify($1::uuid, 'internal', 'partner-1', 'same rank')`,
+        [sameRankId],
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/applies only to downgrades/i),
+    });
+
+    await admin.query("BEGIN");
+    const xidRow = await admin.query("SELECT txid_current()::text AS xid");
+    const xid = xidRow.rows[0].xid;
+    await admin.query(
+      `INSERT INTO judgment_declassify_grant (judgment_id, xid, to_classification)
+       VALUES ($1, $2::bigint, 'public')`,
+      [DECLASSIFY_ID, xid],
+    );
+    await expect(
+      admin.query(
+        `UPDATE judgment SET classification = 'public' WHERE id = $1`,
+        [DECLASSIFY_ID_B],
+      ),
+    ).rejects.toMatchObject({ message: expect.stringMatching(/declassify/i) });
+    await admin.query("ROLLBACK");
+
+    const stale = await admin.query(
+      "SELECT count(*)::int AS n FROM judgment_declassify_grant",
+    );
+    expect(stale.rows[0].n).toBe(0);
+
+    await partner.end();
+  });
+
+  it("PG-DDL-10 FA-DATA-001: declassify row lock does not block v_judgment reads", async () => {
+    await admin.query("DELETE FROM judgment WHERE id = $1", [
+      DECLASSIFY_CONCURRENCY_ID,
+    ]);
+    await admin.query(
+      `INSERT INTO judgment (id, case_title, classification, review_status)
+       VALUES ($1, 'concurrency', 'privileged', 'promoted')`,
+      [DECLASSIFY_CONCURRENCY_ID],
+    );
+
+    const partner = roleClient("corpus_declassify", "declass");
+    await partner.connect();
+    await partner.query("BEGIN");
+    await partner.query(
+      `SELECT declassify($1::uuid, 'public', 'partner-1', 'hold row lock')`,
+      [DECLASSIFY_CONCURRENCY_ID],
+    );
+
+    const reader = roleClient("corpus_reader", "reader");
+    await reader.connect();
+    const started = Date.now();
+    await reader.query("SET lock_timeout = '2s'");
+    const visible = await reader.query(
+      "SELECT count(*)::int AS n FROM v_judgment WHERE review_status = 'promoted'",
+    );
+    expect(visible.rows[0].n).toBeGreaterThan(0);
+    expect(Date.now() - started).toBeLessThan(1500);
+
+    await partner.query("COMMIT");
+    await reader.end();
+    await partner.end();
+  });
 });

@@ -27,7 +27,10 @@ export default defineConfig({
     exclude: [
       ...(process.env.SIKANDER_POSTGRES_URL
         ? []
-        : ["tests/postgres.ddl.integration.test.ts"]),
+        : [
+            "tests/postgres.ddl.integration.test.ts",
+            "tests/probe-fa-data-001.regression.test.ts",
+          ]),
       ...(process.env.FIRESTORE_EMULATOR_HOST
         ? []
         : [
