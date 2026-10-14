@@ -336,7 +336,9 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
         `SELECT declassify($1::uuid, 'privileged-restricted', 'partner-1', 'upgrade attempt')`,
         [DECLASSIFY_ID_B],
       ),
-    ).rejects.toMatchObject({ message: expect.stringMatching(/downgrades only/i) });
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/applies only to downgrades/i),
+    });
 
     const sameRankId = "00000000-0000-0000-0000-000000000101";
     await admin.query("DELETE FROM judgment WHERE id = $1", [sameRankId]);
@@ -350,7 +352,9 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
         `SELECT declassify($1::uuid, 'internal', 'partner-1', 'same rank')`,
         [sameRankId],
       ),
-    ).rejects.toMatchObject({ message: expect.stringMatching(/downgrades only/i) });
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/applies only to downgrades/i),
+    });
 
     await admin.query("BEGIN");
     const xidRow = await admin.query("SELECT txid_current()::text AS xid");
