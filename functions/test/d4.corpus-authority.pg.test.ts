@@ -588,6 +588,26 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     expect(await s.findJudgment(ANY)).toMatchObject({ benchType: "division" })
   })
 
+  it("a programming error inside the adapter is not an unavailable store: it propagates unchanged and opens no breaker (plan D5, #51 R1 D-6)", async () => {
+    const s = store()
+    expect(await s.findJudgment(ANY)).toMatchObject({ benchType: "division" })
+    // A bug in the adapter's own code: it reads `.rows` of a result the driver never gave.
+    const pool = (s as unknown as { pool: { query: unknown } }).pool
+    pool.query = async () => undefined
+    try {
+      const err = await s.findJudgment(ANY).then(
+        () => null,
+        (e: unknown) => e
+      )
+      expect(err).toBeInstanceOf(TypeError)
+      expect(err).not.toBeInstanceOf(AuthorityUnavailableError)
+    } finally {
+      delete (pool as { query?: unknown }).query
+    }
+    // It opened no breaker: the next call reads.
+    expect(await s.findJudgment(ANY)).toMatchObject({ benchType: "division" })
+  })
+
   it("classifyPgError covers SQLSTATEs, Node error codes, timeouts and TLS failures (D6)", () => {
     const err = (props: Record<string, unknown>, message = "x") => Object.assign(new Error(message), props)
     const table: Array<[unknown, string]> = [

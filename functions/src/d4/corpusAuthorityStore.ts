@@ -9,6 +9,7 @@
  * TEMPORAL_UNAVAILABLE, never OK:
  * - a driver error;
  * - data that breaks the contract (D5).
+ * A programming error in this file (a TypeError, say) is not wrapped: it fails the request (D5, D23).
  * An overruling still pending review, or hidden by the visibility rules (ruling 3, D2), is not a failure: it is
  * reported as PENDING_OVERRULING, an overruling of unknown bench (#51 R1 D-1).
  * Questions it can refuse without the database (a non-canonical citation, a non-UUID section, an unmapped
@@ -298,19 +299,24 @@ export class PgAuthorityStore implements AuthorityStore {
   /**
    * The breaker (D9). While it is open every call throws circuit_open without connecting. Any other failure except
    * one about the data (pending_review, inconsistent) opens it for BREAKER_OPEN_MS and logs the reason once (D16).
+   *
+   * Only an AuthorityUnavailableError is a failure here (plan D5 and D23, #51 R1 D-6): a driver error, which run()
+   * has already wrapped, or the adapter's own explicit throw. Anything else is a programming error. It propagates
+   * unchanged, so the request fails (a 500, and a draft stays a draft), and it says nothing about the corpus, so it
+   * opens no breaker.
    */
   private async guarded<T>(fn: () => Promise<T>): Promise<T> {
     if (this.now() < this.openUntil) throw unavailable("circuit_open")
     try {
       return await fn()
     } catch (e) {
-      const error = e instanceof AuthorityUnavailableError ? e : unavailable(classifyPgError(e))
-      if (!DATA_REASONS.has(error.reason)) {
+      if (!(e instanceof AuthorityUnavailableError)) throw e
+      if (!DATA_REASONS.has(e.reason)) {
         this.openUntil = this.now() + BREAKER_OPEN_MS
         this.stateCheckedAt = null
-        logger.warn("d4.authority_unavailable", { reason: error.reason })
+        logger.warn("d4.authority_unavailable", { reason: e.reason })
       }
-      throw error
+      throw e
     }
   }
 

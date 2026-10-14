@@ -3,7 +3,7 @@ import path from "node:path"
 import pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
-import { setAuthorityStoreForTests } from "../src/d4/authority"
+import { activeAuthorityStore, setAuthorityStoreForTests } from "../src/d4/authority"
 import { ApiError, apiErrorOf, viaApi } from "./api"
 import { CORPUS_FIXTURES, type CorpusDb, type PublishSummary, createCorpusDb, resetAuthorityStore, withCorpusReaderEnv } from "./corpusPg"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -222,6 +222,26 @@ describe("F05: the draft gate answers from the promoted Annex A corpus (end to e
     expect(g.citations).toEqual([{ ref: "2099 SCMR 202", judgmentId: J["j-overruled"], status: "OVERRULED" }])
     expect(g.status).toBe("OVERRULED")
     expectErr(await apiErrorOf(approve(f, d2.draftId)), 409, "gate_blocked")
+  }, SLOW)
+
+  it("F05-i a programming error in the adapter is a 500 at approval, never UNVERIFIED, and the draft stays a draft (plan D5, #51 R1 D-6)", async () => {
+    const f = await newFirm()
+    const d = await create(f, cites("2099 SCMR 101"))
+    expect((await gate(f, d.draftId)).status).toBe("OK")
+    // A bug in the adapter's own code (it reads `.rows` of a result the driver never gave), in the store the approval's
+    // fresh gate run uses.
+    const pool = (activeAuthorityStore() as unknown as { pool: { query: unknown } }).pool
+    pool.query = async () => undefined
+    try {
+      expectErr(await apiErrorOf(approve(f, d.draftId)), 500, "internal")
+    } finally {
+      delete (pool as { query?: unknown }).query
+    }
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+    expect(await overrideDoc(d.draftId)).toBeUndefined()
+    // The bug opened no breaker: the same store answers the next gate.
+    const again = await create(f, cites("2099 SCMR 101"))
+    expect((await gate(f, again.draftId)).status).toBe("OK")
   }, SLOW)
 
   it("F05-c a later text pleaded for an earlier date gives TEMPORAL_MISMATCH with the text in force then", async () => {
