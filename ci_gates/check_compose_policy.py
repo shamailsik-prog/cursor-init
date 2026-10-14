@@ -65,7 +65,10 @@ SENTINEL = "pv-{}-vp"
 SENTINEL_RE = re.compile(r"pv-([A-Za-z0-9_]+)-vp")
 REQUIRED_REF = re.compile(r"\$\{([A-Za-z0-9_]+):?\?[^}]*\}")
 REQUIRED_VAR = re.compile(r"^\$\{([A-Za-z0-9_]+):?\?[^}]*\}$")
-VAR_REF = re.compile(r"\$\{([A-Za-z0-9_]+)([^}]*)\}")
+# The name and the rest are disjoint (the rest starts with a non-name character), so a crafted
+# "${aaaa..." without '}' cannot make the two quantifiers trade characters (polynomial ReDoS).
+VAR_REF = re.compile(r"\$\{([A-Za-z0-9_]+)((?:[^A-Za-z0-9_}][^}]*)?)\}")
+SCHEME_RE = re.compile(r"[a-z0-9+]+://")
 CREDENTIAL_NAME = re.compile(r"(PASSWORD|PASSWD|_PASS$|SECRET|TOKEN|_AUTH$|^REDISCLI_AUTH$|_USER$|_KEY$)")
 STORE_CRED_KEY = re.compile(r"^(POSTGRES_|PGUSER$|PGPASSWORD$|PGPASSFILE$|MIGRATE_DB_|APP_DB_|REDIS_APP_|REDISCLI_)")
 OPTIONAL_APP_SECRETS = {"OPENAI_API_KEY"}  # may be ${VAR:-} (empty = feature off)
@@ -123,12 +126,36 @@ def _is_sentinel(text):
 
 
 def _userinfo(url):
-    """(user, password) of a URL, verbatim; a ${VAR:?msg} reference counts as one token."""
-    m = re.match(r"^[a-z0-9+]+://((?:\$\{[^}]*\}|[^@/])*)@", url or "")
+    """(user, password) of a URL, verbatim; a ${VAR:?msg} reference counts as one token (it may
+    contain ':', '/' or '@'). A linear scan, not a regex: the URLs come from compose files, and a
+    regex with overlapping alternatives under a repetition backtracks catastrophically on
+    crafted input (CodeQL py/redos)."""
+    url = url or ""
+    m = SCHEME_RE.match(url)
     if not m:
         return "", ""
-    parts = re.findall(r"\$\{[^}]*\}|[^:]+", m.group(1))
-    return (parts[0] if parts else ""), (parts[1] if len(parts) > 1 else "")
+    parts, current, i, n = [], [], m.end(), len(url)
+    while i < n:
+        if url.startswith("${", i):
+            end = url.find("}", i + 2)
+            if end < 0:  # unterminated reference: no userinfo can be read
+                return "", ""
+            current.append(url[i:end + 1])
+            i = end + 1
+            continue
+        c = url[i]
+        if c == "/":  # the path began before any '@': there is no userinfo
+            return "", ""
+        if c == "@":
+            parts.append("".join(current))
+            return parts[0], (parts[1] if len(parts) > 1 else "")
+        if c == ":":
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(c)
+        i += 1
+    return "", ""  # no '@'
 
 
 def _mask_refs(text):

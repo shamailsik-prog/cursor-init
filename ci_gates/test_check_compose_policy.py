@@ -11,9 +11,11 @@ The checker resolves each deployment with the docker compose CLI (no daemon need
     python3 ci_gates/test_check_compose_policy.py      (or: python3 -m pytest ci_gates/test_check_compose_policy.py)
 """
 
+import ast
 import contextlib
 import io
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -77,6 +79,52 @@ class InsecureFixturesFailForTheirOwnReason(unittest.TestCase):
             # -f groups files into one deployment, like `docker compose -f a -f b`.
             self.assertEqual(policy.main(["-f", str(FIXTURES / "case_override" / "docker-compose.yml")]), 1)
         self.assertIn("[pg-trust]", out.getvalue())
+
+
+def _timed(expr, timeout=10):
+    """Evaluate `expr` against the checker in a child process; return (value, seconds). A
+    catastrophic regex fails the test via TimeoutExpired instead of hanging the suite."""
+    code = (
+        "import sys, time; sys.path.insert(0, %r); import check_compose_policy as p; "
+        "t = time.monotonic(); v = %s; print(repr((v, time.monotonic() - t)))" % (str(HERE), expr)
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=timeout, check=True)
+    return ast.literal_eval(out.stdout.strip())
+
+
+class UserinfoParsing(unittest.TestCase):
+    """_userinfo reads credentials out of URLs taken from compose files (CodeQL py/redos)."""
+
+    def test_crafted_unterminated_references_parse_in_linear_time(self):
+        for expr in ('p._userinfo("postgres://" + "${" * 50000)',
+                     'p._userinfo("postgres://" + "${a" * 50000)',
+                     'p._userinfo("postgres://" + "${:" * 50000 + "@h")',
+                     'p._mask_refs("${" + "a" * 50000)'):
+            with self.subTest(expr=expr[:40]):
+                value, seconds = _timed(expr)
+                self.assertLess(seconds, 1.0)
+                if "_userinfo" in expr and "@h" not in expr:
+                    self.assertEqual(value, ("", ""))
+
+    def test_userinfo_forms(self):
+        cases = {
+            "postgres://user:${PW:?missing}@db:5432/x": ("user", "${PW:?missing}"),
+            "postgresql+asyncpg://${U:?x}:${P:?msg with / and @}@postgres/db": ("${U:?x}", "${P:?msg with / and @}"),
+            "rediss://pv-REDIS_APP_USER-vp:pv-REDIS_APP_PASSWORD-vp@redis:6379/0": ("pv-REDIS_APP_USER-vp", "pv-REDIS_APP_PASSWORD-vp"),
+            "rediss://u:p@h:6379/0": ("u", "p"),
+            "rediss://:p@h": ("", "p"),
+            "postgres://db:5432/x": ("", ""),
+            "postgres://db/x@y": ("", ""),
+            "not a url": ("", ""),
+            "": ("", ""),
+        }
+        for url, expected in cases.items():
+            with self.subTest(url=url):
+                self.assertEqual(policy._userinfo(url), expected)
+
+    def test_var_refs(self):
+        self.assertEqual(policy.VAR_REF.findall("${A:?x} ${B:-d} ${C}"), [("A", ":?x"), ("B", ":-d"), ("C", "")])
+        self.assertEqual(policy._mask_refs("a${X:?m}b"), "aVARb")
 
 
 class ShippedComposeMutations(unittest.TestCase):
