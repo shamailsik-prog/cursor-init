@@ -23,12 +23,12 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import {
-  addMember,
-  assignMatterMember,
+  cacheMember,
   confirmEngagement,
   MembershipAssignmentError,
   recordMatterMemberAdd,
   validateMatterAssignee,
+  validateMatterAssignment,
 } from "@/services/d1-2/matters"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 
@@ -210,9 +210,12 @@ async function handlePost(request: Request) {
       await repo.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
       // Keep in-memory mirror in sync for flows that still read the spine directly.
       store.matters.set(matter.id, matter)
+      // Audit F14 R7: each membership is persisted first and cached only once the write has succeeded, so a member sync
+      // whose snapshot holds it always lists it (every member was validated above, before anything was persisted).
       for (const userId of memberIds) {
-        addMember(store, matter.id, userId, parsed.firmId)
-        await repo.members.upsert({ matterId: matter.id, userId, firmId: parsed.firmId })
+        const member = { matterId: matter.id, userId, firmId: matter.firmId }
+        await repo.members.upsert(member)
+        cacheMember(store, member)
         recordMatterMemberAdd(store, parsed.actorId, matter, userId)
       }
       store.audit.push({
@@ -235,9 +238,9 @@ async function handlePost(request: Request) {
       await syncFirmMatters(store, repo, actor.firmId)
       const matter = store.matters.get(parsed.matterId) ?? (await repo.matters.get(parsed.matterId))
       if (matter) store.matters.set(matter.id, matter)
-      let member: { matterId: string; userId: string; firmId: string }
+      let assignment: ReturnType<typeof validateMatterAssignment>
       try {
-        member = assignMatterMember(store, {
+        assignment = validateMatterAssignment(store, {
           actorId: parsed.actorId,
           matterId: parsed.matterId,
           userId: parsed.memberUserId,
@@ -248,7 +251,11 @@ async function handlePost(request: Request) {
         }
         throw err
       }
+      // Audit F14 R7: validate, persist, then cache; a failed write leaves nothing cached and nothing audited.
+      const { matter: assigned, member } = assignment
       await repo.members.upsert(member)
+      cacheMember(store, member)
+      recordMatterMemberAdd(store, parsed.actorId, assigned, member.userId)
       const payload = { action: "add_member", member }
       claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

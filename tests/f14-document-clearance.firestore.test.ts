@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { POST as mattersPost } from "@/app/api/d1/matters/route"
+import { GET as mattersGet, POST as mattersPost } from "@/app/api/d1/matters/route"
 import { GET as documentsGet, POST as documentsPost } from "@/app/api/d1/documents/route"
 import { POST as workflowPost } from "@/app/api/d1/document-workflow/route"
 import { GET as reportingGet } from "@/app/api/d1/reporting/route"
 import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
+import { canReadDocument } from "@/platform/p5/documentAccess"
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories, setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
@@ -26,11 +27,16 @@ import { testAdminFirestore } from "@/tests/helpers/admin-firestore"
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 })
 
 /**
- * A seam on the Firestore repositories the routes create (audit F14 NEW-1): once armed, the next matter_members listing
- * signals `reached`, waits until `opened`, and answers `rows`, a listing read before then. Unarmed, it passes through.
+ * A seam on the Firestore repositories the routes create. Unset, every call passes through.
+ * - `armed` (audit F14 NEW-1): the next matter_members listing signals `reached`, waits until `opened`, and answers
+ *   `rows`, a listing read before then.
+ * - `trackNext` (audit F14 R7): the next matter_members listing is read for real at once, and until that read completes
+ *   every matter_members write waits for it, so the listing is read before any write issued meanwhile commits.
  */
 const memberListing = vi.hoisted(() => ({
   armed: null as null | { reached: () => void; opened: Promise<void>; rows: unknown[] },
+  trackNext: false,
+  reading: null as null | Promise<void>,
 }))
 
 vi.mock("@/platform/persistence/firestoreSpineRepositories", async (importOriginal) => {
@@ -40,13 +46,31 @@ vi.mock("@/platform/persistence/firestoreSpineRepositories", async (importOrigin
     createFirestoreRepositories: (...args: Parameters<typeof mod.createFirestoreRepositories>) => {
       const repos = mod.createFirestoreRepositories(...args)
       const listByFirm = repos.members.listByFirm.bind(repos.members)
+      const upsert = repos.members.upsert.bind(repos.members)
       repos.members.listByFirm = async (firmId: string) => {
+        if (memberListing.trackNext) {
+          memberListing.trackNext = false
+          const read = listByFirm(firmId)
+          const reading = read.then(
+            () => undefined,
+            () => undefined
+          )
+          memberListing.reading = reading
+          void reading.then(() => {
+            if (memberListing.reading === reading) memberListing.reading = null
+          })
+          return read
+        }
         const armed = memberListing.armed
         if (!armed) return listByFirm(firmId)
         memberListing.armed = null
         armed.reached()
         await armed.opened
         return armed.rows as Awaited<ReturnType<typeof listByFirm>>
+      }
+      repos.members.upsert = async (row: Parameters<typeof upsert>[0]) => {
+        if (memberListing.reading) await memberListing.reading
+        return upsert(row)
       }
       return repos
     },
@@ -80,7 +104,7 @@ async function raiseElsewhere(matterId: string): Promise<void> {
 }
 
 /** The partner creates an internal matter with the associate and the clerk as members, through the matters route. */
-const createMatter = (title: string) =>
+const createMatter = (title: string, memberUserIds: string[] = ["associate_a", "clerk_a"]) =>
   post(mattersPost, `${B}/api/d1/matters`, {
     action: "create",
     actorId: "partner_a",
@@ -89,8 +113,30 @@ const createMatter = (title: string) =>
     title,
     courtId: "SHC",
     classification: "internal",
-    memberUserIds: ["associate_a", "clerk_a"],
+    memberUserIds,
   })
+
+/**
+ * Starts another request's member sync the moment the route caches the membership `matches` names (audit F14 R7): the
+ * sync's snapshot then holds that membership, and its listing is read at once, before any membership write the route
+ * issues afterwards commits (the seam holds such writes until the read completes).
+ */
+function syncWhenCached(store: ReturnType<typeof getRuntimeStore>, repos: Awaited<ReturnType<typeof getRuntimeRepositories>>, matches: (key: string) => boolean) {
+  let inFlight: Promise<void> = Promise.resolve()
+  const hook = releaseAfterSet(store.members, (key) => matches(key), () => {
+    memberListing.trackNext = true
+    inFlight = syncFirmMembers(store, repos, "firmA")
+  })
+  return {
+    fired: hook.fired,
+    /** Restores the map and waits for the sync to land. */
+    settle: async () => {
+      hook.restore()
+      memberListing.trackNext = false
+      await inFlight
+    },
+  }
+}
 
 /** A gate another request's in-flight work waits on: `opened` resolves once `open` is called. */
 function gated(): { opened: Promise<void>; open: () => void } {
@@ -394,6 +440,60 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
     const res = await reportingGet(new Request(`${B}/api/d1/reporting?view=matter_report_export_analytics&actorId=partner_a&limit=10&cursor=0`))
     expect(res.status).toBe(200)
     expect(getRuntimeStore().matters.has(matterId)).toBe(false)
+  })
+
+  it("a membership the create route writes stays cached and allowed when another sync snapshots it before its write commits (R7)", async () => {
+    const store = getRuntimeStore()
+    const repos = await getRuntimeRepositories(store)
+    const before = new Set(store.members.keys())
+    // Another request's member sync starts the moment the route caches the creator's new membership: its snapshot holds
+    // that membership and its listing is read at once, before the route's membership write commits.
+    const sync = syncWhenCached(store, repos, (key) => key.endsWith("_partner_a") && !before.has(key))
+    let res: Response
+    try {
+      res = await createMatter("R7 create member window")
+    } finally {
+      await sync.settle()
+    }
+    expect(sync.fired()).toBe(true)
+    expect(res.status).toBe(200)
+    const matterId = ((await res.json()) as { result: { matter: { id: string } } }).result.matter.id
+    expect((await db().collection("matter_members").where("matterId", "==", matterId).get()).size).toBe(3)
+    for (const userId of ["partner_a", "associate_a", "clerk_a"]) {
+      expect({ userId, cached: store.members.has(store.memberKey(matterId, userId)) }).toEqual({ userId, cached: true })
+    }
+    // A follow-up read decided on this process's cache (as a concurrent request that has already synced decides), and
+    // one through the routes.
+    const partner = store.users.get("partner_a")
+    expect(partner && canReadDocument(store, partner, { firmId: "firmA", classification: "internal", matterId })).toBe(true)
+    const listed = await mattersGet(new Request(`${B}/api/d1/matters?userId=partner_a&limit=100&cursor=0`))
+    expect(listed.status).toBe(200)
+    expect(await listed.text()).toContain(matterId)
+  })
+
+  it("a membership add_member writes stays cached and allowed when another sync snapshots it before its write commits (R7)", async () => {
+    const created = await createMatter("R7 add_member window", ["associate_a"])
+    expect(created.status).toBe(200)
+    const matterId = ((await created.json()) as { result: { matter: { id: string } } }).result.matter.id
+    const store = getRuntimeStore()
+    const repos = await getRuntimeRepositories(store)
+    const clerkKey = store.memberKey(matterId, "clerk_a")
+    const sync = syncWhenCached(store, repos, (key) => key === clerkKey)
+    let res: Response
+    try {
+      res = await post(mattersPost, `${B}/api/d1/matters`, { action: "add_member", actorId: "partner_a", matterId, memberUserId: "clerk_a" })
+    } finally {
+      await sync.settle()
+    }
+    expect(sync.fired()).toBe(true)
+    expect(res.status).toBe(200)
+    expect((await db().collection("matter_members").doc(clerkKey).get()).exists).toBe(true)
+    expect(store.members.has(clerkKey)).toBe(true)
+    const clerk = store.users.get("clerk_a")
+    expect(clerk && canReadDocument(store, clerk, { firmId: "firmA", classification: "internal", matterId })).toBe(true)
+    const listed = await mattersGet(new Request(`${B}/api/d1/matters?userId=clerk_a&limit=100&cursor=0`))
+    expect(listed.status).toBe(200)
+    expect(await listed.text()).toContain(matterId)
   })
 
   it("a document row whose matterId is missing or empty is not the loose vault: the clerk's download is 403 and the list leaves it out (C2)", async () => {

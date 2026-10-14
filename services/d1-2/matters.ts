@@ -1,6 +1,6 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
-import type { SpineStore } from "@/platform/spine/store"
+import type { Matter, SpineStore } from "@/platform/spine/store"
 import { notifyAccounts } from "@/platform/p4/intimation"
 
 export function createMatter(
@@ -77,6 +77,21 @@ export function assignMatterMember(
   store: SpineStore,
   input: { actorId: string; matterId: string; userId: string }
 ) {
+  const { matter, member } = validateMatterAssignment(store, input)
+  cacheMember(store, member)
+  recordMatterMemberAdd(store, input.actorId, matter, input.userId)
+  return member
+}
+
+/**
+ * Every check `assignMatterMember` makes, in the same order and with the same errors, and nothing cached (audit F14
+ * R7): the matters route validates, persists the membership, and only then caches it (`cacheMember`), so a member sync
+ * whose listing is read after the membership is cached always lists it.
+ */
+export function validateMatterAssignment(
+  store: SpineStore,
+  input: { actorId: string; matterId: string; userId: string }
+): { matter: Matter; member: { matterId: string; userId: string; firmId: string } } {
   const actor = store.users.get(input.actorId)
   if (!actor) throw new PublicError("unknown actor")
   const matter = store.matters.get(input.matterId)
@@ -94,9 +109,15 @@ export function assignMatterMember(
     throw new MembershipAssignmentError("not_member", "only a member of the matter assigns its members")
   }
   validateMatterAssignee(store, matter.firmId, input.userId)
-  addMember(store, input.matterId, input.userId, matter.firmId)
-  recordMatterMemberAdd(store, actor.id, matter, input.userId)
-  return { matterId: input.matterId, userId: input.userId, firmId: matter.firmId }
+  return { matter, member: { matterId: input.matterId, userId: input.userId, firmId: matter.firmId } }
+}
+
+/**
+ * Caches a membership that has been validated and persisted (audit F14 R7). Nothing here can fail after the write: the
+ * checks `addMember` makes are made before it (`validateMatterAssignment`, or `validateMatterAssignee` at create).
+ */
+export function cacheMember(store: SpineStore, member: { matterId: string; userId: string; firmId: string }): void {
+  store.members.set(store.memberKey(member.matterId, member.userId), { ...member })
 }
 
 /**

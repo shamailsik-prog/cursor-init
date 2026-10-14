@@ -41,6 +41,7 @@ export const LEGACY_D1_NEXT_WRITES_TEST_FILES = [
   "tests/audit-f01-production-persistence.e2e.test.ts",
   "tests/f03.persistence-rollback.test.ts",
   "tests/f14-document-clearance.firestore.test.ts",
+  "tests/f14-member-write-order.test.ts",
   "tests/platform.surface.test.ts",
   "tests/security.review-round2.test.ts",
 ] as const
