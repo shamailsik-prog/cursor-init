@@ -74,3 +74,4 @@ ui-debug.log
 reports/
 functions/.stryker-tmp/
 functions/reports/
+test-results/

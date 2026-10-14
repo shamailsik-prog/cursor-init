@@ -42,6 +42,8 @@ jobs:
       - run: npm --prefix functions ci
       - name: Typecheck
         run: npm run typecheck
+      - name: Typecheck tests
+        run: npm run typecheck:tests
       - name: Lint
         if: ${{ !cancelled() }}
         run: npm run lint
@@ -89,6 +91,41 @@ jobs:
       - run: npm ci
       - name: Rules and persistence suites (Firestore emulator)
         run: npm run test:rules
+
+  console-f02:
+    name: Console F02 (emulator e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+      - run: npm ci
+      - name: Functions install and build
+        run: npm --prefix functions ci && npm --prefix functions run build
+      - name: F02 console Functions client (Auth + Firestore emulators)
+        run: npm run test:f02-console-auth
+      - name: F02 Functions HTTP emulator
+        run: npm run test:f02-functions-http
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+      - name: F02 browser console auth (Playwright)
+        run: npm run test:e2e:console-auth
 
   functions:
     name: Cloud Functions
