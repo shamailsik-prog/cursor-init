@@ -63,6 +63,8 @@ Source: `docs/architecture/SIKANDER_AI_Architecture_Set_v19.txt`.
 | 12 | An "authority reachable" marker on gate results | Not built | New stored data, which the fix-first freeze treats as a feature. |
 | 13 | Reader role | `corpus_reader` | It is the spec role. A new role would need an erratum. |
 
+**Amendment to ruling 13 (#51 fix round 1, D-3; plan D21):** the draft gate's reader is a member of `corpus_authority_reader` only. 004 creates that role, and it can read just the four `v_authority_*` views and `corpus_metadata`. `corpus_reader` keeps 001's grants (FA-DATA-003 stays its own finding).
+
 ## 4. PR 1: F20 (with F22), corpus_service only
 
 - **New `scraper/trust.py`.**

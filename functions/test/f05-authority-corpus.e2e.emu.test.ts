@@ -344,8 +344,8 @@ describe("F05: the draft gate answers from the promoted Annex A corpus (end to e
     {
       name: "u3 a revoked grant on v_authority_citation",
       arrange: async () => {
-        await ifExists("public.v_authority_citation", "REVOKE SELECT ON public.v_authority_citation FROM corpus_reader")
-        return () => ifExists("public.v_authority_citation", "GRANT SELECT ON public.v_authority_citation TO corpus_reader")
+        await ifExists("public.v_authority_citation", "REVOKE SELECT ON public.v_authority_citation FROM corpus_authority_reader")
+        return () => ifExists("public.v_authority_citation", "GRANT SELECT ON public.v_authority_citation TO corpus_authority_reader")
       },
     },
     {

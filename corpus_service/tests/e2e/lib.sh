@@ -244,18 +244,38 @@ annex_a_checks() {
 }
 
 # annex_a_reader_checks PREFIX PAGE: after probe.py db-runtime published "2099 SCMR PAGE" (publish_batch)
-# and "2099 SCMR PAGE+1" (promotion), corpus_reader sees both through the promoted-only views, and only
-# through them.
+# and "2099 SCMR PAGE+1" (promotion), corpus_reader sees both through 001's promoted-only views, and only
+# through them. The draft gate's reader role, 004's corpus_authority_reader (audit F05, #51 R1 D-3, plan D21),
+# sees both through v_authority_citation and reads nothing of 001's views or tables; corpus_reader holds
+# nothing on 004's views.
 annex_a_reader_checks() {
   local p=$1 page=$2
   expect_out "$p: corpus_reader reads both published judgments (publish_batch, promotion) through v_judgment and v_citation" '^2$' \
     as_role_local corpus_reader "select count(*) from public.v_citation c join public.v_judgment j on j.id = c.judgment_id
       where c.citation_text in ('2099 SCMR $page', '2099 SCMR $((page + 1))')"
-  expect_out "$p: corpus_reader reads both published judgments through 004's v_authority_citation (audit F05)" '^2$' \
-    as_role_local corpus_reader "select count(*) from public.v_authority_citation
-      where citation_text in ('2099 SCMR $page', '2099 SCMR $((page + 1))')"
   expect_refused "$p: corpus_reader cannot read the judgment table itself, only the views" 'permission denied for table judgment' \
     as_role_local corpus_reader "select count(*) from public.judgment"
+  expect_out "$p: corpus_authority_reader reads both published judgments through 004's v_authority_citation (audit F05)" '^2$' \
+    as_role_local corpus_authority_reader "select count(*) from public.v_authority_citation
+      where citation_text in ('2099 SCMR $page', '2099 SCMR $((page + 1))')"
+  expect_refused "$p: corpus_authority_reader cannot read 001's v_judgment" 'permission denied for view v_judgment' \
+    as_role_local corpus_authority_reader "select count(*) from public.v_judgment"
+  expect_refused "$p: corpus_authority_reader cannot read the judgment table" 'permission denied for table judgment' \
+    as_role_local corpus_authority_reader "select count(*) from public.judgment"
+  expect_refused "$p: corpus_reader cannot read 004's v_authority_citation" 'permission denied for view v_authority_citation' \
+    as_role_local corpus_reader "select count(*) from public.v_authority_citation"
+  expect_out "$p: corpus_reader holds no privilege at all on 004's four authority views" '^0$' \
+    as_superuser_local "select count(*) from pg_class c cross join lateral aclexplode(c.relacl) e
+      where c.relnamespace = 'public'::regnamespace and c.relname like 'v\_authority\_%'
+        and e.grantee = 'corpus_reader'::regrole"
+  expect_out "$p: corpus_authority_reader is NOLOGIN, holds no attribute or membership, and reads exactly the four views and corpus_metadata" \
+    '^false\|0\|corpus_metadata,v_authority_citation,v_authority_pending_adverse,v_authority_section_version,v_authority_treatment$' \
+    as_superuser_local "select (r.rolcanlogin or r.rolsuper or r.rolcreatedb or r.rolcreaterole or r.rolreplication
+        or r.rolbypassrls)::text || '|' || (select count(*) from pg_auth_members m where m.member = r.oid) || '|'
+        || (select string_agg(c.relname, ',' order by c.relname collate \"C\") from pg_class c
+             where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm', 'f')
+               and has_any_column_privilege(r.oid, c.oid, 'SELECT'))
+      from pg_roles r where r.rolname = 'corpus_authority_reader'"
 }
 
 # expect_lines LABEL EXPECTED ACTUAL: two newline-separated lists must hold the same lines (sorted).

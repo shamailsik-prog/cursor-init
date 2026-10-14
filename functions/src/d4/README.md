@@ -132,16 +132,27 @@ A call carries only a canonical citation, a judgment id or a section key (with a
 | `SIKANDER_CORPUS_MAX_STALENESS_HOURS` | Required (spec ruling 5): an integer from 1 to 8760. |
 | `SIKANDER_CORPUS_READER_CA` | The PEM CA certificate, required whenever TLS is. |
 
-In production the URL must ask for `verify-full`. Outside production, plaintext is allowed to loopback only. The login must be a `corpus_reader` member and nothing more (ruling 13). The store refuses a superuser, a `corpus_writer` or `corpus_declassify` member, or a session that is not read-only. The deployment binding (the secret, the corpus host, the network path) is out of scope here (spec §7).
+In production the URL must ask for `verify-full`. Outside production, plaintext is allowed to loopback only. The deployment binding (the secret, the corpus host, the network path) is out of scope here (spec §7).
+
+The login must be a member of `corpus_authority_reader`, the NOLOGIN role 004 creates (ruling 13 as amended by plan D21; #51 fix round 1, D-3). That role can read the four `v_authority_*` views and `corpus_metadata`, and nothing else. It is not 001's `corpus_reader`, which can also read `v_judgment`, `v_source_provenance` and the other `v_*` views (FA-DATA-003). Before its first read, and again every 30 s, the store checks the session and refuses it (`wrong_role`) unless all of these hold:
+
+- it inherits `corpus_authority_reader`;
+- it is not a superuser and holds none of CREATEROLE, BYPASSRLS or REPLICATION;
+- it is not a member, directly or through any role, inherited or SET-only, of `corpus_reader`, `corpus_writer`, `corpus_declassify`, `pg_read_all_data` or `pg_write_all_data`, and it does not own the database;
+- it holds no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT, UPDATE or REFERENCES) on any relation in schema `public`;
+- it can SELECT no relation in schema `public` (the table or any column, however granted, including to PUBLIC) other than the four views and `corpus_metadata`;
+- the session is read-only.
+
+A database without 004 has no `corpus_authority_reader`, and that is `schema_missing`.
 
 The store reads only 004's views (`postgres/ddl/004_authority_read_views.sql`) and `corpus_metadata`. A row shows only when it is promoted, written by a finished publication, and carries complete provenance, and so is every parent it reports. A judgment must also be public and have a bench. A row a superuser wrote outside any publication never shows (ruling 2). An overruling the reader cannot show (held for review, or hidden by these rules) is never absent. `listTreatments` reports it as `PENDING_OVERRULING`, an overruling whose bench cannot be relied on. On its own the citation reads UNVERIFIED (ruling 3), never VERIFIED. Beside a qualifying overruling the citation stays OVERRULED: a pending overruling never hides the strongest warning (P4-2; #51 fix round 1, D-1). `InMemoryAuthorityStore.addPendingOverruling` gives the same answer, for O-59 parity. Jurisdiction codes map to Annex A values by upper-case equality only (`FEDERAL` is `Federal`; `PK` maps to nothing, ruling 6). A section version is usable only with a confidence strictly above 0.5 (ruling 4). Dates travel as text, so the process time zone cannot move them.
 
 It fails closed. Every failure throws `AuthorityUnavailableError(reason)`, which the gate reads as UNVERIFIED / TEMPORAL_UNAVAILABLE. The gate catches that class and only that class: any other error still fails the request. The reasons are:
 
-- `unreachable`, `timeout`, `auth`, `tls`, `permission`, `schema_missing`: the connection or the server;
+- `unreachable`, `timeout`, `auth`, `tls`, `permission`, `schema_missing`: the connection or the server (`schema_missing` also when 004's role is absent);
 - `contract_missing`: `publication_contract` is not `1`, or `last_refresh` is malformed or missing;
 - `stale`: `last_refresh` is older than the bound, or more than 5 minutes ahead;
-- `wrong_role`: the login is not a plain corpus reader;
+- `wrong_role`: the session can do more than read the four views and `corpus_metadata` (above);
 - `pending_review`: kept for adapters that cannot list treatments at all; the corpus store reports a pending overruling as a fact instead (above);
 - `inconsistent`: data that breaks the contract;
 - `circuit_open`: the breaker is open;

@@ -139,7 +139,7 @@ annex_a_checks "Annex A at init"
 expect_refused "postgres: app role over TLS cannot INSERT into an Annex A table directly" 'permission denied for table judgment' \
   psql_c "$APP_CONN sslmode=verify-full sslrootcert=/ca/ca.crt" \
   "insert into judgment (case_title) values ('F19 E2E Probe v. Test 2099')" -e PGPASSWORD="$APP_DB_PASSWORD"
-for role in corpus_reader corpus_declassify; do
+for role in corpus_reader corpus_declassify corpus_authority_reader; do
   expect_refused "postgres: app role over TLS cannot SET ROLE $role (not a member)" 'permission denied to set role' \
     psql_c "$APP_CONN sslmode=verify-full sslrootcert=/ca/ca.crt" "set role $role" -e PGPASSWORD="$APP_DB_PASSWORD"
 done
@@ -208,24 +208,26 @@ writer_membership() {
 }
 expect_out "re-running 20-provision-roles.sh on the running stack succeeds (prints ready)" 'ready in legal_scraper' provision
 annex_a_checks "after re-provisioning"
-# The grants 001/003 make to corpus_writer, corpus_reader and corpus_declassify, as initialised (object:grantee:
-# privilege:grantor). Every reset below (REVOKE ... CASCADE included, #50 round 2) must leave exactly these.
+# The grants 001/003/004 make to corpus_writer, corpus_reader, corpus_declassify and corpus_authority_reader (004,
+# #51 R1 D-3), as initialised (object:grantee:privilege:grantor). Every reset below (REVOKE ... CASCADE included,
+# #50 round 2) must leave exactly these.
 ddl_role_grants() {
   as_superuser_local "select coalesce(string_agg(x, ',' order by x collate \"C\"), 'none') from (
       select a::text || ':' || g.rolname || ':' || e.privilege_type || ':' || pg_get_userbyid(e.grantor) as x
         from public.corpus_contract_relations() a join pg_class c on c.oid = a
         cross join lateral aclexplode(c.relacl) e join pg_roles g on g.oid = e.grantee
-       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify')
+       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify', 'corpus_authority_reader')
       union all
       select f.routine::text || ':' || g.rolname || ':' || e.privilege_type || ':' || pg_get_userbyid(e.grantor)
         from public.corpus_contract_routines() f join pg_proc p on p.oid = f.routine
         cross join lateral aclexplode(p.proacl) e join pg_roles g on g.oid = e.grantee
-       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify')) s"
+       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify', 'corpus_authority_reader')) s"
 }
 DDL_ROLE_GRANTS=$(ddl_role_grants 2>&1)
 for want in 'corpus_publication_begin\(text,text,text,text\):corpus_writer:EXECUTE:' \
             'declassify\(uuid,text,text,text\):corpus_declassify:EXECUTE:' 'v_judgment:corpus_reader:SELECT:' \
-            'judgment:corpus_writer:INSERT:'; do
+            'judgment:corpus_writer:INSERT:' 'v_authority_citation:corpus_authority_reader:SELECT:' \
+            'corpus_metadata:corpus_authority_reader:SELECT:'; do
   expect_out "control: the DDL's own grants are read ($want)" "$want" printf '%s' "$DDL_ROLE_GRANTS"
 done
 # Drift an operator (or an older script) could leave behind; a re-run must put every one of them back.
@@ -379,13 +381,16 @@ expect_out "a function, table, sequence and schema the superuser creates afterwa
 as_superuser_local "drop function public.f19_l2_probe(); drop table public.f19_l2_probe_t; drop sequence public.f19_l2_probe_s;
   drop schema f19_l2_s cascade; drop schema f19_l2_s2" >/dev/null 2>&1 || fail "L2: dropping the probe objects"
 if [ "$(ddl_role_grants 2>&1)" = "$DDL_ROLE_GRANTS" ]; then
-  pass "corpus_writer, corpus_reader and corpus_declassify keep exactly the DDL's grants after every reset (CASCADE removed none)"
+  pass "corpus_writer, corpus_reader, corpus_declassify and corpus_authority_reader keep exactly the DDL's grants after every reset (CASCADE removed none)"
 else
-  fail "corpus_writer, corpus_reader and corpus_declassify keep exactly the DDL's grants after every reset (CASCADE removed none)" \
+  fail "corpus_writer, corpus_reader, corpus_declassify and corpus_authority_reader keep exactly the DDL's grants after every reset (CASCADE removed none)" \
     "before: $DDL_ROLE_GRANTS; after: $(ddl_role_grants 2>&1)"
 fi
 expect_out "corpus_reader still reads v_judgment after the resets (its own grant is untouched)" '^true$' \
   as_superuser_local "select has_table_privilege('corpus_reader', 'public.v_judgment', 'SELECT')::text"
+expect_out "corpus_authority_reader still reads v_authority_citation and uses schema public after the resets" '^true\|true$' \
+  as_superuser_local "select has_table_privilege('corpus_authority_reader', 'public.v_authority_citation', 'SELECT') || '|'
+    || has_schema_privilege('corpus_authority_reader', 'public', 'USAGE')"
 expect_out "corpus_writer still executes corpus_publication_begin/finish and corpus_declassify declassify after the resets" \
   '^true\|true\|true$' \
   as_superuser_local "select has_function_privilege('corpus_writer', '$BEGIN_FN', 'EXECUTE') || '|'

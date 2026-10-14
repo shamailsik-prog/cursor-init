@@ -25,7 +25,7 @@ import { CORPUS_FIXTURES, type CorpusDb, type PublishSummary, createCorpusDb } f
 
 /**
  * The F05 corpus adapter (plan Tasks 6 and 7) against real Postgres: one database for this file, Annex A 001 -> 003
- * -> 004, seeded through the publication CLI as a corpus_writer member, read as a corpus_reader login. Runs only in
+ * -> 004, seeded through the publication CLI as a corpus_writer member, read as a corpus_authority_reader login. Runs only in
  * `npm run test:f05-authority` (F05_AUTHORITY_SUITE=1, D14). Fixtures follow P4-13 (2099, "Test Act 2099").
  */
 
@@ -48,8 +48,8 @@ const S5_V2 = "Section 5 as amended: sixty days."
 
 let db: CorpusDb
 const stores: PgAuthorityStore[] = []
-/** The role the corpus reader login must be a member of (ruling 13). */
-const READER_ROLE = "corpus_reader"
+/** The role the corpus reader login must be a member of (ruling 13 as amended by plan D21, #51 R1 D-3). */
+const READER_ROLE = "corpus_authority_reader"
 /** Login and helper roles a test created; dropped after the database. */
 const extraRoles: string[] = []
 /** Judgment id by canonical citation (the golden judgments) and by item key (the treatment fixtures). */
@@ -435,6 +435,43 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     }
   })
 
+  // #51 R1 D-3: the login may read the four authority views and corpus_metadata, and no other relation in public.
+  // 001's corpus_reader can read v_judgment, v_source_provenance and the rest (FA-DATA-003), so membership of it is
+  // refused too, however it is held.
+  const READS_MORE_THAN_THE_VIEWS: Array<{ shape: string; sql: string[]; undo?: string[] }> = [
+    { shape: "a member of corpus_reader", sql: ["GRANT corpus_reader TO $ROLE"] },
+    { shape: "a member of corpus_reader without inheriting it (SET only)", sql: ["GRANT corpus_reader TO $ROLE WITH INHERIT FALSE, SET TRUE"] },
+    { shape: "able to SELECT 001's v_judgment", sql: ["GRANT SELECT ON public.v_judgment TO $ROLE"] },
+    { shape: "able to SELECT 001's v_source_provenance", sql: ["GRANT SELECT ON public.v_source_provenance TO $ROLE"] },
+    { shape: "able to SELECT the judgment table", sql: ["GRANT SELECT ON public.judgment TO $ROLE"] },
+    { shape: "able to SELECT one column of source_provenance", sql: ["GRANT SELECT (source_url) ON public.source_provenance TO $ROLE"] },
+    { shape: "able to SELECT the publication audit", sql: ["GRANT SELECT ON public.corpus_publication TO $ROLE"] },
+    {
+      shape: "able to SELECT v_judgment through a grant to PUBLIC",
+      sql: ["GRANT SELECT ON public.v_judgment TO PUBLIC"],
+      undo: ["REVOKE SELECT ON public.v_judgment FROM PUBLIC"],
+    },
+    {
+      shape: "able to SELECT a non-Annex A table in public",
+      sql: ["CREATE TABLE public.f05x_other (id int)", "GRANT SELECT ON public.f05x_other TO $ROLE"],
+      undo: ["DROP TABLE public.f05x_other"],
+    },
+  ]
+
+  it.each(READS_MORE_THAN_THE_VIEWS)("wrong_role: a reader login that is also $shape (#51 R1 D-3)", async ({ sql, undo }) => {
+    const config = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`, ...sql])
+    try {
+      await expect(store(config).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+    } finally {
+      for (const statement of undo ?? []) await db.admin.query(statement)
+    }
+  })
+
+  it("wrong_role: a corpus_reader login that is not a corpus_authority_reader member (#51 R1 D-3)", async () => {
+    const config = await loginWith(["GRANT corpus_reader TO $ROLE"])
+    await expect(store(config).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+  })
+
   it("wrong_role: a writer membership through an intermediate role, and the plain reader login still reads (control)", async () => {
     const mid = `f05x_mid_${randomUUID().slice(0, 8)}`
     await db.admin.query(`CREATE ROLE "${mid}" NOLOGIN IN ROLE corpus_writer`)
@@ -446,11 +483,18 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
   })
 
   it("permission and schema_missing: a revoked grant, a renamed view", async () => {
-    await withState("REVOKE SELECT ON public.v_authority_citation FROM corpus_reader", "GRANT SELECT ON public.v_authority_citation TO corpus_reader", async () => {
+    await withState("REVOKE SELECT ON public.v_authority_citation FROM corpus_authority_reader", "GRANT SELECT ON public.v_authority_citation TO corpus_authority_reader", async () => {
       await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("permission"))
     })
-    await withState("ALTER VIEW public.v_authority_citation RENAME TO v_authority_citation_gone", "ALTER VIEW public.v_authority_citation_gone RENAME TO v_authority_citation", async () => {
+    // A view the login cannot find is schema_missing. Renamed, but still readable under its new name, it is a relation
+    // outside the four views and corpus_metadata, so the session check refuses it first (#51 R1 D-3).
+    const gone = "ALTER VIEW public.v_authority_citation RENAME TO v_authority_citation_gone"
+    const back = "ALTER VIEW public.v_authority_citation_gone RENAME TO v_authority_citation"
+    await withState(`${gone}; REVOKE SELECT ON public.v_authority_citation_gone FROM corpus_authority_reader`, `GRANT SELECT ON public.v_authority_citation_gone TO corpus_authority_reader; ${back}`, async () => {
       await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("schema_missing"))
+    })
+    await withState(gone, back, async () => {
+      await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
     })
   })
 
@@ -461,7 +505,7 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     // A role that does not exist, and one that may not log in (28000). The server's password check itself (28P01)
     // depends on its pg_hba (the local test server trusts loopback), so classifyPgError's table covers that code.
     const nologin = `f05_nologin_${randomUUID().slice(0, 8)}`
-    await withState(`CREATE ROLE "${nologin}" NOLOGIN IN ROLE corpus_reader`, `DROP ROLE "${nologin}"`, async () => {
+    await withState(`CREATE ROLE "${nologin}" NOLOGIN IN ROLE corpus_authority_reader`, `DROP ROLE "${nologin}"`, async () => {
       for (const user of [nologin, `f05_absent_${randomUUID().slice(0, 8)}`]) {
         const refused = new URL(db.readerUrl)
         refused.username = user
@@ -546,6 +590,7 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
       [err({ code: "42P01" }), "schema_missing"],
       [err({ code: "42703" }), "schema_missing"],
       [err({ code: "3D000" }), "schema_missing"],
+      [err({ code: "42704" }), "schema_missing"],
       [err({ code: "08006" }), "unreachable"],
       [err({ code: "08001" }), "unreachable"],
       [err({ code: "57P01" }), "unreachable"],

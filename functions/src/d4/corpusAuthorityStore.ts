@@ -1,7 +1,8 @@
 /**
  * The corpus adapter for the draft gate (audit F05; spec §6, PR 3): an AuthorityStore over the firm's promoted Annex A
  * corpus on Postgres. It reads only 004's views (v_authority_citation, v_authority_treatment,
- * v_authority_section_version, v_authority_pending_adverse) and corpus_metadata, as a corpus_reader member (ruling 13),
+ * v_authority_section_version, v_authority_pending_adverse) and corpus_metadata, as a corpus_authority_reader member
+ * (ruling 13 as amended by plan D21),
  * through a small pool. Calls carry only a canonical citation, a judgment id or a section key (L19.11 #3).
  *
  * It fails closed. Anything it cannot answer throws AuthorityUnavailableError, which the gate reads as UNVERIFIED /
@@ -101,21 +102,32 @@ const SECTIONS_SQL = `SELECT version_no, effective_from::text AS effective_from,
  ORDER BY effective_from, version_no`
 // The session first (D7): a role check reads no table, so a writer or superuser login is wrong_role, not a permission
 // error on corpus_metadata. Then the corpus metadata the reader needs (F19 D30, D19).
-// D7 as #51 R1 D-2 hardened it: the login reads, and can do nothing else. It must inherit the reader role; it must not
-// be a superuser or hold CREATEROLE, BYPASSRLS or REPLICATION; it must not be a member (directly or through any role)
-// of the writer or declassify roles, of pg_read_all_data or pg_write_all_data, or own the database (pg_database_owner);
-// and it must hold no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT,
-// UPDATE or REFERENCES) on any relation in schema public.
-const ROLE_SQL = `SELECT pg_has_role('corpus_reader', 'USAGE') AS reader,
+// D7 as #51 R1 D-2 and D-3 hardened it: the login reads the four views and corpus_metadata, and can do nothing else.
+// - It must inherit corpus_authority_reader (004's role, plan D21).
+// - It must not be a superuser or hold CREATEROLE, BYPASSRLS or REPLICATION.
+// - It must not be a member, directly or through any role, inherited or SET-only, of corpus_reader (001's reader, which
+//   can read v_judgment and the other v_* views), corpus_writer, corpus_declassify, pg_read_all_data or
+//   pg_write_all_data, and it must not own the database (pg_database_owner).
+// - It must hold no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT,
+//   UPDATE or REFERENCES) on any relation in schema public.
+// - It must be able to SELECT (the table or any column) no relation in schema public except READABLE: no Annex A
+//   base table, no 001 v_* view, and nothing else there either, however granted (directly, by role, or to PUBLIC).
+// A database without 004 has no corpus_authority_reader: pg_has_role raises 42704, which is schema_missing.
+const READABLE = ["v_authority_citation", "v_authority_treatment", "v_authority_section_version", "v_authority_pending_adverse", "corpus_metadata"]
+const ROLE_SQL = `SELECT pg_has_role('corpus_authority_reader', 'USAGE') AS reader,
        coalesce((SELECT rolsuper OR rolcreaterole OR rolbypassrls OR rolreplication
                    FROM pg_catalog.pg_roles WHERE rolname = current_user), true) AS elevated,
-       pg_has_role('corpus_writer', 'MEMBER') OR pg_has_role('corpus_declassify', 'MEMBER')
+       pg_has_role('corpus_reader', 'MEMBER') OR pg_has_role('corpus_writer', 'MEMBER') OR pg_has_role('corpus_declassify', 'MEMBER')
          OR pg_has_role('pg_read_all_data', 'MEMBER') OR pg_has_role('pg_write_all_data', 'MEMBER')
          OR pg_has_role('pg_database_owner', 'MEMBER') AS other_role,
        EXISTS (SELECT 1 FROM pg_catalog.pg_class c
                 WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND (has_table_privilege(c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
                        OR has_any_column_privilege(c.oid, 'INSERT,UPDATE,REFERENCES'))) AS writes,
+       EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                  AND c.relname <> ALL ($1::text[])
+                  AND has_any_column_privilege(c.oid, 'SELECT')) AS reads_more,
        current_setting('transaction_read_only') AS read_only`
 const METADATA_SQL = `SELECT (SELECT value FROM public.corpus_metadata WHERE key = 'publication_contract') AS contract,
        (SELECT value FROM public.corpus_metadata WHERE key = 'last_refresh') AS last_refresh`
@@ -144,6 +156,8 @@ const SQLSTATE_REASONS: Readonly<Record<string, AuthorityUnavailableReason>> = {
   "42P01": "schema_missing",
   "42703": "schema_missing",
   "3D000": "schema_missing",
+  // undefined_object: the role 004 creates (corpus_authority_reader) is not there.
+  "42704": "schema_missing",
   "57P01": "unreachable",
   "57P02": "unreachable",
   "57P03": "unreachable",
@@ -323,10 +337,18 @@ export class PgAuthorityStore implements AuthorityStore {
   private async checkState(): Promise<void> {
     const at = this.now()
     if (this.stateCheckedAt !== null && at - this.stateCheckedAt < STATE_TTL_MS) return
-    const role = (await this.run(ROLE_SQL, [])).rows[0] as
-      | { reader: unknown; elevated: unknown; other_role: unknown; writes: unknown; read_only: unknown }
+    const role = (await this.run(ROLE_SQL, [READABLE])).rows[0] as
+      | { reader: unknown; elevated: unknown; other_role: unknown; writes: unknown; reads_more: unknown; read_only: unknown }
       | undefined
-    if (!role || role.reader !== true || role.elevated !== false || role.other_role !== false || role.writes !== false || role.read_only !== "on") {
+    if (
+      !role ||
+      role.reader !== true ||
+      role.elevated !== false ||
+      role.other_role !== false ||
+      role.writes !== false ||
+      role.reads_more !== false ||
+      role.read_only !== "on"
+    ) {
       throw unavailable("wrong_role")
     }
     const meta = (await this.run(METADATA_SQL, [])).rows[0] as { contract: unknown; last_refresh: unknown } | undefined

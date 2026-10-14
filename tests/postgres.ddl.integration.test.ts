@@ -1517,14 +1517,34 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
 
   // ---- F05 (004_authority_read_views.sql): the reader's promoted-only authority views ------------------
   // Rows are published as corpus_writer (publishAs, "audit-rows"); states a publication cannot produce are forced
-  // by the superuser, which the guard exempts (ruling 2). The reader is the corpus_reader login.
+  // by the superuser, which the guard exempts (ruling 2). The reader is a login whose only role is
+  // corpus_authority_reader (ruling 13 as amended by plan D21, #51 R1 D-3), created once with a password generated
+  // for this run.
   const AUTHORITY_VIEWS = ["v_authority_citation", "v_authority_pending_adverse", "v_authority_section_version", "v_authority_treatment"];
   const TREATMENT_SQL = `INSERT INTO treatment (id, treating_judgment_id, treated_judgment_id, treatment, treating_bench_type,
       confidence, source_id, review_status, publication_id)
     VALUES ($1, $2, $3, $4, 'larger', $5, $6, $7, $8)`;
 
+  const F05_READER = "pgddl_f05_reader";
+  let f05ReaderPassword: string | null = null;
+  async function f05Reader(): Promise<pg.Client> {
+    if (f05ReaderPassword === null) {
+      const password = createHash("sha256").update(randomUUID()).digest("hex");
+      await admin.query(
+        `DO $$ BEGIN
+           CREATE ROLE ${F05_READER} LOGIN;
+         EXCEPTION WHEN duplicate_object THEN NULL;
+         END $$;`,
+      );
+      await admin.query(`ALTER ROLE ${F05_READER} LOGIN PASSWORD '${password}'`);
+      await admin.query(`GRANT corpus_authority_reader TO ${F05_READER}`);
+      f05ReaderPassword = password;
+    }
+    return roleClient(F05_READER, f05ReaderPassword);
+  }
+
   async function asReader<T>(fn: (reader: pg.Client) => Promise<T>): Promise<T> {
-    const reader = roleClient("corpus_reader", "reader");
+    const reader = await f05Reader();
     await reader.connect();
     try {
       return await fn(reader);
@@ -1623,7 +1643,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       [section],
     )).rows);
 
-  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_reader only, no provenance column, and corpus_contract_relations() lists them (33) while corpus_contract_routines() still lists 12", async () => {
+  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_authority_reader only, no provenance column, and corpus_contract_relations() lists them (33) while corpus_contract_routines() still lists 12", async () => {
     const views = await admin.query(
       `SELECT c.relname, c.reloptions FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind = 'v' AND c.relname LIKE 'v\\_authority\\_%' ORDER BY 1`,
@@ -1631,15 +1651,53 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     expect(views.rows).toEqual(AUTHORITY_VIEWS.map((relname) => ({ relname, reloptions: ["security_barrier=true"] })));
     for (const view of AUTHORITY_VIEWS) {
       const p = await admin.query(
-        `SELECT has_table_privilege('corpus_reader', $1, 'SELECT') AS reader,
-                has_table_privilege('corpus_reader', $1, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS reader_writes,
+        `SELECT has_table_privilege('corpus_authority_reader', $1, 'SELECT') AS reader,
+                has_table_privilege('corpus_authority_reader', $1, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS reader_writes,
+                has_any_column_privilege('corpus_reader', $1, 'SELECT') AS corpus_reader,
                 has_table_privilege('corpus_writer', $1, 'SELECT') AS writer,
                 has_table_privilege('corpus_declassify', $1, 'SELECT') AS declassify,
                 has_table_privilege('public', $1, 'SELECT') AS everyone`,
         [`public.${view}`],
       );
-      expect({ view, ...p.rows[0] }).toEqual({ view, reader: true, reader_writes: false, writer: false, declassify: false, everyone: false });
+      expect({ view, ...p.rows[0] }).toEqual({
+        view, reader: true, reader_writes: false, corpus_reader: false, writer: false, declassify: false, everyone: false,
+      });
     }
+    // #51 R1 D-3 (plan D21): the reader role logs in as nothing, holds no attribute and no membership, and can read
+    // exactly the four views and corpus_metadata in public, nothing else (001's corpus_reader keeps its own grants).
+    const role = await admin.query(
+      `SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolinherit,
+              (SELECT count(*)::int FROM pg_auth_members m WHERE m.member = r.oid) AS memberships,
+              has_schema_privilege(r.oid, 'public', 'USAGE') AS schema_usage,
+              has_schema_privilege(r.oid, 'public', 'CREATE') AS schema_create
+         FROM pg_roles r WHERE rolname = 'corpus_authority_reader'`,
+    );
+    expect(role.rows).toEqual([{
+      rolcanlogin: false, rolsuper: false, rolcreatedb: false, rolcreaterole: false, rolreplication: false,
+      rolbypassrls: false, rolinherit: false, memberships: 0, schema_usage: true, schema_create: false,
+    }]);
+    const readable = await admin.query(
+      `SELECT string_agg(c.relname, ',' ORDER BY c.relname) AS names,
+              bool_or(has_table_privilege('corpus_authority_reader', c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                      OR has_any_column_privilege('corpus_authority_reader', c.oid, 'INSERT,UPDATE,REFERENCES')) AS writes
+         FROM pg_class c
+        WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND has_any_column_privilege('corpus_authority_reader', c.oid, 'SELECT')`,
+    );
+    expect(readable.rows[0]).toEqual({
+      names: "corpus_metadata,v_authority_citation,v_authority_pending_adverse,v_authority_section_version,v_authority_treatment",
+      writes: false,
+    });
+    const writesAnywhere = await admin.query(
+      `SELECT count(*)::int AS n FROM pg_class c
+        WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND (has_table_privilege('corpus_authority_reader', c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+               OR has_any_column_privilege('corpus_authority_reader', c.oid, 'INSERT,UPDATE,REFERENCES'))`,
+    );
+    expect(writesAnywhere.rows[0].n).toBe(0);
+    // 001's grants are unchanged (FA-DATA-003 stays its own finding): corpus_reader still reads v_judgment.
+    const legacy = await admin.query("SELECT has_table_privilege('corpus_reader', 'public.v_judgment', 'SELECT') AS v_judgment");
+    expect(legacy.rows[0]).toEqual({ v_judgment: true });
     const columns = await admin.query(
       `SELECT table_name, string_agg(column_name || ':' || data_type, ',' ORDER BY ordinal_position) AS cols
          FROM information_schema.columns WHERE table_schema = 'public' AND table_name LIKE 'v\\_authority\\_%' GROUP BY 1 ORDER BY 1`,
@@ -1783,8 +1841,17 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       expect(await citationRows(citation), citation).toEqual([]);
       seeded.push(judgment);
     }
-    const viaV1 = await asReader(async (r) => (await r.query("SELECT count(*)::int AS n FROM v_judgment WHERE id = ANY($1::uuid[])", [seeded])).rows[0].n);
+    // 001's v_judgment, as 001's corpus_reader (the F05 reader role cannot read it, plan D21).
+    const legacyReader = roleClient("corpus_reader", "reader");
+    await legacyReader.connect();
+    let viaV1: number;
+    try {
+      viaV1 = (await legacyReader.query("SELECT count(*)::int AS n FROM v_judgment WHERE id = ANY($1::uuid[])", [seeded])).rows[0].n;
+    } finally {
+      await legacyReader.end();
+    }
     expect(viaV1).toBe(2);
+    await expect(asReader((r) => r.query("SELECT count(*) FROM v_judgment"))).rejects.toThrow(/permission denied for view v_judgment/);
     const prov = await insertProvenance(admin);
     // A seeded citation under a published judgment: the citation's own publication counts.
     const published = await publishCitedJudgment(3001, "2099 SCMR 926303");

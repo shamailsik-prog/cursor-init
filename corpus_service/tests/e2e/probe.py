@@ -207,6 +207,9 @@ ANNEX_A_RELATIONS = (
 ANY_TABLE_PRIVILEGE = "SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"
 ANY_COLUMN_PRIVILEGE = "SELECT,INSERT,UPDATE,REFERENCES"
 PROBE_TITLE = "F19 E2E Probe v. Test 2099"  # synthetic: no real authority is written
+# 001's reader and the draft gate's reader (004's corpus_authority_reader, audit F05, #51 R1 D-3): neither
+# application role is a member of either.
+READER_ROLES = ("corpus_reader", "corpus_authority_reader")
 
 
 def annex_a_page():
@@ -367,6 +370,7 @@ async def annex_a_runtime(engine, expected):
     state, row = await _in_rolled_back_tx(engine, "SELECT current_user", role="corpus_writer")
     check("runtime role can SET ROLE corpus_writer", state == "SUCCEEDED" and row is not None and row[0] == "corpus_writer",
           f"result={state} row={row}")
+    await _reader_roles_refused(engine, "runtime role")
     for label, sql, want in (
         ("INSERT into corpus_publication_grant", "INSERT INTO public.corpus_publication_grant DEFAULT VALUES",
          INSUFFICIENT_PRIVILEGE),
@@ -413,6 +417,16 @@ async def annex_a_migrate(engine):
     ):
         state, _row = await _in_rolled_back_tx(engine, sql)
         check(f"migration role: {label} is refused (insufficient_privilege)", state == INSUFFICIENT_PRIVILEGE,
+              f"result={state}")
+    await _reader_roles_refused(engine, "migration role")
+
+
+async def _reader_roles_refused(engine, who):
+    """Neither reader role can be taken on (SET ROLE needs a membership): a role that does not exist
+    would be refused with invalid_parameter_value instead, so the reader roles must exist."""
+    for reader in READER_ROLES:
+        state, _row = await _in_rolled_back_tx(engine, "SELECT 1", role=reader)
+        check(f"{who} cannot SET ROLE {reader} (not a member)", state == f"SET ROLE refused: {INSUFFICIENT_PRIVILEGE}",
               f"result={state}")
 
 

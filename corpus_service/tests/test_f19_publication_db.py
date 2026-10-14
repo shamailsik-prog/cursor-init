@@ -239,7 +239,7 @@ def test_f19_contract_routines_list_every_annex_a_function_and_who_may_execute_i
     grants = admin_fetch(
         corpus_db,
         "SELECT CAST(r.routine AS text), g.n FROM corpus_contract_routines() r "
-        "CROSS JOIN (VALUES ('corpus_writer'), ('corpus_reader'), ('corpus_declassify')) AS g(n) "
+        "CROSS JOIN (VALUES ('corpus_writer'), ('corpus_reader'), ('corpus_declassify'), ('corpus_authority_reader')) AS g(n) "
         "WHERE NOT r.public_execute AND has_function_privilege(g.n, r.routine, 'EXECUTE')",
     )
     assert sorted(grants) == [

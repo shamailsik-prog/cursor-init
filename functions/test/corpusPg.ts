@@ -2,7 +2,7 @@
  * The F05 Postgres harness (plan D14, D15): one fresh database per test file on the SIKANDER_POSTGRES_URL server
  * (a superuser URL of a pgvector/pgvector:pg16 server), with the Annex A DDL applied as that superuser, a writer
  * login (a corpus_writer member by SET ROLE only, as PR 2b provisions the runtime role) and a reader login (a
- * corpus_reader member). The corpus is seeded the way an operator seeds it: through PR 2's publication CLI,
+ * corpus_authority_reader member and nothing else, ruling 13 as amended by plan D21). The corpus is seeded the way an operator seeds it: through PR 2's publication CLI,
  * `python -m scraper.publication.cli publish`, as the writer.
  *
  * The suites that use it run only with F05_AUTHORITY_SUITE=1 (functions/vitest.config.ts excludes them otherwise),
@@ -105,7 +105,7 @@ export async function createCorpusDb(suite: string): Promise<CorpusDb> {
     await admin.query(`CREATE ROLE "${writerUser}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${writerPassword}'`)
     await admin.query(`GRANT corpus_writer TO "${writerUser}" WITH INHERIT FALSE, SET TRUE`)
     await admin.query(`CREATE ROLE "${readerUser}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${readerPassword}'`)
-    await admin.query(`GRANT corpus_reader TO "${readerUser}"`)
+    await admin.query(`GRANT corpus_authority_reader TO "${readerUser}"`)
   } catch (e) {
     await admin.end()
     throw new Error(redact(e instanceof Error ? e.message : String(e)))

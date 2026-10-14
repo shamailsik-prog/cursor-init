@@ -27,7 +27,8 @@
 # every Annex A routine any grant to those three roles, and to PUBLIC wherever the DDL itself keeps
 # EXECUTE from PUBLIC (all but 001's trigger function enforce_monotonic_classification(), which keeps
 # PostgreSQL's default and cannot be called directly). The grants the DDL makes to corpus_reader,
-# corpus_writer and corpus_declassify are left alone. APP_DB_USER is a member of corpus_writer WITH
+# corpus_writer, corpus_declassify and corpus_authority_reader (004, the draft gate's reader role) are
+# left alone. APP_DB_USER is a member of corpus_writer WITH
 # INHERIT FALSE, SET TRUE (D14): it holds none of corpus_writer's rights until scraper.publication
 # switches to it (SET LOCAL ROLE) for one audited publication. MIGRATE_DB_USER gets no corpus_* role.
 # 004 (audit F05) adds four authority read views and re-defines the inventory with them. Before changing
@@ -35,8 +36,8 @@
 # relation named v_authority_%, or a view or materialized view whose rewrite rule depends on an
 # inventory relation. That is the state re-applying 003 alone after 004 leaves; the ownership move
 # below would otherwise hand those views to the migration role, which could redefine them.
-# corpus_writer and corpus_reader get USAGE on schema public (revoked from PUBLIC below), which their
-# own grants need; neither can log in. PostgreSQL 16 or later is required
+# corpus_writer, corpus_reader and corpus_authority_reader get USAGE on schema public (revoked from
+# PUBLIC below), which their own grants need; none of them can log in. PostgreSQL 16 or later is required
 # (pg_auth_members.inherit_option / set_option).
 #
 # It then checks the result in the same transaction and rolls everything back on any surprise:
@@ -53,7 +54,8 @@
 # on (database, schema public, the runtime role's tables and sequences, the Annex A relations, sequences
 # and routines) is CASCADE, so the reset takes the whole chain down instead of failing on it (re-audit
 # L1). It removes only grants that depend on a revoked grant option: the grants the DDL makes to
-# corpus_reader, corpus_writer and corpus_declassify come from the object owner and are untouched. The
+# corpus_reader, corpus_writer, corpus_declassify and corpus_authority_reader come from the object owner
+# and are untouched. The
 # bootstrap superuser's default privileges are reset as well (re-audit L2): in schema public, globally
 # and in any other schema, none of them may hand a future object to either application role or
 # corpus_clients, nor a future table or sequence to PUBLIC. Functions keep PostgreSQL's default EXECUTE
@@ -128,6 +130,10 @@ BEGIN
      OR pg_catalog.to_regprocedure('public.corpus_contract_routines()') IS NULL THEN
     RAISE EXCEPTION 'Annex A is not applied: run 15-apply-annex-a.sh first';
   END IF;
+  -- 004 creates the draft gate's reader role (#51 R1 D-3); the schema grant below names it.
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'corpus_authority_reader') THEN
+    RAISE EXCEPTION 'Annex A 004 is not applied (no corpus_authority_reader): run 15-apply-annex-a.sh first';
+  END IF;
 END
 $$;
 -- F05 plan D20: every Annex A view is in the inventory, or nothing below runs.
@@ -192,8 +198,9 @@ REVOKE ALL ON SCHEMA public FROM :"app_user", :"mig_user" CASCADE;
 GRANT USAGE ON SCHEMA public TO corpus_clients;
 GRANT CREATE ON SCHEMA public TO :"mig_user";
 -- The Annex A roles' own grants (003: corpus_writer's DML and publication functions, 001: the
--- reader's v_* views) need the schema too, now that PUBLIC no longer has it.
-GRANT USAGE ON SCHEMA public TO corpus_writer, corpus_reader;
+-- reader's v_* views, 004: the draft gate reader's v_authority_* views and corpus_metadata) need the
+-- schema too, now that PUBLIC no longer has it.
+GRANT USAGE ON SCHEMA public TO corpus_writer, corpus_reader, corpus_authority_reader;
 
 -- Application objects belong to the migration role (pre-F30 installs created them as the
 -- superuser). Extension members, sequences owned by a table column, and the Annex A relations (owned

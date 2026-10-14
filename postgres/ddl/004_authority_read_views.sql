@@ -2,13 +2,16 @@
 -- Applied by a superuser after 003. The order is always 001 -> 003 -> 004 (apply-annex-a.sh, the CI loops, the
 -- test harnesses; plan D13). Every statement can be re-run.
 --
--- The draft gate's corpus reader (functions/src/d4/corpusAuthorityStore.ts, a corpus_reader member) reads only
--- these four views and corpus_metadata. A row is visible (plan D1) only when:
+-- The draft gate's corpus reader (functions/src/d4/corpusAuthorityStore.ts) logs in as a member of
+-- corpus_authority_reader, the NOLOGIN role this file creates, and of nothing else (spec ruling 13 as amended by plan
+-- D21, #51 R1 D-3). That role can read these four views and corpus_metadata, and nothing else: 001's corpus_reader
+-- can also read v_judgment, v_source_provenance and the other v_* views (FA-DATA-003, its own finding), so the gate
+-- does not use it. 001's grants are not changed here. A row is visible (plan D1) only when:
 --   * its review_status is 'promoted';
 --   * its publication_id names a finished corpus_publication (finished_at IS NOT NULL). A row a superuser wrote
 --     outside any publication never shows (spec ruling 2), and neither does one whose publication never finished;
 --   * its source_id names a complete source_provenance row. This is corpus_provenance_complete() inlined: calling
---     that SECURITY DEFINER function from a view would need EXECUTE for corpus_reader;
+--     that SECURITY DEFINER function from a view would need EXECUTE for the reader role;
 --   * for a judgment, also: its classification ranks 0 in classification_rank (public only, ruling 8; ranks are
 --     compared, not labels, and an unknown label fails the join, so it fails closed), and it has a bench.
 -- A view shows a row only when the row and every parent it reports are visible: a citation's judgment; a
@@ -17,10 +20,17 @@
 -- v_authority_pending_adverse (plan D2) lists the treated judgment of every 'overruled' treatment that is not
 -- rejected and does not show in v_authority_treatment: quarantined (ruling 3), or hidden by any rule above. A hidden
 -- overruling must never pass as good law; only the treated id is exposed.
--- The views are security_barrier, carry no provenance column, and grant SELECT to corpus_reader only.
+-- The views are security_barrier, carry no provenance column, and grant SELECT to corpus_authority_reader only.
 -- 004 defines no routine (plan D12). It re-defines corpus_contract_relations() with the four views (33 relations),
 -- so provisioning (PR 2b) keeps them with the superuser; re-applying 003 alone after 004 would shrink the list to
 -- 29, which provisioning refuses (plan D20).
+
+-- 0. The reader role (D21): NOLOGIN, no attribute, a member of nothing. NOINHERIT, like 001's roles, so a membership
+--    someone later grants it would not pass on that role's rights. The gate's login is a member of it and of nothing
+--    else; the adapter refuses any other membership or any other readable relation (D7).
+DO $$ BEGIN CREATE ROLE corpus_authority_reader NOLOGIN NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+ALTER ROLE corpus_authority_reader NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+GRANT USAGE ON SCHEMA public TO corpus_authority_reader;
 
 -- 1. The judgments the reader may know of: promoted, published, provenance complete, public, with a bench.
 CREATE OR REPLACE VIEW public.v_authority_citation WITH (security_barrier = true) AS
@@ -147,13 +157,16 @@ SELECT v.section_id, st.jurisdiction, v.version_no, v.effective_from, v.effectiv
                   AND btrim(coalesce(p.content_hash, '')) <> '' AND p.extraction_method IS NOT NULL
                   AND (btrim(coalesce(p.source_url, '')) <> '' OR btrim(coalesce(p.raw_storage_key, '')) <> ''));
 
--- 5. Grants: SELECT for corpus_reader only.
+-- 5. Grants: SELECT on the four views and corpus_metadata for corpus_authority_reader only (D21). An earlier 004 granted
+--    the views to corpus_reader; re-applying this file takes that back.
 REVOKE ALL ON public.v_authority_citation, public.v_authority_treatment, public.v_authority_pending_adverse,
   public.v_authority_section_version FROM PUBLIC;
 REVOKE ALL ON public.v_authority_citation, public.v_authority_treatment, public.v_authority_pending_adverse,
-  public.v_authority_section_version FROM corpus_writer, corpus_declassify;
+  public.v_authority_section_version FROM corpus_writer, corpus_declassify, corpus_reader;
+REVOKE ALL ON public.v_authority_citation, public.v_authority_treatment, public.v_authority_pending_adverse,
+  public.v_authority_section_version, public.corpus_metadata FROM corpus_authority_reader;
 GRANT SELECT ON public.v_authority_citation, public.v_authority_treatment, public.v_authority_pending_adverse,
-  public.v_authority_section_version TO corpus_reader;
+  public.v_authority_section_version, public.corpus_metadata TO corpus_authority_reader;
 
 -- 6. The inventory of Annex A relations (003's D25), now with the four views (D13). Provisioning keeps every one of
 --    them with the superuser. corpus_contract_routines() is unchanged: 004 adds no routine (D12).
