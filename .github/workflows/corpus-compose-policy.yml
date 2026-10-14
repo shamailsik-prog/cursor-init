@@ -18,15 +18,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: pip install pyyaml==6.0.3
+      # The policy checks each deployment as `docker compose config` resolves it (overrides,
+      # include, extends, profiles, interpolation), plus the raw files for credential forms.
       - name: Policy unit tests (shipped compose passes; every fixture trips exactly its declared rules)
         run: python3 ci_gates/test_check_compose_policy.py -v
-      - name: Policy accepts the shipped compose
+      - name: Policy accepts the shipped compose (merged with any override file next to it)
         run: python3 ci_gates/check_compose_policy.py corpus_service/docker-compose.yml
       - name: Policy rejects the insecure fixtures, each for its own reason
         run: |
           set -u
           status=0
-          for f in ci_gates/fixtures/compose_*.yml; do
+          for f in ci_gates/fixtures/compose_*.yml ci_gates/fixtures/case_*/docker-compose.yml; do
             if out=$(python3 ci_gates/check_compose_policy.py "$f"); then
               echo "::error::policy accepted insecure fixture $f"; status=1; continue
             fi
@@ -43,17 +45,22 @@ jobs:
         working-directory: corpus_service
         run: |
           set -u
-          touch .env
-          vars="POSTGRES_USER POSTGRES_PASSWORD APP_DB_USER APP_DB_PASSWORD MIGRATE_DB_USER MIGRATE_DB_PASSWORD REDIS_APP_USER REDIS_APP_PASSWORD"
-          for v in $vars; do export "$v=$(openssl rand -hex 12)"; done
+          # Variables referenced as ${VAR:?} fail `docker compose config`; POSTGRES_PASSWORD is used
+          # only as a secret file (secrets: environment:), which compose refuses when the service
+          # starts, so each case also tries to start the no-network secrets-preflight one-shot.
+          vars="POSTGRES_USER POSTGRES_PASSWORD APP_DB_USER APP_DB_PASSWORD MIGRATE_DB_USER MIGRATE_DB_PASSWORD REDIS_APP_USER REDIS_APP_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY"
+          for v in $vars; do export "$v=$(openssl rand -hex 24)"; done
+          export POSTGRES_USER=boot_ci APP_DB_USER=corpus_app MIGRATE_DB_USER=corpus_migrate REDIS_APP_USER=corpus_redis
           docker compose config >/dev/null
+          docker compose run --rm -T --no-deps secrets-preflight
           for missing in $vars; do
-            if env -u "$missing" docker compose config >/dev/null 2>&1; then
+            if env -u "$missing" docker compose config >/dev/null 2>&1 \
+               && env -u "$missing" docker compose run --rm -T --no-deps secrets-preflight >/dev/null 2>&1; then
               echo "::error::compose accepted a missing $missing"; exit 1
             fi
           done
           echo "OK: compose refuses to start without any one of: $vars"
-      - name: E2E - store TLS, Redis ACLs, least-privilege roles (real stores + the app's own code path)
+      - name: E2E - store TLS, Redis ACLs, least-privilege roles, per-service credentials (real stores + the app's own code path)
         run: bash corpus_service/tests/e2e/store_security_e2e.sh
       - name: E2E - upgrade a pre-F30 legal/legal volume in place (TLS on, credentials rotated, roles provisioned, data kept)
         run: bash corpus_service/tests/e2e/upgrade_e2e.sh
