@@ -667,3 +667,177 @@ def test_f19_republishing_a_statute_history_shifts_boundaries_without_overlap(co
         "SELECT v.version_no, v.effective_to::text, v.review_status FROM statute_section_version v "
         "JOIN statute_section s ON s.id = v.section_id WHERE s.section_number = '6' ORDER BY 1",
     ) == [(1, "2099-07-01", "promoted"), (2, "2099-09-01", "promoted"), (3, None, "promoted")]
+
+
+# ---------------------------------------------------------------------------------------------
+# the CLI for curated batches
+# ---------------------------------------------------------------------------------------------
+def curated_section5_batch(batch_key="curated/f19-t7-section5"):
+    """One curated batch covering every row of the spec §5 outcome table (synthetic 2099 data)."""
+    return batch_doc(
+        batch_key,
+        # judgments
+        judgment_item("j-larger", citations=[parts("PLD", 71, court="SC")], bench="Larger Bench"),
+        judgment_item("j-division", citations=[{"text": "2099 SCMR 72"}, parts("PLD", 72, court="Karachi")], bench="DB"),
+        judgment_item("j-no-provenance", citations=[{"text": "2099 SCMR 73"}], provenance={**PROVENANCE, "content_hash": None}),
+        judgment_item("j-invalid-bench", citations=[{"text": "2099 SCMR 74"}], bench="Full Court"),
+        judgment_item("j-review", citations=[{"text": "2099 SCMR 75"}], trust=("review", 0.95)),
+        judgment_item("j-no-bench", citations=[{"text": "2099 SCMR 76"}], bench=None),
+        judgment_item("j-not-canonical", citations=[{"text": "PLD 2099 Atlantis 1"}]),
+        # treatments
+        treatment_item("t-overruled", treating={"item_key": "j-larger"}, treated={"item_key": "j-division"}, kind="Overruled"),
+        treatment_item("t-invalid-kind", treating={"item_key": "j-larger"}, treated={"item_key": "j-division"}, kind="reversed"),
+        treatment_item("t-unresolvable", treating={"item_key": "j-larger"}, treated="2099 SCMR 998"),
+        treatment_item("t-uncertain", treating={"item_key": "j-larger"}, treated={"item_key": "j-division"},
+                       kind="doubted", confidence=0.6),
+        # statute section histories
+        history_item("h-amended", version(1, "2099-01-01", "2099-06-01"), version(2, "2099-06-01", None), section="21"),
+        history_item("h-current-text-only", version(1, "2099-01-01", None, confidence=None), section="22",
+                     history="current_text_only"),
+        history_item("h-missing-from", version(1, None, None), section="23"),
+        history_item("h-overlap", version(1, "2099-01-01", "2099-09-01"), version(2, "2099-06-01", None), section="24"),
+        history_item("h-out-of-order", version(1, "2099-06-01", "2099-03-01"), section="25"),
+        history_item("h-jurisdiction", version(1, "2099-01-01", None), section="26", jurisdiction="Islamabad"),
+    )
+
+
+SECTION5_EXPECTED = {
+    "j-larger": ("promoted", None),
+    "j-division": ("promoted", None),
+    "j-no-provenance": ("rejected", "provenance_incomplete"),
+    "j-invalid-bench": ("rejected", "invalid_bench"),
+    "j-review": ("quarantined", "review_source"),
+    "j-no-bench": ("quarantined", "missing_bench"),
+    "j-not-canonical": ("quarantined", "citation_not_canonical"),
+    "t-overruled": ("promoted", None),
+    "t-invalid-kind": ("rejected", "invalid_treatment_kind"),
+    "t-unresolvable": ("rejected", "unresolvable_judgment"),
+    "t-uncertain": ("quarantined", "treatment_uncertain"),
+    "h-amended": ("promoted", None),
+    "h-current-text-only": ("promoted", None),
+    "h-missing-from": ("rejected", "history_missing_effective_from"),
+    "h-overlap": ("rejected", "history_overlap"),
+    "h-out-of-order": ("rejected", "history_out_of_order"),
+    "h-jurisdiction": ("rejected", "invalid_jurisdiction"),
+}
+
+
+def write_batch(tmp_path, doc, name="batch.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    return str(path)
+
+
+def cli_publish(corpus_db, path, user, password, actor="f19-curator-2099"):
+    return corpus_db.run_cli("publish", "--batch", path, "--actor", actor, user=user, password=password)
+
+
+def test_f19_cli_publishes_a_curated_batch_and_the_reader_sees_it(corpus_db, tmp_path):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    proc = cli_publish(corpus_db, write_batch(tmp_path, curated_section5_batch()), writer, writer_pw)
+    assert proc.returncode == 0, proc.stderr[-4000:]
+    out = json.loads(proc.stdout)
+    assert set(out) == {"publication_id", "batch_key", "already", "seq", "counts", "items"}
+    assert out["already"] is False and out["batch_key"] == "curated/f19-t7-section5"
+    for item in out["items"]:
+        assert set(item) == {"item_key", "entity_type", "entity_id", "decision", "reason", "review_status"}
+    primary = {}
+    for item in out["items"]:
+        if item["entity_type"] in ("judgment", "treatment", "statute_section") or item["decision"] == "rejected":
+            primary.setdefault(item["item_key"], (item["decision"], item["reason"]))
+    assert primary == SECTION5_EXPECTED
+    # stdout carries identifiers and decisions only: no titles, texts or URLs
+    assert "F19 j-larger" not in proc.stdout and "example.invalid" not in proc.stdout and "Test Act" not in proc.stdout
+
+    audit = admin_fetch(
+        corpus_db,
+        "SELECT item_count, promoted_count, quarantined_count, updated_count, unchanged_count, rejected_count, "
+        "actor_id, publisher_session_user, source_kind FROM corpus_publication",
+    )
+    assert audit == [(*[out["counts"][k] for k in COUNT_KEYS], "f19-curator-2099", writer, "curated")]
+    decisions = admin_fetch(corpus_db, "SELECT decision, count(*) FROM corpus_publication_item GROUP BY 1")
+    assert dict(decisions) == {k: n for k, n in out["counts"].items() if k != "items" and n}
+
+    reader, reader_pw = corpus_db.reader_role()
+    seen = lambda sql: sorted(fetch_as(corpus_db, reader, reader_pw, sql))  # noqa: E731
+    assert seen("SELECT c.citation_text, j.bench_type FROM v_citation c JOIN v_judgment j ON j.id = c.judgment_id") == [
+        ("2099 SCMR 72", "division"), ("PLD 2099 SC 71", "larger"), ("PLD 2099 Sindh 72", "division")]
+    assert seen("SELECT treatment, treating_bench_type FROM v_treatment") == [("overruled", "larger")]
+    assert seen(
+        "SELECT s.section_number, v.version_no, v.version_confidence FROM v_statute_section_version v "
+        "JOIN v_statute_section s ON s.id = v.section_id"
+    ) == [("21", 1, 0.9), ("21", 2, 0.9), ("22", 1, 0.5)]
+    # Quarantined rows exist in the contract, out of the reader's sight.
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM judgment WHERE review_status = 'quarantined'") == [(3,)]
+
+
+def test_f19_cli_rerun_is_a_no_op_and_a_reused_key_is_refused(corpus_db, tmp_path):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    doc = curated_section5_batch("curated/f19-t7-rerun")
+    path = write_batch(tmp_path, doc)
+    first = cli_publish(corpus_db, path, writer, writer_pw)
+    assert first.returncode == 0, first.stderr[-4000:]
+    before = snapshot(corpus_db)
+
+    again = cli_publish(corpus_db, path, writer, writer_pw)
+    assert again.returncode == 0, again.stderr[-4000:]
+    out1, out2 = json.loads(first.stdout), json.loads(again.stdout)
+    assert out2["already"] is True
+    assert {k: out2[k] for k in ("publication_id", "seq", "counts", "items")} == {
+        k: out1[k] for k in ("publication_id", "seq", "counts", "items")}
+    assert snapshot(corpus_db) == before
+
+    edited = json.loads(json.dumps(doc))
+    edited["items"][0]["full_text"] = "edited synthetic F19 text"
+    reused = cli_publish(corpus_db, write_batch(tmp_path, edited, "edited.json"), writer, writer_pw)
+    assert reused.returncode == 3
+    assert "batch_key_reused" in reused.stderr and reused.stdout == ""
+    assert "edited synthetic" not in reused.stderr
+    assert snapshot(corpus_db) == before
+
+
+def test_f19_cli_failure_leaves_no_trace_and_the_key_unconsumed(corpus_db, tmp_path):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    _install_fault_trigger(corpus_db)
+    doc = batch_doc(
+        "curated/f19-t7-fault",
+        judgment_item("i1", citations=[{"text": "2099 SCMR 81"}]),
+        judgment_item("i2", citations=[{"text": "2099 SCMR 82"}], case_title="F19 fault 2099"),
+    )
+    path = write_batch(tmp_path, doc)
+    empty = snapshot(corpus_db)
+    failed = cli_publish(corpus_db, path, writer, writer_pw)
+    assert failed.returncode == 1
+    assert "publication.failed error=IntegrityError" in failed.stderr
+    assert "F19 fault 2099" not in failed.stderr and "f19 marker" not in failed.stderr and "SCMR" not in failed.stderr
+    assert snapshot(corpus_db) == empty
+    _remove_fault_trigger(corpus_db)
+    retried = cli_publish(corpus_db, path, writer, writer_pw)
+    assert retried.returncode == 0, retried.stderr[-4000:]
+    assert json.loads(retried.stdout)["counts"] == counts(items=2, promoted=4)
+
+
+def test_f19_cli_refuses_a_superuser_url_and_bad_input(corpus_db, tmp_path):
+    prepare(corpus_db)
+    path = write_batch(tmp_path, batch_doc("curated/f19-t7-admin", judgment_item("j1")))
+    admin_user = corpus_db._admin.username
+    superuser = corpus_db.run_cli("publish", "--batch", path, "--actor", "f19-curator-2099",
+                                  user=admin_user, password=corpus_db.password)
+    assert superuser.returncode == 4
+    assert "superuser_session" in superuser.stderr
+
+    nobody, nobody_pw = corpus_db.create_role("f19_none")
+    not_writer = cli_publish(corpus_db, path, nobody, nobody_pw)
+    assert not_writer.returncode == 4 and "not_corpus_writer" in not_writer.stderr
+
+    writer, writer_pw = corpus_db.writer_role()
+    broken = write_batch(tmp_path, {**batch_doc("curated/f19-t7-bad", judgment_item("j1")), "extra": "f19-secret-2099"}, "bad.json")
+    structural = cli_publish(corpus_db, broken, writer, writer_pw)
+    assert structural.returncode == 2 and "BatchError" in structural.stderr
+    assert "f19-secret-2099" not in structural.stderr
+    usage = corpus_db.run_cli("publish", "--batch", path, user=writer, password=writer_pw)  # no --actor
+    assert usage.returncode == 2
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM corpus_publication") == [(0,)]
