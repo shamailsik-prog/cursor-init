@@ -1214,8 +1214,14 @@ Steps:
 4. The expected canonical keys in the golden input table, which come from reading `citations.ts`. The generator is authoritative.
 5. pydantic 2.13 strict JSON-mode date parsing for `effective_from` and `decision_date`.
 6. `docker exec` with `${{ job.services.postgres.id }}` on hosted runners. GitHub Actions is billing-blocked, so CI has not run any of this.
-7. `docker compose config` with an absent `../postgres/ddl` in the policy attack copies (PR 2b).
-8. That `GRANT … WITH INHERIT FALSE, SET TRUE` and the PG16 `pg_auth_members.inherit_option`/`set_option` columns behave as described on `pgvector/pgvector:pg16`.
+7. `docker compose config` with an absent `../postgres/ddl` in the policy attack copies (PR 2b). **Verified in PR 2b:** on a copy of `corpus_service/` alone, `docker compose config` exits 0 and resolves the bind to the missing path (it does not check bind sources), and the policy passes the copy; `test_check_compose_policy.py` passes unchanged, so `apply_attack` needs no change.
+8. That `GRANT … WITH INHERIT FALSE, SET TRUE` and the PG16 `pg_auth_members.inherit_option`/`set_option` columns behave as described on `pgvector/pgvector:pg16`. **Verified in PR 2b** (compose e2e, server major 16): the membership reads `inherit=false set=true admin=false`; the runtime role has none of `corpus_writer`'s rights until `SET ROLE`; re-granting `WITH ADMIN FALSE, INHERIT FALSE, SET TRUE` resets a membership widened to `INHERIT TRUE, ADMIN TRUE`.
+
+### PR 2b decisions beyond the plan (recorded)
+- `GRANT USAGE ON SCHEMA public TO corpus_writer, corpus_reader` in `provision-roles.sh`. F30 revokes the schema from `PUBLIC`, so without it `SET ROLE corpus_writer` reaches nothing in `public` and `corpus_reader` is refused every `v_*` view. Neither role can log in. `corpus_declassify` gets nothing: no compose service declassifies.
+- `provision-roles.sh` ends with a fail-closed post-check in its transaction: exact memberships, every Annex A relation and function owned by a superuser, no table, column or sequence privilege on Annex A for either application role.
+- The DML grant loop covers the relation kinds `GRANT … ON ALL TABLES` covered (`r`, `p`, `v`, `m`, `f`), not only `r`/`p`, so nothing outside Annex A changes for the runtime role.
+- No automatic re-apply on a plain restart: the image runs `/docker-entrypoint-initdb.d` only on an empty volume; `scripts/rotate_postgres_password.sh` is the re-apply path (idempotent).
 
 ### Critical Files for Implementation
 - /home/user/cursor-init/postgres/ddl/003_corpus_publication.sql (new; read 001 at `git show origin/claude/remediate-f20-trust:postgres/ddl/001_corpus_contract.sql`)

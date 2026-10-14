@@ -13,7 +13,7 @@ source. The upgrades are DDL and run only here, never in the API's init_db().
 
 The Annex A corpus contract (postgres/ddl/001 + 003) is never applied here: it needs CREATE ROLE and
 CREATE EXTENSION, which this NOCREATEROLE owner role cannot do. A superuser applies it at postgres
-init (audit F19, PR 2b).
+init (docker/postgres/apply-annex-a.sh, audit F19 PR 2b).
 
 Run it only as MIGRATE_DB_USER (the `migrate` service). Deciding whether the trust CHECK is already
 current builds a throwaway table in scraper_sources' schema (rolled back), which needs CREATE on
