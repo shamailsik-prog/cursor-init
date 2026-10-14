@@ -16,6 +16,7 @@ Needs CORPUS_TEST_DATABASE_URL (see conftest.py); every test gets a fresh databa
 import asyncio
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -841,3 +842,328 @@ def test_f19_cli_refuses_a_superuser_url_and_bad_input(corpus_db, tmp_path):
     usage = corpus_db.run_cli("publish", "--batch", path, user=writer, password=writer_pw)  # no --actor
     assert usage.returncode == 2
     assert admin_fetch(corpus_db, "SELECT count(*) FROM corpus_publication") == [(0,)]
+
+
+# ---------------------------------------------------------------------------------------------
+# migrate and the ORM never touch Annex A; the staging bench column
+# ---------------------------------------------------------------------------------------------
+INVENTORY = {
+    "classification_rank", "source_provenance", "court", "judge", "instrument", "statute", "statute_section",
+    "statute_section_version", "judgment", "judgment_version", "citation", "treatment", "corpus_metadata",
+    "corpus_embeddings", "judgment_classification_declassify_audit", "judgment_declassify_grant",
+    "v_judgment", "v_citation", "v_treatment", "v_statute", "v_statute_section", "v_statute_section_version",
+    "v_instrument", "v_court", "v_judge", "v_source_provenance",
+    "corpus_publication", "corpus_publication_item", "corpus_publication_grant",
+}
+
+
+def _owner_role(db):
+    """A NOCREATEROLE, NOSUPERUSER schema owner, as F30 provisions MIGRATE_DB_USER."""
+    owner, owner_pw = db.create_role("f19_mig")
+    db.admin(
+        f'GRANT CONNECT, CREATE ON DATABASE "{db.name}" TO "{owner}"',
+        f'GRANT USAGE, CREATE ON SCHEMA public TO "{owner}"',
+    )
+    return owner, owner_pw
+
+
+def test_f19_orm_has_no_annex_a_table_and_migrate_never_applies_annex_a(corpus_db):
+    from scraper import database
+    from scraper import models  # noqa: F401 - registers the tables on Base.metadata
+
+    assert set(database.Base.metadata.tables) & INVENTORY == set()
+
+    # migrate alone never creates Annex A.
+    proc = corpus_db.migrate()
+    assert proc.returncode == 0, proc.stderr[-4000:]
+    assert admin_fetch(corpus_db, "SELECT to_regclass('public.judgment') IS NULL") == [(True,)]
+
+    # The NOCREATEROLE owner cannot apply 001 (CREATE ROLE / CREATE EXTENSION): a superuser must.
+    owner, owner_pw = _owner_role(corpus_db)
+    ddl = (Path(__file__).resolve().parents[2] / "postgres" / "ddl" / "001_corpus_contract.sql").read_text(encoding="utf-8")
+
+    async def _apply_as_owner():
+        import asyncpg
+        from sqlalchemy.engine import make_url
+
+        url = make_url(corpus_db.url_as(owner, owner_pw)).set(drivername="postgresql").render_as_string(hide_password=False)
+        conn = await asyncpg.connect(url)
+        try:
+            await conn.execute(ddl)
+        except Exception as exc:  # noqa: BLE001 - classified by SQLSTATE
+            return getattr(exc, "sqlstate", None)
+        finally:
+            await conn.close()
+        return "SUCCEEDED"
+
+    assert run(_apply_as_owner()) == "42501"
+    assert admin_fetch(corpus_db, "SELECT to_regclass('public.judgment') IS NULL") == [(True,)]
+
+
+def test_f19_migrate_as_owner_succeeds_after_annex_a_and_leaves_it_with_the_superuser(corpus_db):
+    corpus_db.apply_annex_a()
+    corpus_db.admin('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')  # as the compose init.sql does
+    owner, owner_pw = _owner_role(corpus_db)
+    proc = corpus_db.migrate(corpus_db.url_as(owner, owner_pw))
+    assert proc.returncode == 0, proc.stderr[-4000:]
+    admin_user = corpus_db._admin.username
+    owners = admin_fetch(
+        corpus_db,
+        "SELECT c.relname, pg_get_userbyid(c.relowner) FROM pg_class c "
+        "WHERE c.oid IN (SELECT r FROM corpus_contract_relations() AS r)",
+    )
+    assert len(owners) == 29
+    assert {row[1] for row in owners} == {admin_user}
+    app_tables = admin_fetch(corpus_db, "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'scraper_staging'")
+    assert app_tables == [(owner,)]
+
+
+def test_f19_migrate_adds_extracted_bench_type_once(corpus_db):
+    from sqlalchemy import text
+
+    from scraper import database
+    from scraper import models  # noqa: F401
+
+    corpus_db.admin(
+        "CREATE EXTENSION IF NOT EXISTS vector", "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+        'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"',
+    )
+
+    async def _legacy():
+        async with database.engine.begin() as conn:
+            await conn.run_sync(database.Base.metadata.create_all)
+            await conn.execute(text("ALTER TABLE scraper_staging DROP COLUMN extracted_bench_type"))
+
+    run(_legacy())
+    column = "SELECT attnum FROM pg_attribute WHERE attrelid = 'scraper_staging'::regclass AND attname = 'extracted_bench_type' AND NOT attisdropped"
+    assert admin_fetch(corpus_db, column) == []
+    first = corpus_db.migrate()
+    assert first.returncode == 0, first.stderr[-4000:]
+    attnum = admin_fetch(corpus_db, column)
+    assert len(attnum) == 1
+    assert "staging bench column added" in first.stderr
+    second = corpus_db.migrate()
+    assert second.returncode == 0, second.stderr[-4000:]
+    assert "staging bench column already present" in second.stderr
+    assert admin_fetch(corpus_db, column) == attnum
+
+
+# ---------------------------------------------------------------------------------------------
+# promotion publishes into Annex A (the spec §5 staging path)
+# ---------------------------------------------------------------------------------------------
+async def _make_sources(specs):
+    from scraper.database import SessionLocal
+    from scraper.models import ScraperSource
+
+    async with SessionLocal() as db:
+        objs = {key: ScraperSource(source_name=name, source_url=f"https://f19.example.invalid/{key}", trust_level=trust)
+                for key, (name, trust) in specs.items()}
+        db.add_all(objs.values())
+        await db.commit()
+        return {key: obj.id for key, obj in objs.items()}
+
+
+async def _stage(rows):
+    from scraper.database import SessionLocal
+    from scraper.models import ScraperStaging
+
+    async with SessionLocal() as db:
+        objs = {}
+        for key, fields in rows.items():
+            objs[key] = ScraperStaging(**{
+                "source_url": f"https://f19.example.invalid/judgment/{key}",
+                "extracted_title": f"F19 Staged {key} v. Test 2099",
+                "extracted_year": 2099,
+                "raw_text": f"synthetic F19 staged text {key}",
+                "raw_html": "<p>synthetic F19 staged page</p>",
+                "extracted_bench_type": "Division Bench",
+                "confidence_score": 0.9,
+                "normalised": True,
+                **fields,
+            })
+        db.add_all(objs.values())
+        await db.commit()
+        return {key: obj.id for key, obj in objs.items()}
+
+
+def _promote_as_runtime_role(db):
+    from scraper.tasks.promotion import promote_staging_records
+
+    app, app_pw = db.runtime_role()
+    with db.app_engine_as(app, app_pw):
+        return run(promote_staging_records()), app
+
+
+def _staging_state(db):
+    rows = admin_fetch(db, "SELECT id, promoted, quarantined, quarantine_reason, promoted_to_id FROM scraper_staging")
+    queue = admin_fetch(db, "SELECT staging_id, reason, details FROM quarantine_queue")
+    return {r[0]: r[1:] for r in rows}, {q[0]: (q[1], q[2]) for q in queue}
+
+
+def test_f19_promotion_publishes_into_annex_a_and_the_reader_sees_it(corpus_db):
+    import hashlib
+
+    from scraper.publication.from_staging import STAGING_ACTOR_ID
+
+    prepare(corpus_db)
+    src = run(_make_sources({"trusted": ("f19-trusted", "trusted")}))
+    ids = run(_stage({"karachi": dict(source_id=src["trusted"], source_site="f19-trusted",
+                                      extracted_citation="PLD 2099 Karachi 12", extracted_bench_type="Division Bench")}))
+    sid = ids["karachi"]
+
+    result, app = _promote_as_runtime_role(corpus_db)
+    assert result == {"promoted": 1, "quarantined": 0, "failed": 0}
+
+    staging, queue = _staging_state(corpus_db)
+    promoted, quarantined, reason, promoted_to = staging[sid]
+    assert (promoted, quarantined, reason) == (True, False, None) and queue == {}
+    judgments = admin_fetch(corpus_db, "SELECT id, bench_type, review_status, source_id, publication_id FROM judgment")
+    assert len(judgments) == 1
+    jid, bench, status, source_id, pub_id = judgments[0]
+    assert (promoted_to, bench, status) == (jid, "division", "promoted")
+    assert admin_fetch(corpus_db, "SELECT citation_text, review_status FROM citation") == [("PLD 2099 Sindh 12", "promoted")]
+    provenance = admin_fetch(
+        corpus_db, "SELECT id, source_name, source_url, extraction_method, content_hash FROM source_provenance")
+    assert provenance == [(source_id, "f19-trusted", "https://f19.example.invalid/judgment/karachi", "html",
+                           hashlib.sha256(b"synthetic F19 staged text karachi").hexdigest())]
+    assert admin_fetch(
+        corpus_db, "SELECT id, batch_key, source_kind, actor_id, publisher_session_user FROM corpus_publication"
+    ) == [(pub_id, f"staging/{sid}", "staging", STAGING_ACTOR_ID, app)]
+    # Ruling 10: nothing goes to case_law_master or the embedding queue any more.
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM case_law_master") == [(0,)]
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM embedding_queue") == [(0,)]
+
+    reader, reader_pw = corpus_db.reader_role()
+    seen = fetch_as(corpus_db, reader, reader_pw,
+                    "SELECT j.id, j.bench_type, c.citation_text FROM v_judgment j JOIN v_citation c ON c.judgment_id = j.id")
+    assert seen == [(jid, "division", "PLD 2099 Sindh 12")]
+
+
+def test_f19_promotion_outcomes_follow_the_section5_table(corpus_db):
+    prepare(corpus_db)
+    src = run(_make_sources({"trusted": ("f19-trusted", "trusted"), "review": ("f19-review", "review")}))
+    trusted = dict(source_id=src["trusted"], source_site="f19-trusted")
+    ids = run(_stage({
+        "no_bench": dict(**trusted, extracted_citation="2099 SCMR 41", extracted_bench_type=None),
+        "panel": dict(**trusted, extracted_citation="2099 SCMR 42", extracted_bench_type="panel"),
+        "atlantis": dict(**trusted, extracted_citation="PLD 2099 Atlantis 1"),
+        "no_provenance": dict(**trusted, extracted_citation="2099 SCMR 44", raw_text=None, raw_html=None),
+        "review": dict(source_id=src["review"], source_site="f19-review", extracted_citation="2099 SCMR 45"),
+        "low_confidence": dict(**trusted, extracted_citation="2099 SCMR 46", confidence_score=0.49),
+        "original": dict(**trusted, extracted_citation="2099 SCMR 50", extracted_bench_type="single",
+                         source_url="https://f19.example.invalid/judgment/original", raw_text="synthetic F19 original"),
+    }))
+    first, _app = _promote_as_runtime_role(corpus_db)
+    assert first == {"promoted": 1, "quarantined": 6, "failed": 0}
+    original = admin_fetch(corpus_db, "SELECT j.id, j.updated_at, j.source_id FROM judgment j JOIN citation c "
+                                      "ON c.judgment_id = j.id WHERE c.citation_text = '2099 SCMR 50'")
+    assert len(original) == 1
+    original_id = original[0][0]
+
+    # Re-stagings of the published authority: one with no bench, one identical.
+    again = run(_stage({
+        "restage_no_bench": dict(**trusted, extracted_citation="2099 SCMR 50", extracted_bench_type=None,
+                                 source_url="https://f19.example.invalid/judgment/original", raw_text="synthetic F19 original"),
+        "restage_identical": dict(**trusted, extracted_citation="2099 SCMR 50", extracted_bench_type="single",
+                                  source_url="https://f19.example.invalid/judgment/original", raw_text="synthetic F19 original",
+                                  extracted_title="F19 Staged original v. Test 2099"),
+    }))
+    second, _app = _promote_as_runtime_role(corpus_db)
+    assert second == {"promoted": 1, "quarantined": 1, "failed": 0}
+    ids.update(again)
+
+    staging, queue = _staging_state(corpus_db)
+    outcome = {key: (staging[sid][0], staging[sid][1], staging[sid][2]) for key, sid in ids.items()}
+    assert outcome == {
+        "no_bench": (False, True, "missing_bench"),
+        "panel": (False, True, "invalid_bench"),
+        "atlantis": (False, True, "citation_not_canonical"),
+        "no_provenance": (False, True, "provenance_incomplete"),
+        "review": (False, True, "review_source"),
+        "low_confidence": (False, True, "low_confidence"),
+        "original": (True, False, None),
+        "restage_no_bench": (False, True, "promoted_row_protected"),
+        "restage_identical": (True, False, None),
+    }
+    assert staging[ids["original"]][3] == original_id
+    assert staging[ids["restage_identical"]][3] == original_id  # promoted_to_id = the existing judgment
+    assert {key: queue[sid][0] for key, sid in ids.items() if sid in queue} == {
+        k: v[2] for k, v in outcome.items() if v[1]}
+    no_bench_details = queue[ids["no_bench"]][1]
+    annex_a = no_bench_details["annex_a"]
+    assert annex_a["decision"] == "quarantined" and annex_a["judgment_id"] is not None
+
+    # Annex A holds the quarantined no-bench and Atlantis judgments, the original, and nothing for
+    # the rejected or trust-quarantined rows (D8).
+    judgments = admin_fetch(
+        corpus_db,
+        "SELECT c.citation_text, j.review_status, c.review_status FROM judgment j JOIN citation c "
+        "ON c.judgment_id = j.id ORDER BY 1",
+    )
+    assert judgments == [
+        ("2099 SCMR 41", "quarantined", "quarantined"),
+        ("2099 SCMR 50", "promoted", "promoted"),
+        ("PLD 2099 Atlantis 1", "quarantined", "quarantined"),
+    ]
+    assert str(annex_a["judgment_id"]) == str(admin_fetch(
+        corpus_db, "SELECT judgment_id FROM citation WHERE citation_text = '2099 SCMR 41'")[0][0])
+    # The re-stagings left the published judgment exactly as it was.
+    assert admin_fetch(corpus_db, "SELECT j.id, j.updated_at, j.source_id FROM judgment j WHERE j.id = :id",
+                       id=original_id) == original
+    decisions = admin_fetch(
+        corpus_db,
+        "SELECT p.batch_key, i.entity_type, i.decision, i.reason FROM corpus_publication_item i "
+        "JOIN corpus_publication p ON p.id = i.publication_id WHERE i.entity_type = 'judgment' ORDER BY p.seq",
+    )
+    by_key = {row[0]: (row[2], row[3]) for row in decisions}
+    assert by_key[f"staging/{ids['restage_no_bench']}"] == ("rejected", "promoted_row_protected")
+    assert by_key[f"staging/{ids['restage_identical']}"] == ("unchanged", None)
+    assert by_key[f"staging/{ids['panel']}"] == ("rejected", "invalid_bench")
+    assert f"staging/{ids['review']}" not in by_key and f"staging/{ids['low_confidence']}" not in by_key
+
+    reader, reader_pw = corpus_db.reader_role()
+    assert fetch_as(corpus_db, reader, reader_pw, "SELECT c.citation_text FROM v_judgment j JOIN v_citation c "
+                                                  "ON c.judgment_id = j.id") == [("2099 SCMR 50",)]
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM case_law_master") == [(0,)]
+
+
+def test_f19_guard_rejection_inside_promotion_rolls_back_only_that_item(corpus_db):
+    """A guard error (SQLSTATE class SK, SKP03-SKP06) raised while promotion publishes one record is
+    handled inside the record's own Session savepoint: the item is rolled back and recorded rejected,
+    the record is quarantined with the guard's reason, and the other records are unaffected (plan D15,
+    UNVERIFIED item 3)."""
+    prepare(corpus_db)
+    # Stand-in for a guard refusal the Python pre-checks did not foresee: the same SQLSTATE and token
+    # the 003 guard raises for a promoted judgment without a bench.
+    corpus_db.admin(
+        """CREATE FUNCTION f19_test_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN
+             IF NEW.case_title = 'F19 guard 2099' THEN
+               RAISE EXCEPTION USING ERRCODE = 'SKP04', MESSAGE = 'bench_required', DETAIL = 'table judgment';
+             END IF;
+             RETURN NEW;
+           END $$""",
+        "CREATE TRIGGER f19_test_guard BEFORE INSERT ON judgment FOR EACH ROW EXECUTE FUNCTION f19_test_guard()",
+    )
+    src = run(_make_sources({"trusted": ("f19-trusted", "trusted")}))
+    trusted = dict(source_id=src["trusted"], source_site="f19-trusted")
+    ids = run(_stage({
+        "before": dict(**trusted, extracted_citation="2099 SCMR 91"),
+        "guarded": dict(**trusted, extracted_citation="2099 SCMR 92", extracted_title="F19 guard 2099"),
+        "after": dict(**trusted, extracted_citation="2099 SCMR 93"),
+    }))
+    result, _app = _promote_as_runtime_role(corpus_db)
+    assert result == {"promoted": 2, "quarantined": 1, "failed": 0}
+    staging, queue = _staging_state(corpus_db)
+    assert staging[ids["guarded"]][:3] == (False, True, "missing_bench")
+    assert queue[ids["guarded"]][1]["annex_a"]["decision"] == "rejected"
+    assert staging[ids["before"]][0] is True and staging[ids["after"]][0] is True
+    assert admin_fetch(corpus_db, "SELECT citation_text FROM citation ORDER BY 1") == [("2099 SCMR 91",), ("2099 SCMR 93",)]
+    items = admin_fetch(
+        corpus_db,
+        "SELECT i.decision, i.reason FROM corpus_publication_item i JOIN corpus_publication p ON p.id = i.publication_id "
+        "WHERE p.batch_key = :k",
+        k=f"staging/{ids['guarded']}",
+    )
+    assert items == [("rejected", "missing_bench")]
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM source_provenance") == [(2,)]

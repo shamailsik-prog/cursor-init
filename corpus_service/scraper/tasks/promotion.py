@@ -1,4 +1,4 @@
-"""Promote normalised staging records (audit F20, F22).
+"""Promote normalised staging records (audit F20, F22, F19).
 
 Each record's source is resolved through its foreign key first, and the trust decision comes from
 scraper.trust: only a trusted source with confidence >= 0.5 is promoted; review, blocked, low
@@ -6,17 +6,28 @@ confidence and an unknown, missing or deleted source are quarantined with a dura
 record with no citation is quarantined as citation_missing (F22). Each record is decided in its own
 savepoint and committed on its own, so one bad record cannot stop or roll back the rest.
 
-Promoted rows are still written to case_law_master and queued for embedding; moving publication to
-the Annex A contract is audit F19. Nothing schedules this routine yet (audit F21).
+A record the trust decision promotes is published into the Annex A corpus contract as one audited
+publication (scraper.publication.annex_a.publish_batch, batch_key "staging/<id>", plan D7), in the
+same transaction as the staging update. It is promoted only if Annex A promotes it: with no bench it
+is published quarantined (missing_bench, ruling 9), a non-canonical citation is quarantined
+(citation_not_canonical), incomplete provenance or an invalid bench is rejected, and a re-scrape can
+never demote or rewrite a published authority (promoted_row_protected); each of those reasons is
+recorded on the staging row and in quarantine_queue. Records quarantined for trust or a missing
+citation never reach Annex A (D8). promoted_to_id is the Annex A judgment id.
+
+case_law_master is no longer written here and nothing is queued for embedding (spec ruling 10;
+Annex A embeddings are audit F27). Nothing schedules this routine yet (audit F21).
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import Mapping, Optional, Tuple
 
 from sqlalchemy import func, select
 
 from scraper.database import SessionLocal
-from scraper.models import CaseLawMaster, EmbeddingQueue, QuarantineQueue, ScraperSource, ScraperStaging
+from scraper.models import QuarantineQueue, ScraperSource, ScraperStaging
+from scraper.publication.annex_a import publish_batch
+from scraper.publication.from_staging import STAGING_ACTOR_ID, staging_batch, staging_outcome
 from scraper.trust import REASON_CITATION_MISSING, publication_decision
 
 logger = logging.getLogger(__name__)
@@ -42,7 +53,14 @@ async def _resolve_source(db, st: ScraperStaging) -> Tuple[Optional[ScraperSourc
     return None, None
 
 
-def _quarantine(db, st: ScraperStaging, src: Optional[ScraperSource], reason: str, resolved_by: Optional[str]) -> None:
+def _quarantine(
+    db,
+    st: ScraperStaging,
+    src: Optional[ScraperSource],
+    reason: str,
+    resolved_by: Optional[str],
+    extra_details: Optional[Mapping[str, object]] = None,
+) -> None:
     db.add(
         QuarantineQueue(
             staging_id=st.id,
@@ -57,6 +75,7 @@ def _quarantine(db, st: ScraperStaging, src: Optional[ScraperSource], reason: st
             details={
                 "trust_level": src.trust_level if src is not None else None,
                 "source_resolved_by": resolved_by,
+                **(extra_details or {}),
             },
         )
     )
@@ -65,37 +84,28 @@ def _quarantine(db, st: ScraperStaging, src: Optional[ScraperSource], reason: st
 
 
 async def _decide(db, st: ScraperStaging) -> str:
-    """Apply the decision for one record; return "promoted", "quarantined" or "skipped"."""
+    """Apply the decision for one record; return "promoted" or "quarantined"."""
     src, resolved_by = await _resolve_source(db, st)
     citation = (st.extracted_citation or "").strip()
     if not citation:
         _quarantine(db, st, src, REASON_CITATION_MISSING, resolved_by)
         return "quarantined"
-    dup = await db.execute(select(CaseLawMaster.id).where(CaseLawMaster.citation == st.extracted_citation))
-    if dup.first() is not None:
-        return "skipped"  # already published; left pending as before
     decision = publication_decision(src.trust_level if src is not None else None, st.confidence_score)
     if not decision.promote:
         _quarantine(db, st, src, decision.reason, resolved_by)
         return "quarantined"
-    master = CaseLawMaster(
-        citation=st.extracted_citation,
-        case_title=st.extracted_title,
-        court=st.extracted_court,
-        year=st.extracted_year,
-        reporter=st.extracted_reporter,
-        full_text=st.raw_text,
-        source_site=st.source_site,
-        source_url=st.source_url,
-        confidence_score=st.confidence_score,
-        is_promoted=True,
-    )
-    db.add(master)
+    # Audit F19: publish into Annex A in this record's transaction. A PublicationError or a database
+    # error propagates to the per-record handler: the record is rolled back, counted failed, left pending.
     await db.flush()
-    db.add(EmbeddingQueue(record_id=master.id, table_name="case_law_master"))
+    conn = await db.connection()
+    result = await publish_batch(conn, staging_batch(st, src), STAGING_ACTOR_ID)
+    outcome = staging_outcome(result)
+    if not outcome.promoted:
+        _quarantine(db, st, src, outcome.reason, resolved_by, extra_details=outcome.details)
+        return "quarantined"
     st.promoted = True
     st.promoted_at = func.now()
-    st.promoted_to_id = master.id
+    st.promoted_to_id = outcome.judgment_id
     return "promoted"
 
 

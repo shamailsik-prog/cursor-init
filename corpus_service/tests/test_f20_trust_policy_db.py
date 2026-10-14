@@ -361,6 +361,10 @@ async def _stage(rows):
                 "extracted_title": f"F20 Fixture {key} v. Test",
                 "extracted_year": 2099,
                 "raw_text": "synthetic F20 fixture text",
+                # Audit F19: a bench and the harvested page, so a promoted row publishes into Annex A
+                # with complete provenance (plan Task 8 mapping).
+                "extracted_bench_type": "single",
+                "raw_html": "<p>synthetic F20 fixture</p>",
                 "normalised": True,
                 **fields,
             }
@@ -380,13 +384,41 @@ async def _outcomes():
     return staging, queue, master, embed
 
 
+# Audit F19: promotion publishes into the Annex A contract. What it published, read as the admin.
+ANNEX_A_TABLES = (
+    "source_provenance", "judgment", "citation", "treatment", "statute", "statute_section",
+    "statute_section_version", "corpus_publication", "corpus_publication_item", "corpus_publication_grant",
+    "corpus_metadata",
+)
+
+
+async def _annex_a_promoted():
+    """(judgment id, citation_text) for every promoted citation of a promoted judgment."""
+    return await fetch(
+        "SELECT j.id, c.citation_text FROM judgment j JOIN citation c ON c.judgment_id = j.id "
+        "WHERE j.review_status = 'promoted' AND c.review_status = 'promoted' ORDER BY c.citation_text"
+    )
+
+
+async def _annex_a_snapshot():
+    return {table: await fetch(f"SELECT * FROM {table} ORDER BY 1") for table in ANNEX_A_TABLES}
+
+
 def _promote():
     from scraper.tasks.promotion import promote_staging_records
 
     return run(promote_staging_records())
 
 
+def _promote_as_runtime_role(corpus_db):
+    """Promotion as the compose runtime role (DML on its own tables, corpus_writer by SET ROLE only),
+    as in production after PR 2b. A superuser is refused by publish_batch (plan D2)."""
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        return _promote()
+
+
 def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({
         "trusted": ("f20-trusted", "trusted"),
@@ -396,19 +428,19 @@ def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
         "renamed": ("f20-old-name", "trusted"),
     }))
     ids = run(_stage({
-        "trusted_050": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 1", confidence_score=0.5),
-        "trusted_049": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 2", confidence_score=0.49),
-        "review": dict(source_site="f20-review", source_id=src["review"], extracted_citation="2099 F20 3", confidence_score=0.99),
-        "blocked": dict(source_site="f20-blocked", source_id=src["blocked"], extracted_citation="2099 F20 4", confidence_score=0.99),
-        "unknown_site": dict(source_site="f20-no-such-source", extracted_citation="2099 F20 5", confidence_score=0.99),
-        "deleted": dict(source_site="f20-deleted", source_id=src["deleted"], extracted_citation="2099 F20 6", confidence_score=0.99),
-        "renamed": dict(source_site="f20-old-name", source_id=src["renamed"], extracted_citation="2099 F20 7", confidence_score=0.9),
+        "trusted_050": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 1", confidence_score=0.5),
+        "trusted_049": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 2", confidence_score=0.49),
+        "review": dict(source_site="f20-review", source_id=src["review"], extracted_citation="2099 SCMR 3", confidence_score=0.99),
+        "blocked": dict(source_site="f20-blocked", source_id=src["blocked"], extracted_citation="2099 SCMR 4", confidence_score=0.99),
+        "unknown_site": dict(source_site="f20-no-such-source", extracted_citation="2099 SCMR 5", confidence_score=0.99),
+        "deleted": dict(source_site="f20-deleted", source_id=src["deleted"], extracted_citation="2099 SCMR 6", confidence_score=0.99),
+        "renamed": dict(source_site="f20-old-name", source_id=src["renamed"], extracted_citation="2099 SCMR 7", confidence_score=0.9),
         # The FK is authoritative: a review source cannot borrow a trusted source's name.
-        "fk_beats_name": dict(source_site="f20-trusted", source_id=src["review"], extracted_citation="2099 F20 8", confidence_score=0.99),
+        "fk_beats_name": dict(source_site="f20-trusted", source_id=src["review"], extracted_citation="2099 SCMR 8", confidence_score=0.99),
         # No FK: the harvester's parsing_metadata.source_name comes before the source_site label.
-        "metadata_name": dict(source_site="f20-site-label", parsing_metadata={"source_name": "f20-trusted"}, extracted_citation="2099 F20 9", confidence_score=0.8),
+        "metadata_name": dict(source_site="f20-site-label", parsing_metadata={"source_name": "f20-trusted"}, extracted_citation="2099 SCMR 9", confidence_score=0.8),
         # No FK, no metadata: the source_site label, as today's harvesters stage rows.
-        "site_only": dict(source_site="f20-trusted", extracted_citation="2099 F20 10", confidence_score=0.7),
+        "site_only": dict(source_site="f20-trusted", extracted_citation="2099 SCMR 10", confidence_score=0.7),
     }))
     # After staging: the source is deleted (FK -> NULL), and another renamed.
     run(execute(
@@ -417,9 +449,10 @@ def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
         params={"d": src["deleted"], "r": src["renamed"]},
     ))
 
-    result = _promote()
+    result = _promote_as_runtime_role(corpus_db)
 
     staging, queue, master, embed = run(_outcomes())
+    published = run(_annex_a_promoted())
     by_id = {row[0]: row for row in staging}
     expected = {
         "trusted_050": ("promoted", None),
@@ -443,38 +476,57 @@ def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
     assert not wrong, f"staging outcome differs from the trust rule: {wrong}"
     # The durable reason is on the review-queue row too, and nothing promoted is queued.
     assert {key: queue_reason.get(ids[key]) for key in expected} == {key: reason for key, (_s, reason) in expected.items()}
-    promoted_citations = {"2099 F20 1", "2099 F20 7", "2099 F20 9", "2099 F20 10"}
-    assert {row[1] for row in master} == promoted_citations, "only promoted rows may reach case_law_master"
-    assert len(master) == 4
-    master_ids = {row[0] for row in master}
-    assert {by_id[ids[k]][4] for k in ("trusted_050", "renamed", "metadata_name", "site_only")} == master_ids
-    assert {row[0] for row in embed} == master_ids and {row[1] for row in embed} == {"case_law_master"}
+    # Audit F19: promoted rows are published into Annex A, and only they reach it.
+    promoted_citations = {"2099 SCMR 1", "2099 SCMR 7", "2099 SCMR 9", "2099 SCMR 10"}
+    assert {row[1] for row in published} == promoted_citations, "only promoted rows may reach Annex A"
+    assert len(published) == 4
+    judgment_ids = {row[0] for row in published}
+    assert len(judgment_ids) == 4
+    assert {by_id[ids[k]][4] for k in ("trusted_050", "renamed", "metadata_name", "site_only")} == judgment_ids
+    # Ruling 10: promotion no longer writes case_law_master or queues embeddings.
+    assert master == [] and embed == []
     assert result == {"promoted": 4, "quarantined": 6, "failed": 0}
 
     # A second pass has nothing left to decide and writes nothing new.
-    assert _promote() == {"promoted": 0, "quarantined": 0, "failed": 0}
+    annex_a = run(_annex_a_snapshot())
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "quarantined": 0, "failed": 0}
     assert run(_outcomes()) == (staging, queue, master, embed)
+    assert run(_annex_a_snapshot()) == annex_a
 
 
 # ---------------------------------------------------------------------------------------------
 # (d) F22: a citation-free record is quarantined; a bad record does not stop the batch
 # ---------------------------------------------------------------------------------------------
 def test_d_citation_free_record_is_quarantined_and_the_batch_continues(corpus_db, caplog):
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
+    # A database error on one row (F22's isolation property, now on Annex A): the publication of the
+    # row titled "F22 fault 2099" is refused by a test trigger on judgment.
+    corpus_db.admin(
+        """CREATE FUNCTION f22_test_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN
+             IF NEW.case_title = 'F22 fault 2099' THEN
+               RAISE EXCEPTION 'f22 marker %', NEW.case_title USING ERRCODE = '23514';
+             END IF;
+             RETURN NEW;
+           END $$""",
+        "CREATE TRIGGER f22_test_fault BEFORE INSERT OR UPDATE ON judgment FOR EACH ROW EXECUTE FUNCTION f22_test_fault()",
+    )
     src = run(_make_sources({"trusted": ("f20-trusted", "trusted")}))
     ids = run(_stage({
         "no_citation": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation=None, confidence_score=0.9),
         "blank_citation": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="   ", confidence_score=0.9),
-        "good": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 21", confidence_score=0.9),
-        # case_law_master refuses year 1800 (ck_case_law_year_sane): a database error on this row.
-        "db_error": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 22", extracted_year=1800, confidence_score=0.9),
-        "good_too": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 23", confidence_score=0.9),
+        "good": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 21", confidence_score=0.9),
+        # The fault trigger above refuses this row's judgment: a database error on this row.
+        "db_error": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 22", extracted_title="F22 fault 2099", confidence_score=0.9),
+        "good_too": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 23", confidence_score=0.9),
     }))
 
     with caplog.at_level(logging.INFO):
-        result = _promote()
+        result = _promote_as_runtime_role(corpus_db)
 
     staging, queue, master, _embed = run(_outcomes())
+    published = run(_annex_a_promoted())
     by_id = {row[0]: row for row in staging}
     assert by_id[ids["no_citation"]][1:4] == (False, True, "citation_missing")
     assert by_id[ids["blank_citation"]][1:4] == (False, True, "citation_missing")
@@ -483,13 +535,14 @@ def test_d_citation_free_record_is_quarantined_and_the_batch_continues(corpus_db
     assert by_id[ids["good_too"]][1:3] == (True, False)
     # The failing row is rolled back on its own and left pending for the next run.
     assert by_id[ids["db_error"]][1:4] == (False, False, None)
-    assert {row[1] for row in master} == {"2099 F20 21", "2099 F20 23"}
+    assert {row[1] for row in published} == {"2099 SCMR 21", "2099 SCMR 23"}
+    assert master == []  # ruling 10: promotion no longer writes case_law_master
     assert result == {"promoted": 2, "quarantined": 2, "failed": 1}
 
     failures = [r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage()]
     assert len(failures) == 1, failures
     assert str(ids["db_error"]) in failures[0] and "IntegrityError" in failures[0]
-    assert "ck_case_law_year_sane" not in failures[0] and "1800" not in failures[0], "log carries row data"
+    assert "f22 marker" not in failures[0] and "F22 fault 2099" not in failures[0], "log carries row data"
 
 
 # ---------------------------------------------------------------------------------------------
