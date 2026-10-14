@@ -54,11 +54,14 @@ jobs:
           docker compose config >/dev/null
           docker compose run --rm -T --no-deps secrets-preflight
           for missing in $vars; do
-            if env -u "$missing" docker compose config >/dev/null 2>&1 \
-               && env -u "$missing" docker compose run --rm -T --no-deps secrets-preflight >/dev/null 2>&1; then
+            if out=$( { env -u "$missing" docker compose config >/dev/null \
+                        && env -u "$missing" docker compose run --rm -T --no-deps secrets-preflight; } 2>&1 ); then
               echo "::error::compose accepted a missing $missing"; exit 1
             fi
+            # The refusal must name the missing variable (not fail for some other reason).
+            printf '%s' "$out" | grep -q -- "$missing" || { echo "::error::refused without naming $missing: $out"; exit 1; }
           done
+          docker compose down --remove-orphans >/dev/null 2>&1 || true
           echo "OK: compose refuses to start without any one of: $vars"
       - name: E2E - store TLS, Redis ACLs, least-privilege roles, per-service credentials (real stores + the app's own code path)
         run: bash corpus_service/tests/e2e/store_security_e2e.sh
