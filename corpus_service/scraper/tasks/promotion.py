@@ -27,17 +27,24 @@ For each record, in this order:
 
 Each record is re-read FOR UPDATE and decided in its own transaction, so one bad record cannot stop
 or roll back the rest. A record whose promotion raises is rolled back, its publication with it, and
-counted as failed. Only a failure confirmed to be about the record itself quarantines it as
-promotion_error:<ExceptionClass>, so it is not retried forever: a database error with SQLSTATE class
-22 (data exception) or 23 (integrity constraint violation), or a refusal by the Annex A publication
-guard that escapes the item (003's SKP01-SKP13, such as SKP12 or SKP13), which is a decision about
-this record. SKP08 is the exception: a publication-state refusal (publication_isolation_refused, ...)
-is a deployment or configuration fault. Every other failure leaves the record pending for the next
-run: a transient error (connection lost; SQLSTATE class 08, 40, 53 or 57; 55P03), and any systemic or
-unknown one (SKP08, permission such as 42501 before PR 2b grants corpus_writer, schema drift, internal
-error, a generic RAISE, a Python exception or a PublicationError with no SQLSTATE), which may be a
-deployment or schema fault rather than bad input. After SYSTEMIC_FAILURE_LIMIT consecutive systemic
-failures with the same SQLSTATE or class the run stops early and leaves the rest pending.
+counted as failed. Only a failure confirmed to be about the record itself quarantines it, so it is
+not retried forever:
+- its own content fails the batch validation that staging_batch() runs (Codex P2 on #49): a
+  BatchError from parse_batch_json (over MAX_BATCH_BYTES, the batch models, a NUL character), or a
+  pydantic ValidationError / CitationError from the batch models should one escape; quarantined as
+  batch_invalid:<code> (too_large, schema, nul_character, citation), never with the message;
+- a database error with SQLSTATE class 22 (data exception) or 23 (integrity constraint violation),
+  or a refusal by the Annex A publication guard that escapes the item (003's SKP01-SKP13, such as
+  SKP12 or SKP13), which is a decision about this record; quarantined as
+  promotion_error:<ExceptionClass>. SKP08 is the exception: a publication-state refusal
+  (publication_isolation_refused, ...) is a deployment or configuration fault.
+Every other failure leaves the record pending for the next run: a transient error (connection lost;
+SQLSTATE class 08, 40, 53 or 57; 55P03), and any systemic or unknown one (SKP08, permission such as
+42501 before PR 2b grants corpus_writer, schema drift, internal error, a generic RAISE, an unknown
+Python exception or a PublicationError with no SQLSTATE), which may be a deployment, schema or code
+fault rather than bad input. After SYSTEMIC_FAILURE_LIMIT consecutive systemic failures with the same
+SQLSTATE or class the run stops early and leaves the rest pending; a record-specific failure resets
+that count.
 
 case_law_master is no longer written here and nothing is queued for embedding (F19, spec ruling 10;
 Annex A embeddings are audit F27); the duplicate check against case_law_master that PR #48 added is
@@ -48,13 +55,16 @@ replaced by the publication's own decision against Annex A. Nothing schedules th
 import logging
 from typing import Mapping, Optional, Tuple
 
+from pydantic import ValidationError
 from sqlalchemy import func, select, text
 
 from scraper.database import SessionLocal
 from scraper.models import QuarantineQueue, ScraperSource, ScraperStaging
 from scraper.publication.annex_a import publish_batch
-from scraper.publication.citations import canonical_key
+from scraper.publication.batch import BATCH_SCHEMA, BatchError
+from scraper.publication.citations import CitationError, canonical_key
 from scraper.publication.from_staging import STAGING_ACTOR_ID, staging_batch, staging_outcome
+from scraper.publication.vocabulary import REASON_BATCH_INVALID_PREFIX
 from scraper.source_identity import META_SOURCE_ID, META_SOURCE_NAME, as_source_uuid, is_present
 from scraper.trust import REASON_CITATION_MISSING, promotion_error_reason, publication_decision
 
@@ -129,6 +139,26 @@ def is_record_specific_db_error(exc: BaseException) -> bool:
     if code is None:
         return False
     return code[:2] in _RECORD_SPECIFIC_SQLSTATE_CLASSES or code in _PUBLICATION_REFUSAL_SQLSTATES
+
+
+def record_validation_reason(exc: BaseException) -> Optional[str]:
+    """Codex P2 on #49: the durable reason when promotion failed validating this record's own
+    content, else None. These are the explicit validation exceptions the publication package raises
+    for one record's data on the promotion path (staging_batch -> parse_batch_json):
+    - scraper.publication.batch.BatchError: the document is over MAX_BATCH_BYTES (too_large), fails
+      the batch models (schema), or holds a NUL character (nul_character);
+    - pydantic.ValidationError from the batch models, should one escape parse_batch_json (schema);
+    - scraper.publication.citations.CitationError, should one escape the citation key builder
+      (citation).
+    The reason is batch_invalid:<code>: the code only, never the message. Anything else, an unknown
+    Python exception in particular, is not a validation failure and stays systemic."""
+    if isinstance(exc, BatchError):
+        return f"{REASON_BATCH_INVALID_PREFIX}{exc.code}"
+    if isinstance(exc, ValidationError):
+        return f"{REASON_BATCH_INVALID_PREFIX}{BATCH_SCHEMA}"
+    if isinstance(exc, CitationError):
+        return f"{REASON_BATCH_INVALID_PREFIX}citation"
+    return None
 
 
 async def _source_by_name(db, name: str) -> Optional[ScraperSource]:
@@ -231,11 +261,12 @@ async def _decide(db, st: ScraperStaging) -> str:
     return "attached" if outcome.attached else "promoted"
 
 
-async def _quarantine_after_error(db, staging_id, exc: BaseException) -> None:
+async def _quarantine_after_error(db, staging_id, exc: BaseException, reason: Optional[str] = None) -> None:
     """Make a failed record's outcome durable (re-audit LOW-3): after its own work is rolled back,
-    quarantine it as promotion_error:<ExceptionClass> in a fresh transaction. If even that fails,
-    log it (identifier and class only) and leave the record pending."""
-    reason = promotion_error_reason(exc)
+    quarantine it in a fresh transaction, as ``reason`` (batch_invalid:<code>) or else as
+    promotion_error:<ExceptionClass>. If even that fails, log it (identifier and class only) and
+    leave the record pending."""
+    reason = reason or promotion_error_reason(exc)
     try:
         async with db.begin_nested():
             st = await db.get(ScraperStaging, staging_id, populate_existing=True, with_for_update=True)
@@ -251,9 +282,11 @@ async def promote_staging_records() -> dict:
     """Decide every normalised, undecided staging record. Returns counts of promoted, attached
     (a duplicate of an already-published citation), quarantined and failed records.
 
-    A failed record is rolled back and counted as failed. Only a record-specific database error
-    (SQLSTATE class 22 or 23) quarantines it as promotion_error:<ExceptionClass>; a transient error
-    and every systemic or unknown failure leave it pending for the next run. After
+    A failed record is rolled back and counted as failed. Only a record-specific failure quarantines
+    it: its own content failing the batch validation (batch_invalid:<code>, Codex P2), or a
+    record-specific database error (SQLSTATE class 22 or 23, or an Annex A guard refusal other than
+    SKP08) as promotion_error:<ExceptionClass>; a transient error and every systemic or unknown
+    failure leave it pending for the next run. After
     SYSTEMIC_FAILURE_LIMIT consecutive systemic/unknown failures with the same SQLSTATE (or
     exception class) the run stops early, leaves the rest pending, and the result gains
     "aborted": "systemic:<SQLSTATE or class>" (the key is present only when the run was aborted)."""
@@ -284,17 +317,22 @@ async def promote_staging_records() -> dict:
                 await db.rollback()
                 counts["failed"] += 1
                 code = _sqlstate(exc)
-                transient = is_transient_db_error(exc)
-                record_specific = not transient and is_record_specific_db_error(exc)
+                # Codex P2 on #49: the record's own content failed the batch validation; it will
+                # fail the same way on every run, so it is record-specific, never transient.
+                validation_reason = record_validation_reason(exc)
+                transient = validation_reason is None and is_transient_db_error(exc)
+                record_specific = validation_reason is not None or (not transient and is_record_specific_db_error(exc))
                 systemic = not transient and not record_specific
-                # Identifier, exception class and SQLSTATE only: the message can carry row data.
+                reason = (validation_reason or promotion_error_reason(exc)) if record_specific else None
+                # Identifier, exception class, SQLSTATE and reason code only: the message can carry
+                # row data.
                 (logger.error if systemic else logger.warning)(
-                    "promotion.record_failed staging_id=%s error=%s sqlstate=%s transient=%s systemic=%s",
+                    "promotion.record_failed staging_id=%s error=%s sqlstate=%s transient=%s systemic=%s reason=%s",
                     staging_id, type(exc).__name__, code or "none",
-                    "true" if transient else "false", "true" if systemic else "false",
+                    "true" if transient else "false", "true" if systemic else "false", reason or "none",
                 )
                 if record_specific:
-                    await _quarantine_after_error(db, staging_id, exc)
+                    await _quarantine_after_error(db, staging_id, exc, reason)
                 if not systemic:
                     streak_key, streak = None, 0
                     continue

@@ -1394,3 +1394,92 @@ def test_f19_m4_publication_isolation_refused_is_systemic_not_the_records_fault(
 
     again = run(_promote_on(corpus_db.engine_for(url)))
     assert again == {"promoted": 4, "attached": 0, "quarantined": 0, "failed": 0}, again
+
+
+# ---------------------------------------------------------------------------------------------
+# Codex P2 on #49 (review 4273565239): a staged record whose own content fails the batch
+# validation (BatchError: over MAX_BATCH_BYTES, schema, NUL) is record-specific. It is quarantined
+# durably as batch_invalid:<code>, the run goes on, and it never counts towards the breaker.
+# ---------------------------------------------------------------------------------------------
+def _stage_trusted_sized(corpus_db, sizes, page0):
+    """Trusted records staged in id order (k0, k1, ...); sizes[i] is None for an ordinary record or
+    the raw_text length of an oversized one (synthetic filler, no legal text)."""
+    import uuid
+
+    src = run(_make_sources({"trusted": ("f19-trusted", "trusted")}))
+    rows = {}
+    for i, size in enumerate(sizes):
+        fields = dict(id=uuid.UUID(f"00000000-0000-4000-8000-{i + 1:012d}"), source_id=src["trusted"],
+                      source_site="f19-trusted", extracted_citation=f"2099 SCMR {page0 + i}")
+        if size is not None:
+            fields["raw_text"] = "x" * size
+        rows[f"k{i}"] = fields
+    return run(_stage(rows))
+
+
+def _p2_published_citations(db):
+    return sorted(r[0] for r in admin_fetch(
+        db, "SELECT c.citation_text FROM citation c JOIN judgment j ON j.id = c.judgment_id "
+            "WHERE j.review_status = 'promoted' AND c.review_status = 'promoted'"))
+
+
+def test_f19_p2_an_oversized_staged_record_is_quarantined_and_the_run_goes_on(corpus_db, caplog):
+    """The real 32 MiB limit, no monkeypatch: the middle record's text alone is one byte over
+    MAX_BATCH_BYTES, so staging_batch() -> parse_batch_json() raises BatchError for that record and
+    only that record. It is quarantined batch_invalid:too_large with a review-queue row, the good
+    records on either side are promoted, the run is not aborted, and the next run does not retry
+    it. The log carries the id, class and reason only."""
+    import logging
+
+    from scraper.publication.batch import MAX_BATCH_BYTES
+
+    prepare(corpus_db)
+    ids = _stage_trusted_sized(corpus_db, [None, MAX_BATCH_BYTES + 1, None], 9600)
+    app, app_pw = corpus_db.runtime_role()
+    with caplog.at_level(logging.INFO):
+        result = run(_promote_on(corpus_db.engine_for(corpus_db.url_as(app, app_pw))))
+
+    assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 1}, result
+    staging, queue = _staging_state(corpus_db)
+    assert staging[ids["k1"]][:3] == (False, True, "batch_invalid:too_large")
+    assert set(queue) == {ids["k1"]} and queue[ids["k1"]][0] == "batch_invalid:too_large"
+    assert staging[ids["k0"]][:3] == (True, False, None) and staging[ids["k2"]][:3] == (True, False, None)
+    assert _p2_published_citations(corpus_db) == ["2099 SCMR 9600", "2099 SCMR 9602"]
+    failed = [r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage()]
+    assert len(failed) == 1, failed
+    assert f"staging_id={ids['k1']} error=BatchError" in failed[0] and "systemic=false" in failed[0], failed
+    assert "reason=batch_invalid:too_large" in failed[0], failed
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "2099 SCMR 9601" not in messages and "xxxxxxxx" not in messages, "log carries row data"
+    assert not any("promotion.aborted" in r.getMessage() for r in caplog.records)
+
+    again = run(_promote_on(corpus_db.engine_for(corpus_db.url_as(app, app_pw))))
+    assert again == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}, "a quarantined record is not retried"
+
+
+def test_f19_p2_three_oversized_records_in_a_row_do_not_trip_the_breaker(corpus_db, monkeypatch, caplog):
+    """Three oversized records in a row, then two good ones. Each is its own record-specific
+    failure, so the systemic breaker (SYSTEMIC_FAILURE_LIMIT = 3) never counts them: no abort, all
+    three quarantined batch_invalid:too_large, the good records promoted. The limit is monkeypatched
+    down to 8 KiB inside this test (parse_batch_json reads the module constant at call time), so the
+    test does not stage 3 x 32 MiB; the 32 MiB case itself is the test above."""
+    import logging
+
+    import scraper.publication.batch as batch_module
+
+    prepare(corpus_db)
+    monkeypatch.setattr(batch_module, "MAX_BATCH_BYTES", 8 * 1024)
+    ids = _stage_trusted_sized(corpus_db, [16 * 1024, 16 * 1024, 16 * 1024, None, None], 9650)
+    app, app_pw = corpus_db.runtime_role()
+    with caplog.at_level(logging.INFO):
+        result = run(_promote_on(corpus_db.engine_for(corpus_db.url_as(app, app_pw))))
+
+    assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 3}, result
+    staging, queue = _staging_state(corpus_db)
+    for key in ("k0", "k1", "k2"):
+        assert staging[ids[key]][:3] == (False, True, "batch_invalid:too_large"), key
+    assert {sid: q[0] for sid, q in queue.items()} == {ids[k]: "batch_invalid:too_large" for k in ("k0", "k1", "k2")}
+    for key in ("k3", "k4"):
+        assert staging[ids[key]][:3] == (True, False, None), key
+    assert _p2_published_citations(corpus_db) == ["2099 SCMR 9653", "2099 SCMR 9654"]
+    assert not any("promotion.aborted" in r.getMessage() for r in caplog.records)

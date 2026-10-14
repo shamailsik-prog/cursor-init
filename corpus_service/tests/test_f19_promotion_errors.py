@@ -129,5 +129,91 @@ class PublicationRefusalsAreRecordSpecificTests(unittest.TestCase):
             self.assertFalse(is_record_specific_db_error(_db_error(code, nested=True)), code)
 
 
+def _valid_batch_doc(**judgment):
+    item = {"kind": "judgment", "item_key": "judgment", "trust": {"level": "trusted", "confidence": 0.9},
+            "provenance": {}, "citations": [{"text": "2099 SCMR 1"}], **judgment}
+    return {"format": "corpus-publication-batch/1", "batch_key": "staging/p2-unit", "source_kind": "staging",
+            "items": [item]}
+
+
+class BatchValidationIsRecordSpecificTests(unittest.TestCase):
+    """Codex P2 on #49 (review 4273565239): the batch validation that staging_batch() runs on one
+    staged record (BatchError from parse_batch_json; a pydantic ValidationError or CitationError
+    from the batch models) is about that record's own content. Promotion quarantines it as
+    batch_invalid:<code> (never with the message, which names field paths) instead of leaving it
+    pending as systemic. Unknown Python exceptions stay systemic."""
+
+    def test_batch_errors_carry_a_stable_code(self):
+        import json
+        from unittest import mock
+
+        from scraper.publication import batch as b
+
+        with self.assertRaises(b.BatchError) as too_large:
+            b.parse_batch_json(b" " * (b.MAX_BATCH_BYTES + 1))
+        self.assertEqual(too_large.exception.code, "too_large")
+        with self.assertRaises(b.BatchError) as schema:
+            b.parse_batch_json(b"{}")
+        self.assertEqual(schema.exception.code, "schema")
+        with self.assertRaises(b.BatchError) as nul:
+            b.parse_batch_json(json.dumps(_valid_batch_doc(case_title="Test v. Test\u0000 2099")).encode())
+        self.assertEqual(nul.exception.code, "nul_character")
+        self.assertEqual(b.parse_batch_json(json.dumps(_valid_batch_doc()).encode()).batch_key, "staging/p2-unit")
+        with mock.patch.object(b, "MAX_BATCH_BYTES", 16), self.assertRaises(b.BatchError) as file_too_large:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".json") as fh:
+                fh.write(json.dumps(_valid_batch_doc()).encode())
+                fh.flush()
+                b.load_batch(fh.name)
+        self.assertEqual(file_too_large.exception.code, "too_large")
+        self.assertEqual(set(b.BATCH_ERROR_CODES), {"too_large", "schema", "nul_character"})
+
+    def test_each_validation_failure_maps_to_its_batch_invalid_reason(self):
+        from pydantic import ValidationError
+
+        from scraper.publication.batch import BatchError, PublicationBatch
+        from scraper.publication.citations import CitationError
+        from scraper.tasks.promotion import record_validation_reason
+
+        for code in ("too_large", "schema", "nul_character"):
+            self.assertEqual(record_validation_reason(BatchError("items.0.full_text: invalid", code=code)),
+                             f"batch_invalid:{code}")
+        try:
+            PublicationBatch.model_validate_json(b"{}")
+        except ValidationError as exc:
+            self.assertEqual(record_validation_reason(exc), "batch_invalid:schema")
+        else:
+            self.fail("an empty document must not validate")
+        self.assertEqual(record_validation_reason(CitationError("unknown_reporter")), "batch_invalid:citation")
+
+    def test_the_reason_never_carries_the_message(self):
+        from scraper.publication.batch import BatchError
+        from scraper.tasks.promotion import record_validation_reason
+
+        reason = record_validation_reason(BatchError("Test v. Test 2099 SCMR 1", code="schema"))
+        self.assertEqual(reason, "batch_invalid:schema")
+        self.assertNotIn("2099", reason)
+
+    def test_unknown_python_errors_and_unmapped_publication_errors_stay_systemic(self):
+        from scraper.publication.annex_a import PublicationError
+        from scraper.tasks.promotion import is_record_specific_db_error, is_transient_db_error, record_validation_reason
+
+        for exc in (RuntimeError("boom"), TypeError("datetime"), KeyError("judgment"), ValueError("x"),
+                    PublicationError("not_corpus_writer"), _publication_error_from("SKP08")):
+            self.assertIsNone(record_validation_reason(exc), repr(exc))
+        for exc in (RuntimeError("boom"), TypeError("datetime"), PublicationError("not_corpus_writer")):
+            self.assertFalse(is_record_specific_db_error(exc), repr(exc))
+            self.assertFalse(is_transient_db_error(exc), repr(exc))
+
+    def test_a_batch_error_is_neither_transient_nor_a_database_error(self):
+        from scraper.publication.batch import BatchError
+        from scraper.tasks.promotion import is_record_specific_db_error, is_transient_db_error
+
+        exc = BatchError("batch: larger than 33554432 bytes", code="too_large")
+        self.assertFalse(is_transient_db_error(exc))
+        self.assertFalse(is_record_specific_db_error(exc))
+
+
 if __name__ == "__main__":
     unittest.main()

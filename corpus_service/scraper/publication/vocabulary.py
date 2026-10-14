@@ -95,6 +95,11 @@ REASON_MISSING_BENCH: Final = "missing_bench"
 REASON_CITATION_NOT_CANONICAL: Final = "citation_not_canonical"
 REASON_TREATMENT_UNCERTAIN: Final = "treatment_uncertain"
 REASON_JUDGMENT_NOT_PROMOTED: Final = "judgment_not_promoted"  # a treatment's judgment is held (re-audit D3)
+# Promotion only (Codex P2 on #49): a staged record whose own content fails the batch validation
+# (scraper.publication.batch.BatchError and the models behind it) is quarantined as
+# "batch_invalid:<code>": too_large, schema, nul_character, or citation (a CitationError). No item
+# reaches the publication, so this is never a corpus_publication_item reason.
+REASON_BATCH_INVALID_PREFIX: Final = "batch_invalid:"
 _TRUST_REASONS: Final[Tuple[str, ...]] = (
     trust.REASON_REVIEW_SOURCE, trust.REASON_LOW_CONFIDENCE, trust.REASON_BLOCKED_SOURCE, trust.REASON_UNKNOWN_SOURCE,
 )

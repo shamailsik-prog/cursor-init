@@ -76,13 +76,17 @@ retried forever; if even that write fails, the failure is logged and the record 
 refusal by the Annex A publication guard that escapes the item (003's SQLSTATE SKP01-SKP13, such as
 SKP12 `publication_not_finished` or SKP13 `parent_not_promoted`) is a decision about the record and
 is quarantined the same way, except SKP08: a publication-state refusal such as
-`publication_isolation_refused` is a deployment or configuration fault and counts as systemic. Every
+`publication_isolation_refused` is a deployment or configuration fault and counts as systemic. A
+record whose own content fails the batch validation that promotion runs before publishing is
+record-specific too (Codex P2 on #49), and is quarantined `batch_invalid:<code>` (the code only):
+`too_large` (its batch document is over `MAX_BATCH_BYTES`, 32 MiB), `schema` (it fails the batch
+models), `nul_character`, or `citation` (a `CitationError` from the key builder). Every
 other failure leaves the record pending for the next run:
 - a transient database error (connection lost, or SQLSTATE class 08, 40, 53 or 57, or 55P03);
 - a systemic or unknown one: permission (42501; before PR 2b grants the runtime role
   `corpus_writer`, every publication fails this way or as a `PublicationError` with no SQLSTATE),
   schema drift (42P01, 42703), an internal error (XX000), a generic RAISE (P0001), SKP08, any other
-  SQLSTATE, or a Python exception with none. These may be
+  SQLSTATE, or an unknown Python exception with none. These may be
   a deployment or schema fault that would hit every record, so the backlog must survive it. They are
   logged at error level with the id, class and SQLSTATE and `systemic=true`, never row data.
 
@@ -92,7 +96,7 @@ between resets the count. Otherwise the rest of the batch always continues. Ever
 written to the staging row's `quarantine_reason` and to a `quarantine_queue` row. The run returns
 `{"promoted", "attached", "quarantined", "failed"}`, plus `"aborted": "systemic:<SQLSTATE or class>"`
 when it stopped early. A record that raised counts as failed whether it was left pending or
-quarantined `promotion_error`. A record that always raises a systemic or unknown error stays pending
+quarantined (`promotion_error` or `batch_invalid`). A record that always raises a systemic or unknown error stays pending
 and is retried on every run; there is no retry cap yet (F28).
 
 Seeds: PakistanLawSite, PakistanCode and NationalAssembly are `trusted`; every other source is

@@ -41,8 +41,20 @@ BATCH_KEY_RE: Final = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
 ITEM_KEY_RE: Final = r"^[A-Za-z0-9._:-]{1,100}$"
 
 
+BATCH_TOO_LARGE: Final = "too_large"  # the document is over MAX_BATCH_BYTES
+BATCH_SCHEMA: Final = "schema"  # shape, types, unknown keys, item rules (the pydantic models)
+BATCH_NUL_CHARACTER: Final = "nul_character"  # a string holds NUL, which Postgres text cannot store
+BATCH_ERROR_CODES: Final = (BATCH_TOO_LARGE, BATCH_SCHEMA, BATCH_NUL_CHARACTER)
+
+
 class BatchError(ValueError):
-    """A structural problem with a batch. The message names a field path, never a value."""
+    """A structural problem with a batch. The message names a field path, never a value; ``code``
+    (one of BATCH_ERROR_CODES) is a stable name for the kind of problem, which promotion records as
+    the quarantine reason batch_invalid:<code> (Codex P2 on #49)."""
+
+    def __init__(self, message: str, *, code: str):
+        super().__init__(message)
+        self.code = code
 
 
 _MODEL = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
@@ -231,14 +243,14 @@ def _find_nul(value: Any, path: str = "") -> Optional[str]:
 def parse_batch_json(raw: bytes) -> PublicationBatch:
     """Validate a batch document. Raises BatchError on any structural problem."""
     if len(raw) > MAX_BATCH_BYTES:
-        raise BatchError(f"batch: larger than {MAX_BATCH_BYTES} bytes")
+        raise BatchError(f"batch: larger than {MAX_BATCH_BYTES} bytes", code=BATCH_TOO_LARGE)
     try:
         batch = PublicationBatch.model_validate_json(raw)
     except ValidationError as exc:
-        raise BatchError(f"invalid batch: {_describe(exc)}") from None
+        raise BatchError(f"invalid batch: {_describe(exc)}", code=BATCH_SCHEMA) from None
     nul = _find_nul(batch.model_dump(mode="json"))
     if nul:
-        raise BatchError(f"invalid batch: {nul}: NUL character")
+        raise BatchError(f"invalid batch: {nul}: NUL character", code=BATCH_NUL_CHARACTER)
     return batch
 
 
@@ -246,7 +258,7 @@ def load_batch(path: Path) -> PublicationBatch:
     """Read and validate a batch file; the size cap is checked before the file is read."""
     size = Path(path).stat().st_size
     if size > MAX_BATCH_BYTES:
-        raise BatchError(f"batch: larger than {MAX_BATCH_BYTES} bytes")
+        raise BatchError(f"batch: larger than {MAX_BATCH_BYTES} bytes", code=BATCH_TOO_LARGE)
     return parse_batch_json(Path(path).read_bytes())
 
 
