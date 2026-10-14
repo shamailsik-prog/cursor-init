@@ -4,8 +4,6 @@
 #        SIKANDER_LIVE=1 ./ci_gates/gate_g0.sh   (also runs the live Firestore/Postgres checks if present)
 set -u
 fail=0
-APP_DIRS="services platform core layers web mobile src agent"
-existing_dirs=""; for d in $APP_DIRS; do [ -d "$d" ] && existing_dirs="$existing_dirs $d"; done
 
 echo "=== Gate G-0: Foundations (static) ==="
 
@@ -13,14 +11,12 @@ echo "[1] fee-guard"
 if grep -R -n -E "calculateCourtFee|getFeeRule|insertFeeMemo|courtFeeBasis" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' --include='*.sql' --include='*.json' --include='*.rules' . 2>/dev/null | grep -v node_modules | grep -v '\.git/' | grep -v '/\.eve/' | grep -v 'ci_gates/' | grep -v 'CORRECTION_LOG.md' | grep -v 'corpus_service/'; then
   echo "FAIL: court-fee identifiers found (E-15)"; fail=1; else echo "PASS"; fi
 
-echo "[2] scraper-guard (app repository: no Playwright/Puppeteer anywhere; no exemption for D3-3 or L4.9)"
-if [ -n "$existing_dirs" ] && grep -R -n -i -E "playwright|puppeteer" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' --include='package.json' --include='requirements.txt' $existing_dirs 2>/dev/null | grep -v node_modules; then
-  echo "FAIL: scraper library in the app repository (N1 / L17.12 — corpus harvest is a separate repo)"; fail=1; else echo "PASS"; fi
+echo "[2] scraper-guard (full application tree: no Playwright/Puppeteer; corpus_service excluded until FA-D3C)"
+python3 ci_gates/check_scraper_libraries.py || fail=1
 python3 ci_gates/check_fetch_allowlist.py || fail=1
 
-echo "[3] provider-guard (AI/OCR/STT/TTS SDK imports only under platform/committeeBrain, platform/p1 or functions/src/p1)"
-if [ -n "$existing_dirs" ] && grep -R -n -E "from ['\"](openai|@anthropic-ai/sdk|@google/generative-ai|groq-sdk|elevenlabs|@google-cloud/vision|@google-cloud/translate|@google-cloud/speech|@ai-sdk/openai|@ai-sdk/anthropic|@ai-sdk/google|deepl-node)['\"]|import (openai|anthropic|google\.generativeai|groq|elevenlabs)|from ['\"](whisper|@perplexity-ai/sdk|together-ai)['\"]" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' $existing_dirs 2>/dev/null | grep -v node_modules | grep -v -E "platform/(committeeBrain|p1)|functions/src/p1"; then
-  echo "FAIL: provider SDK imported outside P1"; fail=1; else echo "PASS"; fi
+echo "[3] provider-guard (full application tree; SDK imports only under platform/p1, committeeBrain, functions/src/p1)"
+python3 ci_gates/check_provider_imports.py || fail=1
 
 echo "[4] duplicate-route guard"
 python3 ci_gates/check_duplicate_routes.py || fail=1
