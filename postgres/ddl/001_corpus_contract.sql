@@ -37,7 +37,20 @@ CREATE TABLE IF NOT EXISTS corpus_embeddings (id UUID PRIMARY KEY DEFAULT gen_ra
   model TEXT NOT NULL, classification_rank SMALLINT NOT NULL DEFAULT 0, embedding vector(1536) NOT NULL, created_at TIMESTAMPTZ DEFAULT now(), UNIQUE (entity_type, entity_id, model));
 CREATE INDEX IF NOT EXISTS corpus_embeddings_hnsw ON corpus_embeddings USING hnsw (embedding vector_cosine_ops);
 
--- monotonic classification (rank-based, Layer 18 W-2)
+-- Partner declassify audit (FA-DATA-001); downgrades only via declassify().
+CREATE TABLE IF NOT EXISTS judgment_classification_declassify_audit (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  judgment_id UUID NOT NULL REFERENCES judgment(id),
+  from_classification TEXT NOT NULL,
+  to_classification TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT judgment_declassify_reason_nonempty CHECK (btrim(reason) <> '')
+);
+CREATE INDEX IF NOT EXISTS judgment_declassify_audit_judgment ON judgment_classification_declassify_audit (judgment_id);
+
+-- monotonic classification (rank-based, Layer 18 W-2); no session GUC bypass (FA-DATA-001).
 CREATE OR REPLACE FUNCTION enforce_monotonic_classification() RETURNS TRIGGER AS $$
 DECLARE old_rank SMALLINT; new_rank SMALLINT;
 BEGIN
@@ -45,13 +58,67 @@ BEGIN
     SELECT rank INTO old_rank FROM classification_rank WHERE label = OLD.classification;
     SELECT rank INTO new_rank FROM classification_rank WHERE label = NEW.classification;
     IF new_rank IS NULL THEN RAISE EXCEPTION 'Unknown classification %', NEW.classification; END IF;
-    IF new_rank < old_rank AND current_setting('app.declassify_reason', true) IS NULL THEN
-      RAISE EXCEPTION 'Classification downgrade rejected: use declassify() with a partner reason';
+    IF new_rank < old_rank THEN
+      RAISE EXCEPTION 'Classification downgrade rejected: call declassify() with a partner reason';
     END IF;
   END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS judgment_monotonic ON judgment; CREATE TRIGGER judgment_monotonic BEFORE UPDATE ON judgment FOR EACH ROW EXECUTE FUNCTION enforce_monotonic_classification();
+
+CREATE OR REPLACE FUNCTION declassify(
+  p_judgment_id UUID,
+  p_new_classification TEXT,
+  p_actor_id TEXT,
+  p_reason TEXT
+) RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_old TEXT;
+  v_old_rank SMALLINT;
+  v_new_rank SMALLINT;
+  v_audit_id UUID;
+BEGIN
+  IF p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'declassify requires a recorded reason';
+  END IF;
+  IF p_actor_id IS NULL OR btrim(p_actor_id) = '' THEN
+    RAISE EXCEPTION 'declassify requires actor_id';
+  END IF;
+  SELECT classification INTO v_old FROM judgment WHERE id = p_judgment_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'judgment not found: %', p_judgment_id;
+  END IF;
+  SELECT rank INTO v_old_rank FROM classification_rank WHERE label = v_old;
+  SELECT rank INTO v_new_rank FROM classification_rank WHERE label = p_new_classification;
+  IF v_new_rank IS NULL THEN
+    RAISE EXCEPTION 'Unknown classification %', p_new_classification;
+  END IF;
+  IF v_new_rank >= v_old_rank THEN
+    RAISE EXCEPTION 'declassify applies only to downgrades';
+  END IF;
+  v_audit_id := gen_random_uuid();
+  INSERT INTO judgment_classification_declassify_audit (
+    id, judgment_id, from_classification, to_classification, actor_id, reason
+  ) VALUES (
+    v_audit_id, p_judgment_id, v_old, p_new_classification, btrim(p_actor_id), btrim(p_reason)
+  );
+  ALTER TABLE judgment DISABLE TRIGGER judgment_monotonic;
+  UPDATE judgment
+    SET classification = p_new_classification, updated_at = now()
+    WHERE id = p_judgment_id;
+  ALTER TABLE judgment ENABLE TRIGGER judgment_monotonic;
+  RETURN v_audit_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION declassify(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
+DO $$ BEGIN CREATE ROLE corpus_declassify NOINHERIT LOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+GRANT EXECUTE ON FUNCTION declassify(UUID, TEXT, TEXT, TEXT) TO corpus_declassify;
+GRANT SELECT ON judgment_classification_declassify_audit TO corpus_declassify;
 
 -- promoted-only views for the application role
 CREATE OR REPLACE VIEW v_judgment AS SELECT * FROM judgment WHERE review_status='promoted';
@@ -67,3 +134,4 @@ CREATE OR REPLACE VIEW v_source_provenance AS SELECT * FROM source_provenance;
 DO $$ BEGIN CREATE ROLE corpus_reader NOINHERIT LOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE corpus_writer NOINHERIT LOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 GRANT SELECT ON v_judgment, v_citation, v_treatment, v_statute, v_statute_section, v_statute_section_version, v_instrument, v_court, v_judge, v_source_provenance, corpus_metadata, corpus_embeddings TO corpus_reader;
+REVOKE ALL ON judgment_classification_declassify_audit FROM corpus_reader;
