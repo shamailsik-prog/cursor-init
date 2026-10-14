@@ -4,7 +4,6 @@ from sqlalchemy import text
 from scraper.config import asyncpg_engine_args, settings
 from scraper.trust import DEFAULT_TRUST_LEVEL, TRUST_LEVELS, normalise_legacy_trust, trust_check_sql
 import logging
-import re
 logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):
@@ -46,37 +45,59 @@ async def init_db():
 
 
 TRUST_CHECK_NAME = "ck_trust_level_values"
-_SQL_LITERAL = re.compile(r"'((?:[^']|'')*)'")
+_TRUST_PROBE_TABLE = "f20_trust_vocabulary_probe"
 
 
-def _sql_literals(expr):
-    return {m.replace("''", "'") for m in _SQL_LITERAL.findall(expr or "")}
+async def _expected_trust_rendering(conn: AsyncConnection, column_type: str):
+    """PostgreSQL's own rendering of the F20 CHECK and default for a trust_level column of
+    ``column_type``: built on a throwaway table inside a savepoint that is always rolled back, so
+    nothing persists. (Not a TEMP table: after F30 the migration role has CREATE on public but no
+    TEMP on the database.)"""
+    savepoint = await conn.begin_nested()
+    try:
+        await conn.execute(text(
+            f"CREATE TABLE {_TRUST_PROBE_TABLE} (trust_level {column_type} NOT NULL "
+            f"DEFAULT '{DEFAULT_TRUST_LEVEL}', CONSTRAINT {_TRUST_PROBE_TABLE}_ck CHECK ({trust_check_sql()}))"
+        ))
+        check = (await conn.execute(text(
+            "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c "
+            "WHERE c.conrelid = to_regclass(:t) AND c.contype = 'c'"
+        ), {"t": _TRUST_PROBE_TABLE})).scalar_one()
+        default = (await conn.execute(text(
+            "SELECT pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d WHERE d.adrelid = to_regclass(:t)"
+        ), {"t": _TRUST_PROBE_TABLE})).scalar_one()
+        return check, default
+    finally:
+        await savepoint.rollback()
 
 
 async def _trust_vocabulary_is_current(conn: AsyncConnection) -> bool:
-    """True when scraper_sources already carries the validated F20 CHECK and the review default."""
+    """True only when scraper_sources carries a *validated* CHECK named ck_trust_level_values whose
+    definition is exactly PostgreSQL's rendering of trust_check_sql(), and the review default. A
+    same-named CHECK that is NOT VALID or only looks similar (e.g. "... OR trust_level IS NOT NULL")
+    is not current, so the upgrade replaces it (re-audit LOW-2)."""
     check = (await conn.execute(text(
         "SELECT pg_get_constraintdef(c.oid), c.convalidated FROM pg_constraint c "
         "WHERE c.conrelid = 'scraper_sources'::regclass AND c.conname = :name AND c.contype = 'c'"
     ), {"name": TRUST_CHECK_NAME})).first()
-    default = (await conn.execute(text(
-        "SELECT pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d JOIN pg_attribute a "
-        "ON a.attrelid = d.adrelid AND a.attnum = d.adnum "
-        "WHERE d.adrelid = 'scraper_sources'::regclass AND a.attname = 'trust_level'"
-    ))).scalar()
-    return (
-        check is not None
-        and check[1] is True
-        and "trust_level" in check[0]
-        and _sql_literals(check[0]) == set(TRUST_LEVELS)
-        and _sql_literals(default) == {DEFAULT_TRUST_LEVEL}
-    )
+    column = (await conn.execute(text(
+        "SELECT format_type(a.atttypid, a.atttypmod), pg_get_expr(d.adbin, d.adrelid) FROM pg_attribute a "
+        "LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+        "WHERE a.attrelid = 'scraper_sources'::regclass AND a.attname = 'trust_level' AND NOT a.attisdropped"
+    ))).first()
+    if check is None or column is None or column[1] is None:
+        return False
+    if check[1] is not True:
+        return False
+    want_check, want_default = await _expected_trust_rendering(conn, column[0])
+    return check[0] == want_check and column[1] == want_default
 
 
 async def upgrade_trust_vocabulary(conn: AsyncConnection) -> None:
     """Bring scraper_sources onto the F20 vocabulary (trusted | review | blocked, default review).
 
-    Idempotent: a database that is already current is left untouched (no DDL, no UPDATE). Otherwise,
+    Idempotent: a database that is already current is left untouched (the only DDL is the
+    comparison probe, which is rolled back; the constraint and the rows are not touched). Otherwise,
     in the caller's transaction: drop the old CHECK, map every stored value outside the vocabulary
     (the legacy semi_trusted / untrusted / quarantined, or anything else) to review via
     scraper.trust.normalise_legacy_trust, add the new CHECK and set the default. The old CHECK

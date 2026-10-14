@@ -805,6 +805,48 @@ def test_h_for_update_reread_sees_concurrent_quarantine(corpus_db):
     assert master == [] and queue == []
 
 
+def test_h_permissive_same_name_check_is_not_treated_as_current(corpus_db):
+    """LOW-2 (re-audit attack): a CHECK with the right name and literals but a permissive body is
+    replaced by migrate."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    run(execute(
+        f"ALTER TABLE scraper_sources DROP CONSTRAINT {CHECK_NAME}",
+        f"ALTER TABLE scraper_sources ADD CONSTRAINT {CHECK_NAME} CHECK "
+        "(trust_level IN ('trusted','review','blocked') OR trust_level IS NOT NULL)",
+        "INSERT INTO scraper_sources (source_name, source_url, trust_level) VALUES ('f20-drift', 'https://f20.example.invalid/', 'semi_trusted')",
+    ))
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    assert run(try_insert_source("f20-after-drift", "semi_trusted")) == ("refused", CHECK_VIOLATION)
+    assert run(trust_by_name())["f20-drift"] == "review"
+    _oid, literals, valid, default = run(constraint_state())
+    assert (literals, valid, default) == (SPEC_TRUST_LEVELS, True, {"review"})
+
+
+def test_h_not_valid_check_is_revalidated(corpus_db):
+    """LOW-2 (re-audit attack): the right CHECK added NOT VALID over a legacy row is not current."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    run(execute(
+        f"ALTER TABLE scraper_sources DROP CONSTRAINT {CHECK_NAME}",
+        "INSERT INTO scraper_sources (source_name, source_url, trust_level) VALUES ('f20-nv', 'https://f20.example.invalid/', 'semi_trusted')",
+        f"ALTER TABLE scraper_sources ADD CONSTRAINT {CHECK_NAME} CHECK (trust_level IN ('trusted','review','blocked')) NOT VALID",
+    ))
+    assert run(constraint_state())[2] is False
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    assert run(trust_by_name())["f20-nv"] == "review"
+    assert run(constraint_state())[2] is True
+
+
+def test_h_a_fresh_database_is_current_after_one_migrate(corpus_db):
+    """LOW-2 guard: the constraint create_all builds is recognised as current, so a second migrate
+    on a fresh database issues no DDL (same constraint OID) and says so."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    oid1 = run(constraint_state())[0]
+    second = corpus_db.migrate()
+    assert_migrated(second, corpus_db)
+    assert run(constraint_state())[0] == oid1
+    assert "trust vocabulary already current" in second.stderr + second.stdout
+
+
 def test_h_a_second_run_waits_for_an_unfinished_publication_of_the_same_citation(corpus_db, monkeypatch):
     """LOW-1/LOW-4: two runs on *different* staging rows with the same citation, interleaved so the
     second run checks for a duplicate while the first has inserted but not yet committed the
