@@ -247,6 +247,37 @@ jobs:
       - name: next build
         run: npm run build
 
+  postgres-ddl:
+    name: Postgres DDL integration (FA-CI-002)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sikander_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sikander_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Annex A + platform DDL tests (real Postgres + pgvector)
+        env:
+          SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/sikander_ci
+        run: npm run test:postgres-ddl
+
   corpus-service:
     name: corpus_service pytest
     # corpus_service/ pytest, including the security-hardening regression tests. Runs until

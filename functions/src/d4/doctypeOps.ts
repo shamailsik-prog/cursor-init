@@ -2,7 +2,7 @@ import { decodeCursor, encodeCursor, parsePage, type Page } from "../d1/paginati
 import { HttpError } from "../http/errors"
 import type { Data, FirmOperation } from "../p5/common"
 import { requirePermission } from "../p5/permission"
-import { getDocumentType, listDocumentTypes, type DocumentType } from "./doctypes"
+import { getDocumentType, isLawDependent, listDocumentTypes, reviewChecklistOf, type DocumentType } from "./doctypes"
 
 /**
  * The document-type reads behind `/api/d4/intelligence/` (spec P4-5, P4-10, E-15): `listDocumentTypes` and
@@ -56,11 +56,21 @@ export const listDocumentTypesOp: FirmOperation<Page<TypeSummary>> = {
 }
 
 /**
- * getTypeProfile(?typeId=) → the whole seed row of a verified type: its courts, temporal binding rule, first-ground
- * rule, required fields, checklist, template and annexure rule. A missing or non-string id is 400
- * `invalid_document_type`; an id that names no verified type is 404 `document_type_not_found`.
+ * A type profile: the whole seed row, unchanged (its `checklist` is the seed's, repeats included), and what an
+ * approval of the type needs (F06): `reviewChecklistItems`, the review checklist `approveDraft` validates
+ * (`reviewChecklistOf`: the distinct seed items, then for a ruled type its `Legal verification (ruling): ...` item), and
+ * `lawDependent`, whether that checklist is required (`isLawDependent`).
  */
-export const getTypeProfileOp: FirmOperation<DocumentType> = {
+export type TypeProfile = DocumentType & { reviewChecklistItems: string[]; lawDependent: boolean }
+
+/**
+ * getTypeProfile(?typeId=) → the whole seed row of a verified type: its courts, temporal binding rule, first-ground
+ * rule, required fields, checklist, template and annexure rule; with the review checklist an approval must answer
+ * (`reviewChecklistItems`) and whether it must (`lawDependent`), so a client learns both before an approval answers
+ * 422 `review_checklist_incomplete`. A missing or non-string id is 400 `invalid_document_type`; an id that names no
+ * verified type is 404 `document_type_not_found`.
+ */
+export const getTypeProfileOp: FirmOperation<TypeProfile> = {
   auth: "firm",
   kind: "general",
   action: "doctype.read",
@@ -74,6 +84,13 @@ export const getTypeProfileOp: FirmOperation<DocumentType> = {
     const type = getDocumentType(typeId)
     if (type === null) throw new HttpError(404, "document_type_not_found")
     await audit.allow()
-    return { ...type, courtIds: [...type.courtIds], requiredFields: [...type.requiredFields], checklist: [...type.checklist] }
+    return {
+      ...type,
+      courtIds: [...type.courtIds],
+      requiredFields: [...type.requiredFields],
+      checklist: [...type.checklist],
+      reviewChecklistItems: reviewChecklistOf(type),
+      lawDependent: isLawDependent(type),
+    }
   },
 }
