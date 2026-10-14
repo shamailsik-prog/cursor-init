@@ -58,8 +58,12 @@ const byItem = new Map<string, string>()
 let S5 = ""
 let S6 = ""
 
+/** The temporary directories writeBatch made; afterAll removes them (#51 R1 D-5). */
+const batchDirs: string[] = []
+
 function writeBatch(doc: unknown): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "f05-adapter-"))
+  batchDirs.push(dir)
   const file = path.join(dir, "batch.json")
   fs.writeFileSync(file, JSON.stringify(doc))
   return file
@@ -149,6 +153,10 @@ afterAll(async () => {
       await server.end()
     }
   }
+  // Nothing this file wrote to the temporary directory outlives it (#51 R1 D-5).
+  for (const dir of batchDirs) fs.rmSync(dir, { recursive: true, force: true })
+  expect(batchDirs.length).toBeGreaterThan(0)
+  expect(batchDirs.filter((dir) => fs.existsSync(dir))).toEqual([])
 }, 120_000)
 
 describe("F05 adapter helpers (pure)", () => {
