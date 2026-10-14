@@ -139,6 +139,15 @@ expect_reply "redis: TLS without credentials gets NOAUTH" 'NOAUTH' \
   redis_c --tls --cacert /ca/ca.crt PING
 OK_RE='PONG' expect_reply "redis: the default user cannot authenticate (disabled)" 'WRONGPASS|invalid username-password|disabled' \
   redis_c --tls --cacert /ca/ca.crt --no-auth-warning --user default --pass "$REDIS_PASSWORD" PING
+# Re-audit R2-D1: with `nopass` on the app user any password logs in.
+OK_RE='PONG' expect_reply "redis: the app ACL user with a WRONG password is refused (WRONGPASS)" 'WRONGPASS' \
+  redis_c --tls --cacert /ca/ca.crt --no-auth-warning --user "$REDIS_APP_USER" --pass "$(rand_secret)" PING
+# The running server's own command line: exactly two ACL users (default, the app user) and no nopass.
+# Prints user names and counts only (the args also hold the app password).
+REDIS_ARGS=$(docker inspect -f '{{range .Args}}{{println .}}{{end}}' "${COMPOSE_PROJECT_NAME}-redis-1" 2>/dev/null)
+expect_lines "redis: the running server defines exactly the ACL users default and $REDIS_APP_USER" \
+  "$(printf '%s\n' default "$REDIS_APP_USER")" "$(printf '%s\n' "$REDIS_ARGS" | awk 'prev == "--user" {print} {prev = $0}')"
+expect_lines "redis: no ACL rule on the running server is nopass" "" "$(printf '%s\n' "$REDIS_ARGS" | grep -ix 'nopass')"
 SETGET=$(REDISCLI_AUTH="$REDIS_APP_PASSWORD" redis_c --tls --cacert /ca/ca.crt --user "$REDIS_APP_USER" SET f30:e2e ok-over-tls 2>&1; \
          REDISCLI_AUTH="$REDIS_APP_PASSWORD" redis_c --tls --cacert /ca/ca.crt --user "$REDIS_APP_USER" GET f30:e2e 2>&1)
 if printf '%s' "$SETGET" | tr '\n' ' ' | grep -Eq '^OK ok-over-tls'; then pass "redis: app ACL user over TLS can SET/GET"; else fail "redis: app ACL user over TLS can SET/GET" "$SETGET"; fi
@@ -214,6 +223,53 @@ scope_check "D5: postgres container env holds no password value (POSTGRES/APP/MI
 scope_check "D5: redis container env holds no password value (healthcheck reads the secret file)" "$(inspect_env redis)" 0
 expect_ok "D1: the app image carries no .env (/app/.env absent in the api container)" \
   timeout 60 "${COMPOSE[@]}" exec -T api test ! -e /app/.env
+
+echo "-- re-audit R2-D2: what each app container really holds, beyond its configured environment"
+# PID 1's own environment (what the main process runs with, including variables its command set
+# before exec), every process's command line, the files under /run/secrets, and the mounts.
+proc1_env() { timeout 60 "${COMPOSE[@]}" exec -T "$1" cat /proc/1/environ 2>/dev/null | tr '\0' '\n'; }
+proc_cmdlines() {
+  # shellcheck disable=SC2016
+  timeout 60 "${COMPOSE[@]}" exec -T "$1" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " <"$f"; echo; done' 2>/dev/null
+}
+secrets_in() { # file names under /run/secrets in the service's container (running or exited)
+  local c="${COMPOSE_PROJECT_NAME}-$1-1"
+  docker container inspect "$c" >/dev/null 2>&1 || { echo "<no container $c>"; return; }
+  docker cp "$c:/run/secrets" - 2>/dev/null | tar -t 2>/dev/null | sed -n 's|^secrets/\([^/][^/]*\)/*$|\1|p'
+}
+mounts_of() { # TYPE|VOLUME NAME|DESTINATION|RW, one mount per line
+  local c="${COMPOSE_PROJECT_NAME}-$1-1"
+  docker container inspect "$c" >/dev/null 2>&1 || { echo "<no container $c>"; return; }
+  docker inspect -f '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Destination}}|{{.RW}}{{println}}{{end}}' "$c"
+}
+store_mounts_of() { # the store volumes among a container's mounts, and the CA volume when writable
+  mounts_of "$1" | awk -F'|' -v p="$COMPOSE_PROJECT_NAME" '/^<no container/ || $2 == p "_pgdata" ||
+    $2 == p "_tls-postgres" || $2 == p "_tls-redis" || ($2 == p "_tls-ca" && $4 == "true")'
+}
+# Positive controls: the same readers see the stores' own secrets and data volume.
+expect_lines "R2-D2 control: /run/secrets in the postgres container lists its three password files" \
+  "$(printf '%s\n' app_db_password migrate_db_password postgres_password)" "$(secrets_in postgres)"
+expect_lines "R2-D2 control: /run/secrets in the redis container lists its password file" "redis_app_password" "$(secrets_in redis)"
+expect_out "R2-D2 control: the postgres container mounts the pgdata volume" "[|]${COMPOSE_PROJECT_NAME}_pgdata[|]" mounts_of postgres
+expect_out "R2-D2 control: api's PID 1 environment carries its DATABASE_URL" '^DATABASE_URL=postgresql' proc1_env api
+for svc in api worker-embed celery-beat; do
+  scope_check "R2-D2: $svc PID 1 environment holds only its runtime URLs' credentials" \
+    "$(proc1_env "$svc")" 1 APP_DB_PASSWORD@DATABASE_URL REDIS_APP_PASSWORD@REDIS_URL
+done
+for svc in worker-a worker-b; do
+  scope_check "R2-D2: $svc PID 1 environment holds no store credential" "$(proc1_env "$svc")" 1
+done
+for svc in api worker-embed celery-beat worker-a worker-b; do
+  no_store_secret "R2-D2: no process command line in $svc carries a store password" "$(proc_cmdlines "$svc")"
+done
+for svc in api worker-embed celery-beat worker-a worker-b migrate; do
+  expect_lines "R2-D2: $svc has no /run/secrets files (no store secret mounted)" "" "$(secrets_in "$svc")"
+  expect_lines "R2-D2: $svc mounts no store volume (pgdata, tls-postgres, tls-redis) and the CA volume only read-only" \
+    "" "$(store_mounts_of "$svc")"
+  no_store_secret "R2-D2: $svc command, entrypoint and healthcheck carry no store password" \
+    "$(docker inspect -f '{{json .Path}} {{json .Args}} {{json .Config.Cmd}} {{json .Config.Entrypoint}} {{json .Config.Healthcheck}}' \
+       "${COMPOSE_PROJECT_NAME}-${svc}-1" 2>/dev/null)"
+done
 for svc in api worker-embed celery-beat; do
   run_probe "D1: $svc container, using only its own env" \
     timeout 300 "${COMPOSE[@]}" exec -T "$svc" python tests/e2e/probe.py env-escalation

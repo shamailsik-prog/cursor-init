@@ -88,8 +88,18 @@ default, and all four differ.
   docker-compose.yml` checks the deployment as `docker compose config` resolves it, **merged with
   any `docker-compose.override.yml` next to it** (compose loads that file automatically), with all
   profiles enabled. It refuses `include:`/`extends:`, unknown services, store images given by
-  variable, and any flag that weakens the stores. CI runs it on the repository; run it on the
-  deployment host too, after adding an override.
+  variable or built from the repository (a store is recognised by its image, its Dockerfile's
+  `FROM`, or its service name), Postgres server options outside a fixed allowlist (exactly the
+  ones this file sets) or passed through `PGOPTIONS`/`POSTGRES_INITDB_ARGS`, `pg_hba.conf` lines
+  that accept a TCP login for anyone but the `+corpus_clients` group, Redis ACL users that are
+  enabled without exactly one required password (`nopass`, a second password, a password removed
+  again) or that no app connects as, and app containers that can reach a store credential, secret
+  or volume they do not use, publish a port other than the api's loopback bind, or get host access
+  (`privileged`, `cap_add`, devices, host or shared namespaces, binds from outside the repository).
+  It is a guard over this compose file, not a proof of safety: it does not vet, for example, the
+  Redis TLS protocol options, the host's `.env` (`COMPOSE_FILE`), or what the repository's own
+  scripts and images do. CI runs it on the repository; run it on the deployment host too, after
+  adding an override.
 - **Your own certificates.** Bind the three TLS volumes to host directories holding
   `ca.crt`, `postgres/server.{crt,key}` and `redis/server.{crt,key}` (server certs must name
   `postgres` / `redis` and chain to `ca.crt`), and set `TLS_CERTS_MODE=external`; the `certs`

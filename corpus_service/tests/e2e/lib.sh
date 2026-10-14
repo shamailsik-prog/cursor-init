@@ -146,3 +146,23 @@ scope_check() {
   done
   if [ -z "$problems" ]; then pass "$label"; else fail "$label" "$problems"; fi
 }
+
+# no_store_secret LABEL TEXT
+# TEXT is anything read from a container (process command lines, a healthcheck, ...); it must not
+# contain any store password value. Reports variable names only, never values.
+no_store_secret() {
+  local label=$1 text=$2 name problems=""
+  if [ -z "$text" ]; then fail "$label" "nothing to scan (could not read it)"; return; fi
+  for name in $STORE_SECRET_VARS; do
+    if printf '%s' "$text" | grep -qF -- "${!name}"; then problems+="carries $name; "; fi
+  done
+  if [ -z "$problems" ]; then pass "$label"; else fail "$label" "$problems"; fi
+}
+
+# expect_lines LABEL EXPECTED ACTUAL: two newline-separated lists must hold the same lines (sorted).
+expect_lines() {
+  local label=$1 want got
+  want=$(printf '%s\n' "$2" | sed '/^$/d' | sort | tr '\n' ' ')
+  got=$(printf '%s\n' "$3" | sed '/^$/d' | sort | tr '\n' ' ')
+  if [ "$want" = "$got" ]; then pass "$label"; else fail "$label" "expected [${want% }], got [${got% }]"; fi
+}
