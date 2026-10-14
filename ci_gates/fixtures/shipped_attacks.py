@@ -6,7 +6,10 @@ reports exactly the rules in "expect" (an empty set means the deployment must pa
 
 Cases A01-A32 are the round-2 independent auditor's attack compose mutations, copied verbatim
 (same anchor strings, same replacements). Cases S01-S27 are siblings of those attacks that the
-same fixes must also catch. Data only: nothing here runs on import.
+same fixes must also catch. Review findings on dc265e3: D01-D11 replace the build ignore file
+(Docker applies the last matching .dockerignore line), C01-C10 add or reach a network-isolated
+helper that holds a store credential or a store's files, H01-H02 change the hba method.
+Data only: nothing here runs on import.
 
 Edit forms, applied in order to docker-compose.yml:
   ("replace", OLD, NEW)              first occurrence of OLD (it must exist)
@@ -31,6 +34,10 @@ PG_ENV_DB = "      POSTGRES_DB: legal_scraper\n"
 API_VOLUMES_END = "      - tls-ca:/run/tls-ca:ro\n    networks: [edge, data]"
 HBA_APP_LINE = "hostssl    legal_scraper   +corpus_clients  all       scram-sha-256"
 MIGRATE_CMD = '    command: python -m scraper.migrate\n    restart: "no"\n'
+# A one-shot, network-isolated helper (C cases): {creds} gives it a store credential, {mounts} its storage.
+HELPER = ('  pw-copier:\n    image: pgvector/pgvector:pg16\n'
+          '    entrypoint: ["/bin/sh", "-c", "cp /run/secrets/postgres_password /out/pw"]\n'
+          '{creds}    volumes:\n{mounts}    network_mode: none\n    restart: "no"\n')
 
 
 def pg_c(opt):
@@ -250,4 +257,90 @@ CASES = [
      "edits": [("replace", "  postgres_password:\n    environment: POSTGRES_PASSWORD\n",
                 "  postgres_password:\n    file: ${POSTGRES_PASSWORD_FILE:?x}\n  pw_copy:\n    file: ${POSTGRES_PASSWORD_FILE:?x}\n"),
                ("replace", API_CMD, API_CMD + "    secrets: [pw_copy]\n")]},
+
+    # ---- review P1 on dc265e3: the build ignore file, read the way Docker reads it ----------------
+    # The shipped app services build "." with ./Dockerfile, so ./.dockerignore decides whether the
+    # compose .env (every secret) is copied into the image by `COPY . .`. Docker applies the LAST
+    # matching line, '!' lines re-include, '#' in column 1 is a comment, blank lines are skipped,
+    # patterns are relative to the context root ('/' and './' prefixes, trailing '/' are cleaned),
+    # and '**' spans any number of directories, none included.
+    {"id": "D01", "title": ".dockerignore: .env then !.env (re-included)", "expect": ["app-image-secrets"],
+     "edits": [], "files": {".dockerignore": ".env\n!.env\n"}},
+    {"id": "D02", "title": ".dockerignore: * then !.env (re-included)", "expect": ["app-image-secrets"],
+     "edits": [], "files": {".dockerignore": "*\n!.env\n"}},
+    {"id": "D03", "title": ".dockerignore: .env* then !.env.example (.env stays excluded; must pass)", "expect": [],
+     "edits": [], "files": {".dockerignore": ".env*\n!.env.example\n"}},
+    {"id": "D04", "title": ".dockerignore: **/.env (matches .env at the root; must pass)", "expect": [],
+     "edits": [], "files": {".dockerignore": "**/.env\n"}},
+    {"id": "D05", "title": ".dockerignore: **/.env then !**/.env (re-included)", "expect": ["app-image-secrets"],
+     "edits": [], "files": {".dockerignore": "**/.env\n!**/.env\n"}},
+    {"id": "D06", "title": ".dockerignore: a comment and a blank line are ignored (must pass)", "expect": [],
+     "edits": [], "files": {".dockerignore": "# !.env would re-include it, but this line is a comment\n\n.env\n#!.env\n"}},
+    {"id": "D07", "title": ".dockerignore: /.env and ./.env/ forms are cleaned to .env (must pass)", "expect": [],
+     "edits": [], "files": {".dockerignore": "/.env\n!.env\n./.env/\n"}},
+    {"id": "D08", "title": ".dockerignore: .env/** excludes only what is under a directory .env", "expect": ["app-image-secrets"],
+     "edits": [], "files": {".dockerignore": ".env/**\n"}},
+    {"id": "D09", "title": ".dockerignore: a character class the policy does not model excludes nothing (fail closed)",
+     "expect": ["app-image-secrets"], "edits": [], "files": {".dockerignore": "[.]env\n"}},
+    {"id": "D10", "title": ".dockerignore: an unmodelled negation counts as re-including (fail closed)",
+     "expect": ["app-image-secrets"], "edits": [], "files": {".dockerignore": ".env\n!.e[n]v\n"}},
+    {"id": "D11", "title": ".dockerignore: a space before # makes it a pattern, not a comment (still excluded; must pass)",
+     "expect": [], "edits": [], "files": {".dockerignore": ".env\n #!.env\n"}},
+
+    # ---- review HIGH on dc265e3: a network-isolated helper laundering a store credential ----------
+    # The helper holds a store credential and shares storage with an app; network_mode: none must
+    # not exempt it. C01 is the reviewer's mutation; C06 (tmpfs, not shared) must pass.
+    {"id": "C01", "title": "isolated helper copies the postgres_password secret into a volume api mounts",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", MIGRATE_HDR, HELPER.format(creds="    secrets: [postgres_password]\n", mounts="      - shared:/out\n")
+                + "\n" + MIGRATE_HDR),
+               ("replace", API_VOLUMES_END, "      - tls-ca:/run/tls-ca:ro\n      - shared:/srv/shared:ro\n    networks: [edge, data]"),
+               ("replace", "volumes:\n  pgdata:\n", "volumes:\n  shared:\n  pgdata:\n")]},
+    {"id": "C02", "title": "the same through a bind-mounted repository directory",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", MIGRATE_HDR, HELPER.format(creds="    secrets: [postgres_password]\n", mounts="      - ./handoff:/out\n")
+                + "\n" + MIGRATE_HDR),
+               ("replace", API_VOLUMES_END, "      - tls-ca:/run/tls-ca:ro\n      - ./handoff:/srv/handoff:ro\n    networks: [edge, data]")]},
+    {"id": "C03", "title": "api takes the helper's mounts with volumes_from",
+     "expect": ["app-credential-scope", "app-store-volume"],
+     "edits": [("replace", MIGRATE_HDR, HELPER.format(creds="    secrets: [postgres_password]\n", mounts="      - shared:/out\n")
+                + "\n" + MIGRATE_HDR),
+               ("replace", API_CMD, API_CMD + "    volumes_from: [pw-copier]\n"),
+               ("replace", "volumes:\n  pgdata:\n", "volumes:\n  shared:\n  pgdata:\n")]},
+    {"id": "C04", "title": "the helper takes api's mounts with volumes_from and writes into them",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", MIGRATE_HDR, HELPER.format(creds="    secrets: [postgres_password]\n", mounts="      - shared:/out\n")
+                .replace("    network_mode: none\n", "    volumes_from: [api]\n    network_mode: none\n") + "\n" + MIGRATE_HDR),
+               ("replace", "volumes:\n  pgdata:\n", "volumes:\n  shared:\n  pgdata:\n")]},
+    {"id": "C05", "title": "the helper gets the superuser password through environment, not a secret",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", MIGRATE_HDR, HELPER.format(creds="    environment:\n      PW: ${POSTGRES_PASSWORD:?x}\n",
+                                                       mounts="      - shared:/out\n") + "\n" + MIGRATE_HDR),
+               ("replace", API_VOLUMES_END, "      - tls-ca:/run/tls-ca:ro\n      - shared:/srv/shared:ro\n    networks: [edge, data]"),
+               ("replace", "volumes:\n  pgdata:\n", "volumes:\n  shared:\n  pgdata:\n")]},
+    {"id": "C06", "title": "helper and api each use a tmpfs at the same path (not shared storage; must pass)", "expect": [],
+     "edits": [("replace", MIGRATE_HDR, HELPER.format(creds="    secrets: [postgres_password]\n", mounts="")
+                .replace("    volumes:\n", "    tmpfs: [/out]\n") + "\n" + MIGRATE_HDR),
+               ("replace", API_CMD, API_CMD + "    tmpfs: [/out]\n")]},
+    {"id": "C07", "title": "an isolated service built from the repository is checked as an app",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", MIGRATE_HDR, "  tool:\n    build: .\n    secrets: [postgres_password]\n    network_mode: none\n\n"
+                + MIGRATE_HDR)]},
+    {"id": "C08", "title": "an isolated service with an image the policy does not know", "expect": ["unknown-service"],
+     "edits": [("replace", MIGRATE_HDR, "  tool:\n    image: alpine:3.20\n    network_mode: none\n\n" + MIGRATE_HDR)]},
+    # The shipped helpers are checked too: secrets-preflight holds every store password, certs
+    # writes the store TLS volumes; neither may share a mount with an app (tls-ca:ro excepted).
+    {"id": "C09", "title": "api binds the directory whose script the shipped secrets-preflight mounts",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", API_VOLUMES_END, "      - tls-ca:/run/tls-ca:ro\n      - ./docker/preflight:/srv/pf:ro\n"
+                "    networks: [edge, data]")]},
+    {"id": "C10", "title": "worker-a binds the directory whose script the shipped certs one-shot mounts",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", "      PLS_SEAT: A\n    volumes:\n", "      PLS_SEAT: A\n    volumes:\n      - ./docker/certs:/srv/certs:ro\n")]},
+
+    # ---- review MEDIUM on dc265e3: hostssl lines accept SCRAM only ----------------------------------
+    {"id": "H01", "title": "pg_hba.conf: the application line uses cert instead of scram-sha-256", "expect": ["pg-hba"],
+     "edits": [], "hba": (HBA_APP_LINE, "hostssl    legal_scraper   +corpus_clients  all       cert")},
+    {"id": "H02", "title": "pg_hba.conf: the application line uses md5 over TLS", "expect": ["pg-hba"],
+     "edits": [], "hba": (HBA_APP_LINE, "hostssl    legal_scraper   +corpus_clients  all       md5")},
 ]

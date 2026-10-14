@@ -275,6 +275,37 @@ for svc in api worker-embed celery-beat worker-a worker-b migrate; do
     "$(docker inspect -f '{{json .Path}} {{json .Args}} {{json .Config.Cmd}} {{json .Config.Entrypoint}} {{json .Config.Healthcheck}}' \
        "${COMPOSE_PROJECT_NAME}-${svc}-1" 2>/dev/null)"
 done
+
+echo "-- review (dc265e3): no app shares storage with a one-shot that holds store credentials or files"
+mount_keys_of() { # volume:NAME or bind:SOURCE, then |RW, one mount per line (a tmpfs has neither)
+  local c="${COMPOSE_PROJECT_NAME}-$1-1"
+  docker container inspect "$c" >/dev/null 2>&1 || { echo "<no container $c>|"; return; }
+  docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}volume:{{.Name}}{{else if eq .Type "bind"}}bind:{{.Source}}{{end}}|{{.RW}}{{println}}{{end}}' "$c" \
+    | grep -v '^|'
+}
+# secrets-preflight holds every store password; certs writes the store TLS volumes.
+HELPER_MOUNTS=$(for h in secrets-preflight certs; do mount_keys_of "$h"; done | cut -d'|' -f1 | sort -u)
+expect_out "review control: the one-shots' mounts are readable (certs mounts the CA volume, preflight its script)" \
+  "volume:${COMPOSE_PROJECT_NAME}_tls-ca" printf '%s\n' "$HELPER_MOUNTS"
+expect_out "review control: secrets-preflight's script bind is among them" "^bind:.*/check-secrets\.sh$" printf '%s\n' "$HELPER_MOUNTS"
+shared_with_helpers() { # an app's mounts that a one-shot also mounts (a bind counts if either contains the other)
+  local key rw h
+  while IFS='|' read -r key rw; do
+    [ -n "$key" ] || continue
+    if [ "$key" = "volume:${COMPOSE_PROJECT_NAME}_tls-ca" ] && [ "$rw" = false ]; then continue; fi
+    while IFS= read -r h; do
+      if [ "$key" = "$h" ]; then printf '%s\n' "$key"; break; fi
+      case "$key" in bind:*) ;; *) continue ;; esac
+      case "$h" in bind:*) ;; *) continue ;; esac
+      case "${h#bind:}/" in "${key#bind:}"/*) printf '%s\n' "$key"; break ;; esac
+      case "${key#bind:}/" in "${h#bind:}"/*) printf '%s\n' "$key"; break ;; esac
+    done <<<"$HELPER_MOUNTS"
+  done < <(mount_keys_of "$1")
+}
+for svc in api worker-embed celery-beat worker-a worker-b migrate; do
+  expect_lines "review: $svc shares no mount with secrets-preflight or certs (the CA volume read-only excepted)" \
+    "" "$(shared_with_helpers "$svc")"
+done
 for svc in api worker-embed celery-beat; do
   run_probe "D1: $svc container, using only its own env" \
     timeout 300 "${COMPOSE[@]}" exec -T "$svc" python tests/e2e/probe.py env-escalation

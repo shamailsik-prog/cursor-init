@@ -24,9 +24,9 @@ Usage:
   check_compose_policy.py FILE [FILE ...]     each FILE is one deployment (plus its override files)
   check_compose_policy.py -f FILE -f FILE     one deployment made of several files
 """
-import fnmatch
 import json
 import os
+import posixpath
 import re
 import shlex
 import string
@@ -48,8 +48,8 @@ RULES = {
     "literal-credential": "a credential is a literal, a ${VAR} without :? (unset or defaulted), or a non-secret file",
     "pg-tls": "Postgres not started with ssl=on and a server certificate and key",
     "pg-password-encryption": "Postgres password_encryption is not scram-sha-256",
-    "pg-hba": "pg_hba.conf missing, unverifiable, or accepting non-TLS TCP, non-SCRAM, or TCP logins for any "
-              "user outside the application group (HBA_CLIENT_GROUP)",
+    "pg-hba": "pg_hba.conf missing, unverifiable, or accepting a TCP login that is not hostssl + scram-sha-256 "
+              "(cert, md5, password, trust, ...) or is for a user outside the application group (HBA_CLIENT_GROUP)",
     "pg-weakening-flag": "a Postgres server option is repeated, unrecognised, outside the allowlist (PG_ALLOWED), "
                          "or passed through the environment (PGOPTIONS, POSTGRES_INITDB_ARGS)",
     "app-role": "Postgres provisions no application role distinct from the bootstrap superuser",
@@ -64,7 +64,8 @@ RULES = {
     "app-redis-tls": "an app service's REDIS_URL is not rediss:// with a named ACL user and verified TLS",
     "app-credential-scope": "an app container can read a store credential it does not use (anywhere in the service "
                             "outside its own two URLs: environment, command, healthcheck, build args, a store's "
-                            "secret or config), or holds the migration role outside the one-shot migrate service",
+                            "secret or config), shares storage with a network-isolated helper that holds store "
+                            "credentials or files, or holds the migration role outside the one-shot migrate service",
     "app-store-volume": "an app service mounts a data store's volume (only the CA volume, read-only, is shared)",
     "app-host-access": "an app service publishes a host port (other than the api's loopback bind) or gets host "
                        "access: privileged, cap_add, devices, a host or another container's namespace, a bind "
@@ -455,8 +456,9 @@ def _hba_problems(path):
             method = fields[4] if len(fields) > 4 else ""
         if kind != "hostssl" and method != "reject":
             problems.append(f"line {n}: {kind} ... {_word(method, HBA_METHODS)} accepts non-TLS TCP connections")
-        elif kind == "hostssl" and method not in ("scram-sha-256", "cert", "reject"):
-            problems.append(f"line {n}: hostssl ... {_word(method, HBA_METHODS)} (only scram-sha-256/cert/reject allowed)")
+        elif kind == "hostssl" and method not in ("scram-sha-256", "reject"):
+            problems.append(f"line {n}: hostssl ... {_word(method, HBA_METHODS)} (an accepting line must use "
+                            "scram-sha-256; only reject is otherwise allowed)")
         user = fields[2] if len(fields) > 2 else ""
         if method != "reject" and user != HBA_CLIENT_GROUP:
             problems.append(f"line {n}: a TCP login for USER {_word(user, {'all'})}; only {HBA_CLIENT_GROUP} (the "
@@ -575,18 +577,78 @@ def _inside(path, base):
         return False
 
 
+def _ignore_patterns(text):
+    """(negated, pattern) pairs of a build ignore file, read the way Docker reads it
+    (moby/patternmatcher ignorefile.ReadAll): '#' in column 1 is a comment, lines are trimmed and
+    blank ones skipped, '!' negates, and each pattern is path-cleaned with one leading '/' dropped."""
+    out = []
+    for n, line in enumerate(text.splitlines()):
+        if n == 0:
+            line = line.removeprefix("﻿")
+        if line.startswith("#"):
+            continue
+        pattern = line.strip()
+        if not pattern:
+            continue
+        negated = pattern.startswith("!")
+        if negated:
+            pattern = pattern[1:].strip()
+        if pattern:
+            pattern = posixpath.normpath(pattern)
+            while pattern.startswith("//"):
+                pattern = pattern[1:]
+            if len(pattern) > 1 and pattern.startswith("/"):
+                pattern = pattern[1:]
+        out.append((negated, pattern))
+    return out
+
+
+def _ignore_regex(pattern):
+    """Docker's regex for one cleaned pattern ('*' within a path segment, '?' one character, '**'
+    any number of directories, '**' at the end anything), or None for syntax this policy does not
+    model ('[...]' classes, '\\' escapes) - the caller then fails closed."""
+    if "[" in pattern or "\\" in pattern:
+        return None
+    out, i, n = "^", 0, len(pattern)
+    while i < n:
+        c = pattern[i]
+        if c == "*" and pattern.startswith("**", i):
+            i += 2
+            if i < n and pattern[i] == "/":
+                i += 1
+            out += ".*" if i >= n else "(.*/)?"
+            continue
+        out += "[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c)
+        i += 1
+    return re.compile(out + "$")
+
+
+def _ignore_file_excludes(text, path):
+    """Whether a build ignore file keeps `path` (relative to the context root) out of the build
+    context: the LAST matching line decides, and a '!' line re-includes. A pattern the policy
+    cannot model counts against exclusion: as an exclusion it excludes nothing, as a negation it
+    re-includes."""
+    excluded = False
+    for negated, pattern in _ignore_patterns(text):
+        if not pattern:  # a bare '!' names nothing
+            continue
+        rx = _ignore_regex(pattern)
+        if rx is None:
+            if negated:
+                excluded = False
+            continue
+        if rx.match(path):
+            excluded = not negated
+    return excluded
+
+
 def _dockerignore_excludes_env(context, dockerfile):
+    """Whether the build context of an app keeps the compose .env out of the image. BuildKit reads
+    only the first ignore file found: <Dockerfile>.dockerignore, else .dockerignore."""
     candidates = [Path(context) / f"{dockerfile}.dockerignore", Path(context) / ".dockerignore"]
     for c in candidates:
         if c.is_file():
-            for line in _read_text(c, "build ignore file").splitlines():
-                pat = line.strip()
-                if not pat or pat.startswith("#") or pat.startswith("!"):
-                    continue
-                pat = pat.lstrip("/").removeprefix("**/")
-                if fnmatch.fnmatch(".env", pat):
-                    return True
-            return False  # BuildKit uses only the first ignore file found
+            return _ignore_file_excludes(_read_text(c, "build ignore file"), ".env")
     return False
 
 
@@ -823,13 +885,12 @@ def _cred_vars(model, svc, key):
 def _classify(name, svc, project_dir, bad):
     """isolated | postgres | redis | app | unknown. A store is recognised by its image, by the
     base image of a repo build (FROM, also dockerfile_inline), or by its service name, so a
-    store rebuilt from the repo is still checked as a store (re-audit R2-D4)."""
+    store rebuilt from the repo is still checked as a store (re-audit R2-D4). Only a service that
+    runs a known store image with no network and no ports is an isolated helper (the shipped
+    secrets-preflight and certs one-shots); being isolated exempts no other image or build from
+    the store, app and unknown-service rules, and helpers get their own checks (review on dc265e3)."""
     build = svc.get("build") or {}
-    if svc.get("network_mode") == "none" and not svc.get("ports"):
-        return "isolated"
-    kind = _store_kind_of_image(svc.get("image"))
-    if kind:
-        return kind
+    image_kind = _store_kind_of_image(svc.get("image"))
     # compose resolves a local context to an absolute path; a remote one (git URL, tarball) stays
     # as written, and must not pass for a path under the current directory.
     context = str(build.get("context") or "")
@@ -843,9 +904,11 @@ def _classify(name, svc, project_dir, bad):
             kind = _store_kind_of_image(base)
             if kind:
                 return kind
-        return STORE_SERVICE_NAMES.get(name, "app")
-    bad("unknown-service", name, "its image is not a known data store image, it is not built from "
-        "this repo, and the service is not network_mode: none")
+        return image_kind or STORE_SERVICE_NAMES.get(name, "app")
+    if image_kind and not build:
+        return "isolated" if svc.get("network_mode") == "none" and not svc.get("ports") else image_kind
+    bad("unknown-service", name, "its image is not a known data store image and it is not built from this "
+        "repository")
     return "unknown"
 
 
@@ -898,6 +961,7 @@ def _resolved_checks(model, project_dir, bad):
         return (vdefs.get(key) or {}).get("name") or key
 
     store_volume_names = {volume_name(k) for k in store_mounts["volume"]}
+    _helper_checks(services, kinds, model, store_vars, store_mounts, store_volume_names, volume_name, bad)
 
     for name, svc in services.items():
         kind = kinds[name]
@@ -1030,6 +1094,77 @@ def _resolved_checks(model, project_dir, bad):
                         f"parameter weakening verification ({len(weak)} found)")
             _app_scope_checks(name, svc, env, model, project_dir, store_vars, store_mounts, store_volume_names,
                               volume_name, bad)
+
+
+def _holds_store_material(svc, model, store_vars, store_mounts, store_volume_names, volume_name):
+    """Whether a service can read a store credential (a store's secret or config, by name or the
+    same file; one sourced from a store variable; a store sentinel anywhere in its definition; a
+    store credential key in its environment) or a store's files (a volume or bind a store mounts)."""
+    for kind_key in ("secrets", "configs"):
+        defs = model.get(kind_key) or {}
+        for s in svc.get(kind_key) or []:
+            sdef = defs.get(s.get("source")) or {}
+            if s.get("source") in store_mounts[kind_key] or sdef.get("environment") in store_vars \
+                    or str(sdef.get("file")) in store_mounts["files"] \
+                    or _sentinel_vars(json.dumps(sdef, sort_keys=True)) & store_vars:
+                return True
+    if _sentinel_vars(json.dumps(svc, sort_keys=True)) & store_vars:
+        return True
+    if any(STORE_CRED_KEY.match(k) for k in _env_of(svc)):
+        return True
+    for v in svc.get("volumes") or []:
+        if v.get("type") == "volume" and v.get("source") and volume_name(v["source"]) in store_volume_names:
+            return True
+        if v.get("type") == "bind" and v.get("source") and any(
+                _inside(v["source"], b) or _inside(b, v["source"]) for b in store_mounts["bind"]):
+            return True
+    return False
+
+
+def _volumes_from_services(svc):
+    """Service names in volumes_from ("name", "name:ro"; "container:..." names no service)."""
+    out = []
+    for entry in svc.get("volumes_from") or []:
+        entry = str(entry)
+        if not entry.startswith("container:"):
+            out.append(entry.removeprefix("service:").split(":", 1)[0])
+    return out
+
+
+def _helper_checks(services, kinds, model, store_vars, store_mounts, store_volume_names, volume_name, bad):
+    """Network-isolated one-shot helpers (review HIGH on dc265e3): network_mode: none must not let
+    a helper that holds a store credential or a store's files hand them to an app through shared
+    storage. No app may share a named volume or a bind (either way round) with such a helper, nor
+    take its mounts with volumes_from, and such a helper may not take an app's mounts with
+    volumes_from. A store's own volumes stay under app-store-volume, which lets an app have only the
+    CA volume, read-only (certs writes it; the app reads the public certificate). A tmpfs is private
+    to its container and shares nothing."""
+    apps = [n for n in services if kinds[n] == "app"]
+    for helper, hsvc in services.items():
+        if kinds[helper] != "isolated" or not _holds_store_material(hsvc, model, store_vars, store_mounts,
+                                                                     store_volume_names, volume_name):
+            continue
+        h_volumes = {volume_name(v["source"]) for v in hsvc.get("volumes") or []
+                     if v.get("type") == "volume" and v.get("source")}
+        h_binds = [v["source"] for v in hsvc.get("volumes") or [] if v.get("type") == "bind" and v.get("source")]
+        if hsvc.get("volumes_from"):
+            bad("app-credential-scope", helper, "holds store credentials or files and takes other containers' "
+                "mounts (volumes_from), which it could write them into")
+        for app in apps:
+            asvc = services[app]
+            if helper in _volumes_from_services(asvc):
+                bad("app-credential-scope", app, f"takes the mounts of {helper}, which holds store credentials "
+                    "or files (volumes_from)")
+            for v in asvc.get("volumes") or []:
+                vtype, src = v.get("type"), v.get("source")
+                # A store's own volumes and binds are app-store-volume's (only tls-ca:ro passes there).
+                if vtype == "volume" and src and volume_name(src) in h_volumes - store_volume_names:
+                    bad("app-credential-scope", app, f"volume {src} is shared with {helper}, which holds store "
+                        "credentials or files")
+                elif vtype == "bind" and src and any(_inside(src, b) or _inside(b, src) for b in h_binds) \
+                        and not any(_inside(src, b) or _inside(b, src) for b in store_mounts["bind"]):
+                    bad("app-credential-scope", app, f"a bind mount is shared with {helper}, which holds store "
+                        "credentials or files")
 
 
 def _app_scope_checks(name, svc, env, model, project_dir, store_vars, store_mounts, store_volume_names,

@@ -91,18 +91,23 @@ default, and all four differ.
   variable or built from the repository (a store is recognised by its image, its Dockerfile's
   `FROM`, or its service name), Postgres server options outside a fixed allowlist (exactly the
   ones this file sets) or passed through `PGOPTIONS`/`POSTGRES_INITDB_ARGS`, `pg_hba.conf` lines
-  that accept a TCP login for anyone but the `+corpus_clients` group, Redis ACL users that are
-  enabled without exactly one required password (`nopass`, a second password, a password removed
-  again) or that no app connects as, and app containers that can reach a store credential, secret
-  or volume they do not use, publish a port other than the api's loopback bind, or get host access
-  (`privileged`, `cap_add`, devices, host or shared namespaces, binds from outside the repository).
+  that accept a TCP login other than `hostssl` + `scram-sha-256` or for anyone but the
+  `+corpus_clients` group, Redis ACL users that are enabled without exactly one required password
+  (`nopass`, a second password, a password removed again) or that no app connects as, app images
+  whose build ignore file lets `.env` in (read the way Docker reads it: the last matching line
+  wins, `!` re-includes), and app containers that can reach a store credential, secret or volume
+  they do not use (also through storage shared with a network-isolated one-shot that holds store
+  credentials or files, such as `secrets-preflight` and `certs`), publish a port other than the
+  api's loopback bind, or get host access (`privileged`, `cap_add`, devices, host or shared
+  namespaces, binds from outside the repository). Only a known store image with no network is
+  such a one-shot; a repository build or unknown image is checked as an app or refused.
   It is a guard over this compose file, not a proof of safety: it does not vet, for example, the
   Redis TLS protocol options, the host's `.env` (`COMPOSE_FILE`), or what the repository's own
   scripts and images do. Its findings name the rule, service, key or variable and never print a
   value from the files (a value it must point at shows as `<redacted>`, a required variable as
   `${VAR}`), so its output is safe in CI logs; a file it cannot read or parse is a
-  `compose-config` finding naming the file, error class and line, never a traceback. CI runs it on the repository; run it on the
-  deployment host too, after adding an override.
+  `compose-config` finding naming the file, error class and line, never a traceback. CI runs it
+  on the repository; run it on the deployment host too, after adding an override.
 - **Your own certificates.** Bind the three TLS volumes to host directories holding
   `ca.crt`, `postgres/server.{crt,key}` and `redis/server.{crt,key}` (server certs must name
   `postgres` / `redis` and chain to `ca.crt`), and set `TLS_CERTS_MODE=external`; the `certs`

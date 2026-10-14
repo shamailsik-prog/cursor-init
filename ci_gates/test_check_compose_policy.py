@@ -240,9 +240,10 @@ class ShippedStoreSettings(unittest.TestCase):
 
 
 class ShippedComposeAttacks(unittest.TestCase):
-    """Re-audit round 2: the auditor's own attack mutations of the shipped tree (A01-A32) and
-    siblings of them (S01-S27), each applied alone to a copy of corpus_service/, trip exactly the
-    rules declared in fixtures/shipped_attacks.py (A07 is a control that must pass). Each is
+    """Re-audit round 2: the auditor's own attack mutations of the shipped tree (A01-A32), siblings
+    of them (S01-S27) and the review cases on dc265e3 (D01-D11, C01-C10, H01-H02), each applied
+    alone to a copy of corpus_service/, trip exactly the rules declared in
+    fixtures/shipped_attacks.py (A07, C06 and some D cases are controls that must pass). Each is
     checked from inside the copied corpus_service/, the way the README runs the policy."""
 
     def test_each_attack_trips_exactly_its_declared_rules(self):
