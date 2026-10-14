@@ -22,10 +22,10 @@ The first refusal wins. A refusal at steps 2 to 8c makes no provider call, costs
 6. Price: the model must have one.
 7. Budget: one must be set, and the call's worst case must fit beside the month's spend and the holds of its live reservations (P3-64, audit F07). This first look uses the pre-call read; step 8b decides again on fresh figures.
 8. Credentials: `AI_GATEWAY_API_KEY` must be set.
-8b. Reservation (audit F07). One transaction re-reads the month total and the firm's config and creates `ai_reservations/{usageLogId}` holding the worst case, adding it to the month's `reservedMicroUsd`. The worst case is the estimated input of the masked body plus the 4,096-token output ceiling, at the model's price. It refuses, in this order: `budget_not_set`; `accounting_indeterminate` (the firm has a provider attempt whose lease lapsed unsettled, F08); `budget_exhausted` unless spent + reserved + the new reservation is at most the budget; and `concurrency_exhausted` when the firm already holds `maxConcurrentCalls` live reservations (default 4). If the reservation cannot be written within its deadline, the call is refused `reservation_failed`. In every refusal nothing is sent.
+8b. Reservation (audit F07). One transaction re-reads both kill switches, the month total and the firm's config and creates `ai_reservations/{usageLogId}` holding the worst case, adding it to the month's `reservedMicroUsd`. The worst case is the input ceiling of the masked body (one token per UTF-8 byte plus `REQUEST_OVERHEAD_TOKENS`, 64) plus the 4,096-token output ceiling, at the model's price (re-audit R1-D1). It refuses, in this order: `kill_switch_platform` and `kill_switch_firm` (a switch set after step 2's read still stops the call here, re-audit R1-D3); `budget_not_set`; `accounting_indeterminate` (the firm has a provider attempt whose lease lapsed unsettled, or a reservation the reconciler quarantined, F08); `budget_exhausted` unless spent + reserved + the new reservation is at most the budget; and `concurrency_exhausted` when the firm already holds `maxConcurrentCalls` live reservations (default 4). If the reservation cannot be written within its deadline, the call is refused `reservation_failed`. In every refusal nothing is sent.
 8c. Provider attempt (audit F08). A second small transaction records `providerAttempt: { attemptedAt, outcome: "pending" }` on the reservation, only while it is still held. If that write fails, the call is refused `reservation_failed`, nothing is sent and the commit releases the hold.
 9. Transport call, then the response mask. Any transport error is outcome `failed`, reason `transport_error`. It is charged when the provider may have billed it (a timeout or abort, a 2xx that is not JSON, a 2xx without usable content): the usage the response reported where it is a valid count, else the estimated input and the 4,096-token ceiling, with `tokensEstimated: true`. A non-2xx and a request that never left (a refused connection, DNS, a refused redirect) cost 0. A transport that resolves without text is billed like `gateway_no_text`; any error that is not a billable `P1TransportError` costs 0.
-9b. What the provider answered and what the call is charged go on the reservation's attempt (`outcome: "returned"`, `result`, the token counts, `costMicroUsd`). This write is fail-open; it lets the reconciler settle at that charge if the commit fails.
+9b. What the provider answered and what the call is charged go on the reservation's attempt (`outcome: "returned"`, `result`, the token counts, `costMicroUsd`), with the provider's response id (`responseId`, the body's `id`) and the Gateway's request id (`requestId`, the `x-request-id` or `x-vercel-id` header) when each is a plain id (re-audit R1-D5). Which request-id header the Gateway sets is to be confirmed at G-1 (O-57). This write is fail-open, and lands only while the reservation is still held, so it never rewrites the attempt of a reservation the reconciler has settled. It lets the reconciler settle at that charge if the commit fails.
 10. Trace export (P3-67), fail-open.
 11. One transaction: the usage row, the month total, any threshold alerts, the audit row and the event. The same transaction settles the reservation: the actual cost is added to `spentMicroUsd`, the hold leaves `reservedMicroUsd`, and the reservation takes `state: "settled"` (an ok call or a billed failure) or `"released"` (an unbilled failure, or a call refused after it reserved), with `actualMicroUsd`. A reservation the reconciler already settled is never counted twice: the commit fails on it and finds the reconciler's usage row.
 
@@ -61,7 +61,20 @@ Nothing in `functions/src` binds the key as a function secret yet. Until the dep
 - **Model and price.** `committee` goes to `anthropic/claude-opus-5.5` through provider id `ai-gateway`. Prices are integer nano-USD per token (input 4,000, output 20,000), with their source and the date fetched (2026-10-11) in `costTable.ts`. The routing and price tables are frozen. A model with no price is refused `model_unpriced`. Every call sends `max_tokens: 4096`.
 - **Cost.** In micro-USD, `ceil((inputTokens x inputPrice + outputTokens x outputPrice) / 1000)`. When the response carries no usage, each side is estimated as `ceil(UTF-8 bytes / 3)` tokens and the row says `tokensEstimated: true`: the input from the masked body that was sent, the output from the raw response, because masking shortens it and the provider billed the raw length. The raw text is used for that count only; the masked text is the only one returned, stored, traced or logged. A failed call the provider may have billed is charged too (step 9), and moves the month's spend and token totals by the same rule as an ok call, so it can cross a threshold and counts toward `budget_exhausted`.
 - **Currency.** Micro-USD integers are canonical. When the firm has set `pkrPerUsd`, the row stores the rate and `costPkr` to 2 decimal places. There is no default rate.
-- **Budget (audit F07).** Per firm per PKT calendar month (`YYYY-MM`, Asia/Karachi, UTC+5). With no budget set every call is refused `budget_not_set`. The budget is a limit on spend plus holds: a call is sent only after its reservation commits, and a reservation commits only if spent + reserved + its worst case is at most the budget. Calls in flight together therefore cannot overshoot. Once the remainder is smaller than a call's worst case (about 81,960 micro-USD for a short Opus prompt), that call is refused `budget_exhausted` until the partner raises the budget, a hold is released, or the month turns. The provider can report more usage than the reservation estimated only if its input count exceeds `ceil(UTF-8 bytes / 3)`; the settlement records the reported figure as it is.
+- **Budget (audit F07).** Per firm per PKT calendar month (`YYYY-MM`, Asia/Karachi, UTC+5). With no budget set every call is refused `budget_not_set`. The budget is a limit on spend plus holds: a call is sent only after its reservation commits, and a reservation commits only if spent + reserved + its worst case is at most the budget. Once the remainder is smaller than a call's worst case (82,288 micro-USD for a 28-byte prompt; 482,176 for a 100,000-byte one), that call is refused `budget_exhausted` until the partner raises the budget, a hold is released, or the month turns.
+- **The bound, precisely (re-audit R1-D1).** A call's worst case is `costMicroUsd(model, utf8Bytes(maskedBody) + 64, 4096)`. It is an upper bound on what the provider can bill for the call under two conditions:
+  - its tokenizer is byte-level: every token covers at least one byte, so input tokens never exceed the body's UTF-8 bytes plus the 64-token template allowance;
+  - it honours `max_tokens`, so output tokens never exceed 4,096.
+
+  Under those conditions spent + reserved never exceeds the budget, for one call or for many in flight together. The charge estimate used when no usage is reported (`estimateTokens`, bytes / 3, P3-62) is lower than the bound and is not used for the reservation.
+
+  A provider that reports more than the bound breaks the condition, not the books:
+  - its charge is still recorded in full, because it is owed;
+  - the excess is recorded on the reservation (`exceededMicroUsd`);
+  - the same transaction writes the event `ai.reservation.exceeded` (`{ monthKey, reservedMicroUsd, actualMicroUsd, excessMicroUsd }`);
+  - `logger.error("p1.reservation_exceeded", ...)` feeds Cloud Monitoring.
+
+  In that case, and only then, spent can pass the budget, by the excess.
 - **Concurrency (audit F07).** A firm holds at most `ai_config/{firmId}.maxConcurrentCalls` live reservations, an integer from 1 to 64, default 4 (`DEFAULT_MAX_CONCURRENT_CALLS`). A further call is refused `concurrency_exhausted`. No route sets it; it is server-set config. Within one instance a firm's reservation and commit transactions run one at a time through a per-firm queue, because transactions that overlap on the month total only abort each other. Across instances the transactions contend, and each one's re-read keeps the budget whatever the interleaving.
 - **Time budget.** The phases after a call's first reads fit the 120 s function timeout (116 s in all, enforced at import): the reservation 5 s plus one attempt in flight 5 s, the attempt record 2 s, the transport 60 s, the attempt outcome 2 s, the trace 2 s, the commit 30 s plus one attempt in flight 10 s. The reservation's lease is the function timeout plus 60 s (180 s), so no live call can still settle a reservation the reconciler acts on.
 - **Alerts.** At 70 and 90 percent. The transaction that takes the month total across a threshold creates `ai_budget_alerts/{firmId}_{monthKey}_{70|90}` with `tx.create`, so each fires once per firm per month, even for parallel calls. The same transaction stages the audit row `ai.budget.threshold` (actor `system`) and the event `ai.budget.threshold_crossed`; after commit `logger.warn("p1.budget_threshold", ...)` feeds Cloud Monitoring. Raising the budget does not re-arm a threshold already crossed that month. Delivery to people is P4 (O-54).
@@ -75,15 +88,15 @@ Two scopes, each `{ disableAll, disabledModels, reason, setBy, setAt }`: the fir
 
 | Reason | Step | Meaning |
 | --- | --- | --- |
-| `kill_switch_platform` | 2 | the operator's switch blocks every model, or this one |
-| `kill_switch_firm` | 2 | the firm's switch blocks every model, or this one |
+| `kill_switch_platform` | 2, 8b | the operator's switch blocks every model, or this one |
+| `kill_switch_firm` | 2, 8b | the firm's switch blocks every model, or this one |
 | `policy_denied` | 5 | the classification may not go to `ai-gateway` (no executed DPA, or out of region at rank 4; `data/provider_dpa.json` is empty until O-21 is recorded, so only `public` and `internal` reach a provider) |
 | `not_minimised` | 5 | at rank 3 and above, the masked body or purpose would still be masked again |
 | `model_unpriced` | 6 | the routed model has no price |
 | `budget_not_set` | 7 | the firm has no valid monthly budget |
 | `budget_exhausted` | 7, 8b | the call's worst case does not fit beside the month's spend and holds (audit F07) |
 | `no_credentials` | 8 | no `AI_GATEWAY_API_KEY` |
-| `accounting_indeterminate` | 8b | the firm has a provider attempt whose lease lapsed unsettled; it lasts until the reconciler settles it (audit F08) |
+| `accounting_indeterminate` | 8b | the firm has a provider attempt whose lease lapsed unsettled (until the reconciler settles it), or a reservation the reconciler quarantined (until an operator settles it) (audit F08) |
 | `concurrency_exhausted` | 8b | the firm already holds `maxConcurrentCalls` live reservations (default 4) (audit F07) |
 | `reservation_failed` | 8b, 8c | the reservation or the provider-attempt record could not be written, so nothing was sent (audit F07, F08) |
 
@@ -91,7 +104,7 @@ A provider failure is not a block: the outcome is `failed` and the reason `trans
 
 ## Collections and documents
 
-All are server-only: `firestore.rules` denies every client read and write (partners read through `getAiUsage`). Two queries need composite indexes (`firestore.indexes.json`): the reservation transaction's `ai_reservations` by `firmId` and `state`, and the reconciler's by `state` and `leaseUntil`.
+All are server-only: `firestore.rules` denies every client read and write (partners read through `getAiUsage`). One query needs a composite index (`firestore.indexes.json`): the reservation transaction's `ai_reservations` by `firmId` and `state` (`in` reserved, reconcile_failed). The reconciler's query (`state == "reserved"` in document-id order) is served by the single-field index.
 
 | Path | Holds |
 | --- | --- |
@@ -99,7 +112,7 @@ All are server-only: `firestore.rules` denies every client read and write (partn
 | `ai_usage_months/{firmId}_{monthKey}` | the month total: `spentMicroUsd`, token totals and `calls: { ok, failed, blocked }` |
 | `ai_budget_alerts/{firmId}_{monthKey}_{70\|90}` | one alert per threshold per month |
 | `ai_config/{firmId}` | `monthlyBudgetMicroUsd`, `pkrPerUsd`, `killSwitch`, `maxConcurrentCalls` (server-set, audit F07) |
-| `ai_reservations/{usageLogId}` | one per call that passed step 8 (audit F07, F08): `firmId`, `actorId`, `matterId`, `jobId`, `taskType`, `model`, `classification`, `provider`, `traceId`, `usageLogId`, `monthKey`, `reservedInputTokens`, `reservedOutputTokens`, `reservedMicroUsd`, `state` (`reserved`, `settled` or `released`), `leaseUntil`, `createdAt`; then `providerAttempt` (`attemptedAt`, `outcome` `pending` or `returned`, and after the call `returnedAt`, `result`, the token counts, `tokensEstimated`, `costMicroUsd`); when closed, `actualMicroUsd`, `settledAt`, `settledBy` (`gateway` or `reconciler`). No prompt or response text. |
+| `ai_reservations/{usageLogId}` | one per call that passed step 8 (audit F07, F08): `firmId`, `actorId`, `matterId`, `jobId`, `taskType`, `model`, `classification`, `provider`, `traceId`, `usageLogId`, `monthKey`, `reservedInputTokens`, `reservedOutputTokens`, `reservedMicroUsd`, `state` (`reserved`, `settled`, `released` or `reconcile_failed`), `leaseUntil`, `createdAt`; then `providerAttempt` (`attemptedAt`, `outcome` `pending` or `returned`, and after the call `returnedAt`, `result`, the token counts, `tokensEstimated`, `costMicroUsd`, `responseId?`, `requestId?`); when closed, `actualMicroUsd`, `exceededMicroUsd` (only when the charge passed the hold), `settledAt`, `settledBy` (`gateway` or `reconciler`); after a failed reconciler run, `reconcileFailures`, `lastReconcileError` (a code) and, once quarantined, `quarantinedAt`. No prompt or response text. |
 | `platform/p1` | the platform `killSwitch` |
 
 `committeeBrain` also writes `committee_outputs/{id}` in the Next.js shape (`id` and `createdAt` in epoch milliseconds), plus `usageLogId` and `traceId`. The write makes up to 3 attempts on a non-HTTP error (waits of 100 and 200 ms between them). An attempt that fails with ALREADY_EXISTS after an earlier attempt's commit was lost finds the row by its `usageLogId` and is a success. A write that fails for good answers 500 after the provider call (O-58).
@@ -110,12 +123,34 @@ Each decision writes one `events` row (`ai.call.completed`, `ai.call.failed` or 
 
 ## Lease reconciler (audit F07, F08)
 
-`p1ReservationReconciler` (`reconciler.ts`) runs every minute in `asia-south1`. It follows the job sweeper's pattern: a pinned 45 s timeout, a 30 s wall-clock budget checked before each page and each reservation, and no retry count, because the next minute's run is its retry. It reads reservations still `reserved` whose `leaseUntil` has passed, oldest first, in pages of 100 (at most 5 pages a run). Each one is handled in its own transaction that re-reads it:
+`p1ReservationReconciler` (`reconciler.ts`) runs every minute in `asia-south1`. It follows the job sweeper's pattern: a pinned 45 s timeout, a 30 s wall-clock budget checked before each page and each reservation, and no retry count, because the next minute's run is its retry. It pages through every reservation still `reserved`, in document-id order with a cursor, 100 a page and at most 5 pages a run, and acts on those whose lease has passed (re-audit R1-D2).
+- **Leases are read in code.** So a lease in any shape is seen: a Timestamp or a number of milliseconds is compared with the clock, and anything else counts as lapsed. The gateway always writes a Timestamp, so no live call owns such a record.
+- **A failed record never stops the run.** The cursor moves past it.
+
+Each lapsed reservation is handled in its own transaction that re-reads it:
 
 - **No `providerAttempt`.** Nothing was sent. The reservation is released: its hold leaves `reservedMicroUsd` and it takes `state: "released"`, `actualMicroUsd: 0`. No usage row is written.
-- **A `providerAttempt`.** The reservation is settled through the same staging as a call's commit. The charge is the one the attempt recorded after the provider answered, when it did (`reconciledFrom: "recorded"`). Otherwise it is the reserved worst case: the estimated input and the 4,096-token ceiling, with `tokensEstimated: true` (`reconciledFrom: "worst_case"`). The usage row is the call's own id, so a late commit of a live call can never add a second row or charge.
+- **A `providerAttempt`.** The reservation is settled through the same staging as a call's commit. The charge is the one the attempt recorded after the provider answered, when it did (`reconciledFrom: "recorded"`). Otherwise it is the reserved worst case: the input ceiling and the 4,096-token ceiling, with `tokensEstimated: true` (`reconciledFrom: "worst_case"`). The usage row is the call's own id, so a late commit of a live call can never add a second row or charge. A charge above the hold takes the excess path described under the bound.
+- **Malformed records.** Fields a settlement can do without are defaulted: a missing `traceId` is recorded as null, a missing actor as `system`, and an unreadable classification as the strictest label (`privileged-restricted`). A record whose firm, month (`YYYY-MM`) or hold (`reservedMicroUsd`, a non-negative integer) cannot be read fails, because settling it would mean guessing what to take off which month total.
+- **Quarantine.** Each failed run is counted on the record (`reconcileFailures`, `lastReconcileError`). At the third (`RECONCILE_MAX_FAILURES`) the record is quarantined: `state: "reconcile_failed"`, `quarantinedAt`, and `logger.error("p1.reconcile_quarantined", { firmId, usageLogId, failures, code })`. It keeps its hold. Its firm is refused `accounting_indeterminate` until an operator settles it: fail closed, because the firm's accounting really is unknown.
 
-The Gateway gives this code no per-request receipt, so no charge is matched against the provider's own bill here. That stays with O-57 (reconcile `costMicroUsd` against the Gateway's spend report at G-1).
+### Runbook: settling a quarantined reservation
+
+There is no route for this. It is an operator action with the Admin SDK or the Firestore console, on `ai_reservations/{usageLogId}`, recorded in the incident log.
+
+1. **Find it.** The `p1.reconcile_quarantined` log line names the firm and the id. `lastReconcileError` gives the code: `reservation_malformed` means a firm, month or hold that cannot be read.
+2. **Preferred: repair and requeue.**
+   - Correct the unreadable field from the evidence: the `committee_outputs` row with this `usageLogId`, the month total, and the Gateway's records for `providerAttempt.responseId` or `requestId`.
+   - Set `state` back to `"reserved"` and `reconcileFailures` to 0.
+   - The next minute's run settles it through the normal path: usage row, month total, audit row and event.
+3. **Otherwise, settle it by hand in one transaction:**
+   - create `ai_usage_logs/{usageLogId}`: outcome `reconciled`, `reconciledFrom: "manual"`, and the charge the Gateway's records show (or the reserved worst case if they show none);
+   - add the charge to the month's `spentMicroUsd`, and take the reservation's original hold off `reservedMicroUsd`;
+   - set the reservation to `state: "settled"` with `actualMicroUsd` and `settledBy: "operator"` (or `state: "released"` with `actualMicroUsd: 0` if the provider was never called);
+   - write an `audit_log` row `ai.gateway.reconciled` (actor: the operator's uid; reason `manual`).
+4. **Confirm.** The firm's next call must no longer be refused `accounting_indeterminate`.
+
+The Gateway gives this code no per-request receipt, so no charge is matched against the provider's own bill here. The attempt keeps the provider's `responseId` and the Gateway's `requestId` so this can later be done per request. That remains O-57: reconcile `costMicroUsd` against the Gateway's records at G-1.
 
 ## Trace (Opik)
 

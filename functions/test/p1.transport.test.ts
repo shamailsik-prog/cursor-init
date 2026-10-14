@@ -95,6 +95,20 @@ describe("P1 Gateway transport (P3-68)", () => {
     })
   })
 
+  it("carries the provider's response id and the request-id header when they are plain ids, and drops anything else (audit F08 R1-D5)", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_7f3a-01" }).end(JSON.stringify({ id: "gen-01J9ZXK4", choices: [{ message: { content: "hi" } }] }))
+    }
+    expect(await gatewayTransport("k", base).send(request)).toEqual({ text: "hi", inputTokens: null, outputTokens: null, responseId: "gen-01J9ZXK4", requestId: "req_7f3a-01" })
+    // Not a plain id (spaces, provider text, over 200 characters, not a string): left out, never stored.
+    for (const bad of ["has spaces in it", "x".repeat(201), 42, { nested: "id" }]) {
+      respond = json(200, { id: bad, choices: [{ message: { content: "hi" } }] })
+      const out = await gatewayTransport("k", base).send(request)
+      expect(out, JSON.stringify(bad)).not.toHaveProperty("responseId")
+      expect(out).not.toHaveProperty("requestId")
+    }
+  })
+
   it("sends the max_tokens it is given", async () => {
     respond = json(200, { choices: [{ message: { content: "x" } }] })
     await gatewayTransport("k", base).send({ ...request, maxTokens: 17 })

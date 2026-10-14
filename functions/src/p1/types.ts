@@ -32,8 +32,11 @@ export type UsageOutcome = P1Outcome | "reconciled"
  */
 export type P1Accounting = "settled" | "pending"
 
-/** A reservation's state (F07, F08): held, settled at a charge, or released with no charge. */
-export type ReservationState = "reserved" | "settled" | "released"
+/**
+ * A reservation's state (F07, F08): held, settled at a charge, released with no charge, or quarantined by the reconciler
+ * after repeated failures (`reconcile_failed`, re-audit R1-D2), which keeps its hold and its firm blocked.
+ */
+export type ReservationState = "reserved" | "settled" | "released" | "reconcile_failed"
 
 /** The fixed reason recorded for any provider failure; provider error text is never stored (P3-61). */
 export const TRANSPORT_ERROR = "transport_error"

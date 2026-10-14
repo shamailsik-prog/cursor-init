@@ -22,10 +22,10 @@ import {
   reservedOf,
   spentOf,
 } from "./config"
-import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens } from "./costTable"
+import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens, inputTokenCeiling } from "./costTable"
 import { monthKeyPkt } from "./month"
 import { OPIK_TIMEOUT_MS, exportTrace } from "./opik"
-import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, type TransportCode } from "./transport"
+import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, plainId, type TransportCode } from "./transport"
 import { TRANSPORT_ERROR, type BlockReason, type P1Accounting, type P1Outcome, type ReservationState, type TaskType, type UsageOutcome } from "./types"
 import { uuidv7 } from "./uuidv7"
 
@@ -36,10 +36,12 @@ import { uuidv7 } from "./uuidv7"
  * then the transport call and the response mask; then the trace; then one transaction writing the usage row,
  * the month total, any threshold alerts, the audit row and the event, and settling the reservation.
  *
- * Spend is a limit, not a report (F07). Before the provider is called, one transaction re-reads the month total
- * and the firm's config and creates `ai_reservations/{usageLogId}` holding the call's worst case (the estimated
- * input of the masked body plus the 4,096-token output ceiling), refusing unless spent + reserved + the new
- * reservation fits the budget and the firm holds fewer than its maximum of live reservations. The provider is
+ * Spend is a limit, not a report (F07). Before the provider is called, one transaction re-reads both kill switches,
+ * the month total and the firm's config and creates `ai_reservations/{usageLogId}` holding the call's worst case (the
+ * input ceiling of the masked body, one token per UTF-8 byte plus the request overhead, and the 4,096-token output
+ * ceiling: re-audit R1-D1), refusing unless no switch blocks the model, spent + reserved + the new reservation fits
+ * the budget and the firm holds fewer than its maximum of live reservations. A provider that bills above that ceiling
+ * is charged in full and the excess is recorded and raised (`ai.reservation.exceeded`, `p1.reservation_exceeded`). The provider is
  * called only after that commits, and only after a second small transaction has recorded the provider attempt
  * on the reservation. The commit adds the actual cost to `spent`, takes the hold off `reserved` and settles the
  * reservation. If the commit fails for good, the reservation keeps its hold and its attempt (F08), the result
@@ -302,8 +304,28 @@ function inLedgerQueue<T>(firmId: string, kind: "reserve" | "commit", s: typeof 
   return ledgerQueue(firmId, maxWaitMs, LEDGER_QUEUE_HOLD_MS, timeoutError, fn)
 }
 
+/**
+ * The reservation states that still hold money and still count against the firm: `reserved`, and `reconcile_failed`
+ * (quarantined by the reconciler, re-audit R1-D2), which blocks the firm `accounting_indeterminate` until an operator
+ * settles it (README runbook).
+ */
+export const OPEN_RESERVATION_STATES: ReservationState[] = ["reserved", "reconcile_failed"]
+
+/**
+ * A reservation's lease end in epoch milliseconds: a Timestamp, or a finite number of milliseconds (a malformed record,
+ * re-audit R1-D2); null for anything else, which every reader treats as lapsed (fail closed: the gateway always writes
+ * a Timestamp, so no live call can own such a record).
+ */
+export function leaseMillis(value: unknown): number | null {
+  if (value instanceof Timestamp) return value.toMillis()
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+/** The states a call or the reconciler closes a reservation with. */
+export type ClosedState = Extract<ReservationState, "settled" | "released">
+
 /** The state a reservation settles to: `settled` when the provider was called and charged (or answered), else `released` at 0. */
-export function settledState(dispatched: boolean, outcome: UsageOutcome, costMicroUsd: number): Exclude<ReservationState, "reserved"> {
+export function settledState(dispatched: boolean, outcome: UsageOutcome, costMicroUsd: number): ClosedState {
   return dispatched && (outcome === "ok" || costMicroUsd > 0) ? "settled" : "released"
 }
 
@@ -353,9 +375,10 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
     purpose: maskOutboundPII(req.purpose, { partyNames }).masked,
     redactionCounts: Object.fromEntries(bodyMask.redactions.map((r) => [r.kind, r.count])),
   }
-  // The call's worst case (F07): the estimated input of the masked body that is sent, plus the output ceiling sent
-  // as max_tokens, at the model's price. Null only for an unpriced model, which step 6 refuses.
-  const reservedInputTokens = estimateTokens(outbound.body)
+  // The call's worst case (F07, re-audit R1-D1): the input ceiling of the masked body that is sent (one token per UTF-8
+  // byte plus the request overhead), plus the output ceiling sent as max_tokens, at the model's price. A provider that
+  // honours max_tokens and bills a byte-level tokenizer cannot charge more. Null only for an unpriced model (step 6).
+  const reservedInputTokens = inputTokenCeiling(outbound.body)
   const worstCase = costMicroUsd(model, reservedInputTokens, MAX_OUTPUT_TOKENS)
 
   /** Steps 2 and 5 to 7, in order; the first refusal wins. */
@@ -426,6 +449,8 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
   let tokensEstimated = false
   let cost = 0
   let dispatched = false
+  // The provider's own ids for this call, when its answer carried plain ones (re-audit R1-D5).
+  let providerIds: { responseId?: string; requestId?: string } = {}
   if (blockReason === null && transport !== null) {
     dispatched = true
     // 9. The transport call, then the response mask (P3-68).
@@ -435,6 +460,8 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
       if (typeof res?.text !== "string") {
         throw new P1TransportError("gateway_no_text", { billable: true, inputTokens: tokenCount(res?.inputTokens), outputTokens: tokenCount(res?.outputTokens) })
       }
+      const [responseId, requestId] = [plainId(res.responseId), plainId(res.requestId)]
+      providerIds = { ...(responseId === undefined ? {} : { responseId }), ...(requestId === undefined ? {} : { requestId }) }
       const masked = maskOutboundPII(res.text, { partyNames }).masked
       const reportedIn = tokenCount(res.inputTokens)
       const reportedOut = tokenCount(res.outputTokens)
@@ -473,7 +500,7 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
   // 9b. What the provider answered goes on the reservation's attempt (F08), fail-open: should the commit fail for
   // good, the reconciler settles at this charge instead of the worst case.
   if (dispatched) {
-    await recordAttemptOutcome(resRef, { result: outcome, inputTokens, outputTokens, tokensEstimated, costMicroUsd: cost }).catch((err: unknown) =>
+    await recordAttemptOutcome(db, resRef, { result: outcome, inputTokens, outputTokens, tokensEstimated, costMicroUsd: cost, ...providerIds }).catch((err: unknown) =>
       logger.warn("p1.attempt_outcome_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) })
     )
     reservation = { ref: resRef, state: settledState(true, outcome, cost), mustBeLive: true }
@@ -523,18 +550,19 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
     monthKey,
     trace: { id: traceId, status },
   }
-  let crossings: Crossing[] = []
+  let staged: StageResult = { crossings: [], exceeded: null }
   let accounting: P1Accounting = "pending"
   try {
     await t.beforeCommit?.()
-    crossings = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation })
+    staged = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation })
     accounting = "settled"
   } catch (err) {
     // The result is still returned (P3-63) and the log keeps the record; the reservation, when there is one, keeps
     // holding the worst case with its provider attempt, so the spend is never lost from the books (F08).
     logger.error("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err) })
   }
-  for (const c of crossings) logger.warn("p1.budget_threshold", { firmId, monthKey, ...c })
+  for (const c of staged.crossings) logger.warn("p1.budget_threshold", { firmId, monthKey, ...c })
+  if (staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded })
 
   return {
     outcome,
@@ -623,27 +651,35 @@ async function reserve(db: Firestore, a: ReserveArgs): Promise<"reserved" | Bloc
 }
 
 /**
- * One reservation attempt. Reads the month total, the firm's config and the firm's live reservations, then refuses,
- * in this order: no valid budget (`budget_not_set`, the budget may have changed since the first read); a provider
- * attempt whose lease has lapsed unsettled (`accounting_indeterminate`, F08); a worst case that does not fit beside
- * what is spent and held (`budget_exhausted`); and as many live reservations as the firm may hold
- * (`concurrency_exhausted`). Otherwise creates the reservation and adds its hold to the month's `reservedMicroUsd`.
- * A reservation whose lease lapsed with no attempt holds budget but no slot: nothing was sent, and the reconciler
- * releases it.
+ * One reservation attempt. Reads the platform's and the firm's kill switches, the month total, the firm's config and
+ * the firm's open reservations, then refuses, in this order: a kill switch that blocks the routed model
+ * (`kill_switch_platform`, `kill_switch_firm`: a switch set after the call's first read still stops it here, re-audit
+ * R1-D3); no valid budget (`budget_not_set`, the budget may have changed since the first read); unresolved accounting
+ * (`accounting_indeterminate`, F08: a provider attempt whose lease lapsed unsettled, or a reservation the reconciler
+ * quarantined); a worst case that does not fit beside what is spent and held (`budget_exhausted`); and as many live
+ * reservations as the firm may hold (`concurrency_exhausted`). Otherwise creates the reservation and adds its hold to
+ * the month's `reservedMicroUsd`. A reservation whose lease lapsed with no attempt holds budget but no slot: nothing
+ * was sent, and the reconciler releases it.
  */
 async function stageReservation(db: Firestore, tx: Transaction, a: ReserveArgs): Promise<"reserved" | BlockReason> {
-  const [totalSnap, configSnap, ownSnap] = await tx.getAll(a.totalRef, a.configRef, a.reservationRef)
+  const [totalSnap, configSnap, ownSnap, platformSnap] = await tx.getAll(a.totalRef, a.configRef, a.reservationRef, platformConfigRef())
   // An earlier attempt of this call committed and lost its answer: its reservation already holds the worst case.
   if (ownSnap!.exists && ownSnap!.get("traceId") === a.fields.traceId) return ownSnap!.get("state") === "reserved" ? "reserved" : "reservation_failed"
-  const live = await tx.get(db.collection("ai_reservations").where("firmId", "==", a.firmId).where("state", "==", "reserved"))
-  const config = configSnap.data()
+  const open = await tx.get(db.collection("ai_reservations").where("firmId", "==", a.firmId).where("state", "in", OPEN_RESERVATION_STATES))
+  const config = configSnap!.data()
+  if (killSwitchBlocks(platformSnap!.get("killSwitch"), a.fields.model)) return "kill_switch_platform"
+  if (killSwitchBlocks(config?.killSwitch, a.fields.model)) return "kill_switch_firm"
   const budget = budgetOf(config)
   if (budget === null) return "budget_not_set"
   let active = 0
   let indeterminate = false
-  for (const doc of live.docs) {
-    const lease = doc.get("leaseUntil")
-    const lapsed = !(lease instanceof Timestamp) || lease.toMillis() <= a.nowMs
+  for (const doc of open.docs) {
+    if (doc.get("state") === "reconcile_failed") {
+      indeterminate = true
+      continue
+    }
+    const lease = leaseMillis(doc.get("leaseUntil"))
+    const lapsed = lease === null || lease <= a.nowMs
     if (!lapsed) active += 1
     else if (doc.get("providerAttempt") != null) indeterminate = true
   }
@@ -690,21 +726,34 @@ async function markAttempt(db: Firestore, ref: DocumentReference, s: typeof p1Te
   )
 }
 
-/** After the provider answers: what it answered and what the call is charged, on the attempt (F08). Cut off like the mark. */
+/**
+ * After the provider answers: what it answered, what the call is charged and the provider's own ids, on the attempt
+ * (F08, re-audit R1-D5). Only while the reservation is still held (re-audit INFO): once the reconciler has settled it,
+ * the attempt keeps saying what that settlement was based on. Cut off like the mark.
+ */
 async function recordAttemptOutcome(
+  db: Firestore,
   ref: DocumentReference,
-  r: { result: P1Outcome; inputTokens: number; outputTokens: number; tokensEstimated: boolean; costMicroUsd: number }
+  r: { result: P1Outcome; inputTokens: number; outputTokens: number; tokensEstimated: boolean; costMicroUsd: number; responseId?: string; requestId?: string }
 ): Promise<void> {
   await withTimeout(
-    ref.update({
-      "providerAttempt.outcome": "returned",
-      "providerAttempt.returnedAt": FieldValue.serverTimestamp(),
-      "providerAttempt.result": r.result,
-      "providerAttempt.inputTokens": r.inputTokens,
-      "providerAttempt.outputTokens": r.outputTokens,
-      "providerAttempt.tokensEstimated": r.tokensEstimated,
-      "providerAttempt.costMicroUsd": r.costMicroUsd,
-    }),
+    db.runTransaction(
+      async (tx) => {
+        if ((await tx.get(ref)).get("state") !== "reserved") return
+        tx.update(ref, {
+          "providerAttempt.outcome": "returned",
+          "providerAttempt.returnedAt": FieldValue.serverTimestamp(),
+          "providerAttempt.result": r.result,
+          "providerAttempt.inputTokens": r.inputTokens,
+          "providerAttempt.outputTokens": r.outputTokens,
+          "providerAttempt.tokensEstimated": r.tokensEstimated,
+          "providerAttempt.costMicroUsd": r.costMicroUsd,
+          ...(r.responseId === undefined ? {} : { "providerAttempt.responseId": r.responseId }),
+          ...(r.requestId === undefined ? {} : { "providerAttempt.requestId": r.requestId }),
+        })
+      },
+      { maxAttempts: 3 }
+    ),
     ATTEMPT_RECORD_TIMEOUT_MS,
     "attempt_outcome_timeout"
   )
@@ -729,7 +778,8 @@ export type CommitArgs = {
   configRef: DocumentReference
   totalRef: DocumentReference
   record: UsageRecord
-  traceId: string
+  /** The call's trace id; null only for a reconciled record whose reservation lost it (re-audit R1-D2). */
+  traceId: string | null
   failCommit: boolean
   seam: typeof p1TestSeam
   /**
@@ -738,7 +788,7 @@ export type CommitArgs = {
    * was called, so a reservation no longer held (the reconciler settled it) fails the commit instead of being
    * counted twice; otherwise one that is absent or no longer held is left as it is.
    */
-  reservation: { ref: DocumentReference; state: Exclude<ReservationState, "reserved">; mustBeLive: boolean } | null
+  reservation: { ref: DocumentReference; state: ClosedState; mustBeLive: boolean } | null
   /** Who settles the reservation; the reconciler's own transaction passes "reconciler". */
   settledBy?: "gateway" | "reconciler"
 }
@@ -753,7 +803,7 @@ export type CommitArgs = {
  * is reported, the usage row is read: a commit found done returns the crossings its alert docs record, so an
  * unseen commit is never logged as a failure.
  */
-async function commit(db: Firestore, args: CommitArgs): Promise<Crossing[]> {
+async function commit(db: Firestore, args: CommitArgs): Promise<StageResult> {
   const clock = args.seam.wallClock ?? Date.now
   const started = clock()
   const remaining = () => COMMIT_DEADLINE_MS - (clock() - started)
@@ -767,7 +817,7 @@ async function commit(db: Firestore, args: CommitArgs): Promise<Crossing[]> {
     try {
       // Waiting in the firm's ledger queue counts against the deadline: at most `left`, then the deadline error; the
       // deadline is checked again when the attempt leaves the queue.
-      const crossings = await inLedgerQueue(args.record.firmId, "commit", args.seam, left, commitDeadlineError, () => {
+      const staged = await inLedgerQueue(args.record.firmId, "commit", args.seam, left, commitDeadlineError, () => {
         if (remaining() <= 0) throw commitDeadlineError()
         return db.runTransaction(
           (tx) => {
@@ -780,7 +830,7 @@ async function commit(db: Firestore, args: CommitArgs): Promise<Crossing[]> {
       })
       const lost = args.seam.lostCommitAnswers?.shift()
       if (lost) throw lost
-      return crossings
+      return staged
     } catch (err) {
       failure = err
       if (isAlreadyExists(err) || !isRetryableCommitError(err)) break
@@ -801,16 +851,20 @@ async function commit(db: Firestore, args: CommitArgs): Promise<Crossing[]> {
  * After an ALREADY_EXISTS: null unless this call's usage row is there (an earlier attempt's commit landed and
  * its answer was lost); otherwise the thresholds that commit crossed, read back from the alert docs it wrote.
  */
-async function committedCrossings(db: Firestore, a: CommitArgs): Promise<Crossing[] | null> {
+async function committedCrossings(db: Firestore, a: CommitArgs): Promise<StageResult | null> {
   try {
     const { firmId, monthKey } = a.record
     const [usage, ...alerts] = await db.getAll(a.usageRef, ...THRESHOLDS.map((t) => alertRef(firmId, monthKey, t)))
     if (!usage!.exists || usage!.get("trace.id") !== a.traceId) return null
-    return alerts.flatMap((snap, i) =>
-      snap.exists && snap.get("usageLogId") === a.usageRef.id
-        ? [{ threshold: THRESHOLDS[i]!, budgetMicroUsd: snap.get("budgetMicroUsd") as number, spentMicroUsd: snap.get("spentMicroUsd") as number }]
-        : []
-    )
+    // An excess is durable on the reservation and in its event; only the after-commit log line is not repeated here.
+    return {
+      crossings: alerts.flatMap((snap, i) =>
+        snap.exists && snap.get("usageLogId") === a.usageRef.id
+          ? [{ threshold: THRESHOLDS[i]!, budgetMicroUsd: snap.get("budgetMicroUsd") as number, spentMicroUsd: snap.get("spentMicroUsd") as number }]
+          : []
+      ),
+      exceeded: null,
+    }
   } catch {
     return null
   }
@@ -821,7 +875,17 @@ async function committedCrossings(db: Firestore, a: CommitArgs): Promise<Crossin
  * reservation's settlement, the audit row, the event and any alerts. Shared by the call's commit and by the
  * reconciler, which stages a `reconciled` record for a reservation whose call never settled it (F08).
  */
-export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Promise<Crossing[]> {
+/**
+ * A settlement above the reservation (re-audit R1-D1): the provider billed more than the call's ceiling. The charge is
+ * still recorded in full, because it is owed; the excess is recorded on the reservation, raised as the event
+ * `ai.reservation.exceeded`, and logged `p1.reservation_exceeded` after commit.
+ */
+export type Exceeded = { reservedMicroUsd: number; actualMicroUsd: number; excessMicroUsd: number }
+
+/** What one staged decision crossed: its threshold alerts, and an excess over its reservation (or null). */
+export type StageResult = { crossings: Crossing[]; exceeded: Exceeded | null }
+
+export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Promise<StageResult> {
   const { record: r, usageRef } = a
   const [totalSnap, configSnap, reservationSnap] = await tx.getAll(a.totalRef, a.configRef, ...(a.reservation ? [a.reservation.ref] : []))
   const live = reservationSnap?.exists === true && reservationSnap.get("state") === "reserved"
@@ -860,8 +924,25 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
     },
     { merge: true }
   )
+  const exceeded: Exceeded | null = live && r.costMicroUsd > held ? { reservedMicroUsd: held, actualMicroUsd: r.costMicroUsd, excessMicroUsd: r.costMicroUsd - held } : null
   if (live) {
-    tx.update(a.reservation!.ref, { state: a.reservation!.state, actualMicroUsd: r.costMicroUsd, settledAt: now, settledBy: a.settledBy ?? "gateway" })
+    tx.update(a.reservation!.ref, {
+      state: a.reservation!.state,
+      actualMicroUsd: r.costMicroUsd,
+      ...(exceeded === null ? {} : { exceededMicroUsd: exceeded.excessMicroUsd }),
+      settledAt: now,
+      settledBy: a.settledBy ?? "gateway",
+    })
+  }
+  if (exceeded !== null) {
+    tx.create(db.collection("events").doc(`${usageRef.id}_reservation_exceeded`), {
+      name: "ai.reservation.exceeded",
+      firmId: r.firmId,
+      payload: { monthKey: r.monthKey, ...exceeded },
+      classification: "internal",
+      occurredAt: now,
+      idempotencyKey: `${usageRef.id}:reservation_exceeded`,
+    })
   }
   stageAudit(
     r.outcome === "reconciled"
@@ -902,7 +983,7 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
     idempotencyKey: `${usageRef.id}:${suffix}`,
   })
 
-  return crossed.map((threshold) => {
+  const crossings = crossed.map((threshold) => {
     const ref = alertRef(r.firmId, r.monthKey, threshold)
     const crossing: Crossing = { threshold, budgetMicroUsd: budget!, spentMicroUsd: after }
     tx.create(ref, { firmId: r.firmId, monthKey: r.monthKey, ...crossing, usageLogId: usageRef.id, createdAt: now })
@@ -921,4 +1002,5 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
     })
     return crossing
   })
+  return { crossings, exceeded }
 }

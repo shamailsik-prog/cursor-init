@@ -5,8 +5,26 @@
  * records the fixed `transport_error` and charges the call by the error's `billable` flag (I1).
  */
 
+/**
+ * What a call answered. `responseId` is the provider's own response id (the OpenAI-compatible body's `id`) and
+ * `requestId` the request-id header the Gateway answered with; each is present only when it is a plain id (audit F08,
+ * re-audit R1-D5), so a later per-request reconciliation against the provider's records can find the call (O-57).
+ */
+export type P1TransportReply = { text: string; inputTokens: number | null; outputTokens: number | null; responseId?: string; requestId?: string }
+
 export type P1Transport = {
-  send(req: { model: string; body: string; maxTokens: number }): Promise<{ text: string; inputTokens: number | null; outputTokens: number | null }>
+  send(req: { model: string; body: string; maxTokens: number }): Promise<P1TransportReply>
+}
+
+/**
+ * The response headers that may carry the Gateway's request id, in the order read. Which one the Vercel AI Gateway
+ * sets is to be confirmed at G-1 (O-57); `x-vercel-id` is set on responses served through Vercel's edge.
+ */
+export const REQUEST_ID_HEADERS = ["x-request-id", "x-vercel-id"] as const
+
+/** A provider or Gateway id when it is a plain id (letters, digits, `.`, `_`, `:`, `-`, at most 200 characters); else undefined. Never provider text. */
+export function plainId(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value) ? value : undefined
 }
 
 export const GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
@@ -55,6 +73,7 @@ export class P1TransportError extends Error {
 }
 
 type GatewayBody = {
+  id?: unknown
   choices?: { message?: { content?: unknown } }[]
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown }
 } | null
@@ -105,7 +124,9 @@ export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts
       const inputTokens = tokenCount(json?.usage?.prompt_tokens)
       const outputTokens = tokenCount(json?.usage?.completion_tokens)
       if (typeof text !== "string") throw new P1TransportError("gateway_no_text", { billable: true, inputTokens, outputTokens })
-      return { text, inputTokens, outputTokens }
+      const responseId = plainId(json?.id)
+      const requestId = REQUEST_ID_HEADERS.map((h) => plainId(res.headers.get(h))).find((v) => v !== undefined)
+      return { text, inputTokens, outputTokens, ...(responseId === undefined ? {} : { responseId }), ...(requestId === undefined ? {} : { requestId }) }
     },
   }
 }

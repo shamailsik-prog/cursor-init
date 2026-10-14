@@ -36,3 +36,21 @@ export function costMicroUsd(model: string, inputTokens: number, outputTokens: n
 export function estimateTokens(text: string): number {
   return Math.ceil(Buffer.byteLength(text, "utf8") / 3)
 }
+
+/**
+ * Input tokens a request may carry beyond its body (audit F07, re-audit R1-D1): the provider's chat template around
+ * the one user message the transport sends (role and turn markers, begin and end tokens). The request carries no
+ * system prompt and no tools (transport.ts sends `model`, one user message and `max_tokens`), so the template is a
+ * handful of tokens; 64 leaves a wide margin and costs 256 micro-USD of reservation at the Opus input price. To be
+ * measured at G-1 against the Gateway's `prompt_tokens` for a one-byte body (O-57).
+ */
+export const REQUEST_OVERHEAD_TOKENS = 64
+
+/**
+ * An upper bound on the input tokens a provider can bill for `text` (re-audit R1-D1): one per UTF-8 byte, because a
+ * byte-level BPE token always covers at least one byte, plus REQUEST_OVERHEAD_TOKENS. `estimateTokens` is the charge
+ * estimate when no usage is reported (P3-62) and stays as it is; only the reservation uses this ceiling.
+ */
+export function inputTokenCeiling(text: string): number {
+  return Buffer.byteLength(text, "utf8") + REQUEST_OVERHEAD_TOKENS
+}

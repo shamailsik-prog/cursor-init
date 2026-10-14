@@ -145,6 +145,11 @@ SPEND_TESTS=(
   'F07 through callP1 of ten concurrent calls only those whose worst case fits are dispatched, and spent plus reserved never exceeds the budget'
   'F07 through callP1 calls on separate instances (no shared ledger queue) still never over-admit: the transaction alone keeps spent plus reserved within the budget'
   'F07 through callP1 a single request whose worst case exceeds the remaining budget is refused before dispatch; one that fits exactly is sent'
+  # re-audit R1-D1 (provider usage discrepancy), R1-D3 (kill switch in the reservation transaction)
+  'F07 through callP1 provider usage discrepancy, one call: a provider billing one input token per byte never takes spent above the budget'
+  'F07 through callP1 provider usage discrepancy, four parallel calls: spent plus reserved stays within the budget while they are in flight and after they settle'
+  'F07 through callP1 a provider that bills beyond the reservation is charged in full, and the excess is recorded on the reservation, raised as ai.reservation.exceeded and logged p1.reservation_exceeded'
+  "F07 through callP1 a kill switch set after the call's first read is honoured by the reservation transaction: refused, nothing sent"
   "F07 through callP1 a firm's concurrent calls are bounded: the fifth live reservation is refused concurrency_exhausted by default, and a freed slot admits again"
   "F07 through callP1 the firm's configured maxConcurrentCalls replaces the default, and an invalid value falls back to it"
   'F07 through callP1 a reservation that cannot be written or an attempt that cannot be recorded sends nothing: blocked reservation_failed, and the held amount is released'
@@ -153,6 +158,11 @@ SPEND_TESTS=(
   'F08 through callP1 the audit scenario: a usage-commit failure keeps a durable reservation with its provider attempt, says accounting pending, blocks the firm once the lease lapses, and the reconciler settles it'
   'F08 through callP1 an attempt whose outcome was never recorded is reconciled at the reserved worst case'
   "F08 through callP1 a reconciler that settles a call still in flight is never double-counted by that call's own commit"
+  # re-audit R1-D2: malformed records, no head-of-line blocking, quarantine
+  'F08 through callP1 a lapsed attempt with no traceId is still reconciled, and its firm is unblocked'
+  'F08 through callP1 a reservation whose leaseUntil is stored as a number is found by the reconciler and settled, and its firm is unblocked'
+  'F08 through callP1 a hundred unreconcilable lapsed reservations of another firm, ahead of a good one, do not starve it: it is settled in the first run'
+  'F08 through callP1 a reservation the reconciler cannot settle is quarantined after three failed runs: reconcile_failed, logged, its hold kept and its firm still blocked'
   # both, through the HTTP router
   'F07 and F08 through the HTTP router (committeeBrain) ten concurrent committeeBrain requests against a budget for two worst cases dispatch two and refuse the rest; spent plus reserved never exceeds it'
   'F07 and F08 through the HTTP router (committeeBrain) a usage-commit failure answers with the text and accounting pending, stores accounting pending, blocks the firm accounting_indeterminate past the lease, and the reconciler restores service'
@@ -257,6 +267,7 @@ TRANSPORT_TESTS=(
   'posts the OpenAI-compatible body with the bearer key and parses text and usage'
   'rejects a non-2xx response with a fixed message that does not echo the provider text'
   'rejects a 200 with no usable choices[0].message.content, with a fixed message'
+  "carries the provider's response id and the request-id header when they are plain ids, and drops anything else (audit F08 R1-D5)"
 )
 TRANSPORT_ERR_SUITE='P1 Gateway transport errors (I1: billed failures are charged)'
 TRANSPORT_ERR_TESTS=(

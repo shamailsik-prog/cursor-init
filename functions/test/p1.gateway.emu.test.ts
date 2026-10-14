@@ -6,7 +6,7 @@ import { logger } from "firebase-functions"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { THRESHOLDS, alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
-import { MAX_OUTPUT_TOKENS, costMicroUsd, estimateTokens } from "../src/p1/costTable"
+import { MAX_OUTPUT_TOKENS, costMicroUsd, estimateTokens, inputTokenCeiling } from "../src/p1/costTable"
 import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { COMMIT_ATTEMPT_SLACK_MS, COMMIT_BACKOFF_CAP_MS, COMMIT_DEADLINE_MS, callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
 import { OPIK_TIMEOUT_MS, setOpikFetchForTests } from "../src/p1/opik"
@@ -749,7 +749,10 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
   })
 
   describe("alerts at 70 and 90 (P3-65, Review Focus 2)", () => {
-    // Audit F07: a call is admitted only when its worst case (81,960 micro-USD for this body: the estimated input and
+    // The stub bills these charges as output tokens far beyond the 4,096 a real call can return, so each settlement
+    // above the call's reservation also takes the excess path (recorded, raised, logged: re-audit R1-D1). That is
+    // what a provider over-billing looks like, and it leaves the alert arithmetic, which reads the charge, unchanged.
+    // Audit F07: a call is admitted only when its worst case (82,288 micro-USD for this body: its input ceiling and
     // the 4,096-token output ceiling) fits beside the month's spend and holds. The budget and every charge below are
     // the earlier 100,000 micro-USD case scaled by 100, so each call the cases make still fits and is sent.
     const BUDGET = 10_000_000
@@ -837,7 +840,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       costing(6_000_000)
       await callP1(req(firmId), at)
       // 6000000 + 10 x 400000 = 10000000: the burst passes 7000000 and 9000000. All ten are reserved before any answers,
-      // and 6000000 spent plus ten worst cases (10 x 81,960) fits the budget. The firm allows ten calls at once
+      // and 6000000 spent plus ten worst cases (10 x 82,288) fits the budget. The firm allows ten calls at once
       // (maxConcurrentCalls), and the ten commits race as from separate instances.
       costingTogether(400_000, 10)
       p1TestSeam.unqueued = "commit"
@@ -954,7 +957,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       // Audit F08: the spend is not lost from the books. The reservation made before the call keeps holding its worst
       // case, with the provider attempt, until the reconciler settles it, and the result says accounting is pending.
       expect(r.accounting).toBe("pending")
-      const worst = costMicroUsd(OPUS, estimateTokens(r.outbound.body), MAX_OUTPUT_TOKENS)
+      const worst = costMicroUsd(OPUS, inputTokenCeiling(r.outbound.body), MAX_OUTPUT_TOKENS)
       const month = (await monthOf(firmId))!
       expect(month).toMatchObject({ reservedMicroUsd: worst })
       expect(month).not.toHaveProperty("spentMicroUsd")
@@ -986,13 +989,13 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       // The commit wrote nothing; the reservation made before the call still holds its worst case (audit F08).
       expect(r.accounting).toBe("pending")
       const month = (await monthOf(firmId))!
-      expect(month).toMatchObject({ reservedMicroUsd: costMicroUsd(OPUS, estimateTokens(r.outbound.body), MAX_OUTPUT_TOKENS) })
+      expect(month).toMatchObject({ reservedMicroUsd: costMicroUsd(OPUS, inputTokenCeiling(r.outbound.body), MAX_OUTPUT_TOKENS) })
       expect(month).not.toHaveProperty("spentMicroUsd")
       expect((await reservationOf(r.usageLogId))!.state).toBe("reserved")
     })
 
     it("an ambiguous commit followed by ALREADY_EXISTS on the usage row is done: no p1.usage_log_failed, exactly one row, and its threshold warning still logged", async () => {
-      // 140000 of a 200000 budget lands exactly on 70% (the budget leaves room for the call's 81,960 micro-USD worst
+      // 140000 of a 200000 budget lands exactly on 70% (the budget leaves room for the call's 82,288 micro-USD worst
       // case, which audit F07's reservation must fit before the call is sent).
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: 200_000 })
       const logs = spyLogs()
