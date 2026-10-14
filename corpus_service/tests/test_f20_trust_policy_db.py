@@ -757,11 +757,12 @@ def test_h_trust_is_decided_before_the_duplicate_check(corpus_db):
     assert result == {"promoted": 2, "attached": 2, "quarantined": 4, "failed": 0}
 
 
-def test_h_a_record_that_raises_is_quarantined_durably_and_the_batch_continues(corpus_db, monkeypatch, caplog):
-    """LOW-3: a non-database exception mid-batch. The record's work is rolled back, it is
-    quarantined as promotion_error:<ExceptionClass> so it is not retried forever, and the rest of
-    the batch is promoted. Reason and log carry the class name only. Since F19 the rest of the batch
-    is published into Annex A, as the runtime role."""
+def test_h_a_python_error_leaves_the_record_pending_and_the_batch_continues(corpus_db, monkeypatch, caplog):
+    """LOW-3 + round-4 (Codex P1): a Python exception mid-batch says nothing about the record (it
+    has no SQLSTATE, so it may be a deployment or code fault). The record's work is rolled back and
+    it is left pending, not quarantined, so it retries once the fault is fixed; the rest of the
+    batch is promoted. The log carries the id and class only, marked systemic. Since F19 the rest
+    of the batch is published into Annex A, as the runtime role."""
     corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
@@ -786,46 +787,46 @@ def test_h_a_record_that_raises_is_quarantined_durably_and_the_batch_continues(c
     assert result == {"promoted": 4, "attached": 0, "quarantined": 0, "failed": 1}
     staging, queue, master, _embed = run(_outcomes())
     by_id = {row[0]: row for row in staging}
-    assert by_id[ids["k2"]][1:4] == (False, True, "promotion_error:RuntimeError")
-    assert [(row[0], row[1]) for row in queue] == [(ids["k2"], "promotion_error:RuntimeError")]
+    assert by_id[ids["k2"]][1:4] == (False, False, None), "a Python error must leave the record pending"
+    assert queue == []
     published = run(_annex_a_promoted())
     assert sorted(row[1] for row in published) == ["2099 SCMR 70", "2099 SCMR 71", "2099 SCMR 73", "2099 SCMR 74"]
     assert master == []  # F19 ruling 10
     messages = " ".join(r.getMessage() for r in caplog.records)
     assert f"promotion.record_failed staging_id={ids['k2']} error=RuntimeError" in messages
+    assert "systemic=true" in messages
     assert "2099 SCMR 72" not in messages, "log carries row data"
 
-    # A second run leaves the quarantined record alone.
-    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}
+    # The record is retried on the next run (still failing while the fault is there), then
+    # promoted once it is gone.
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 1}
+    monkeypatch.setattr(promo, "publication_decision", real)
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
 
 
 def test_h_if_the_error_quarantine_also_fails_the_batch_still_continues(corpus_db, monkeypatch, caplog):
     """LOW-3: if even the promotion_error quarantine write fails, that is logged (class only) and the
-    batch continues; the record stays pending. (Since F19 the others publish into Annex A, as the
-    runtime role.)"""
+    batch continues; the record stays pending. (Round 4: the first failure is a record-specific
+    database error, the only kind that is quarantined. Since F19 the others publish into Annex A,
+    as the runtime role, and the fault is raised on the record's citation insert.)"""
     corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
     ids = run(_stage({
         f"k{i}": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 SCMR 8{i}",
-                      confidence_score=0.61 if i == 1 else 0.9)
+                      confidence_score=0.9)
         for i in range(3)
     }))
+    run(execute(*_raise_on_citation_insert({"2099 SCMR 81": "23505"})))
     import scraper.tasks.promotion as promo
 
-    real_decision, real_queue = promo.publication_decision, promo.QuarantineQueue
-
-    def boom(trust, confidence):
-        if confidence == 0.61:
-            raise RuntimeError("first failure")
-        return real_decision(trust, confidence)
+    real_queue = promo.QuarantineQueue
 
     def queue_that_refuses_error_rows(**fields):
         if str(fields.get("reason", "")).startswith("promotion_error:"):
             raise LookupError("second failure")
         return real_queue(**fields)
 
-    monkeypatch.setattr(promo, "publication_decision", boom)
     monkeypatch.setattr(promo, "QuarantineQueue", queue_that_refuses_error_rows)
     with caplog.at_level(logging.INFO):
         result = _promote_as_runtime_role(corpus_db)
@@ -1281,3 +1282,150 @@ def test_k_a_route_without_a_valid_kind_is_refused_and_every_direct_route_needs_
     run(dispatcher._run_async("PeshawarHighCourt"))
     run(dispatcher._run_async("SindhHighCourt"))
     assert calls == [("scrape_peshawarhighcourt", "PeshawarHighCourt"), ("scrape_shc", "SindhHighCourt")]
+
+
+# ---------------------------------------------------------------------------------------------
+# (l) round 4 (Codex P1 on PR #48): only record-specific failures are quarantined
+# ---------------------------------------------------------------------------------------------
+def _raise_on_citation_insert(codes):
+    """SQL for a trigger that raises SQLSTATE codes[citation] when that citation's Annex A citation
+    row is inserted (the message carries row data, which must never reach a log or a reason).
+    Migrated to F19: promotion no longer writes case_law_master, so the fault sits on the row the
+    publication writes for the record (the error escapes publish_batch's item, as any non-guard
+    database error does)."""
+    cases = " ".join(f"WHEN '{citation}' THEN '{code}'" for citation, code in codes.items())
+    return (
+        "CREATE FUNCTION f20_raise_on_insert() RETURNS trigger LANGUAGE plpgsql AS $$ "
+        f"DECLARE code text := CASE NEW.citation_text {cases} END; BEGIN "
+        "IF code IS NOT NULL THEN RAISE EXCEPTION 'synthetic row data %', NEW.citation_text USING ERRCODE = code; END IF; "
+        "RETURN NEW; END $$",
+        "CREATE TRIGGER f20_raise_on_insert BEFORE INSERT ON citation FOR EACH ROW EXECUTE FUNCTION f20_raise_on_insert()",
+    )
+
+
+_PAGE_BASE = {"SYS": 9700, "REC": 9800, "CB": 9900, "PUB": 9600}
+
+
+def _cite(prefix, i):
+    """The canonical 2099 citation of record i of a section (l) batch."""
+    return f"2099 SCMR {_PAGE_BASE[prefix] + i}"
+
+
+def _stage_in_order(src, n, prefix):
+    """n trusted, promotable records whose ids sort in index order (promotion runs ORDER BY id)."""
+    return run(_stage({
+        f"k{i}": dict(id=uuid.UUID(f"00000000-0000-4000-8000-{i + 1:012d}"), source_id=src, source_site="f20-trusted",
+                      extracted_citation=_cite(prefix, i), confidence_score=0.9)
+        for i in range(n)
+    }))
+
+
+@pytest.mark.parametrize("code", ["42501", "42P01", "XX000", "P0001"],
+                         ids=["insufficient_privilege", "undefined_table", "internal_error", "raise_exception"])
+def test_l_a_systemic_or_unknown_database_error_leaves_the_record_pending(corpus_db, code, caplog):
+    """Round 4: a failure that is not confirmed to be about the record (permission, schema drift,
+    an internal error, a generic RAISE) is rolled back and left pending, not quarantined, so the
+    backlog is not lost when the deployment or schema is at fault. It counts as failed, is logged
+    with id, class and SQLSTATE and systemic=true, and is retried on the next run. (Migrated to F19:
+    Annex A, the runtime role, the fault on the record's citation insert.)"""
+    corpus_db.apply_annex_a()
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))["t"]
+    ids = _stage_in_order(src, 3, "SYS")
+    run(execute(*_raise_on_citation_insert({_cite("SYS", 1): code})))
+
+    with caplog.at_level(logging.INFO):
+        result = _promote_as_runtime_role(corpus_db)
+
+    assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 1}, result
+    staging, queue, master, _embed = run(_outcomes())
+    by_id = {row[0]: row for row in staging}
+    assert by_id[ids["k1"]][1:4] == (False, False, None), f"{code} must leave the record pending"
+    assert queue == [], f"{code} must write no review-queue row"
+    assert sorted(row[1] for row in run(_annex_a_promoted())) == [_cite("SYS", 0), _cite("SYS", 2)]
+    assert master == []  # F19 ruling 10
+    failed = [r for r in caplog.records if "promotion.record_failed" in r.getMessage()]
+    assert len(failed) == 1 and failed[0].levelno == logging.ERROR, [r.getMessage() for r in failed]
+    message = failed[0].getMessage()
+    assert f"staging_id={ids['k1']} " in message and f"sqlstate={code} " in message, message
+    assert "transient=false" in message and "systemic=true" in message, message
+    assert "synthetic row data" not in message and "2099" not in message, "log carries row data"
+
+    # The next run retries it (and fails again while the fault is there): still pending.
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 1}
+    assert {row[0]: row for row in run(_outcomes())[0]}[ids["k1"]][1:4] == (False, False, None)
+
+
+@pytest.mark.parametrize("code,reason", [("22001", "promotion_error:DBAPIError"), ("23505", "promotion_error:IntegrityError")],
+                         ids=["string_data_right_truncation", "unique_violation"])
+def test_l_a_record_specific_database_error_is_quarantined_and_the_good_records_are_promoted(corpus_db, code, reason, caplog):
+    """Round 4: SQLSTATE class 22 (data exception) and 23 (integrity constraint violation) are the
+    confirmed record-specific failures. That record is quarantined promotion_error:<ExceptionClass>
+    (class only) with a review-queue row; the good records around it are promoted. (Migrated to F19:
+    Annex A, the runtime role, the fault on the record's citation insert.)"""
+    corpus_db.apply_annex_a()
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))["t"]
+    ids = _stage_in_order(src, 3, "REC")
+    run(execute(*_raise_on_citation_insert({_cite("REC", 1): code})))
+
+    with caplog.at_level(logging.INFO):
+        result = _promote_as_runtime_role(corpus_db)
+
+    assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 1}, result
+    staging, queue, master, _embed = run(_outcomes())
+    by_id = {row[0]: row for row in staging}
+    assert by_id[ids["k1"]][1:4] == (False, True, reason)
+    assert [(row[0], row[1]) for row in queue] == [(ids["k1"], reason)]
+    assert sorted(row[1] for row in run(_annex_a_promoted())) == [_cite("REC", 0), _cite("REC", 2)]
+    assert master == []  # F19 ruling 10
+    message = " ".join(r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage())
+    assert f"sqlstate={code} " in message and "systemic=false" in message, message
+    assert "2099" not in message
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}, \
+        "a quarantined record is not retried"
+
+
+@pytest.mark.parametrize("codes,expected,aborted", [
+    (["42501"] * 5, {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 3}, "systemic:42501"),
+    (["42501", "XX000", "42501", "XX000", "42501"], {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 5}, None),
+    (["42501", "42501", None, "42501", "42501"], {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 4}, None),
+    (["42501", "42501", "23505", "42501", "42501"], {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 5}, None),
+], ids=["same_code_five_times", "alternating_codes", "a_success_resets", "a_record_specific_failure_resets"])
+def test_l_the_breaker_stops_the_batch_after_three_consecutive_identical_systemic_failures(
+        corpus_db, codes, expected, aborted, caplog):
+    """Round 4: N=3 consecutive systemic/unknown failures with the same SQLSTATE (or exception
+    class) stop the run early, so a broken schema does not churn the whole backlog; the records not
+    attempted stay pending and the result carries the reason. Any other outcome in between resets
+    the count. (Migrated to F19: Annex A, the runtime role, the fault on each record's citation
+    insert.)"""
+    corpus_db.apply_annex_a()
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))["t"]
+    ids = _stage_in_order(src, len(codes), "CB")
+    run(execute(*_raise_on_citation_insert({_cite("CB", i): c for i, c in enumerate(codes) if c})))
+
+    with caplog.at_level(logging.INFO):
+        result = _promote_as_runtime_role(corpus_db)
+
+    want = dict(expected, aborted=aborted) if aborted else expected
+    assert result == want, result
+    staging = {row[0]: row for row in run(_outcomes())[0]}
+    for i, c in enumerate(codes):
+        state = staging[ids[f"k{i}"]][1:4]
+        if c is None:
+            assert state[:2] == (True, False), (i, state)
+        elif c == "23505":
+            assert state == (False, True, "promotion_error:IntegrityError"), (i, state)
+        else:
+            assert state == (False, False, None), (i, state)
+    attempted = [r for r in caplog.records if "promotion.record_failed" in r.getMessage()]
+    assert len(attempted) == expected["failed"]
+    aborted_logs = [r.getMessage() for r in caplog.records if "promotion.aborted" in r.getMessage()]
+    if aborted:
+        assert len(aborted_logs) == 1 and "42501" in aborted_logs[0] and "left_pending=2" in aborted_logs[0], aborted_logs
+    else:
+        assert aborted_logs == []
+    from scraper.tasks import promotion
+
+    assert getattr(promotion, "SYSTEMIC_FAILURE_LIMIT", None) == 3

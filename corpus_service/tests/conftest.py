@@ -171,9 +171,12 @@ class CorpusTestDatabase:
         option = " WITH INHERIT FALSE, SET TRUE" if set_only else ""
         self.admin(f'GRANT {group} TO "{role}"{option}')
 
-    def runtime_role(self) -> Tuple[str, str]:
+    def runtime_role(self, corpus_writer: str = "set") -> Tuple[str, str]:
         """The API/worker runtime role as PR 2b provisions it: DML on the ORM tables only (not
-        "ALL TABLES"), and corpus_writer reachable by SET ROLE only (INHERIT FALSE, SET TRUE)."""
+        "ALL TABLES"), and corpus_writer reachable by SET ROLE only (INHERIT FALSE, SET TRUE).
+
+        corpus_writer="none" is the role as shipped before PR 2b (no membership); "no_set" is a
+        member that may not SET ROLE to it (INHERIT FALSE, SET FALSE)."""
         name, password = self.create_role("f19_app")
         tables = ", ".join(f'"{t}"' for t in ORM_TABLES)
         self.admin(
@@ -187,7 +190,12 @@ class CorpusTestDatabase:
                   LOOP EXECUTE format('GRANT USAGE, SELECT, UPDATE ON SEQUENCE %I TO %I', s.relname, '{name}');
                   END LOOP; END $$""",
         )
-        self._grant_member(name, "corpus_writer", set_only=True)
+        if corpus_writer == "set":
+            self._grant_member(name, "corpus_writer", set_only=True)
+        elif corpus_writer == "no_set":
+            self.admin(f'GRANT corpus_writer TO "{name}" WITH INHERIT FALSE, SET FALSE')
+        elif corpus_writer != "none":
+            raise ValueError(corpus_writer)
         return name, password
 
     def writer_role(self) -> Tuple[str, str]:

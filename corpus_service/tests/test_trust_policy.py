@@ -222,6 +222,29 @@ class TransientDatabaseErrorTests(unittest.TestCase):
             self.assertFalse(is_transient_db_error(exc), exc)
 
 
+class RecordSpecificDatabaseErrorTests(unittest.TestCase):
+    """Round 4 (Codex P1): only SQLSTATE class 22 (data exception) and 23 (integrity constraint
+    violation) are confirmed record-specific failures that may be quarantined. Everything else
+    (permission, schema drift, internal errors, a generic RAISE, no SQLSTATE) is systemic or
+    unknown and leaves the record pending."""
+
+    _Orig = TransientDatabaseErrorTests._Orig
+    _err = TransientDatabaseErrorTests._err
+
+    def test_only_class_22_and_23_are_record_specific(self):
+        from scraper.tasks.promotion import is_record_specific_db_error
+
+        specific = ["22001", "22003", "22P02", "22007", "23505", "23503", "23502", "23514", "23P01"]
+        other = ["42501", "42P01", "42703", "42883", "0A000", "25P02", "28000", "3D000", "3F000", "58030", "XX000",
+                 "P0001", "40001", "08006", "57014", "55P03", "55000", None]
+        wrong = {s for s in specific if not is_record_specific_db_error(self._err(s))}
+        wrong |= {s for s in specific if not is_record_specific_db_error(self._err(s, nested=True))}
+        wrong |= {s for s in other if is_record_specific_db_error(self._err(s))}
+        self.assertEqual(wrong, set())
+        for exc in (RuntimeError("23505"), ValueError("22001"), LookupError(), KeyError("x")):
+            self.assertFalse(is_record_specific_db_error(exc), exc)
+
+
 TASKS_DIR = PROJECT_ROOT / "scraper" / "tasks"
 
 # ---------------------------------------------------------------------------------------------

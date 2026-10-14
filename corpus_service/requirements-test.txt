@@ -5,7 +5,7 @@
 # imports the real Celery app to check that its broker and result backend verify the Redis TLS
 # certificate (audit F30). pydantic validates the F19 publication batch format. Verified on Python
 # 3.12 with node 22 and CORPUS_TEST_DATABASE_URL set (pgvector/pgvector:pg16, audit F20 and F19
-# tests): 195 passed, 0 skipped.
+# tests): 213 passed, 0 skipped.
 fastapi==0.142.2
 httpx==0.28.1
 sqlalchemy[asyncio]==2.1.3

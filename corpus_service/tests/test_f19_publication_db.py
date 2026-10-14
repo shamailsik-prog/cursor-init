@@ -1309,3 +1309,88 @@ def test_f19_r1_an_unchanged_restage_is_attached_and_skipped_without_a_review_ro
     )
     assert {(row[1], row[2]) for row in decisions} == {("citation", "unchanged"), ("judgment", "unchanged")}
     assert len(decisions) == 4
+
+
+# ---------------------------------------------------------------------------------------------
+# merging #48 round 4: systemic publication failures leave the backlog pending
+# ---------------------------------------------------------------------------------------------
+def _stage_trusted_in_order(corpus_db, n, page0):
+    src = run(_make_sources({"trusted": ("f19-trusted", "trusted")}))
+    import uuid
+
+    return run(_stage({
+        f"k{i}": dict(id=uuid.UUID(f"00000000-0000-4000-8000-{i + 1:012d}"), source_id=src["trusted"],
+                      source_site="f19-trusted", extracted_citation=f"2099 SCMR {page0 + i}")
+        for i in range(n)
+    }))
+
+
+async def _promote_on(engine):
+    from scraper import database
+    from scraper.tasks.promotion import promote_staging_records
+
+    saved = database.SessionLocal.kw.get("bind")
+    database.SessionLocal.configure(bind=engine)
+    try:
+        return await promote_staging_records()
+    finally:
+        database.SessionLocal.configure(bind=saved)
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("membership,key", [("none", "PublicationError"), ("no_set", "42501")],
+                         ids=["no_membership_before_pr2b", "member_without_set_42501"])
+def test_f19_m4_without_corpus_writer_the_backlog_stays_pending(corpus_db, membership, key, caplog):
+    """#48 round 4 merged into F19: before PR 2b the runtime role cannot publish into Annex A (no
+    corpus_writer membership: publish_batch's PublicationError, no SQLSTATE; or membership without
+    SET: SET ROLE refused, 42501). That is a deployment fault, not the records': they stay pending
+    (not quarantined, no review-queue row, nothing in Annex A), the run stops after
+    SYSTEMIC_FAILURE_LIMIT identical failures, and once the role is granted the backlog publishes."""
+    import logging
+
+    prepare(corpus_db)
+    ids = _stage_trusted_in_order(corpus_db, 5, 9500)
+    app, app_pw = corpus_db.runtime_role(corpus_writer=membership)
+    with caplog.at_level(logging.INFO):
+        result = run(_promote_on(corpus_db.engine_for(corpus_db.url_as(app, app_pw))))
+
+    assert result == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 3, "aborted": f"systemic:{key}"}, result
+    staging, queue = _staging_state(corpus_db)
+    assert {staging[sid][:3] for sid in ids.values()} == {(False, False, None)}, "every record must stay pending"
+    assert queue == {}
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM judgment") == [(0,)]
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM corpus_publication") == [(0,)]
+    failed = [r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage()]
+    assert len(failed) == 3 and all("systemic=true" in m and "transient=false" in m for m in failed), failed
+    assert any("promotion.aborted" in r.getMessage() and "left_pending=2" in r.getMessage() for r in caplog.records)
+
+    # PR 2b's grant arrives: the same backlog publishes, nothing was lost.
+    corpus_db.admin(f'GRANT corpus_writer TO "{app}" WITH INHERIT FALSE, SET TRUE')
+    again = run(_promote_on(corpus_db.engine_for(corpus_db.url_as(app, app_pw))))
+    assert again == {"promoted": 5, "attached": 0, "quarantined": 0, "failed": 0}, again
+    assert len(admin_fetch(corpus_db, "SELECT id FROM judgment WHERE review_status = 'promoted'")) == 5
+
+
+def test_f19_m4_publication_isolation_refused_is_systemic_not_the_records_fault(corpus_db, caplog):
+    """#48 round 4 merged into F19, SKP08: a promotion session at REPEATABLE READ is refused by
+    corpus_publication_begin (publication_isolation_refused, fix round 1). That is a configuration
+    fault: the records stay pending and the run stops after three identical failures
+    ("systemic:SKP08"); at READ COMMITTED the same backlog publishes."""
+    import logging
+
+    prepare(corpus_db)
+    ids = _stage_trusted_in_order(corpus_db, 4, 9550)
+    app, app_pw = corpus_db.runtime_role()
+    url = corpus_db.url_as(app, app_pw)
+    with caplog.at_level(logging.INFO):
+        result = run(_promote_on(corpus_db.engine_for(url, isolation_level="REPEATABLE READ")))
+
+    assert result == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 3, "aborted": "systemic:SKP08"}, result
+    staging, queue = _staging_state(corpus_db)
+    assert {staging[sid][:3] for sid in ids.values()} == {(False, False, None)}
+    assert queue == {}
+    failed = [r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage()]
+    assert len(failed) == 3 and all("sqlstate=SKP08" in m and "systemic=true" in m for m in failed), failed
+
+    again = run(_promote_on(corpus_db.engine_for(url)))
+    assert again == {"promoted": 4, "attached": 0, "quarantined": 0, "failed": 0}, again

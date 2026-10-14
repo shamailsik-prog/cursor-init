@@ -42,7 +42,9 @@ QUARANTINE_REASONS: Final[Tuple[str, ...]] = (
 )
 # A promotable record whose citation is already published is not quarantined: it is attached to the
 # existing row and skipped (FINAL_2 DEDUPLICATION; see scraper/tasks/promotion.py).
-# A record whose promotion raised is quarantined as "promotion_error:<ExceptionClass>".
+# A record whose promotion raised a record-specific database error (SQLSTATE class 22 or 23) is
+# quarantined as "promotion_error:<ExceptionClass>"; any other failure leaves it pending
+# (scraper/tasks/promotion.py).
 REASON_PROMOTION_ERROR_PREFIX: Final = "promotion_error:"
 
 
