@@ -1,4 +1,5 @@
-# Pre-fix F30 shape; check_compose_policy.py must reject this.
+# expect: literal-credential, store-ports, store-network, pg-tls, pg-password-encryption, pg-hba, app-role, redis-tls, redis-default-user, redis-acl-user
+# Pre-fix F30 shape (published plaintext stores, legal/legal, no Redis auth); check_compose_policy.py must reject this.
 services:
   postgres:
     image: pgvector/pgvector:pg16

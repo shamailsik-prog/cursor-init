@@ -1,0 +1,5 @@
+# Included by compose_include.yml: an unauthenticated redis published on 6380 (re-audit D2).
+services:
+  rogue-redis:
+    image: redis:7-alpine
+    ports: ["6380:6379"]

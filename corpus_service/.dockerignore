@@ -1,0 +1,8 @@
+# Audit F30: never bake the compose interpolation file (all store and app secrets) or harvested
+# data into the app image; every container would otherwise carry them at /app/.env.
+.env
+.env.*
+live/
+imports/
+blackletter_state/
+**/__pycache__

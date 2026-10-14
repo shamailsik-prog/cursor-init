@@ -1,0 +1,6 @@
+# Loaded by plain `docker compose up`; policy checks the merged result.
+services:
+  postgres:
+    ports: ["5432:5432"]
+  redis:
+    ports: ["6379:6379"]
