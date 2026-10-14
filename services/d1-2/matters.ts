@@ -72,21 +72,11 @@ export class MembershipAssignmentError extends PublicError {
  * set by the matters API at creation, through the same `validateMatterAssignee` rule (the
  * creator seats themselves; the partner rule governs later assignment only). Mirrored by
  * firestore.rules matter_members create.
- */
-export function assignMatterMember(
-  store: SpineStore,
-  input: { actorId: string; matterId: string; userId: string }
-) {
-  const { matter, member } = validateMatterAssignment(store, input)
-  cacheMember(store, member)
-  recordMatterMemberAdd(store, input.actorId, matter, input.userId)
-  return member
-}
-
-/**
- * Every check `assignMatterMember` makes, in the same order and with the same errors, and nothing cached (audit F14
- * R7): the matters route validates, persists the membership, and only then caches it (`cacheMember`), so a member sync
- * whose listing is read after the membership is cached always lists it.
+ *
+ * Validation only, nothing cached (audit F14 R7): the matters route's add_member validates here, persists the
+ * membership, and only then caches it (`cacheMember`) and audits it, so a member sync whose listing is read after the
+ * membership is cached always lists it. (The former `assignMatterMember`, which cached without persisting, is removed:
+ * audit F14 R8.)
  */
 export function validateMatterAssignment(
   store: SpineStore,
@@ -121,7 +111,7 @@ export function cacheMember(store: SpineStore, member: { matterId: string; userI
 }
 
 /**
- * The assignee rule shared by matter create (`memberUserIds`) and `assignMatterMember`
+ * The assignee rule shared by matter create (`memberUserIds`) and `validateMatterAssignment`
  * (final audit F1). R2 N5: only same-firm matter staff are assigned. Clients reach their own
  * matters through matters.clientId (L8.1), and accounts is register-only (L17.6 #41). A
  * cross-firm user is reported exactly like a nonexistent one (no existence oracle).

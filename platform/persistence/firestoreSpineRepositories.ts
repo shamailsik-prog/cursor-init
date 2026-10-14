@@ -227,18 +227,26 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
   const createDenyByDefaultWorkflowOpsRepository =
     createDenyByDefaultWorkflowOpsRepositoryBinder(db)
   return {
+    // Audit F14 R8: a matter row's `id` is its document id. The Cloud Functions write matters without an `id` field
+    // (functions/src/d1/matter/ops.ts), and Next writes the field equal to the document id (setById), so the document id
+    // is authoritative: it wins over any `id` in the data.
     matters: {
       async create(row) {
         await setById(db, "matters", row)
       },
       async get(id) {
-        return getById<Matter>(db, "matters", id)
+        const row = await getById<Matter>(db, "matters", id)
+        return row ? { ...row, id } : null
       },
       async update(id, patch) {
-        return updateById<Matter>(db, "matters", id, patch)
+        const row = await updateById<Matter>(db, "matters", id, patch)
+        return row ? { ...row, id } : null
       },
       async listByFirm(firmId) {
-        return listByFirm<Matter>(db, "matters", firmId)
+        const snap = await getDocs(collection(db, "matters"))
+        return snap.docs
+          .map((row) => ({ ...(row.data() as Matter), id: row.id }))
+          .filter((row) => row.firmId === firmId)
       },
     },
     users: {

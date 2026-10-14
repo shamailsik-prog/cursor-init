@@ -18,6 +18,11 @@ function dropUnlisted<V>(map: Map<string, V>, before: Map<string, V>, listed: Re
   }
 }
 
+/** A usable cache key part (audit F14 R8): a row without one is skipped, never cached under `undefined` or "". */
+function isKeyPart(value: unknown): value is string {
+  return typeof value === "string" && value !== ""
+}
+
 /**
  * Reconciles the store's copy of the firm's memberships with the persisted rows: a membership revoked elsewhere is
  * dropped, and every listed one is cached. Audit F14 R5-D1: a membership another request caches while this listing is
@@ -29,7 +34,8 @@ export async function syncFirmMembers(
   firmId: string
 ): Promise<void> {
   const before = snapshotOfFirm(store.members, firmId)
-  const rows = await repos.members.listByFirm(firmId)
+  // Audit F14 R8: a membership without a usable matterId and userId is skipped (never cached as "undefined_<uid>").
+  const rows = (await repos.members.listByFirm(firmId)).filter((row) => isKeyPart(row.matterId) && isKeyPart(row.userId))
   dropUnlisted(store.members, before, new Set(rows.map((row) => store.memberKey(row.matterId, row.userId))))
   for (const row of rows) {
     store.members.set(store.memberKey(row.matterId, row.userId), row)
@@ -46,8 +52,10 @@ export async function syncFirmMembers(
  * stale label or firm; a moved matter is cached again under its new firm when that firm syncs.
  * Audit F14 R5-D1: only a matter cached before the listing was awaited, and still the same cached
  * object, is dropped, so a matter another request creates while this listing is in flight (persisted,
- * then cached) is kept. Returns the firm's matters as listed, the request's one listing of them (C4).
- * In memory mode the repository is the store itself, so this changes nothing.
+ * then cached) is kept. Audit F14 R8: a matter without a usable `id` is skipped, never cached under
+ * `undefined` (the Firestore repository gives every matter its document id). Returns the firm's
+ * matters as listed and cached, the request's one listing of them (C4). In memory mode the
+ * repository is the store itself, so this changes nothing.
  */
 export async function syncFirmMatters(
   store: SpineStore,
@@ -55,7 +63,7 @@ export async function syncFirmMatters(
   firmId: string
 ): Promise<Matter[]> {
   const before = snapshotOfFirm(store.matters, firmId)
-  const rows = await repos.matters.listByFirm(firmId)
+  const rows = (await repos.matters.listByFirm(firmId)).filter((row) => isKeyPart(row.id))
   dropUnlisted(store.matters, before, new Set(rows.map((row) => row.id)))
   for (const row of rows) {
     store.matters.set(row.id, row)

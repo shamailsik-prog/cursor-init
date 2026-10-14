@@ -1,3 +1,4 @@
+import { FieldValue } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { GET as mattersGet, POST as mattersPost } from "@/app/api/d1/matters/route"
 import { GET as documentsGet, POST as documentsPost } from "@/app/api/d1/documents/route"
@@ -494,6 +495,55 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
     const listed = await mattersGet(new Request(`${B}/api/d1/matters?userId=clerk_a&limit=100&cursor=0`))
     expect(listed.status).toBe(200)
     expect(await listed.text()).toContain(matterId)
+  })
+
+  it("a matter the Cloud Function wrote (no id field) is cached under its document id: members read and list its document, and a raise refuses the uncleared one (R8)", async () => {
+    const store = getRuntimeStore()
+    const cachedKeysAreIds = () => [...store.matters.entries()].every(([key, row]) => typeof key === "string" && key !== "" && row.id === key)
+    // The matter and its members as functions/src/d1/matter/ops.ts createMatter writes them: no `id` field in the data.
+    const matterId = `f14fn${Date.now()}`
+    await db().collection("matters").doc(matterId).set({
+      firmId: "firmA",
+      matterNo: "NHS-2099-0001",
+      stage: "pre_filing",
+      status: "engagement_unconfirmed",
+      clientId: "client_a",
+      conflictCheckId: "chk_f14fn",
+      title: "R8 Functions-written matter",
+      courtId: "SHC",
+      classification: "internal",
+      createdBy: "partner_a",
+      createdAt: FieldValue.serverTimestamp(),
+    })
+    for (const userId of ["partner_a", "clerk_a"]) {
+      await db().collection("matter_members").doc(`${matterId}_${userId}`).set({
+        firmId: "firmA",
+        matterId,
+        userId,
+        addedBy: "partner_a",
+        classification: "internal",
+        createdAt: FieldValue.serverTimestamp(),
+      })
+    }
+
+    // The member partner files a document on it through the routes; the clerk reads and lists it.
+    const ingested = await ingest("partner_a", matterId, "%PDF-f14-r8%", "internal")
+    expect(ingested.status).toBe(200)
+    const docId = ((await ingested.json()) as { result: { doc: { id: string } } }).result.doc.id
+    const read = (userId: string) => documentsGet(new Request(`${B}/api/d1/documents?userId=${userId}&docId=${docId}&includeContent=true`))
+    const listed = async (userId: string) => (await documentsGet(new Request(`${B}/api/d1/documents?userId=${userId}&limit=100&cursor=0`))).text()
+    expect((await read("clerk_a")).status).toBe(200)
+    expect(await listed("clerk_a")).toContain(docId)
+    expect(store.matters.get(matterId)?.id).toBe(matterId)
+    expect(cachedKeysAreIds()).toBe(true)
+
+    // Raised elsewhere: the clerk is refused and the document leaves the clerk's list; the cleared partner still reads it.
+    await raiseElsewhere(matterId)
+    expect((await read("clerk_a")).status).toBe(403)
+    expect(await listed("clerk_a")).not.toContain(docId)
+    expect((await read("partner_a")).status).toBe(200)
+    expect(await listed("partner_a")).toContain(docId)
+    expect(cachedKeysAreIds()).toBe(true)
   })
 
   it("a document row whose matterId is missing or empty is not the loose vault: the clerk's download is 403 and the list leaves it out (C2)", async () => {
