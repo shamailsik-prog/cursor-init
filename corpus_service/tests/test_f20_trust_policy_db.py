@@ -909,3 +909,83 @@ def test_h_a_second_run_waits_for_an_unfinished_publication_of_the_same_citation
     assert by_id[second_id][1:5] == (True, False, None, by_id[first_id][4])
     assert [row[1] for row in master] == ["2099 F20 RACE"]
     assert queue == []
+
+
+# ---------------------------------------------------------------------------------------------
+# (i) re-audit round 2 (PR #48): L2 transient database errors
+# ---------------------------------------------------------------------------------------------
+def _interrupt_the_promotion_waiting_on(corpus_db, staging_id, terminate, started, done):
+    """Hold staging_id's row lock; once promotion blocks on it, terminate or cancel that backend
+    (the backend-terminate / statement-cancel repro from the re-audit), then release the lock."""
+
+    async def holder():
+        from sqlalchemy import text
+
+        eng = corpus_db.engine_for(corpus_db.url)
+        try:
+            async with eng.begin() as conn:
+                await conn.execute(text("SELECT 1 FROM scraper_staging WHERE id = :i FOR UPDATE"), {"i": staging_id})
+                started.set()
+                for _ in range(600):
+                    await conn.execute(text("SELECT pg_stat_clear_snapshot()"))
+                    waiting = (await conn.execute(text(
+                        "SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid() "
+                        # (pg_stat_activity truncates the ORM's long column list, so match its start)
+                        "AND datname = current_database() AND query ILIKE '%scraper_staging%'"))).all()
+                    if waiting:
+                        fn = "pg_terminate_backend" if terminate else "pg_cancel_backend"
+                        await conn.execute(text(f"SELECT {fn}(:p)"), {"p": waiting[0][0]})
+                        break
+                    await asyncio.sleep(0.05)
+        finally:
+            await eng.dispose()
+            done.set()
+
+    threading.Thread(target=lambda: asyncio.run(holder())).start()
+
+
+@pytest.mark.parametrize("terminate", [True, False], ids=["terminate_backend", "cancel_statement"])
+@pytest.mark.parametrize("pool", ["production_queuepool", "test_nullpool"])
+def test_i_a_transient_database_error_leaves_the_record_pending(corpus_db, terminate, pool, caplog):
+    """Round-2 L2: a transient error (connection lost, SQLSTATE class 08/40/53/57, or 55P03) is not
+    the record's fault. The record is left pending (not quarantined), reported as failed, and the
+    rest of the batch continues; a later run promotes it."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
+    ids = run(_stage({
+        f"k{i}": dict(id=uuid.UUID(f"00000000-0000-4000-8000-{i + 1:012d}"), source_id=src["t"],
+                      source_site="f20-trusted", extracted_citation=f"2099 F20 T{i}", confidence_score=0.9)
+        for i in range(4)
+    }))
+    started, done = threading.Event(), threading.Event()
+    _interrupt_the_promotion_waiting_on(corpus_db, ids["k1"], terminate, started, done)
+    assert started.wait(30)
+
+    async def promote_with(pool_kind):
+        from scraper import database
+        from scraper.tasks.promotion import promote_staging_records
+
+        eng = database.build_engine(corpus_db.url) if pool_kind == "production_queuepool" else corpus_db.engine_for(corpus_db.url)
+        saved = database.SessionLocal.kw.get("bind")
+        database.SessionLocal.configure(bind=eng)
+        try:
+            return await promote_staging_records()
+        finally:
+            database.SessionLocal.configure(bind=saved)
+            await eng.dispose()
+
+    with caplog.at_level(logging.INFO):
+        result = run(promote_with(pool))
+    assert done.wait(30)
+
+    staging, queue, master, _embed = run(_outcomes())
+    by_id = {row[0]: row for row in staging}
+    assert by_id[ids["k1"]][1:4] == (False, False, None), "a transient error must leave the record pending"
+    assert queue == [], "a transient error writes no review-queue row"
+    assert result == {"promoted": 3, "attached": 0, "quarantined": 0, "failed": 1}, result
+    assert sorted(row[1] for row in master) == ["2099 F20 T0", "2099 F20 T2", "2099 F20 T3"]
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert f"promotion.record_failed staging_id={ids['k1']} " in messages and "transient=true" in messages, messages
+
+    # The lock is gone now; the next run promotes the record.
+    assert _promote() == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}

@@ -187,6 +187,39 @@ class SourceStampTests(unittest.TestCase):
                          {"source_id": str(sid), "source_name": "NasirLawSite"})
 
 
+class TransientDatabaseErrorTests(unittest.TestCase):
+    """Round-2 L2: what promotion treats as transient (leave the record pending) rather than the
+    record's own fault (quarantine it as promotion_error)."""
+
+    class _Orig(Exception):
+        def __init__(self, sqlstate=None):
+            super().__init__("driver error")
+            if sqlstate is not None:
+                self.sqlstate = sqlstate
+
+    def _err(self, sqlstate=None, invalidated=False, nested=False):
+        from sqlalchemy.exc import DBAPIError
+
+        orig = self._Orig(None if nested else sqlstate)
+        if nested:  # SQLAlchemy's asyncpg adapter: the SQLSTATE sits on the driver exception it wraps
+            orig.__cause__ = self._Orig(sqlstate)
+        return DBAPIError("SELECT 1", {}, orig, connection_invalidated=invalidated)
+
+    def test_transient_and_permanent_errors(self):
+        from scraper.tasks.promotion import is_transient_db_error
+
+        transient = ["08000", "08003", "08006", "08P01", "40001", "40P01", "53000", "53100", "53200", "53300",
+                     "57014", "57P01", "57P03", "55P03"]
+        permanent = ["23505", "23514", "22001", "42501", "42P01", "55000", "55006", "XX000", "P0001", None]
+        wrong = {s for s in transient if not is_transient_db_error(self._err(s))}
+        wrong |= {s for s in transient if not is_transient_db_error(self._err(s, nested=True))}
+        wrong |= {s for s in permanent if is_transient_db_error(self._err(s))}
+        self.assertEqual(wrong, set())
+        self.assertTrue(is_transient_db_error(self._err(None, invalidated=True)), "an invalidated connection")
+        for exc in (RuntimeError("x"), ValueError("40001"), LookupError()):
+            self.assertFalse(is_transient_db_error(exc), exc)
+
+
 TASKS_DIR = PROJECT_ROOT / "scraper" / "tasks"
 
 
