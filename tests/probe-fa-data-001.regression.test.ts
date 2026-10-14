@@ -43,7 +43,11 @@ suite("probe FA-DATA-001 regression (before vs after)", () => {
       try {
         execSync("npm run probe:fa-data-001", {
           encoding: "utf8",
-          env: { ...process.env, SIKANDER_POSTGRES_URL: postgresUrl },
+          env: {
+            ...process.env,
+            SIKANDER_POSTGRES_URL: postgresUrl,
+            FA_DATA_001_PROBE_SKIP_DDL: "1",
+          },
         });
       } catch {
         failed = true;
@@ -52,14 +56,9 @@ suite("probe FA-DATA-001 regression (before vs after)", () => {
     } finally {
       const fs = await import("node:fs");
       const path = await import("node:path");
-      const ddl = fs.readFileSync(
-        path.join(process.cwd(), "postgres/ddl/001_corpus_contract.sql"),
-        "utf8",
-      );
-      const match = ddl.match(
-        /CREATE OR REPLACE FUNCTION enforce_monotonic_classification\(\)[\s\S]*?END; \$\$ LANGUAGE plpgsql;/,
-      );
-      if (match) await admin.query(match[0]);
+      const ddlDir = path.join(process.cwd(), "postgres", "ddl");
+      await admin.query(fs.readFileSync(path.join(ddlDir, "001_corpus_contract.sql"), "utf8"));
+      await admin.query(fs.readFileSync(path.join(ddlDir, "002_platform.sql"), "utf8"));
       await admin.end();
     }
   });

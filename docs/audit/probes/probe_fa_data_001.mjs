@@ -29,21 +29,25 @@ function fail(msg) {
 const admin = new pg.Client({ connectionString: url });
 await admin.connect();
 
+const skipDdl = process.env.FA_DATA_001_PROBE_SKIP_DDL === "1";
+
 try {
-  const corpus = fs.readFileSync(ddlPath, "utf8");
-  const platform = fs.readFileSync(platformPath, "utf8");
-  await admin.query(corpus);
-  await admin.query(platform);
-  await admin.query(
-    `DO $$ BEGIN
-       CREATE ROLE app_writer LOGIN PASSWORD 'x';
-     EXCEPTION WHEN duplicate_object THEN
-       ALTER ROLE app_writer LOGIN PASSWORD 'x';
-     END $$;
-     GRANT SELECT, INSERT, UPDATE ON judgment TO app_writer;
-     GRANT SELECT ON classification_rank TO app_writer;
-     ALTER ROLE corpus_declassify LOGIN PASSWORD 'declass';`,
-  );
+  if (!skipDdl) {
+    const corpus = fs.readFileSync(ddlPath, "utf8");
+    const platform = fs.readFileSync(platformPath, "utf8");
+    await admin.query(corpus);
+    await admin.query(platform);
+    await admin.query(
+      `DO $$ BEGIN
+         CREATE ROLE app_writer LOGIN PASSWORD 'x';
+       EXCEPTION WHEN duplicate_object THEN
+         ALTER ROLE app_writer LOGIN PASSWORD 'x';
+       END $$;
+       GRANT SELECT, INSERT, UPDATE ON judgment TO app_writer;
+       GRANT SELECT ON classification_rank TO app_writer;
+       ALTER ROLE corpus_declassify LOGIN PASSWORD 'declass';`,
+    );
+  }
 
   await admin.query("DELETE FROM judgment WHERE id = $1", [JUDGMENT_ID]);
   await admin.query(
