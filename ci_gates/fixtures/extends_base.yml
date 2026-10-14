@@ -1,0 +1,5 @@
+# Extended by compose_extends.yml: a base service that publishes Postgres (re-audit D2).
+services:
+  pgbase:
+    image: pgvector/pgvector:pg16
+    ports: ["5432:5432"]

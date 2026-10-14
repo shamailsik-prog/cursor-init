@@ -1,0 +1,45 @@
+# expect: app-redis-tls
+# The app's REDIS_URL is plaintext redis://.
+# Otherwise identical to baseline_secure.yml.
+services:
+  app:
+    build: .
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${APP_DB_USER:?x}:${APP_DB_PASSWORD:?x}@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/run/tls-ca/ca.crt"
+      REDIS_URL: "redis://${REDIS_APP_USER:?x}:${REDIS_APP_PASSWORD:?x}@redis:6379/0"
+      SECRET_KEY: ${SECRET_KEY:?x}
+    networks: [edge, data]
+  migrate:
+    build: .
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${MIGRATE_DB_USER:?x}:${MIGRATE_DB_PASSWORD:?x}@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/run/tls-ca/ca.crt"
+      REDIS_URL: ""
+    command: python -m scraper.migrate
+    restart: "no"
+    networks: [data]
+  certs:
+    image: pgvector/pgvector:pg16
+    entrypoint: ["/bin/sh", "/generate-certs.sh"]
+    network_mode: none
+  postgres:
+    image: pgvector/pgvector:pg16
+    command: [postgres, -c, ssl=on, -c, ssl_cert_file=/run/tls/server.crt, -c, ssl_key_file=/run/tls/server.key,
+              -c, password_encryption=scram-sha-256, -c, hba_file=/etc/postgresql/corpus/pg_hba.conf]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?x}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?x}
+      APP_DB_USER: ${APP_DB_USER:?x}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?x}
+      MIGRATE_DB_USER: ${MIGRATE_DB_USER:?x}
+      MIGRATE_DB_PASSWORD: ${MIGRATE_DB_PASSWORD:?x}
+    volumes: ["./pg_hba_secure.conf:/etc/postgresql/corpus/pg_hba.conf:ro"]
+    networks: [data]
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --port, "0", --tls-port, "6379", --tls-cert-file, /run/tls/server.crt,
+              --tls-key-file, /run/tls/server.key, --user, default, "off", resetpass, "-@all",
+              --user, "${REDIS_APP_USER:?x}", "on", ">${REDIS_APP_PASSWORD:?x}", "~*", "&*", "+@all", "-@admin", "-@dangerous"]
+    networks: [data]
+networks:
+  edge: {}
+  data: {internal: true}

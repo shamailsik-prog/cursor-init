@@ -1,14 +1,21 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text
-from scraper.config import settings
+from scraper.config import asyncpg_engine_args, settings
 import logging
 logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):
     pass
 
-engine = create_async_engine(settings.DATABASE_URL, echo=False, pool_size=20, max_overflow=30)
+def build_engine(url: str):
+    """Async engine for a DATABASE_URL. TLS parameters (sslmode/ssl, sslrootcert) become an explicit
+    asyncpg `ssl` argument; with sslmode=verify-full that is an SSLContext requiring a certificate
+    that chains to sslrootcert and names the host (audit F30)."""
+    clean_url, connect_args = asyncpg_engine_args(url)
+    return create_async_engine(clean_url, echo=False, pool_size=20, max_overflow=30, connect_args=connect_args)
+
+engine = build_engine(settings.DATABASE_URL)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 async def get_db():
