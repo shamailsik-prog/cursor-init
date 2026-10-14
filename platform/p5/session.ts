@@ -178,7 +178,7 @@ function bearerToken(request: Request): string | null {
  */
 export async function loadUserRecord(
   userId: string,
-  options: { preferRepository?: boolean; store?: SpineStore } = {}
+  options: { preferRepository?: boolean; store?: SpineStore; firmId?: string } = {}
 ): Promise<User | null> {
   const store = options.store ?? getRuntimeStore()
   const cached = store.users.get(userId)
@@ -186,7 +186,9 @@ export async function loadUserRecord(
   let fromRepo: User | null = null
   try {
     const repos = await getRuntimeRepositories(store)
-    fromRepo = (await repos.users.get(userId)) ?? null
+    const firmScope = options.firmId ?? cached?.firmId
+    fromRepo =
+      firmScope !== undefined ? ((await repos.users.get(userId, firmScope)) ?? null) : null
   } catch (err) {
     console.error("[auth] user lookup failed", err)
     if (options.preferRepository) {
@@ -213,7 +215,7 @@ export async function loadUserRecord(
 async function loadFirmRecord(firmId: string): Promise<FirmRecord | null> {
   try {
     const repos = await getRuntimeRepositories(getRuntimeStore())
-    return await repos.firms.get(firmId)
+    return await repos.firms.get(firmId, firmId)
   } catch (err) {
     console.error("[auth] firm lookup failed", err)
     throw new AuthError(503, "IDENTITY_UNAVAILABLE", "identity service unavailable")
@@ -269,7 +271,10 @@ export async function resolveSession(request: Request): Promise<Session | Insecu
   }
 
   // Step 2 (identityPolicy.bindRecords): the authoritative users/{uid} and firms/{firmId}.
-  const record = await loadUserRecord(decoded.uid, { preferRepository: true })
+  const record = await loadUserRecord(decoded.uid, {
+    preferRepository: true,
+    firmId: claimed.firmId,
+  })
   const firm = await loadFirmRecord(claimed.firmId)
   const decision = bindRecords(
     claimed,

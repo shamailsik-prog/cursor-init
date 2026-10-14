@@ -356,7 +356,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       await repos.drafts.create(draft)
       const template = listTemplateCatalog("").find((item) => item.id === draft.templateId)
       const analyticsId = draftTemplateAnalyticsId(draft.templateId)
-      const existingAnalytics = await repos.draftTemplateAnalytics.get(analyticsId)
+      const existingAnalytics = await repos.draftTemplateAnalytics.get(analyticsId, actor.firmId)
       const baseAnalytics =
         existingAnalytics ??
         buildDraftTemplateAnalyticsRow(actor.firmId, {
@@ -371,7 +371,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       const payload = {
         action: "compose",
         preflight: gate,
-        draft: (await repos.drafts.get(draft.id)) ?? draft,
+        draft: (await repos.drafts.get(draft.id, actor.firmId)) ?? draft,
       }
       claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

@@ -4,12 +4,29 @@ import {
   doc as clientDoc,
   getDoc as clientGetDoc,
   getDocs as clientGetDocs,
+  query as clientQuery,
+  startAfter as clientStartAfter,
   runTransaction as clientRunTransaction,
   setDoc as clientSetDoc,
   updateDoc as clientUpdateDoc,
   deleteDoc as clientDeleteDoc,
+  where as clientWhere,
+  limit as clientLimit,
   type Firestore as ClientFirestore,
 } from "firebase/firestore"
+
+/** Default cap for firm-scoped list queries (admin SDK must not scan whole collections). */
+export const FIRM_SCOPED_LIST_LIMIT = 500
+
+/** Cursor document missing or not owned by the requested firm (do not silently restart at page 1). */
+export class FirmScopedCursorError extends Error {
+  readonly code = "FIRM_SCOPED_CURSOR_INVALID"
+
+  constructor(message: string) {
+    super(message)
+    this.name = "FirmScopedCursorError"
+  }
+}
 
 export type Firestore = ClientFirestore | AdminFirestore
 
@@ -54,7 +71,95 @@ export async function getDoc(ref: ReturnType<typeof doc>) {
   return clientGetDoc(ref as never)
 }
 
-export async function getDocs(query: ReturnType<typeof collection>) {
+export type FirmIdQuery = ReturnType<typeof collection> | ReturnType<typeof clientQuery>
+
+export function queryByFirmId(
+  db: ClientFirestore | AdminFirestore,
+  collectionPath: string,
+  firmId: string,
+  maxResults: number = FIRM_SCOPED_LIST_LIMIT
+): FirmIdQuery {
+  if (isAdminFirestore(db)) {
+    return db
+      .collection(collectionPath)
+      .where("firmId", "==", firmId)
+      .limit(maxResults) as FirmIdQuery
+  }
+  return clientQuery(
+    clientCollection(db, collectionPath),
+    clientWhere("firmId", "==", firmId),
+    clientLimit(maxResults)
+  )
+}
+
+export function queryByFirmIdAndField(
+  db: ClientFirestore | AdminFirestore,
+  collectionPath: string,
+  firmId: string,
+  field: string,
+  value: string,
+  maxResults: number = FIRM_SCOPED_LIST_LIMIT
+): FirmIdQuery {
+  if (isAdminFirestore(db)) {
+    return db
+      .collection(collectionPath)
+      .where("firmId", "==", firmId)
+      .where(field, "==", value)
+      .limit(maxResults) as FirmIdQuery
+  }
+  return clientQuery(
+    clientCollection(db, collectionPath),
+    clientWhere("firmId", "==", firmId),
+    clientWhere(field, "==", value),
+    clientLimit(maxResults)
+  )
+}
+
+export async function validateFirmListCursor(
+  db: Firestore,
+  collectionPath: string,
+  firmId: string,
+  startAfterId: string
+): Promise<unknown> {
+  const ref = doc(db, collectionPath, startAfterId)
+  if (isAdminFirestore(db)) {
+    const snap = await (ref as { get: () => Promise<{ exists: boolean; data: () => unknown }> }).get()
+    if (!snap.exists) {
+      throw new FirmScopedCursorError("invalid cursor")
+    }
+    const data = snap.data() as { firmId?: string }
+    if (data.firmId !== firmId) {
+      throw new FirmScopedCursorError("cross-firm cursor")
+    }
+    return snap
+  }
+  const snap = await clientGetDoc(ref as never)
+  if (!snap.exists()) {
+    throw new FirmScopedCursorError("invalid cursor")
+  }
+  const data = snap.data() as { firmId?: string }
+  if (data.firmId !== firmId) {
+    throw new FirmScopedCursorError("cross-firm cursor")
+  }
+  return snap
+}
+
+export function withFirmQueryStartAfter(
+  db: Firestore,
+  baseQuery: FirmIdQuery,
+  cursorSnap: unknown
+): FirmIdQuery {
+  if (isAdminFirestore(db)) {
+    const adminQuery = baseQuery as { startAfter?: (snap: unknown) => FirmIdQuery }
+    if (typeof adminQuery.startAfter !== "function") {
+      throw new Error("admin firm query does not support startAfter")
+    }
+    return adminQuery.startAfter(cursorSnap)
+  }
+  return clientQuery(baseQuery as never, clientStartAfter(cursorSnap as never)) as FirmIdQuery
+}
+
+export async function getDocs(query: FirmIdQuery | ReturnType<typeof collection>) {
   if ("get" in query && typeof query.get === "function") {
     const snap = await query.get()
     return {

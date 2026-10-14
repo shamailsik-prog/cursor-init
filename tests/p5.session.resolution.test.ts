@@ -42,7 +42,7 @@ vi.mock("@/platform/spine/runtimeStore", () => ({ getRuntimeStore: () => runtime
 vi.mock("@/platform/persistence/runtimeRepositories", () => ({
   getRuntimeRepositories: async () => ({
     users: {
-      get: async (id: string) => {
+      get: async (id: string, _firmId?: string) => {
         runtime.repoReads += 1
         if (runtime.repoFails) throw new Error("firestore unreachable")
         return runtime.repoUsers.get(id) ?? null
@@ -436,19 +436,21 @@ describe("loadUserRecord", () => {
     store.users.set(cached.id, cached)
     expect(await loadUserRecord(cached.id, { store })).toBe(cached)
     expect(runtime.repoReads).toBe(0)
-    expect(await loadUserRecord(cached.id, { store, preferRepository: true })).toBe(partner)
+    expect(await loadUserRecord(cached.id, { store, preferRepository: true, firmId: "firmA" })).toBe(
+      partner
+    )
     expect(runtime.repoReads).toBe(1)
     expect(store.users.get(cached.id)).toBe(partner)
   })
 
   it("hydrates the store from the repository on a miss", async () => {
     const store = newStore()
-    expect(await loadUserRecord("partner_a", { store })).toBe(partner)
+    expect(await loadUserRecord("partner_a", { store, firmId: "firmA" })).toBe(partner)
     expect(store.users.get("partner_a")).toBe(partner)
   })
 
   it("uses the runtime store when none is passed", async () => {
-    expect(await loadUserRecord("partner_a")).toBe(partner)
+    expect(await loadUserRecord("partner_a", { firmId: "firmA" })).toBe(partner)
     expect(runtime.store.users.get("partner_a")).toBe(partner)
   })
 
@@ -456,7 +458,9 @@ describe("loadUserRecord", () => {
     const store = newStore()
     store.users.set(partner.id, partner)
     runtime.repoFails = true
-    const err = await authError(loadUserRecord(partner.id, { store, preferRepository: true }))
+    const err = await authError(
+      loadUserRecord(partner.id, { store, preferRepository: true, firmId: "firmA" })
+    )
     expect(err).toMatchObject({ status: 503, code: "IDENTITY_UNAVAILABLE", message: "identity service unavailable" })
     expect(errorLog).toHaveBeenCalledWith("[auth] user lookup failed", expect.any(Error))
   })
@@ -476,7 +480,7 @@ describe("loadUserRecord", () => {
     const store = newStore()
     const stale: User = { ...partner, id: "gone" }
     store.users.set(stale.id, stale)
-    expect(await loadUserRecord("gone", { store, preferRepository: true })).toBeNull()
+    expect(await loadUserRecord("gone", { store, preferRepository: true, firmId: "firmA" })).toBeNull()
     expect(store.users.has("gone")).toBe(false)
   })
 

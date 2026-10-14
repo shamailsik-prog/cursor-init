@@ -1,9 +1,16 @@
+import type { FirmBoundSpineRepositories } from "@/platform/persistence/firmBoundRepositories"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
-import type { SpineStore } from "@/platform/spine/store"
+import type { MatterMember, SpineStore } from "@/platform/spine/store"
+
+type MemberSyncRepos = {
+  members: {
+    listByFirm(firmId: string): Promise<readonly MatterMember[]>
+  }
+}
 
 export async function syncFirmMembers(
   store: SpineStore,
-  repos: SpineRepositories,
+  repos: SpineRepositories | FirmBoundSpineRepositories | MemberSyncRepos,
   firmId: string
 ): Promise<void> {
   const rows = await repos.members.listByFirm(firmId)
