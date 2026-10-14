@@ -1,0 +1,10 @@
+{
+  "fa_d3c_001_scraper": [
+    "corpus_service/requirements.txt",
+    "corpus_service/Dockerfile"
+  ],
+  "fa_d3c_002_provider": [
+    "corpus_service/requirements.txt",
+    "corpus_service/scraper/tasks/embeddings.py"
+  ]
+}

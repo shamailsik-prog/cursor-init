@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """scraper-guard — no Playwright/Puppeteer in application source (full tree).
 
-Scans the repository like fee-guard [1], excluding harvest-only trees and test harnesses.
-corpus_service/ is excluded until FA-D3C-001 (separate repo / harvest boundary).
+Known corpus_service violations are allowlisted per file (FA-D3C-001) until remediated.
+Any new violation under corpus_service/ fails the build.
 """
 from __future__ import annotations
 
@@ -11,45 +11,53 @@ import pathlib
 import re
 import sys
 
-SKIP_PARTS = {
-    "node_modules",
-    ".git",
-    ".next",
-    "ci_gates",
-    "_superseded",
-    "corpus_service",
-    ".eve",
-    "tests",
-}
-SKIP_FILES = {"playwright.config.ts"}
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-SOURCE_SUFFIXES = {".ts", ".tsx", ".js", ".py"}
+from g0_guard_common import (
+    SOURCE_SUFFIXES,
+    is_allowlisted,
+    iter_scan_files,
+    load_allowlist,
+    rel_posix,
+)
 
-# Real dependency / import usage, not documentation strings.
+# Real dependency / import usage, not bare words in docstrings.
 IMPORT_RE = re.compile(
     r"""
-    (?:from\s+["']playwright|import\s+[^;\n]*\bplaywright\b|require\s*\(\s*["']playwright)
-    |(?:from\s+["']puppeteer|import\s+[^;\n]*\bpuppeteer\b|require\s*\(\s*["']puppeteer)
+    (?:from\s+(?:["']playwright[\w./-]*["']|playwright[\w.]*)\s+import|
+       import\s+[^;\n]*\bplaywright\b|
+       require\s*\(\s*["']playwright[\w./-]*["']|
+       import\s*\(\s*["']playwright[\w./-]*["'])
+    |(?:from\s+(?:["']puppeteer[\w./-]*["']|puppeteer[\w.]*)\s+import|
+       import\s+[^;\n]*\bpuppeteer\b|
+       require\s*\(\s*["']puppeteer[\w./-]*["']|
+       import\s*\(\s*["']puppeteer[\w./-]*["'])
     """,
     re.I | re.VERBOSE,
 )
 
+DOCKER_PLAYWRIGHT_RE = re.compile(r"\bplaywright\s+install\b", re.I)
+DOCKER_PUPPETEER_RE = re.compile(r"\bpuppeteer\b", re.I)
 
-def _rel(p: pathlib.Path) -> str:
-    return str(p).replace("\\", "/")
+ROOT_PACKAGE_JSON = "package.json"
+ROOT_PLAYWRIGHT_TEST_DEV = "@playwright/test"
 
 
 def _check_package_json(path: pathlib.Path) -> list[str]:
+    rel = rel_posix(path)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
     failed: list[str] = []
-    for section in ("dependencies", "optionalDependencies"):
+    for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
         for name in data.get(section, {}):
             low = name.lower()
-            if "playwright" in low or "puppeteer" in low:
-                failed.append(f"{_rel(path)}: {section} lists {name}")
+            if "playwright" not in low and "puppeteer" not in low:
+                continue
+            if rel == ROOT_PACKAGE_JSON and section == "devDependencies" and name == ROOT_PLAYWRIGHT_TEST_DEV:
+                continue
+            failed.append(f"{rel}: {section} lists {name}")
     return failed
 
 
@@ -61,23 +69,43 @@ def _check_requirements_txt(path: pathlib.Path) -> list[str]:
             continue
         token = re.split(r"[<>=!~\s]", stripped, maxsplit=1)[0].lower()
         if token in {"playwright", "puppeteer"}:
-            failed.append(f"{_rel(path)}: requires {token}")
+            failed.append(f"{rel_posix(path)}: requires {token}")
+    return failed
+
+
+def _check_dockerfile(path: pathlib.Path) -> list[str]:
+    rel = rel_posix(path)
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    failed: list[str] = []
+    if DOCKER_PLAYWRIGHT_RE.search(text):
+        failed.append(f"{rel}: Playwright install in Dockerfile")
+    if DOCKER_PUPPETEER_RE.search(text) and "puppeteer" in text.lower():
+        # Avoid matching unrelated words; require install-like context or package name
+        if re.search(r"puppeteer\s+install|npm\s+.*puppeteer|pip\s+.*puppeteer", text, re.I):
+            failed.append(f"{rel}: Puppeteer in Dockerfile")
     return failed
 
 
 def main() -> int:
+    allow = load_allowlist()
     failed: list[str] = []
-    for p in pathlib.Path(".").rglob("*"):
-        if any(part in SKIP_PARTS for part in p.parts):
-            continue
-        rel = _rel(p)
-        if p.name in SKIP_FILES:
-            continue
+
+    for p in iter_scan_files():
+        rel = rel_posix(p)
         if p.name == "package.json":
-            failed.extend(_check_package_json(p))
+            for hit in _check_package_json(p):
+                if not is_allowlisted(rel, "fa_d3c_001_scraper", allow):
+                    failed.append(hit)
             continue
         if p.name == "requirements.txt":
-            failed.extend(_check_requirements_txt(p))
+            for hit in _check_requirements_txt(p):
+                if not is_allowlisted(rel, "fa_d3c_001_scraper", allow):
+                    failed.append(hit)
+            continue
+        if p.name == "Dockerfile" or p.name.endswith(".Dockerfile"):
+            for hit in _check_dockerfile(p):
+                if not is_allowlisted(rel, "fa_d3c_001_scraper", allow):
+                    failed.append(hit)
             continue
         if p.suffix not in SOURCE_SUFFIXES:
             continue
@@ -86,14 +114,15 @@ def main() -> int:
         except Exception:
             continue
         if IMPORT_RE.search(text):
-            failed.append(f"{rel}: Playwright/Puppeteer import")
+            if not is_allowlisted(rel, "fa_d3c_001_scraper", allow):
+                failed.append(f"{rel}: Playwright/Puppeteer import")
 
     if failed:
         print("FAIL: scraper library in application source (N1 / L17.12):")
         for f in sorted(set(failed)):
             print(" ", f)
         return 1
-    print("PASS: no Playwright/Puppeteer outside excluded trees")
+    print("PASS: no Playwright/Puppeteer outside allowlisted FA-D3C-001 files")
     return 0
 
 

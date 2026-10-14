@@ -25,6 +25,9 @@ export default defineConfig({
     // emulator. Skip them under a plain `vitest run`; they execute via
     // `npm run test:rules`, which wraps them with `firebase emulators:exec`.
     exclude: [
+      ...(process.env.SIKANDER_POSTGRES_URL
+        ? []
+        : ["tests/postgres.ddl.integration.test.ts"]),
       ...(process.env.FIRESTORE_EMULATOR_HOST
         ? []
         : [
