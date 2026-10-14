@@ -10,7 +10,7 @@ Per-PR checks run in `.github/workflows/gate-g0.yml` (Gate G-0 job) and
 
 | Check | Proves | Run locally |
 | --- | --- | --- |
-| Typecheck | The Next app, tests and gate scripts type-check (`next typegen` + `tsc`). | `npm run typecheck` |
+| Typecheck | The Next app type-checks (`next typegen` + root `tsc`); `tests/` and in-process Functions helpers type-check separately (`tsconfig.tests.json`, including `functions/src` via `functions/node_modules`). | `npm run typecheck` and `npm run typecheck:tests` |
 | Gate G-0 (static) | Foundations hold: no court-fee identifiers, no scraper libraries, AI SDKs imported only under P1, no duplicate routes, Phase 0 files present, case-number fixtures valid, the 159 document types are not cloned, embedding dimension matches the DDL, classifications compared by rank, Firestore rules cover every Phase 0 collection with a default deny, master writes only in P6, idempotency and pagination guards, `/ops` helper resolution, no product + phase-audit-doc mixing, focused lattice bundle parity. | `npm run gate:g0` |
 | Lint | ESLint (Next core-web-vitals + TypeScript) reports no errors. | `npm run lint` |
 | Unit + rules tests | The Next unit suite, plus the Firestore rules and persistence suites under the Firestore emulator. | `npm run test:all` (`npm test` for the unit suite alone) |

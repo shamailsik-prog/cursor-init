@@ -5,7 +5,7 @@ import {
   getDocs,
   setDoc,
   type Firestore,
-} from "firebase/firestore"
+} from "@/platform/persistence/firestoreDbModular"
 
 /**
  * Firestore collection paths for workflow-ops spine repositories that use

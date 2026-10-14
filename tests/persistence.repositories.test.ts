@@ -5,6 +5,7 @@ import {
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
 import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
+import { testAdminFirestore } from "@/tests/helpers/admin-firestore"
 import { AuditAppendConflictError } from "@/platform/persistence/auditAppendConflictError"
 import { normalizeAuditEntryInPlace } from "@/platform/persistence/auditWriteThrough"
 import { isAuditRowPersisted, markAuditRowPersisted } from "@/platform/audit/requestAudit"
@@ -39,10 +40,8 @@ afterAll(async () => {
 describe("Firestore repository adapters", () => {
   it("round-trips matters/documents/drafts/workflow/filings without secrets (emulator)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      const db = ctx.firestore()
-      const repos = createFirestoreRepositories(
-        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
-      )
+      const db = testAdminFirestore("sikander-persistence-adapters")
+      const repos = createFirestoreRepositories(db)
 
       await repos.users.upsert({
         id: "associate_a",
@@ -5053,10 +5052,8 @@ describe("Firestore repository adapters", () => {
 
   it("audit_log append is insert-only: an existing audit id is never overwritten (emulator)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      const db = ctx.firestore()
-      const repos = createFirestoreRepositories(
-        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
-      )
+      const db = testAdminFirestore("sikander-persistence-adapters")
+      const repos = createFirestoreRepositories(db)
       const original = {
         id: "aud_insert_only_1",
         firmId: "firmA",
@@ -5107,10 +5104,8 @@ describe("Firestore repository adapters", () => {
 describe("Firestore filings.decideIfPending (final audit F2)", () => {
   it("of two concurrent decisions exactly one applies; a decided package is left unchanged", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      const db = ctx.firestore()
-      const repos = createFirestoreRepositories(
-        db as unknown as Parameters<typeof createFirestoreRepositories>[0]
-      )
+      const db = testAdminFirestore("sikander-persistence-adapters")
+      const repos = createFirestoreRepositories(db)
       await repos.filings.create({
         id: "pkg_one_shot",
         firmId: "firmA",

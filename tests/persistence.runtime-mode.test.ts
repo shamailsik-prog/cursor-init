@@ -21,6 +21,7 @@ import { GET as reportingGet, POST as reportingPost } from "@/app/api/d1/reporti
 import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
+import { testAdminFirestore } from "@/tests/helpers/admin-firestore"
 import { composeDraft } from "@/services/d4-1/drafts"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
@@ -82,7 +83,7 @@ describe("Runtime persistence mode", () => {
 
   it("routes matter lifecycle writes through Firestore after in-memory reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
 
       const matterId = await createMatterViaRoute(
         "Persisted runtime matter",
@@ -102,7 +103,7 @@ describe("Runtime persistence mode", () => {
 
       // Simulate a fresh runtime cycle and assert write actions rehydrate persisted matter access.
       resetRuntimeStoreForTests()
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
 
       const confirmRes = await mattersPost(
         new Request("http://127.0.0.1/api/d1/matters", {
@@ -170,7 +171,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists document ingest and workflow transitions in Firestore mode", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted document matter",
         "8effb371-c5d4-4aae-8f0d-c2ae801f9e72"
@@ -281,7 +282,7 @@ describe("Runtime persistence mode", () => {
 
   it("document reads use the matter's current label from Firestore: a raise written by another process refuses the clerk's download (F14, O-76)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute("F14 matter raised elsewhere", "f14f14f1-4f14-4f14-8f14-f14f14f14f11")
       const ingestRes = await documentsPost(
         new Request("http://127.0.0.1/api/d1/documents", {
@@ -320,7 +321,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists filing package create/decide through Firestore-backed routes", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted filing matter",
         "8ca5f631-e807-4d3f-a5e7-7cf89eaf3070"
@@ -6695,7 +6696,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists draft compose/list through Firestore-backed route mode", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted draft matter",
         "5983eb9b-5f04-4590-a6fe-c6508862494f"
@@ -6746,7 +6747,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists draft template analytics and rehydrates discovery ordering after reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted draft analytics matter",
         "5ef90e29-122d-4ba0-967d-278a11ba9a86"
@@ -6857,7 +6858,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists court-ops queue resolution lifecycle in Firestore mode", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted ops matter",
         "e2e2d157-16f4-4452-ab24-d0119c5260ac"
@@ -7015,7 +7016,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 1/6)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted ops reporting matter",
         "5ff4fa50-12e1-41e8-9f58-b848f78d04cb"
@@ -7527,7 +7528,7 @@ describe("Runtime persistence mode", () => {
   it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 2/6)", async () => {
     const { matterId } = requireActivityFlow(2)
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
 
       const enforcementRecomplete = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -7843,7 +7844,7 @@ describe("Runtime persistence mode", () => {
   it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 3/6)", async () => {
     const { matterId } = requireActivityFlow(3)
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
 
       const remediationSlaBreachEscalationAssign = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -8148,7 +8149,7 @@ describe("Runtime persistence mode", () => {
   it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 4/6)", async () => {
     const { matterId } = requireActivityFlow(4)
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
 
       const remediationSlaBreachResolutionCheckpointOpen = await opsReportingPost(
         new Request("http://127.0.0.1/api/d2/ops-reporting", {
@@ -8523,7 +8524,7 @@ describe("Runtime persistence mode", () => {
   it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 5/6)", async () => {
     const { matterId } = requireActivityFlow(5)
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
 
       getRuntimeStore().workflowOpsAlertDigests = new Map()
       getRuntimeStore().workflowOpsAlertAttestations = new Map()
@@ -8787,7 +8788,7 @@ describe("Runtime persistence mode", () => {
   it("persists workflow/court-ops activity index and rehydrates reporting after reset (part 6/6)", async () => {
     const { matterId, docId } = requireActivityFlow(6)
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
 
       const remediationSlaView = await opsReportingGet(
         new Request(
@@ -10044,7 +10045,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists follow-up and intimation creation at source through matters route", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted source follow-up matter",
         "c80ce346-af03-4e18-8d29-8a179fd95bd3"
@@ -10114,7 +10115,7 @@ describe("Runtime persistence mode", () => {
 
   it("hydrates permission checks from persisted matter memberships after in-memory reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted membership matter",
         "60c99e85-5d41-4edc-abca-af5631d2557d"
@@ -10178,7 +10179,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists and rehydrates entity/client registry data after in-memory reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const createOne = await clientsPost(
         new Request("http://127.0.0.1/api/d1/clients", {
           method: "POST",
@@ -10275,7 +10276,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists reporting index and matter analytics scaffolding after reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
 
       const clientCreate = await clientsPost(
         new Request("http://127.0.0.1/api/d1/clients", {
@@ -10452,7 +10453,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists non-tenancy audit actions and rehydrates them through tenancy audit view", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted audit parity matter",
         "eb14e3d6-c2dc-4c38-8bc7-e97f6bc22009"
@@ -10603,7 +10604,7 @@ describe("Runtime persistence mode", () => {
 
   it("persists committee-brain outputs and rehydrates listing after in-memory reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       // Committee classification is derived from the referenced matter (H1) and
       // listings are filtered by matter membership (M4).
       const internalMatterId = await createMatterViaRoute(
@@ -10708,7 +10709,7 @@ describe("Runtime persistence mode", () => {
 
   it("hydrates tenancy membership, roles, and audit views from persisted repositories after reset", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
-      setFirestorePersistenceForTests(ctx.firestore())
+      setFirestorePersistenceForTests(testAdminFirestore("sikander-runtime-persistence"))
       const matterId = await createMatterViaRoute(
         "Persisted tenancy membership matter",
         "fdccf93b-c5d5-43fe-9445-3573b526c5a6"
