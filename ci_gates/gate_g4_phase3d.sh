@@ -34,6 +34,10 @@
 #        codes, messages and billable flags, and the transport and Opik fetch seams refusing to be set when
 #        NODE_ENV is production
 #      - the deployable bundle: NODE_ENV pinned to production at build time (no runtime read left)
+#      - audit F07 and F08 end to end (f07-f08-ai-spend.e2e.emu.test.ts): the worst case reserved atomically before
+#        dispatch (spent + reserved never over the budget, the firm's concurrent calls bounded), the provider attempt
+#        recorded before dispatch, accounting pending after a failed usage commit, the accounting_indeterminate block
+#        once a lease lapses, and the lease reconciler settling or releasing what a call left
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -89,7 +93,7 @@ GW_TESTS=(
   'PKR (P3-64) with pkrPerUsd 280, a 14000 micro-USD call stores fxPkrPerUsd 280 and costPkr 3.92'
   # alerts at 70 and 90, exactly once (P3-65, Review Focus 2)
   'alerts at 70 and 90 (P3-65, Review Focus 2) crossing 70 writes one alert, one system audit row, one event and one warning; crossing 90 later writes the 90 alert'
-  'alerts at 70 and 90 (P3-65, Review Focus 2) one call from 60000 to 95000 writes both alerts'
+  'alerts at 70 and 90 (P3-65, Review Focus 2) one call from 6000000 to 9500000 writes both alerts'
   'alerts at 70 and 90 (P3-65, Review Focus 2) landing exactly on 70% crosses it; stopping just below does not'
   'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing 70% write exactly one 70 alert, and the total equals the sum of the rows'
   'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing both 70% and 90% write exactly one alert, audit row and event for each, and the total equals the sum of the rows'
@@ -131,6 +135,35 @@ REFUSAL_TESTS=(
   "'spend exactly at the budget' → blocked 'budget_exhausted'"
   "'spend over the budget' → blocked 'budget_exhausted'"
   "'no transport and no key' → blocked 'no_credentials'"
+)
+
+# --- audit F07 and F08 end to end (functions/test/f07-f08-ai-spend.e2e.emu.test.ts) ---------------------------
+SPEND_SUITE='audit F07 and F08: AI spend is reserved before dispatch and accounted after it (e2e)'
+SPEND_TESTS=(
+  # F07: the worst case is reserved atomically before dispatch; spent + reserved never exceeds the budget
+  'F07 through callP1 the audit scenario: ten concurrent calls against a 100 micro-USD budget dispatch nothing and commit no spend'
+  'F07 through callP1 of ten concurrent calls only those whose worst case fits are dispatched, and spent plus reserved never exceeds the budget'
+  'F07 through callP1 calls on separate instances (no shared ledger queue) still never over-admit: the transaction alone keeps spent plus reserved within the budget'
+  'F07 through callP1 a single request whose worst case exceeds the remaining budget is refused before dispatch; one that fits exactly is sent'
+  "F07 through callP1 a firm's concurrent calls are bounded: the fifth live reservation is refused concurrency_exhausted by default, and a freed slot admits again"
+  "F07 through callP1 the firm's configured maxConcurrentCalls replaces the default, and an invalid value falls back to it"
+  'F07 through callP1 a reservation that cannot be written or an attempt that cannot be recorded sends nothing: blocked reservation_failed, and the held amount is released'
+  'F07 through callP1 the lease reconciler releases an abandoned reservation that never reached the provider, and spending resumes'
+  # F08: a durable attempt before dispatch, accounting pending, the indeterminate block and the reconciler
+  'F08 through callP1 the audit scenario: a usage-commit failure keeps a durable reservation with its provider attempt, says accounting pending, blocks the firm once the lease lapses, and the reconciler settles it'
+  'F08 through callP1 an attempt whose outcome was never recorded is reconciled at the reserved worst case'
+  "F08 through callP1 a reconciler that settles a call still in flight is never double-counted by that call's own commit"
+  # both, through the HTTP router
+  'F07 and F08 through the HTTP router (committeeBrain) ten concurrent committeeBrain requests against a budget for two worst cases dispatch two and refuse the rest; spent plus reserved never exceeds it'
+  'F07 and F08 through the HTTP router (committeeBrain) a usage-commit failure answers with the text and accounting pending, stores accounting pending, blocks the firm accounting_indeterminate past the lease, and the reconciler restores service'
+)
+# The per-firm ledger queue (functions/test/p1.units.test.ts): contention control that never costs liveness.
+QUEUE_SUITE='P1 ledger queue (audit F07: contention control that never costs liveness)'
+QUEUE_TESTS=(
+  "runs one firm's operations one at a time, in arrival order, whether they succeed or fail"
+  'an operation that holds the queue past the hold time lets the next one run beside it'
+  'a waiter whose wait runs out is refused with its own error and its operation never runs; the queue then moves on'
+  'different firms never wait for each other'
 )
 
 # --- the routes (functions/test/p1.api.emu.test.ts) --------------------------------------------------------
@@ -275,8 +308,10 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${SEAM_TESTS[@]}"; do names+=("$SEAM_SUITE $t"); done
   for t in "${EXPORTER_TESTS[@]}"; do names+=("$EXPORTER_SUITE $t"); done
   for t in "${DEPLOY_TESTS[@]}"; do names+=("$DEPLOY_SUITE $t"); done
+  for t in "${SPEND_TESTS[@]}"; do names+=("$SPEND_SUITE $t"); done
+  for t in "${QUEUE_TESTS[@]}"; do names+=("$QUEUE_SUITE $t"); done
   for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
-  npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts test/deploy.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
+  npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts test/f07-f08-ai-spend.e2e.emu.test.ts test/deploy.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
   EXPECTED="$(printf '%s\n' "${names[@]}")" EXPECTED_COUNT="${#names[@]}" node -e '
     const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
     console.log(`P1 gateway, routes and units: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)

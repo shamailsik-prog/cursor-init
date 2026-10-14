@@ -452,8 +452,8 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       const sent = fakeTransport({ text: "Reply for Ali Raza" })
       const r = await send(brainAt, f.P, base(f, { body: "Draft for Ali Raza, 0300-1234567.", purpose: "summarise" })) as Out
 
-      expect(Object.keys(r).sort()).toEqual(["blocked", "classification", "outputId", "text", "traceId", "usage"])
-      expect(r).toMatchObject({ blocked: false, text: "Reply for [PARTY]", classification: "internal", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
+      expect(Object.keys(r).sort()).toEqual(["accounting", "blocked", "classification", "outputId", "text", "traceId", "usage"])
+      expect(r).toMatchObject({ blocked: false, accounting: "settled", text: "Reply for [PARTY]", classification: "internal", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
       expect(r.traceId).toMatch(UUID_V7)
       expect(sent).toEqual([{ model: OPUS, body: "Draft for [PARTY], [PHONE].", maxTokens: 4096 }])
 
@@ -462,7 +462,7 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect(outputs[0]!.id).toBe(r.outputId)
       const row = outputs[0]!.data
       expect(Object.keys(row).sort()).toEqual(
-        ["actorId", "blocked", "classification", "createdAt", "documentIds", "firmId", "id", "matterId", "outbound", "purpose", "text", "traceId", "usageLogId"].sort()
+        ["accounting", "actorId", "blocked", "classification", "createdAt", "documentIds", "firmId", "id", "matterId", "outbound", "purpose", "text", "traceId", "usageLogId"].sort()
       )
       expect(row).toMatchObject({
         id: r.outputId,
@@ -473,6 +473,7 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         classification: "internal",
         purpose: "summarise",
         blocked: false,
+        accounting: "settled",
         text: "Reply for [PARTY]",
         traceId: r.traceId,
         outbound: { body: sent[0]!.body, metadata: { classification: "internal", provider: "ai-gateway", purpose: "summarise" } },
@@ -502,8 +503,8 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       const f = await newFirm({ budget: null })
       const sent = fakeTransport()
       const r = await send(brainAt, f.P, base(f)) as Out
-      expect(Object.keys(r).sort()).toEqual(["blocked", "classification", "outputId", "reason", "traceId", "usage"])
-      expect(r).toMatchObject({ blocked: true, reason: "budget_not_set", usage: { inputTokens: 0, outputTokens: 0, costMicroUsd: 0 } })
+      expect(Object.keys(r).sort()).toEqual(["accounting", "blocked", "classification", "outputId", "reason", "traceId", "usage"])
+      expect(r).toMatchObject({ blocked: true, accounting: "settled", reason: "budget_not_set", usage: { inputTokens: 0, outputTokens: 0, costMicroUsd: 0 } })
       expect(sent).toHaveLength(0)
       const row = (await outputsOf(f.firmId))[0]!.data
       expect(row).toMatchObject({ blocked: true, reason: "budget_not_set", outbound: { body: "Draft a reply to the notice." } })
@@ -595,8 +596,8 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         // A retryable gRPC code (DEADLINE_EXCEEDED) thrown after the first attempt's transaction has committed.
         p1OpsTestSeam.lostCommitAnswers = [Object.assign(new Error("deadline exceeded"), { code: 4 })]
         const r = (await ask(f)) as Out
-        expect(Object.keys(r).sort()).toEqual(["blocked", "classification", "outputId", "text", "traceId", "usage"])
-        expect(r).toMatchObject({ blocked: false, text: "REPLY", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
+        expect(Object.keys(r).sort()).toEqual(["accounting", "blocked", "classification", "outputId", "text", "traceId", "usage"])
+        expect(r).toMatchObject({ blocked: false, accounting: "settled", text: "REPLY", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
         expect(waits).toEqual([100])
         expect(p1OpsTestSeam.lostCommitAnswers).toEqual([])
         expect(sent).toHaveLength(1)

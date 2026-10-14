@@ -34,7 +34,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "d1AutoConfirmTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated"])
+    expect(Object.keys(index).sort()).toEqual(["api", "d1AutoConfirmTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
@@ -60,6 +60,11 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(index.jobSweeper.__endpoint.scheduleTrigger).toMatchObject({ schedule: "every 1 minutes" })
     // Pinned below the one-minute schedule, not left to the platform default.
     expect(index.jobSweeper.__endpoint.timeoutSeconds).toBe(45)
+    // Audit F07, F08: the P1 lease reconciler follows the sweeper's pattern: every minute, in asia-south1, a pinned
+    // 45 s timeout, no retry count (the next minute's run is its retry), and no HTTP or callable trigger.
+    expect(index.p1ReservationReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 1 minutes" } })
+    expect(index.p1ReservationReconciler.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
+    expect([index.p1ReservationReconciler.__endpoint.httpsTrigger, index.p1ReservationReconciler.__endpoint.callableTrigger]).toEqual([undefined, undefined])
     // The worker stays IAM-private (only Cloud Tasks, with OIDC, may invoke it): firebase-functions
     // does not verify the caller itself, so an invoker set here or globally (e.g. "public") must fail.
     expect(index.jobWorker.__endpoint.taskQueueTrigger).not.toHaveProperty("invoker")

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { MAX_OUTPUT_TOKENS, MODEL_PRICES, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens, priceMicroUsd } from "../src/p1/costTable"
+import { ledgerQueue } from "../src/p1/gateway"
 import { isMonthKey, monthKeyPkt } from "../src/p1/month"
 import { buildTrace, opikConfig, type TraceRecord } from "../src/p1/opik"
 import { TRANSPORT_ERROR } from "../src/p1/types"
@@ -369,5 +370,70 @@ describe("P1 Opik trace payload (P3-67)", () => {
   it("uses the project and ISO times it is given, and fails closed on an unknown classification", () => {
     expect(buildTrace(record(), "other").project_name).toBe("other")
     expect(() => buildTrace(record({ classification: "constructor" as never }), "p")).toThrow()
+  })
+})
+
+describe("P1 ledger queue (audit F07: contention control that never costs liveness)", () => {
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+  const waitError = () => Object.assign(new Error("waited too long"), { code: "test_deadline" })
+  let n = 0
+  const key = () => `firm-queue-${++n}`
+
+  it("runs one firm's operations one at a time, in arrival order, whether they succeed or fail", async () => {
+    const k = key()
+    const log: string[] = []
+    const op = (name: string, ms: number, fail = false) => async () => {
+      log.push(`${name} start`)
+      await sleep(ms)
+      log.push(`${name} end`)
+      if (fail) throw new Error(name)
+      return name
+    }
+    const results = await Promise.allSettled([
+      ledgerQueue(k, 5_000, 5_000, waitError, op("a", 30, true)),
+      ledgerQueue(k, 5_000, 5_000, waitError, op("b", 10)),
+      ledgerQueue(k, 5_000, 5_000, waitError, op("c", 1)),
+    ])
+    expect(log).toEqual(["a start", "a end", "b start", "b end", "c start", "c end"])
+    expect(results.map((r) => r.status)).toEqual(["rejected", "fulfilled", "fulfilled"])
+  })
+
+  it("an operation that holds the queue past the hold time lets the next one run beside it", async () => {
+    const k = key()
+    let finishHung!: () => void
+    const hung = ledgerQueue(k, 5_000, 50, waitError, () => new Promise<string>((resolve) => (finishHung = () => resolve("hung"))))
+    const started = Date.now()
+    const next = await ledgerQueue(k, 5_000, 50, waitError, async () => "next")
+    expect(next).toBe("next")
+    expect(Date.now() - started).toBeLessThan(2_000)
+    finishHung()
+    expect(await hung).toBe("hung")
+  })
+
+  it("a waiter whose wait runs out is refused with its own error and its operation never runs; the queue then moves on", async () => {
+    const k = key()
+    let finishFirst!: () => void
+    const first = ledgerQueue(k, 5_000, 60_000, waitError, () => new Promise<string>((resolve) => (finishFirst = () => resolve("first"))))
+    let ran = false
+    await expect(
+      ledgerQueue(k, 30, 60_000, waitError, async () => {
+        ran = true
+        return "late"
+      })
+    ).rejects.toMatchObject({ code: "test_deadline" })
+    const third = ledgerQueue(k, 5_000, 60_000, waitError, async () => "third")
+    finishFirst()
+    expect(await first).toBe("first")
+    expect(await third).toBe("third")
+    expect(ran).toBe(false)
+  })
+
+  it("different firms never wait for each other", async () => {
+    const [a, b] = [key(), key()]
+    let finishA!: () => void
+    const held = ledgerQueue(a, 5_000, 60_000, waitError, () => new Promise<string>((resolve) => (finishA = () => resolve("a"))))
+    expect(await ledgerQueue(b, 100, 60_000, waitError, async () => "b")).toBe("b")
+    finishA()
+    expect(await held).toBe("a")
   })
 })

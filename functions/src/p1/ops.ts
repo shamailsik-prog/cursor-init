@@ -10,7 +10,7 @@ import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, pla
 import { PROVIDER_ID } from "./costTable"
 import { callP1, isAlreadyExists } from "./gateway"
 import { isMonthKey, monthKeyPkt } from "./month"
-import { TRANSPORT_ERROR } from "./types"
+import { TRANSPORT_ERROR, type P1Accounting } from "./types"
 
 /**
  * The five P1 operations behind `/api/platform/brain/` (spec P3-60, P3-66, P3-70..P3-72): `committeeBrain`,
@@ -175,6 +175,8 @@ export type CommitteeBrainResponse = {
   classification: Classification
   usage: { inputTokens: number; outputTokens: number; costMicroUsd: number }
   traceId: string
+  /** Whether the call's books are complete, apart from whether its text is available (audit F08; see P1Accounting). */
+  accounting: P1Accounting
 }
 
 /**
@@ -182,7 +184,9 @@ export type CommitteeBrainResponse = {
  * request, then `ai.call` on the matter (same firm, member, cleared; partner, associate, clerk), derives the
  * classification (the strictest of the matter's label, the caller's label and the `internal` floor; the caller's
  * clearance must reach it), masks with the matter's party names, calls `callP1` and writes one `committee_outputs`
- * row. A blocked or failed call is stored and returned like an ok one, with its reason and no text.
+ * row. A blocked or failed call is stored and returned like an ok one, with its reason and no text. The response
+ * and the row carry `accounting` (audit F08): `pending` when the call's usage could not be committed, so its spend
+ * is still held by its reservation until the lease reconciler settles it.
  */
 export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
   auth: "firm",
@@ -239,6 +243,8 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
         },
         usageLogId: result.usageLogId,
         traceId: result.traceId,
+        // The accounting state when the call returned; the usage row (usageLogId) is the authority after that.
+        accounting: result.accounting,
         createdAt,
       })
     }), { outputRef, usageLogId: result.usageLogId })
@@ -252,6 +258,7 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
       classification,
       usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens, costMicroUsd: result.costMicroUsd },
       traceId: result.traceId,
+      accounting: result.accounting,
     }
   },
 }
