@@ -98,8 +98,10 @@ default, and all four differ.
   (`privileged`, `cap_add`, devices, host or shared namespaces, binds from outside the repository).
   It is a guard over this compose file, not a proof of safety: it does not vet, for example, the
   Redis TLS protocol options, the host's `.env` (`COMPOSE_FILE`), or what the repository's own
-  scripts and images do. CI runs it on the repository; run it on the deployment host too, after
-  adding an override.
+  scripts and images do. Its findings name the rule, service, key or variable and never print a
+  value from the files (a value it must point at shows as `<redacted>`, a required variable as
+  `${VAR}`), so its output is safe in CI logs. CI runs it on the repository; run it on the
+  deployment host too, after adding an override.
 - **Your own certificates.** Bind the three TLS volumes to host directories holding
   `ca.crt`, `postgres/server.{crt,key}` and `redis/server.{crt,key}` (server certs must name
   `postgres` / `redis` and chain to `ca.crt`), and set `TLS_CERTS_MODE=external`; the `certs`

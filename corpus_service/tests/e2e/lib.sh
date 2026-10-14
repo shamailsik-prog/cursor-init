@@ -4,11 +4,27 @@
 FAILS=0
 CHECKS=0
 
-pass() { CHECKS=$((CHECKS + 1)); printf 'PASS  %s\n' "$1"; }
+# Every secret value the scripts hold; nothing they print may contain one.
+SECRET_VALUE_VARS="POSTGRES_PASSWORD MIGRATE_DB_PASSWORD APP_DB_PASSWORD REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY"
+
+# redact TEXT: TEXT with every secret value replaced by <redacted>.
+redact() {
+  local text=$1 name value
+  for name in $SECRET_VALUE_VARS; do
+    value=${!name:-}
+    if [ -n "$value" ]; then text=${text//"$value"/<redacted>}; fi
+  done
+  printf '%s' "$text"
+}
+# redact_stream: the same for a pipe (container logs).
+redact_stream() { local line; while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$(redact "$line")"; done; }
+
+# pass/fail print through redact: no label or failure detail can echo a secret.
+pass() { CHECKS=$((CHECKS + 1)); printf 'PASS  %s\n' "$(redact "$1")"; }
 fail() {
   CHECKS=$((CHECKS + 1)); FAILS=$((FAILS + 1))
-  printf 'FAIL  %s\n' "$1"
-  if [ -n "${2:-}" ]; then printf '%s\n' "$2" | head -c 1500 | sed 's/^/      | /'; printf '\n'; fi
+  printf 'FAIL  %s\n' "$(redact "$1")"
+  if [ -n "${2:-}" ]; then redact "$2" | head -c 1500 | sed 's/^/      | /'; printf '\n'; fi
 }
 
 # expect_ok LABEL CMD...            CMD must exit 0.

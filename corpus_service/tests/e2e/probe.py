@@ -31,8 +31,32 @@ FAILURES = []
 INSUFFICIENT_PRIVILEGE = "42501"
 
 
+def _known_secrets():
+    """Every secret this container holds: values of credential-named variables and the
+    passwords inside its URLs. Nothing the probe prints may contain one."""
+    found = set()
+    for name, value in os.environ.items():
+        if value and re.search(r"PASSWORD|SECRET|TOKEN|_KEY$|_AUTH$", name):
+            found.add(value)
+        if "://" in value:
+            try:
+                password = urlsplit(value).password
+            except ValueError:
+                password = None
+            if password:
+                found.add(password)
+    return found
+
+
+def redact(text):
+    text = str(text)
+    for value in sorted(_known_secrets(), key=len, reverse=True):
+        text = text.replace(value, "<redacted>")
+    return text
+
+
 def check(label, ok, detail=""):
-    print(f"{'PASS' if ok else 'FAIL'}  {label}" + (f"  [{detail}]" if detail and not ok else ""), flush=True)
+    print(redact(f"{'PASS' if ok else 'FAIL'}  {label}" + (f"  [{detail}]" if detail and not ok else "")), flush=True)
     if not ok:
         FAILURES.append(label)
 

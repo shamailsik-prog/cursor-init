@@ -257,6 +257,117 @@ class ShippedComposeAttacks(unittest.TestCase):
                 self.assertEqual(sorted(fired), sorted(case["expect"]), f"{case['id']}: {case['title']}")
 
 
+# A deployment that plants a distinct value in every place a finding used to quote one: literal
+# and defaulted credentials, URL userinfo and query, Postgres/Redis command arguments, Redis ACL
+# users and password rules, pg_hba.conf fields, secret file paths, network modes, healthchecks.
+LEAK_COMPOSE = """\
+services:
+  app:
+    build: .
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${APP_DB_USER:?x}:@@db_pw@@@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/ca.crt"
+      REDIS_URL: "rediss://${REDIS_APP_USER:?x}:${REDIS_APP_PASSWORD:?x}@redis:6379/0?ssl_cert_reqs=@@ssl_reqs@@"
+      SECRET_KEY: ${SECRET_KEY:?x}
+      EXTRA_PASSWORD: ${APP_DB_PASSWORD:-@@defaulted@@}
+    network_mode: "container:@@container@@"
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=@@health@@ true"]
+  postgres:
+    image: pgvector/pgvector:pg16
+    command: [postgres, -c, ssl=on, -c, ssl_cert_file=/s.crt, -c, ssl_key_file=/s.key, -c, password_encryption=scram-sha-256,
+              -c, hba_file=/etc/pg/pg_hba.conf, -c, "@@malformed@@", -c, "ssl_min_protocol_version=@@tlsver@@", "@@stray@@"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?x}
+      POSTGRES_PASSWORD: "@@literal@@"
+      APP_DB_USER: ${APP_DB_USER:?x}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?x}
+    volumes: ["./pg_hba.conf:/etc/pg/pg_hba.conf:ro"]
+    networks: [data]
+  redis:
+    image: redis:7-alpine
+    command: ["@@server@@", --port, "0", --tls-port, "6379", --tls-cert-file, /s.crt, --tls-key-file, /s.key,
+              --protected-mode, "@@protected@@", --user, default, "off",
+              --user, "${REDIS_APP_USER:?x}", "on", ">${REDIS_APP_PASSWORD:?x}", "<@@removed@@", "~*", "+@all",
+              "-@admin", "-@dangerous", --user, "@@acl_user@@", "on", ">@@acl_pw@@"]
+    networks: [data]
+secrets:
+  leaked:
+    file: ./@@secret_file@@
+networks:
+  data: {internal: true}
+"""
+LEAK_HBA = """\
+@@hba_kind@@ all all all reject
+hostssl all @@hba_user@@ all scram-sha-256
+hostssl all +corpus_clients all @@hba_method@@
+"""
+# docker compose's own error text can quote a value (here an unterminated default).
+LEAK_UNRESOLVABLE = """\
+services:
+  app:
+    build: .
+    environment:
+      X: "${POSTGRES_PASSWORD:-@@cfg_default@@"
+"""
+
+
+class FindingsNeverQuoteValues(unittest.TestCase):
+    """No finding, and nothing main() prints, may carry a credential or any value that could be
+    one: findings name the rule, service, key or variable and redact the value (CodeQL
+    py/clear-text-logging-sensitive-data on 34be30a). The planted values are generated per run,
+    so no password-shaped literal sits in this file."""
+
+    def planted(self):
+        import secrets
+        names = ("db_pw", "ssl_reqs", "defaulted", "container", "health", "malformed", "tlsver", "stray", "literal",
+                 "server", "protected", "removed", "acl_user", "acl_pw", "secret_file", "hba_kind", "hba_user",
+                 "hba_method", "cfg_default")
+        return {n: "Lv" + secrets.token_hex(10) for n in names}
+
+    @staticmethod
+    def fill(template, values):
+        for name, value in values.items():
+            template = template.replace(f"@@{name}@@", value)
+        assert "@@" not in template, template
+        return template
+
+    def test_findings_and_cli_output_hold_no_planted_value_or_sentinel(self):
+        values = self.planted()
+        with tempfile.TemporaryDirectory() as root:
+            leaky, broken = Path(root) / "leaky", Path(root) / "broken"
+            for d in (leaky, broken):
+                d.mkdir()
+                (d / ".dockerignore").write_text(".env\n")
+            (leaky / "docker-compose.yml").write_text(self.fill(LEAK_COMPOSE, values))
+            (leaky / "pg_hba.conf").write_text(self.fill(LEAK_HBA, values))
+            (broken / "docker-compose.yml").write_text(self.fill(LEAK_UNRESOLVABLE, values))
+            findings = policy.check(str(leaky / "docker-compose.yml")) + policy.check(str(broken / "docker-compose.yml"))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(policy.main([str(leaky / "docker-compose.yml"), str(broken / "docker-compose.yml")]), 1)
+        fired = {rule for rule, _s, _m in findings}
+        # The planted values sit where the rules look, so these all fire and get to print.
+        self.assertLessEqual({"literal-credential", "pg-weakening-flag", "redis-weakening-flag", "redis-acl-user",
+                              "app-redis-tls", "pg-hba", "app-host-access", "compose-config"}, fired)
+        # Failures name the leaking finding (rule, service), never its text. Compared without case:
+        # a rule that lower-cases its input still leaks the value.
+        texts = [(f"[{r}] {s}", msg.lower()) for r, s, msg in findings] + [("main() stdout", out.getvalue().lower())]
+        for name, value in values.items():
+            with self.subTest(planted=name):
+                self.assertEqual([where for where, t in texts if value.lower() in t], [], f"quotes the planted {name} value")
+        self.assertEqual([where for where, t in texts if policy.SENTINEL_RE.search(t)], [], "quotes a sentinel value")
+
+    def test_no_fixture_or_attack_finding_quotes_a_sentinel(self):
+        leaks = []
+        for path in insecure_fixtures():
+            leaks += [f"{path.name} [{r}] {s}" for r, s, msg in policy.check(str(path)) if policy.SENTINEL_RE.search(msg)]
+        for case in load_attacks():
+            with tempfile.TemporaryDirectory() as root:
+                compose = apply_attack(case, root)
+                leaks += [f"{case['id']} [{r}] {s}" for r, s, msg in policy.check(str(compose))
+                          if policy.SENTINEL_RE.search(msg)]
+        self.assertEqual(leaks, [])
+
+
 class ShippedComposeMutations(unittest.TestCase):
     """The same rules hold on the real file: weakening any F30 control in the shipped compose (in
     its own text, or through an override file compose would load) trips its rule."""

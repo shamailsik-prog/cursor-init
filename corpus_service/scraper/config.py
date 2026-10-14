@@ -130,7 +130,7 @@ def _redis_url_problem(name: str, url: str, db_password: str = "") -> Optional[s
         allowed = _REDIS_STRICT_SSL_QUERY.get(key.lower())
         if allowed is None or value.strip().lower() not in allowed:
             return (
-                f"{name} must not override TLS verification ({key}={value}) in production/staging; "
+                f"{name} must not override TLS verification ({key}) in production/staging; "
                 "configure the CA with REDIS_TLS_CA_FILE"
             )
     return None

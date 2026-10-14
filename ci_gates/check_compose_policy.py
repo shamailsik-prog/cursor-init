@@ -168,6 +168,179 @@ class _RefScanner:
 VAR_REF = _RefScanner(required_only=False)
 REQUIRED_REF = _RefScanner(required_only=True)
 
+# Findings never carry a value from the deployment: any env, command, healthcheck or URL value
+# could be a credential, and the findings are printed into CI logs and terminals. A finding names
+# the rule, service, key, variable, compose object or argument position; a value it must refer to
+# is shown as REDACTED (or as the ${VAR} a policy sentinel stands for). bad() also scrubs every
+# message against the deployment's credential values (_credential_values) as a second line.
+REDACTED = "<redacted>"
+HBA_KINDS = {"local", "host", "hostssl", "hostnossl", "hostgssenc", "hostnogssenc",
+             "include", "include_if_exists", "include_dir"}
+HBA_METHODS = {"trust", "reject", "scram-sha-256", "md5", "password", "gss", "sspi", "ident", "peer", "pam",
+               "ldap", "radius", "cert", "bsd", "oauth"}
+# Well-known Postgres server options a finding may name (setting names, not values).
+PG_NAMED_OPTIONS = PG_ALLOWED | {
+    "config_file", "data_directory", "include", "include_dir", "include_if_exists", "listen_addresses", "port",
+    "log_statement", "log_min_duration_statement", "log_min_error_statement", "log_connections",
+    "log_destination", "logging_collector", "scram_iterations", "lo_compat_privileges",
+    "shared_preload_libraries", "session_preload_libraries", "local_preload_libraries", "dynamic_library_path",
+    "unix_socket_directories", "unix_socket_permissions", "unix_socket_group", "authentication_timeout",
+    "krb_server_keyfile", "db_user_namespace", "ssl_ciphers", "ssl_crl_file", "ssl_crl_dir",
+    "ssl_passphrase_command", "ssl_max_protocol_version", "ssl_prefer_server_ciphers", "ssl_dh_params_file",
+}
+TLS_VERSIONS = {"TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3"}
+# Arguments that take a password: the next token is a credential.
+PASSWORD_FLAGS = {"--requirepass", "--masterauth", "--pass", "--password", "-a"}
+
+
+def _show(value):
+    """A value a finding has to point at: the ${VAR} a policy sentinel stands for, else REDACTED."""
+    m = SENTINEL_RE.fullmatch(str(value or ""))
+    return "${" + m.group(1) + "}" if m else REDACTED
+
+
+def _word(value, known):
+    """A keyword from a fixed vocabulary as itself; anything else REDACTED."""
+    return value if value in known else REDACTED
+
+
+def _mode(value):
+    """A network_mode/pid/ipc value: its kind (host, none, bridge, service:, container:) only."""
+    value = str(value or "")
+    return value if value in ("host", "none", "bridge", "default") else value.split(":", 1)[0] + ":" + REDACTED
+
+
+REDIS_NAMED_OPTIONS = REDIS_UNVETTABLE | REDIS_MUST_BE_NO | {
+    "port", "tls-port", "tls-cert-file", "tls-key-file", "tls-ca-cert-file", "tls-auth-clients", "protected-mode",
+    "user", "requirepass", "bind", "tls-protocols", "tls-ciphers", "tls-ciphersuites", "tls-replication",
+    "tls-cluster", "save", "appendonly", "dir", "dbfilename", "rename-command", "maxmemory", "acllog-max-len",
+}
+
+
+def _redis_option(option):
+    """A redis-server option name from a fixed vocabulary; any other is REDACTED."""
+    return "--" + option if option in REDIS_NAMED_OPTIONS else f"an option ({REDACTED})"
+
+
+def _var_names(names):
+    """Variable names (from policy sentinels) as text; anything that is not a plain name is dropped."""
+    return ", ".join(sorted(n for n in names if re.fullmatch(r"[A-Za-z0-9_]{1,64}", str(n))))
+
+
+def _rel(path, project_dir):
+    """A path inside the project as ./relative; any other path is REDACTED."""
+    try:
+        rel = Path(path).resolve().relative_to(Path(project_dir).resolve())
+    except ValueError:
+        return REDACTED
+    return "./" + rel.as_posix() if rel.parts else "."
+
+
+def _ref_defaults(text):
+    """The default/alternative text of each ${VAR-...}/${VAR:-...}/${VAR:+...} reference, up to its
+    '}' or the end of the text (an unterminated one is quoted by compose's own error)."""
+    out, text, i = [], str(text), str(text).find("${")
+    while i >= 0:
+        j = i + 2
+        while j < len(text) and text[j] in _NAME_CHARS:
+            j += 1
+        if text.startswith((":-", ":=", ":+"), j):
+            j += 2
+        elif text.startswith(("-", "=", "+"), j):
+            j += 1
+        else:
+            i = text.find("${", i + 1)
+            continue
+        k = text.find("}", j)
+        out.append(text[j:] if k < 0 else text[j:k])
+        i = text.find("${", j)
+    return out
+
+
+NON_CREDENTIAL_NAMES = {"PASSWORD_ENCRYPTION", "POSTGRES_HOST_AUTH_METHOD", "SSL_KEY_FILE", "TLS_KEY_FILE"}
+
+
+def _is_credential_name(name):
+    """Whether a variable/option name holds a credential (case-insensitive: PGPASSWORD=,
+    password=, REDISCLI_AUTH=, ..._USER, ..._KEY), except a few TLS/auth settings."""
+    name = str(name).upper()
+    if name in NON_CREDENTIAL_NAMES:
+        return False
+    return bool(CREDENTIAL_NAME.search(name.removesuffix("_FILE"))) or name in ("PGUSER", "PGPASSFILE")
+
+
+def _credential_values(services, top_level):
+    """Every value in a credential position of these service definitions (raw YAML or resolved):
+    values of credential-named keys (or of values referring to a credential variable), their
+    ${VAR:-defaults}, URL userinfo, Redis ACL password rules, arguments of password flags,
+    KEY=VALUE words with a credential-named KEY in commands and healthchecks, credential build
+    args, and the inline content of secrets and configs."""
+    found = set()
+
+    def add(value):
+        value = str(value or "")
+        if value and not SENTINEL_RE.fullmatch(value) and not REQUIRED_VAR.match(value):
+            found.add(value)
+            found.update(d for d in _ref_defaults(value) if d)
+
+    def scan_words(value):
+        tokens = value if isinstance(value, list) else [value] if value else []
+        prev = ""
+        for w in (word for tok in tokens for word in str(tok).split()):
+            for part in _userinfo(w):
+                add(part)
+            if w[:1] in (">", "<", "#", "!") and len(w) > 1:
+                add(w[1:])
+            if prev in PASSWORD_FLAGS:
+                add(w)
+            if "=" in w and _is_credential_name(w.split("=", 1)[0].lstrip("-")):
+                add(w.split("=", 1)[1])
+            prev = w
+
+    for svc in (services or {}).values():
+        svc = svc if isinstance(svc, dict) else {}
+        for key, value in _env_of(svc).items():
+            refs = [n for n, _rest in VAR_REF.findall(value)] + re.findall(r"\$\{([A-Za-z0-9_]+)", value)
+            if _is_credential_name(key) or any(_is_credential_name(n) for n in refs):
+                add(value)
+            for part in _userinfo(value):
+                add(part)
+        for field in ("command", "entrypoint"):
+            scan_words(svc.get(field))
+        health = svc.get("healthcheck") if isinstance(svc.get("healthcheck"), dict) else {}
+        scan_words(health.get("test"))
+        build = svc.get("build") if isinstance(svc.get("build"), dict) else {}
+        args = build.get("args") or {}
+        if isinstance(args, list):
+            args = dict(a.split("=", 1) if "=" in a else (a, "") for a in map(str, args))
+        for key, value in args.items():
+            if _is_credential_name(key):
+                add(value)
+    for kind_key in ("secrets", "configs"):
+        for sdef in ((top_level or {}).get(kind_key) or {}).values():
+            if isinstance(sdef, dict):
+                add(sdef.get("content"))
+    return found
+
+
+def _scrub(message, credentials):
+    """The last line of defence in bad(): every credential value of the deployment REDACTED
+    wherever it occurs (case-insensitively; values under 6 characters only as a whole word, so a
+    short one cannot garble the text), then sentinels shown as the ${VAR} they stand for."""
+    for value in sorted(credentials, key=len, reverse=True):
+        if len(value) >= 6:
+            low, needle, out, pos = message.lower(), value.lower(), [], 0
+            i = low.find(needle)
+            while i >= 0:
+                out += [message[pos:i], REDACTED]
+                pos = i + len(value)
+                i = low.find(needle, pos)
+            message = "".join(out) + message[pos:]
+        else:
+            message = re.sub(r"(?<![A-Za-z0-9_])" + re.escape(value) + r"(?![A-Za-z0-9_])", REDACTED,
+                             message, flags=re.IGNORECASE)
+    return SENTINEL_RE.sub(lambda m: "${" + m.group(1) + "}", message)
+
 
 # --------------------------------------------------------------------------------------------
 # helpers
@@ -265,7 +438,7 @@ def _hba_problems(path):
         fields = line.split()
         kind = fields[0]
         if kind.startswith("include"):
-            problems.append(f"line {n}: {kind} cannot be verified by policy")
+            problems.append(f"line {n}: {_word(kind, HBA_KINDS)} cannot be verified by policy")
             continue
         if kind == "local":
             method = fields[3] if len(fields) > 3 else ""
@@ -273,7 +446,7 @@ def _hba_problems(path):
                 problems.append(f"line {n}: local {method}")
             continue
         if kind not in HBA_TCP:
-            problems.append(f"line {n}: unknown connection type {kind!r}")
+            problems.append(f"line {n}: unknown connection type ({_word(kind, HBA_KINDS)})")
             continue
         # TYPE DATABASE USER ADDRESS METHOD, or TYPE DATABASE USER IP-ADDRESS IP-MASK METHOD.
         if len(fields) > 5 and re.match(r"^[0-9a-fA-F.:]+$", fields[4]) and re.match(r"^[0-9a-fA-F.:]+$", fields[3]):
@@ -281,13 +454,13 @@ def _hba_problems(path):
         else:
             method = fields[4] if len(fields) > 4 else ""
         if kind != "hostssl" and method != "reject":
-            problems.append(f"line {n}: {kind} ... {method} accepts non-TLS TCP connections")
+            problems.append(f"line {n}: {kind} ... {_word(method, HBA_METHODS)} accepts non-TLS TCP connections")
         elif kind == "hostssl" and method not in ("scram-sha-256", "cert", "reject"):
-            problems.append(f"line {n}: hostssl ... {method} (only scram-sha-256/cert/reject allowed)")
+            problems.append(f"line {n}: hostssl ... {_word(method, HBA_METHODS)} (only scram-sha-256/cert/reject allowed)")
         user = fields[2] if len(fields) > 2 else ""
         if method != "reject" and user != HBA_CLIENT_GROUP:
-            problems.append(f"line {n}: a TCP login for USER {user!r}; only {HBA_CLIENT_GROUP} (the application "
-                            "roles) may log in over the network")
+            problems.append(f"line {n}: a TCP login for USER {_word(user, {'all'})}; only {HBA_CLIENT_GROUP} (the "
+                            "application roles) may log in over the network")
     return problems
 
 
@@ -320,21 +493,20 @@ def _acl_enabled(rules):
     return state
 
 
-def _acl_password_problems(rules):
-    """An enabled user must authenticate with exactly one password, a required ${VAR:?}: one
-    '>' rule holding a sentinel, no '#<hash>' (a second password), no nopass anywhere (any
-    password works), and nothing after it that removes it again (resetpass, reset, '<', '!')."""
+def _acl_auth_problems(rules):
+    """An enabled user must authenticate with exactly one secret, a required ${VAR:?}: one '>'
+    rule holding a sentinel, no '#<hash>' (a second one), no nopass anywhere (anything is
+    accepted), and nothing after it that removes it again (resetpass, reset, '<', '!'). The
+    problems name rule kinds and counts only: a rule's text is the secret itself."""
     low = [r.lower() for r in rules]
     problems = []
-    passwords = [i for i, r in enumerate(rules) if r.startswith((">", "#"))]
+    adds = [i for i, r in enumerate(rules) if r.startswith((">", "#"))]
     if "nopass" in low:
         problems.append("nopass (any password is accepted)")
-    if len(passwords) != 1 or not rules[passwords[0]].startswith(">") or not _is_sentinel(rules[passwords[0]][1:]):
-        problems.append(f"{len(passwords)} password rule(s); exactly one >${{VAR:?}} is required")
-    if passwords:
-        removed = [r for r in low[passwords[0] + 1:] if r in ("resetpass", "reset") or r.startswith(("<", "!"))]
-        if removed:
-            problems.append(f"{' '.join(removed)} after the password removes it")
+    if len(adds) != 1 or not rules[adds[0]].startswith(">") or not _is_sentinel(rules[adds[0]][1:]):
+        problems.append(f"{len(adds)} password rule(s); exactly one >${{VAR:?}} is required")
+    if adds and any(r in ("resetpass", "reset") or r.startswith(("<", "!")) for r in low[adds[0] + 1:]):
+        problems.append("a resetpass, reset, '<' or '!' rule after the password removes it")
     return problems
 
 
@@ -344,10 +516,10 @@ def _parse_pg_command(cmd):
     if not cmd:
         return settings, problems
     if cmd[0] != "postgres":
-        problems.append(f"command must start with 'postgres', got {cmd[0]!r}")
-    i = 1
+        problems.append("command must start with 'postgres'")
+    i, where = 1, {}
     while i < len(cmd):
-        arg, kv = cmd[i], None
+        arg, kv, at = cmd[i], None, i
         if arg == "-c" and i + 1 < len(cmd):
             kv, i = cmd[i + 1], i + 2
         elif arg.startswith("-c") and len(arg) > 2:
@@ -355,23 +527,26 @@ def _parse_pg_command(cmd):
         elif arg.startswith("--") and "=" in arg:
             kv, i = arg[2:], i + 1
         else:
-            problems.append(f"unrecognised postgres argument {arg!r}")
+            problems.append(f"unrecognised postgres argument (command argument {at})")
             i += 1
             continue
         if "=" not in kv:
-            problems.append(f"malformed server option {kv!r}")
+            problems.append(f"malformed server option (command argument {at}: not NAME=VALUE)")
             continue
         key, value = kv.split("=", 1)
         key = key.strip().lower().replace("-", "_")
         if key in settings:
-            problems.append(f"{key} is set more than once (the last one wins)")
+            problems.append(f"{_word(key, PG_NAMED_OPTIONS)} is set more than once (the last one wins; "
+                            f"command argument {at})")
         settings[key] = value.strip().strip("'\"")
+        where[key] = at
     for key in settings:
         if key not in PG_ALLOWED:
-            problems.append(f"server option {key} is not on the allowlist ({', '.join(sorted(PG_ALLOWED))})")
+            problems.append(f"server option {_word(key, PG_NAMED_OPTIONS)} (command argument {where[key]}) is not "
+                            f"on the allowlist ({', '.join(sorted(PG_ALLOWED))})")
     mpv = settings.get("ssl_min_protocol_version")
     if mpv is not None and mpv not in ("TLSv1.2", "TLSv1.3"):
-        problems.append(f"ssl_min_protocol_version={mpv}")
+        problems.append(f"ssl_min_protocol_version={_word(mpv, TLS_VERSIONS)} (TLSv1.2 or TLSv1.3 required)")
     return settings, problems
 
 
@@ -447,13 +622,14 @@ def _namespace_problems(svc):
     if svc.get("privileged"):
         problems.append("privileged: true")
     if svc.get("cap_add"):
-        problems.append(f"cap_add {svc['cap_add']}")
+        problems.append(f"cap_add ({len(svc['cap_add'])} added capabilities)")
     if svc.get("devices"):
         problems.append("devices: host devices handed to the container")
     for key in HOST_NAMESPACE_KEYS:
         value = str(svc.get(key) or "")
         if value == "host" or value.startswith(("service:", "container:")):
-            problems.append(f"{key}: {value} (shares the host's or another container's namespace)")
+            mode = "host" if value == "host" else value.split(":", 1)[0] + ":" + REDACTED
+            problems.append(f"{key}: {mode} (shares the host's or another container's namespace)")
     return problems
 
 
@@ -511,9 +687,11 @@ def resolve(files, raw_docs):
         try:
             proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
         except (OSError, subprocess.SubprocessError) as exc:
-            return None, f"docker compose unavailable: {exc}"
+            return None, f"docker compose is not available ({type(exc).__name__})"
     if proc.returncode != 0:
-        return None, (proc.stderr or proc.stdout).strip().splitlines()[-1:] or ["failed"]
+        # compose's own message is not passed on: it can quote any value from the files.
+        return None, (f"exit status {proc.returncode}; its message is withheld because it can quote values "
+                      "from the files - run `docker compose config` on this deployment to read it")
     return json.loads(proc.stdout), None
 
 
@@ -531,7 +709,7 @@ def _raw_checks(raw_docs, project_dir, bad):
             if "file" in sdef:
                 f = str(sdef["file"])
                 if not REQUIRED_VAR.match(f) and (not f.startswith("/") or _inside(f, project_dir)):
-                    bad("literal-credential", "-", f"secret {sname} reads a file kept with the repo ({f}); "
+                    bad("literal-credential", "-", f"secret {sname} reads a file kept with the repository; "
                         "use environment: VAR or file: ${VAR:?}")
             elif "environment" not in sdef and not sdef.get("external"):
                 bad("literal-credential", "-", f"secret {sname} has no file:/environment: source")
@@ -552,14 +730,16 @@ def _raw_checks(raw_docs, project_dir, bad):
                 if key in OPTIONAL_APP_SECRETS and val in (f"${{{key}:-}}", f"${{{key}-}}"):
                     continue
                 if not REQUIRED_VAR.match(val):
-                    bad("literal-credential", name, f"{key} must be a required ${{VAR:?}} reference, got {val!r}")
+                    bad("literal-credential", name, f"{key} must be a required ${{VAR:?}} reference (it is a literal "
+                        "or an optional reference)")
             for text in list(env.values()) + _as_list(svc.get("command")):
                 for var, rest in VAR_REF.findall(text):
                     if not CREDENTIAL_NAME.search(var) or rest.startswith(":?") or rest.startswith("?"):
                         continue
                     if var in OPTIONAL_APP_SECRETS and rest in (":-", "-"):
                         continue
-                    bad("literal-credential", name, f"${{{var}{rest}}} is not required (:?) - unset or defaulted credential")
+                    bad("literal-credential", name, f"${{{var}}} is referenced without :? (it may be unset or "
+                        "defaulted)")
             if "build" in svc:
                 for ef in _env_file_entries(svc):
                     p = (base / ef).resolve()
@@ -582,7 +762,7 @@ def _raw_checks(raw_docs, project_dir, bad):
                         bad("literal-credential", name, "REDIS_URL user and password must be required ${VAR:?} references")
 
 
-def _secret_env_var(model, svc, path_value):
+def _file_source_var(model, svc, path_value):
     """The variable behind /run/secrets/<name> for this service, if any."""
     m = re.fullmatch(r"/run/secrets/([A-Za-z0-9_.-]+)", path_value or "")
     if not m:
@@ -599,7 +779,7 @@ def _cred_vars(model, svc, key):
     """Variables that supply credential `key` of a store service (value sentinel or secret file)."""
     env = _env_of(svc)
     out = set(_sentinel_vars(env.get(key)))
-    via_file = _secret_env_var(model, svc, env.get(f"{key}_FILE"))
+    via_file = _file_source_var(model, svc, env.get(f"{key}_FILE"))
     if via_file:
         out.add(via_file)
     return out
@@ -621,7 +801,7 @@ def _classify(name, svc, project_dir, bad):
     if build and Path(context).is_absolute() and _inside(context, project_dir):
         bases = _dockerfile_bases(build)
         if any("$" in b for b in bases):
-            bad("unknown-service", name, f"the build's base image is a build variable ({', '.join(bases)}); "
+            bad("unknown-service", name, "the build's base image is a build variable; "
                 "the policy cannot tell what runs")
             return "unknown"
         for base in bases:
@@ -629,7 +809,7 @@ def _classify(name, svc, project_dir, bad):
             if kind:
                 return kind
         return STORE_SERVICE_NAMES.get(name, "app")
-    bad("unknown-service", name, f"image {svc.get('image')!r} is not a known data store, not built from "
+    bad("unknown-service", name, "its image is not a known data store image, it is not built from "
         "this repo, and the service is not network_mode: none")
     return "unknown"
 
@@ -693,9 +873,9 @@ def _resolved_checks(model, project_dir, bad):
                 bad("store-image", name, "data store built from a repository Dockerfile; run the pinned upstream "
                     "image (the policy cannot vet a custom image's entrypoint or baked-in configuration)")
             if svc.get("ports"):
-                bad("store-ports", name, f"data store publishes host ports {svc['ports']}")
+                bad("store-ports", name, f"data store publishes {len(svc['ports'])} host port(s)")
             if svc.get("network_mode"):
-                bad("store-network", name, f"network_mode {svc['network_mode']!r}")
+                bad("store-network", name, f"network_mode {_mode(svc['network_mode'])}")
             svc_nets = list((svc.get("networks") or {"default": None}).keys())
             for n in svc_nets:
                 ndef = nets.get(n) or {}
@@ -723,7 +903,7 @@ def _resolved_checks(model, project_dir, bad):
             if not hba:
                 bad("pg-hba", name, "no -c hba_file=: the image default pg_hba.conf accepts plaintext logins")
             elif not src or not src.is_file() or not _inside(src, project_dir):
-                bad("pg-hba", name, f"hba_file {hba} is not a repo file bind-mounted into the container")
+                bad("pg-hba", name, "hba_file is not a repository file bind-mounted into the container")
             else:
                 for p in _hba_problems(src):
                     bad("pg-hba", name, f"{src.name} {p}")
@@ -737,22 +917,22 @@ def _resolved_checks(model, project_dir, bad):
             if svc.get("entrypoint"):
                 bad("redis-weakening-flag", name, "entrypoint override hides the server command")
             if cmd and cmd[0] not in REDIS_SERVERS:
-                bad("redis-weakening-flag", name, f"command must start with redis-server, got {cmd[0]!r}")
+                bad("redis-weakening-flag", name, "command must start with redis-server")
             rest = cmd[1:] if cmd else []
             if rest and not rest[0].startswith("--"):
-                bad("redis-weakening-flag", name, f"config file argument {rest[0]!r} cannot be verified")
+                bad("redis-weakening-flag", name, "a config file argument cannot be verified")
             opts = _redis_options(rest)
             seen = set()
             for o, a in opts:
                 if o != "user" and o in seen:
-                    bad("redis-weakening-flag", name, f"--{o} is given more than once (the last one wins)")
+                    bad("redis-weakening-flag", name, f"{_redis_option(o)} is given more than once (the last one wins)")
                 seen.add(o)
                 if o in REDIS_UNVETTABLE:
-                    bad("redis-weakening-flag", name, f"--{o} is not allowed")
+                    bad("redis-weakening-flag", name, f"{_redis_option(o)} is not allowed")
                 if o in REDIS_MUST_BE_NO and [x.lower() for x in a] != ["no"]:
-                    bad("redis-weakening-flag", name, f"--{o} {' '.join(a)}")
+                    bad("redis-weakening-flag", name, f"{_redis_option(o)} must be no")
                 if o == "protected-mode" and [x.lower() for x in a] != ["yes"]:
-                    bad("redis-weakening-flag", name, f"--protected-mode {' '.join(a)}")
+                    bad("redis-weakening-flag", name, "--protected-mode must be yes")
             flat = {o: a for o, a in opts}
             if flat.get("port") != ["0"] or "tls-port" not in flat \
                     or "tls-cert-file" not in flat or "tls-key-file" not in flat:
@@ -762,7 +942,7 @@ def _resolved_checks(model, project_dir, bad):
                 if o == "user" and a:
                     users.setdefault(a[0], []).extend(a[1:])
                     if any(not r or r != r.strip() or len(r.split()) != 1 for r in a):
-                        bad("redis-acl-user", name, f"--user {a[0]}: every ACL rule must be its own single-word "
+                        bad("redis-acl-user", name, f"--user {_show(a[0])}: every ACL rule must be its own single-word "
                             "argument (a rule holding spaces cannot be vetted)")
             default_rules = [r.lower() for r in users.get("default", [])]
             if "requirepass" in flat or "off" not in default_rules or "on" in default_rules[default_rules.index("off"):]:
@@ -771,12 +951,12 @@ def _resolved_checks(model, project_dir, bad):
             if not enabled:
                 bad("redis-acl-user", name, "no enabled ACL user with a >${VAR:?} password")
             for u, rules in enabled.items():
-                for p in _acl_password_problems(rules):
-                    bad("redis-acl-user", name, f"ACL user {u}: {p}")
+                for p in _acl_auth_problems(rules):
+                    bad("redis-acl-user", name, f"ACL user {_show(u)}: {p}")
                 if u not in redis_url_users:
-                    bad("redis-acl-user", name, f"ACL user {u} is enabled but no app's REDIS_URL connects as it")
+                    bad("redis-acl-user", name, f"ACL user {_show(u)} is enabled but no app's REDIS_URL connects as it")
                 if not _acl_least_privilege(rules):
-                    bad("redis-acl-privilege", name, f"ACL user {u} must end with -@admin -@dangerous after its last "
+                    bad("redis-acl-privilege", name, f"ACL user {_show(u)} must end with -@admin -@dangerous after its last "
                         "grant, and may not use (selectors)")
         if kind == "app":
             build = svc.get("build") or {}
@@ -787,7 +967,8 @@ def _resolved_checks(model, project_dir, bad):
                 user, pw = _userinfo(db)
                 uvars, pvars = _sentinel_vars(user), _sentinel_vars(pw)
                 if (uvars | pvars) & bootstrap:
-                    bad("app-db-bootstrap-user", name, f"DATABASE_URL uses the bootstrap superuser ({sorted((uvars | pvars) & bootstrap)})")
+                    bad("app-db-bootstrap-user", name, "DATABASE_URL uses the bootstrap superuser "
+                        f"({_var_names((uvars | pvars) & bootstrap)})")
                 if not _is_sentinel(user) or not _is_sentinel(pw):
                     bad("literal-credential", name, "DATABASE_URL user and password must come from required variables")
                 query = dict(parse_qsl(urlsplit(_mask_refs(db)).query))
@@ -806,12 +987,12 @@ def _resolved_checks(model, project_dir, bad):
             if rd:
                 user, pw = _userinfo(rd)
                 parts = urlsplit(rd)
-                weak = [f"{k}={v}" for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                weak = [k for k, v in parse_qsl(parts.query, keep_blank_values=True)
                         if k.lower().startswith("ssl_")
                         and v.strip().lower() not in REDIS_STRICT_SSL_QUERY.get(k.lower(), ())]
                 if parts.scheme != "rediss" or not user or user == "default" or weak:
                     bad("app-redis-tls", name, "REDIS_URL must be rediss://<acl user>:<password>@... with no ssl_* "
-                        f"override weakening verification {weak}")
+                        f"parameter weakening verification ({len(weak)} found)")
             _app_scope_checks(name, svc, env, model, project_dir, store_vars, store_mounts, store_volume_names,
                               volume_name, bad)
 
@@ -843,14 +1024,15 @@ def _app_scope_checks(name, svc, env, model, project_dir, store_vars, store_moun
     # Host access.
     ports = svc.get("ports") or []
     if ports and ports != APP_ALLOWED_PORTS.get(name):
-        bad("app-host-access", name, f"publishes {ports}; the only app port is the api's 127.0.0.1:8000 bind")
+        bad("app-host-access", name, f"publishes {len(ports)} host port(s); the only app port is the api's "
+            "127.0.0.1:8000 bind")
     for p in _namespace_problems(svc):
         bad("app-host-access", name, p)
 
     # Mounts: nothing a store mounts (the CA volume read-only excepted), nothing from outside the
     # repository, and no volume whose contents the policy cannot see (external, driver, custom name).
     if svc.get("volumes_from"):
-        bad("app-store-volume", name, f"volumes_from {svc['volumes_from']} shares another container's mounts")
+        bad("app-store-volume", name, "volumes_from shares another container's mounts")
     project_name = model.get("name")
     env_file = Path(project_dir) / ".env"
     for v in svc.get("volumes") or []:
@@ -863,20 +1045,22 @@ def _app_scope_checks(name, svc, env, model, project_dir, store_vars, store_moun
                 if not v.get("read_only") or vname in others:
                     bad("app-store-volume", name, f"volume {src} must be mounted read-only and be only the CA volume")
             elif src in store_mounts["volume"] or vname in store_volume_names:
-                bad("app-store-volume", name, f"volume {src} ({vname}) is a data store's volume")
+                bad("app-store-volume", name, f"volume {src} is a data store's volume")
             elif vdef.get("external") or vdef.get("driver") or vdef.get("driver_opts") \
                     or vname != f"{project_name}_{src}":
-                bad("app-host-access", name, f"volume {src} is external, driver-backed or renamed ({vname}); "
+                bad("app-host-access", name, f"volume {src} is external, driver-backed or renamed; "
                     "the policy cannot see what it holds")
         elif vtype == "bind" and src:
             if not _inside(src, project_dir):
-                bad("app-host-access", name, f"bind mount {src} is outside the repository")
+                bad("app-host-access", name, "a bind mount from outside the repository")
                 continue
             if _inside(env_file, src):
-                bad("app-credential-scope", name, f"bind mount {src} exposes the compose .env (every secret)")
+                bad("app-credential-scope", name, f"bind mount {_rel(src, project_dir)} exposes the compose .env "
+                    "(every secret)")
             for store_src in store_mounts["bind"]:
                 if _inside(src, store_src) or _inside(store_src, src):
-                    bad("app-store-volume", name, f"bind mount {src} overlaps a data store's mount {store_src}")
+                    bad("app-store-volume", name, f"bind mount {_rel(src, project_dir)} overlaps a data store's mount "
+                        f"{_rel(store_src, project_dir)}")
 
 
 def check_deployment(files):
@@ -885,9 +1069,15 @@ def check_deployment(files):
     project_dir = files[0].parent
     raw_docs = _raw_closure(files)
     findings = []
+    # Every credential value in the files (and, once resolved, in the model): bad() redacts them
+    # from any message, whatever rule built it.
+    credentials = set()
+    for _path, _text, doc in raw_docs:
+        credentials |= _credential_values(doc.get("services"), doc)
 
     def bad(rule, service, msg):
         assert rule in RULES, rule
+        msg = _scrub(str(msg), credentials)
         if (rule, service, msg) not in findings:
             findings.append((rule, service, msg))
 
@@ -896,6 +1086,7 @@ def check_deployment(files):
     if model is None:
         bad("compose-config", "-", f"docker compose config failed: {err}")
     else:
+        credentials |= _credential_values(model.get("services"), model)
         _resolved_checks(model, project_dir, bad)
     return findings
 

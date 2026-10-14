@@ -63,7 +63,7 @@ as_superuser_local() { # psql over the container's own socket (peer), the only s
 echo "== F30 e2e against $DIR (project $COMPOSE_PROJECT_NAME)"
 docker pull -q "$PG_CLIENT" >/dev/null && docker pull -q "$REDIS_CLIENT" >/dev/null
 if ! "${COMPOSE[@]}" up -d --wait --wait-timeout 180 postgres redis; then
-  "${COMPOSE[@]}" logs --no-color certs postgres redis | tail -n 80
+  "${COMPOSE[@]}" logs --no-color certs postgres redis 2>&1 | tail -n 80 | redact_stream
   fail "stores start (certs -> postgres, redis healthy)"
   summary "F30 store security e2e"; exit 1
 fi
@@ -251,7 +251,12 @@ expect_lines "R2-D2 control: /run/secrets in the postgres container lists its th
   "$(printf '%s\n' app_db_password migrate_db_password postgres_password)" "$(secrets_in postgres)"
 expect_lines "R2-D2 control: /run/secrets in the redis container lists its password file" "redis_app_password" "$(secrets_in redis)"
 expect_out "R2-D2 control: the postgres container mounts the pgdata volume" "[|]${COMPOSE_PROJECT_NAME}_pgdata[|]" mounts_of postgres
-expect_out "R2-D2 control: api's PID 1 environment carries its DATABASE_URL" '^DATABASE_URL=postgresql' proc1_env api
+if proc1_env api | grep -q '^DATABASE_URL=postgresql'; then
+  pass "R2-D2 control: api's PID 1 environment carries its DATABASE_URL"
+else # names only: the values hold the runtime credentials
+  fail "R2-D2 control: api's PID 1 environment carries its DATABASE_URL" \
+    "variables seen: $(proc1_env api | cut -d= -f1 | tr '\n' ' ')"
+fi
 for svc in api worker-embed celery-beat; do
   scope_check "R2-D2: $svc PID 1 environment holds only its runtime URLs' credentials" \
     "$(proc1_env "$svc")" 1 APP_DB_PASSWORD@DATABASE_URL REDIS_APP_PASSWORD@REDIS_URL
@@ -293,7 +298,7 @@ expect_refused "secrets-preflight refuses a password that is not URL-safe" 'URL-
 
 if [ "$FAILS" -ne 0 ]; then
   "${COMPOSE[@]}" logs --no-color --tail 40 secrets-preflight migrate api worker-embed postgres redis 2>&1 \
-    | grep -v -i -e password -e secret | tail -n 120
+    | grep -v -i -e password -e secret | tail -n 120 | redact_stream
 fi
 
 summary "F30 store security e2e"
