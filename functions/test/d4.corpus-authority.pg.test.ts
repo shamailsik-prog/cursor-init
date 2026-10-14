@@ -48,6 +48,10 @@ const S5_V2 = "Section 5 as amended: sixty days."
 
 let db: CorpusDb
 const stores: PgAuthorityStore[] = []
+/** The role the corpus reader login must be a member of (ruling 13). */
+const READER_ROLE = "corpus_reader"
+/** Login and helper roles a test created; dropped after the database. */
+const extraRoles: string[] = []
 /** Judgment id by canonical citation (the golden judgments) and by item key (the treatment fixtures). */
 const byCanonical = new Map<string, string>()
 const byItem = new Map<string, string>()
@@ -136,6 +140,15 @@ afterEach(async () => {
 
 afterAll(async () => {
   await db?.drop()
+  if (extraRoles.length) {
+    const server = new pg.Client({ connectionString: process.env.SIKANDER_POSTGRES_URL })
+    await server.connect()
+    try {
+      for (const role of extraRoles.reverse()) await server.query(`DROP ROLE IF EXISTS "${role}"`)
+    } finally {
+      await server.end()
+    }
+  }
 }, 120_000)
 
 describe("F05 adapter helpers (pure)", () => {
@@ -385,6 +398,51 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     await withState(`GRANT corpus_writer TO "${db.readerUser}" WITH INHERIT FALSE, SET TRUE`, `REVOKE corpus_writer FROM "${db.readerUser}"`, async () => {
       await expect(store().findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
     })
+  })
+
+  /** A login with `sql` applied ($ROLE is the login), as a reader configuration; the role is dropped after the file. */
+  async function loginWith(sql: string[]): Promise<CorpusReaderConfig> {
+    const name = `f05x_${randomUUID().slice(0, 8)}`
+    const password = randomUUID()
+    await db.admin.query(`CREATE ROLE "${name}" LOGIN PASSWORD '${password}'`)
+    extraRoles.push(name)
+    for (const statement of sql) await db.admin.query(statement.replaceAll("$ROLE", `"${name}"`).replaceAll("$DB", `"${db.name}"`))
+    const url = new URL(db.readerUrl)
+    url.username = name
+    url.password = password
+    return readerConfig({ SIKANDER_CORPUS_READER_URL: url.toString() })
+  }
+
+  const MORE_THAN_READING: Array<{ shape: string; sql: string[]; undo?: string[] }> = [
+    { shape: "a member of pg_write_all_data", sql: ["GRANT pg_write_all_data TO $ROLE"] },
+    { shape: "a member of pg_read_all_data", sql: ["GRANT pg_read_all_data TO $ROLE"] },
+    { shape: "CREATEROLE", sql: ["ALTER ROLE $ROLE CREATEROLE"] },
+    { shape: "BYPASSRLS", sql: ["ALTER ROLE $ROLE BYPASSRLS"] },
+    { shape: "REPLICATION", sql: ["ALTER ROLE $ROLE REPLICATION"] },
+    { shape: "INSERT and UPDATE on treatment", sql: ["GRANT INSERT, UPDATE ON public.treatment TO $ROLE"] },
+    { shape: "DELETE on corpus_metadata", sql: ["GRANT DELETE ON public.corpus_metadata TO $ROLE"] },
+    { shape: "TRUNCATE on judgment", sql: ["GRANT TRUNCATE ON public.judgment TO $ROLE"] },
+    { shape: "UPDATE on one column of citation", sql: ["GRANT UPDATE (review_status) ON public.citation TO $ROLE"] },
+    { shape: "the database's owner", sql: ["ALTER DATABASE $DB OWNER TO $ROLE"], undo: ["ALTER DATABASE $DB OWNER TO CURRENT_USER"] },
+  ]
+
+  it.each(MORE_THAN_READING)("wrong_role: a reader login that is also $shape (#51 R1 D-2)", async ({ sql, undo }) => {
+    const config = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`, ...sql])
+    try {
+      await expect(store(config).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+    } finally {
+      for (const statement of undo ?? []) await db.admin.query(statement.replaceAll("$DB", `"${db.name}"`))
+    }
+  })
+
+  it("wrong_role: a writer membership through an intermediate role, and the plain reader login still reads (control)", async () => {
+    const mid = `f05x_mid_${randomUUID().slice(0, 8)}`
+    await db.admin.query(`CREATE ROLE "${mid}" NOLOGIN IN ROLE corpus_writer`)
+    extraRoles.push(mid)
+    const nested = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`, `GRANT "${mid}" TO $ROLE`])
+    await expect(store(nested).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+    const plain = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`])
+    expect(await store(plain).findJudgment(ANY)).toMatchObject({ benchType: "division" })
   })
 
   it("permission and schema_missing: a revoked grant, a renamed view", async () => {

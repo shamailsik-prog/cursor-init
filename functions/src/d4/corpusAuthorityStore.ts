@@ -101,9 +101,21 @@ const SECTIONS_SQL = `SELECT version_no, effective_from::text AS effective_from,
  ORDER BY effective_from, version_no`
 // The session first (D7): a role check reads no table, so a writer or superuser login is wrong_role, not a permission
 // error on corpus_metadata. Then the corpus metadata the reader needs (F19 D30, D19).
+// D7 as #51 R1 D-2 hardened it: the login reads, and can do nothing else. It must inherit the reader role; it must not
+// be a superuser or hold CREATEROLE, BYPASSRLS or REPLICATION; it must not be a member (directly or through any role)
+// of the writer or declassify roles, of pg_read_all_data or pg_write_all_data, or own the database (pg_database_owner);
+// and it must hold no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT,
+// UPDATE or REFERENCES) on any relation in schema public.
 const ROLE_SQL = `SELECT pg_has_role('corpus_reader', 'USAGE') AS reader,
-       coalesce((SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user), true) AS superuser,
-       pg_has_role('corpus_writer', 'MEMBER') OR pg_has_role('corpus_declassify', 'MEMBER') AS writer,
+       coalesce((SELECT rolsuper OR rolcreaterole OR rolbypassrls OR rolreplication
+                   FROM pg_catalog.pg_roles WHERE rolname = current_user), true) AS elevated,
+       pg_has_role('corpus_writer', 'MEMBER') OR pg_has_role('corpus_declassify', 'MEMBER')
+         OR pg_has_role('pg_read_all_data', 'MEMBER') OR pg_has_role('pg_write_all_data', 'MEMBER')
+         OR pg_has_role('pg_database_owner', 'MEMBER') AS other_role,
+       EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                  AND (has_table_privilege(c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                       OR has_any_column_privilege(c.oid, 'INSERT,UPDATE,REFERENCES'))) AS writes,
        current_setting('transaction_read_only') AS read_only`
 const METADATA_SQL = `SELECT (SELECT value FROM public.corpus_metadata WHERE key = 'publication_contract') AS contract,
        (SELECT value FROM public.corpus_metadata WHERE key = 'last_refresh') AS last_refresh`
@@ -303,16 +315,20 @@ export class PgAuthorityStore implements AuthorityStore {
   }
 
   /**
-   * The session and the corpus, cached for STATE_TTL_MS (D7, D19): a corpus_reader that is neither a superuser nor a
-   * corpus_writer or corpus_declassify member, in a read-only session (wrong_role otherwise); publication contract
+   * The session and the corpus, cached for STATE_TTL_MS (D7, D19): a reader login that can do nothing but read
+   * (ROLE_SQL), in a read-only session (wrong_role otherwise); publication contract
    * '1' and a well-formed last_refresh (contract_missing otherwise); and a last_refresh no older than the configured
    * staleness and at most FUTURE_SKEW_MS ahead (stale otherwise).
    */
   private async checkState(): Promise<void> {
     const at = this.now()
     if (this.stateCheckedAt !== null && at - this.stateCheckedAt < STATE_TTL_MS) return
-    const role = (await this.run(ROLE_SQL, [])).rows[0] as { reader: unknown; superuser: unknown; writer: unknown; read_only: unknown } | undefined
-    if (!role || role.reader !== true || role.superuser !== false || role.writer !== false || role.read_only !== "on") throw unavailable("wrong_role")
+    const role = (await this.run(ROLE_SQL, [])).rows[0] as
+      | { reader: unknown; elevated: unknown; other_role: unknown; writes: unknown; read_only: unknown }
+      | undefined
+    if (!role || role.reader !== true || role.elevated !== false || role.other_role !== false || role.writes !== false || role.read_only !== "on") {
+      throw unavailable("wrong_role")
+    }
     const meta = (await this.run(METADATA_SQL, [])).rows[0] as { contract: unknown; last_refresh: unknown } | undefined
     if (meta?.contract !== PUBLICATION_CONTRACT) throw unavailable("contract_missing")
     const refreshed = parseLastRefresh(meta.last_refresh)
