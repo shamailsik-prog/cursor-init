@@ -992,6 +992,53 @@ def test_i_a_transient_database_error_leaves_the_record_pending(corpus_db, termi
 
 
 # ---------------------------------------------------------------------------------------------
+# (j) re-audit round 2 (PR #48): L4 a current CHECK with a drifted default; INFO the probe schema
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("drift", ["SET DEFAULT 'trusted'", "DROP DEFAULT"], ids=["default_trusted", "default_dropped"])
+def test_j_a_current_check_with_a_drifted_default_is_repaired(corpus_db, drift):
+    """Round-2 L4: the CHECK is exactly current but the default drifted (fail-open 'trusted', or
+    none). Migrate must not treat that as current: the default comes back as 'review', the CHECK
+    keeps refusing legacy values, and the comparison probe leaves nothing behind."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    run(execute(f"ALTER TABLE scraper_sources ALTER COLUMN trust_level {drift}"))
+    assert run(constraint_state())[1] == SPEC_TRUST_LEVELS, "the CHECK itself is still current"
+    assert run(constraint_state())[3] != {"review"}
+
+    second = corpus_db.migrate()
+    assert_migrated(second, corpus_db)
+
+    _oid, literals, valid, default = run(constraint_state())
+    assert (literals, valid, default) == (SPEC_TRUST_LEVELS, True, {"review"})
+    assert run(try_insert_source("f20-after-default-drift")) == ("stored", "review")
+    assert "trust vocabulary already current" not in second.stderr + second.stdout
+    assert run(fetch("SELECT count(*) FROM pg_class WHERE relname LIKE 'f20_trust_vocabulary_probe%'"))[0][0] == 0
+
+
+def test_j_the_probe_is_built_next_to_scraper_sources_not_in_the_first_search_path_schema(corpus_db):
+    """Round-2 INFO: the comparison probe is created in scraper_sources' own schema. With the default
+    search_path ("$user", public), a schema named after the migration role comes first; F30 gives
+    that role CREATE on public only, so an unqualified probe would make migrate fail there."""
+    build_legacy_schema(corpus_db)
+    mig, mig_pw = corpus_db.create_role("f20_mig")
+    corpus_db.admin(
+        f'REVOKE ALL ON DATABASE "{corpus_db.name}" FROM PUBLIC',
+        f'GRANT CONNECT ON DATABASE "{corpus_db.name}" TO "{mig}"',
+        "REVOKE ALL ON SCHEMA public FROM PUBLIC",
+        f'GRANT USAGE, CREATE ON SCHEMA public TO "{mig}"',
+        *[f'ALTER TABLE "{t}" OWNER TO "{mig}"' for t in (
+            "courts", "scraper_sources", "case_law_master", "statutes_master", "scraper_staging",
+            "statutes_staging", "scraper_jobs", "quarantine_queue", "embedding_queue")],
+        # A "$user" schema the role can use but not create in.
+        f'CREATE SCHEMA "{mig}"',
+        f'GRANT USAGE ON SCHEMA "{mig}" TO "{mig}"',
+    )
+    assert_migrated(corpus_db.migrate(corpus_db.url_as(mig, mig_pw)), corpus_db)
+    _oid, literals, valid, default = run(constraint_state())
+    assert (literals, valid, default) == (SPEC_TRUST_LEVELS, True, {"review"})
+    assert run(fetch("SELECT count(*) FROM pg_class WHERE relname LIKE 'f20_trust_vocabulary_probe%'"))[0][0] == 0
+
+
+# ---------------------------------------------------------------------------------------------
 # (k) re-audit round 2 (PR #48): L1 route kinds
 # ---------------------------------------------------------------------------------------------
 def test_k_a_route_without_a_valid_kind_is_refused_and_every_direct_route_needs_trusted(corpus_db, monkeypatch, caplog):
