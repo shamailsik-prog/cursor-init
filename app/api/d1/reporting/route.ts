@@ -27,6 +27,7 @@ import {
   buildMatterSearchIndexRow,
 } from "@/platform/persistence/matterClientSearchIndex"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
+import { syncFirmMatters } from "@/platform/persistence/memberSync"
 
 const RELEVANCE_FRESH_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -440,6 +441,8 @@ async function handlePost(request: Request) {
   }
 
   await syncFirmUsers(store, repos, actor.firmId)
+  // Audit F14 R2-D1: the reporting rows seeded below take the matter's current label, not a cached one.
+  await syncFirmMatters(store, repos, actor.firmId)
   const matter = await resolveMatter(matterId, store, repos)
   if (!matter || matter.firmId !== actor.firmId) {
     return NextResponse.json({ error: "unknown matter" }, { status: 404 })

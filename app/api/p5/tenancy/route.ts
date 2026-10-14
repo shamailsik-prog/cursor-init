@@ -21,7 +21,7 @@ import type {
 import { storedUserRecord } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { syncFirmAudit } from "@/platform/persistence/auditSync"
 import { syncFirmTenancySessionReferences } from "@/platform/persistence/tenancySessionReferenceSync"
@@ -640,6 +640,7 @@ async function handleGet(request: Request) {
       }
       await syncFirmUsers(store, repos, user.firmId)
       await syncFirmMembers(store, repos, user.firmId)
+      await syncFirmMatters(store, repos, user.firmId)
       const session = buildSessionContext(store, user.id, resolvedFirmId ?? user.firmId)
       const sessionReference = upsertTenancySessionReference(store, {
         user: session.user,
@@ -689,6 +690,7 @@ async function handleGet(request: Request) {
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmMembers(store, repos, firmId)
+      await syncFirmMatters(store, repos, firmId)
       const users = listFirmUsers(store, actorId, firmId, limit, cursor)
       return NextResponse.json({
         view: "users",
@@ -709,6 +711,7 @@ async function handleGet(request: Request) {
       }
       await syncFirmUsers(store, repos, firmId)
       await syncFirmMembers(store, repos, firmId)
+      await syncFirmMatters(store, repos, firmId)
       const memberships = listFirmMemberships(
         store,
         actorId,

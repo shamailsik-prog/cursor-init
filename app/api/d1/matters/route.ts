@@ -20,7 +20,7 @@ import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import {
   addMember,
@@ -102,6 +102,7 @@ async function handleGet(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
   await syncFirmMembers(store, repo, user.firmId)
+  await syncFirmMatters(store, repo, user.firmId)
   const perm = checkPermission(store, userId, "list_matters")
   if (!perm.allow) {
     return deny(`permission denied: ${perm.reason}`)
@@ -231,6 +232,7 @@ async function handlePost(request: Request) {
     if (isAction(MATTERS_SURFACE, parsed, "add_member")) {
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
+      await syncFirmMatters(store, repo, actor.firmId)
       const matter = store.matters.get(parsed.matterId) ?? (await repo.matters.get(parsed.matterId))
       if (matter) store.matters.set(matter.id, matter)
       let member: { matterId: string; userId: string; firmId: string }
@@ -258,6 +260,7 @@ async function handlePost(request: Request) {
       }
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
+      await syncFirmMatters(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
       const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
@@ -297,6 +300,7 @@ async function handlePost(request: Request) {
       }
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
+      await syncFirmMatters(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
       // R2 N6: the case number feeds the citation gate's own-case exemption; only a partner
       // member records it (D6-1 owns it, L18 §3.2), and it is audited below.

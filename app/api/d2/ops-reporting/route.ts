@@ -576,7 +576,7 @@ import {
   type OpsPostAction,
 } from "@/app/api/d2/ops-reporting/dispatch"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { checkPermission } from "@/platform/p5/checkPermission"
 
@@ -12536,6 +12536,7 @@ async function handleGet(request: Request) {
 
   await syncFirmUsers(store, repos, actor.firmId)
   await syncFirmMembers(store, repos, actor.firmId)
+  await syncFirmMatters(store, repos, actor.firmId)
   const firmMatters = await repos.matters.listByFirm(actor.firmId)
   for (const matter of firmMatters) {
     store.matters.set(matter.id, matter)
@@ -17414,6 +17415,7 @@ async function handlePost(request: Request) {
 
   await syncFirmUsers(store, repos, actor.firmId)
   await syncFirmMembers(store, repos, actor.firmId)
+  await syncFirmMatters(store, repos, actor.firmId)
   const matter = await resolveMatter({ matterId, store, repos })
   if (!matter || matter.firmId !== actor.firmId) {
     return NextResponse.json({ error: "unknown matter" }, { status: 404 })

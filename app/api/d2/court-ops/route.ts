@@ -14,6 +14,7 @@ import {
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { syncFirmMatters } from "@/platform/persistence/memberSync"
 import { buildCourtOpsActivityRow, buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import { WHATSAPP_GRAMMAR_HELP, handleWhatsApp, whatsAppCommandName } from "@/services/d2-1/whatsapp"
 import {
@@ -86,6 +87,8 @@ async function syncCourtOpsState(
   for (const row of firmMembers) {
     store.members.set(store.memberKey(row.matterId, row.userId), row)
   }
+  // Audit F14 R2-D1/R2-D2: the queue's matter gate and resolve_workflow's document check read each matter's current label.
+  await syncFirmMatters(store, repos, actor.firmId)
 
   const firmFollowUps = await repos.followUps.listByFirm(actor.firmId)
   const mergedFollowUps = new Map<string, (typeof firmFollowUps)[number]>()

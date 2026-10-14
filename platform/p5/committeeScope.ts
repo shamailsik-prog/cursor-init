@@ -42,12 +42,17 @@ export function strictestClassification(labels: Classification[]): Classificatio
   return best
 }
 
+/**
+ * The matter as persisted now (audit F14 R2-D1): the repository first, so a label raised by another process drives the
+ * permission check and the scope's classification (P1 provider policy), not this process's cached copy. The cached copy
+ * is the fallback only when the repository has no row (no app path deletes a matter; in memory mode they are the same).
+ */
 async function loadMatter(
   store: SpineStore,
   repos: SpineRepositories,
   matterId: string
 ): Promise<Matter | null> {
-  const matter = store.matters.get(matterId) ?? (await repos.matters.get(matterId))
+  const matter = (await repos.matters.get(matterId)) ?? store.matters.get(matterId)
   if (matter) store.matters.set(matter.id, matter)
   return matter ?? null
 }

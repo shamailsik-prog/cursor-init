@@ -102,8 +102,15 @@ async function handleGet(request: Request) {
       if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(matter.classification)) {
         throw new PublicError("clearance below matter classification")
       }
+      // Audit F14 R2-D4: an event names its document (and carries its reason), so it is shown only to a caller who
+      // may read that document: its own label as well as the matter's. An event whose document is unknown is left out.
+      const docsById = new Map((await repos.documents.listByFirm(user.firmId)).map((d) => [d.id, d]))
       const timelineRows = (await repos.workflowEvents.listByFirm(user.firmId))
         .filter((event) => event.matterId === matterId)
+        .filter((event) => {
+          const eventDoc = docsById.get(event.documentId) ?? store.documents.get(event.documentId)
+          return eventDoc !== undefined && canViewWorkflowDocument(store, userId, eventDoc)
+        })
         .sort((a, b) => a.at - b.at)
       const paged = timelineRows.slice(cursor, cursor + limit)
       const nextCursor =

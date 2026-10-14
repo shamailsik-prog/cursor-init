@@ -171,44 +171,36 @@ export function isSafeRef(ref: unknown): boolean {
 }
 
 /**
- * Collections whose rows belong to one matter: they carry the matter's id and are read under its membership and
- * label (firestore.rules, R-2; platform/spine row types), or are written for it by the server only. Audit F14 R1-D3:
- * a firm-level job (`matterId` null) is judged against no matter, so a reference it carried to one of these rows would
- * reach that row with no check of the matter's current label or membership. Such a job may not carry one.
+ * The firm-level collections a firm-level job (`matterId` null) may reference (audit F14 R1-D3, R2-D3). Such a job is
+ * judged against no matter, so a reference it carried to a matter's row (a document, a draft, evidence, a custody
+ * event, a reporting snapshot, a conflict check, another job, ...) would reach that row with no check of the matter's
+ * current label or membership. An allowlist, not a denylist, so a collection nobody listed fails closed: the job
+ * events (fan-out's input), the merge events (un-merge's output) and the firm's registry rows (clients, entities,
+ * entity links and aliases) and counters. Every one is firm-scoped in firestore.rules.
  */
-export const MATTER_BOUND_COLLECTIONS: ReadonlySet<string> = new Set([
-  "matters",
-  "matter_members",
-  "matter_parties",
-  "matter_events",
-  "documents",
-  "document_versions",
-  "document_workflow",
-  "workflow_events",
-  "drafts",
-  "draft_versions",
-  "draft_gate_results",
-  "draft_gate_overrides",
-  "committee_outputs",
-  "follow_ups",
-  "propositions",
-  "intimation_register",
-  "filing_packet_artifacts",
+export const FIRM_LEVEL_REF_COLLECTIONS: ReadonlySet<string> = new Set([
+  "events",
+  "merge_events",
+  "clients",
+  "entities",
+  "entity_links",
+  "entity_aliases",
+  "counters",
 ])
 
-/** `ref` (a `collection/id` ref) names a row of a matter-bound collection. */
-export function isMatterBoundRef(ref: string): boolean {
-  return MATTER_BOUND_COLLECTIONS.has(ref.split("/")[0])
+/** `ref` (a `collection/id` ref) names a row of an allowlisted firm-level collection. */
+export function isFirmLevelRef(ref: string): boolean {
+  return FIRM_LEVEL_REF_COLLECTIONS.has(ref.split("/")[0])
 }
 
 /**
- * Job refs (inputRefs at enqueue, outputRefs at commit): an array of at most MAX_REFS safe `collection/id` refs, none of
- * them into a matter-bound collection when the job is firm-level (`matterId` null; audit F14 R1-D3). A matter job's
- * refs are read under its matter's current label and membership (the job routes judge the job that way).
+ * Job refs (inputRefs at enqueue, outputRefs at commit): an array of at most MAX_REFS safe `collection/id` refs, each
+ * into an allowlisted firm-level collection when the job is firm-level (`matterId` null; audit F14 R1-D3, R2-D3). A
+ * matter job's refs are read under its matter's current label and membership (the job routes judge the job that way).
  */
 export function areValidRefs(refs: unknown, matterId: string | null): refs is string[] {
   if (!Array.isArray(refs) || refs.length > MAX_REFS || !refs.every(isSafeRef)) return false
-  return matterId !== null || !refs.some((ref: string) => isMatterBoundRef(ref))
+  return matterId !== null || refs.every((ref: string) => isFirmLevelRef(ref))
 }
 
 type Validated = { spec: JobSpec; jobId: string; payloadHash: string; inputRefs: string[]; runKey: string | null }

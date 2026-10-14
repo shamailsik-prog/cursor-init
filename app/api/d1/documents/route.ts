@@ -222,6 +222,8 @@ async function handlePost(request: Request) {
   try {
     const actor = requireActor(parsed.actorId, parsed.firmId)
     await syncFirmMembers(store, repos, actor.firmId)
+    // Audit F14 R2-D1: the matter checks below (member, floor) and the ingest default use its current label.
+    await syncFirmMatters(store, repos, actor.firmId)
     const matterId = parsed.matterId ?? null
     const matterForDefault = matterId ? store.matters.get(matterId) : undefined
     // L17.3 Human control: "Initial classification set at ingest (default privileged for

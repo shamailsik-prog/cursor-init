@@ -75,6 +75,10 @@ service cloud.firestore {
     // Audit F14 / O-76: a matter-bound row is read under its matter's CURRENT label, not only the label it was written
     // with, so a matter raised after the row was written binds the row too (as drafts and draft_versions). A loose-vault
     // row (matterId null) names no matter; a matter that cannot be read denies (get() of a missing document fails).
+    // Cost (F14 R2-D5): reading a documents, document_versions or non-engine jobs row now costs two access calls per
+    // distinct matter (the membership exists() and this matters get()), on top of the two identity calls (users, firms).
+    // Rules allow 10 access calls per single-document request and 20 per transaction or batch, so a client transaction
+    // or batch over rows of about nine or more distinct matters can be denied; split such work by matter.
     function clearedForMatterNow(matterId) {
       return matterId == null || cleared(get(/databases/$(database)/documents/matters/$(matterId)).data.classification);
     }

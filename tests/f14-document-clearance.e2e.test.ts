@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { GET, POST } from "@/app/api/d1/documents/route"
-import { GET as workflowGet } from "@/app/api/d1/document-workflow/route"
+import { GET as workflowGet, POST as workflowPost } from "@/app/api/d1/document-workflow/route"
+import { GET as courtOpsGet } from "@/app/api/d2/court-ops/route"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
@@ -116,6 +117,58 @@ describe("F14 download door: the Next documents routes apply the matter's curren
     expect((await listed("partner_a", matterId)).find((i) => i.id === docId)).toMatchObject({ ocrJobs: 1 })
     expect((await bytesOf(await download("partner_a", docId))).equals(PLAINT)).toBe(true)
     expect(await queued("partner_a", matterId)).toContain(docId)
+  })
+
+  it("a privileged document in an internal matter stays off the clerk's workflow timeline and court-ops queue, as its download is refused (R2-D4)", async () => {
+    const matterId = openMatter()
+    const res = await POST(
+      new Request("http://127.0.0.1/api/d1/documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": "f14f14f1-4f14-4f14-8f14-f14f14f14f03" },
+        body: JSON.stringify({
+          action: "ingest",
+          actorId: "partner_a",
+          firmId: "firmA",
+          matterId,
+          contentBase64: Buffer.from("%PDF-1.4 F14 privileged annex.\n").toString("base64"),
+          sourceChannel: "web",
+          classification: "privileged",
+        }),
+      })
+    )
+    expect(res.status).toBe(200)
+    const docId = ((await res.json()) as { result: { doc: { id: string } } }).result.doc.id
+    const REASON = "privileged annex: settlement figure"
+    const blocked = await workflowPost(
+      new Request("http://127.0.0.1/api/d1/document-workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": "f14f14f1-4f14-4f14-8f14-f14f14f14f04" },
+        body: JSON.stringify({ action: "transition", actorId: "partner_a", documentId: docId, nextStatus: "review_required", reason: REASON }),
+      })
+    )
+    expect(blocked.status).toBe(200)
+    const courtOpsQueue = (userId: string) =>
+      courtOpsGet(new Request(`http://127.0.0.1/api/d2/court-ops?userId=${userId}&limit=50&cursor=0`))
+
+    // The clerk (confidential) is a member of the internal matter but below the document's own label.
+    expect((await download("clerk_a", docId)).status).toBe(403)
+    const clerkTimeline = await timeline("clerk_a", matterId)
+    expect(clerkTimeline.status).toBe(200)
+    const clerkTimelineText = await clerkTimeline.text()
+    expect(clerkTimelineText).not.toContain(docId)
+    expect(clerkTimelineText).not.toContain(REASON)
+    const clerkQueue = await courtOpsQueue("clerk_a")
+    expect(clerkQueue.status).toBe(200)
+    expect(await clerkQueue.text()).not.toContain(docId)
+
+    // The associate (privileged) and the partner see the document, its timeline entry with the reason, and its queue row.
+    for (const userId of ["associate_a", "partner_a"]) {
+      const shown = await timeline(userId, matterId)
+      expect(shown.status).toBe(200)
+      const text = await shown.text()
+      expect([userId, text.includes(docId), text.includes(REASON)]).toEqual([userId, true, true])
+      expect([userId, (await (await courtOpsQueue(userId)).text()).includes(docId)]).toEqual([userId, true])
+    }
   })
 
   it("a matter document whose matter cannot be read is refused to every member, however cleared", async () => {
