@@ -4,7 +4,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+if not settings.REDIS_URL:
+    # An empty REDIS_URL marks a process that holds no Redis credentials (audit F30); without this
+    # guard Celery would silently fall back to its default amqp://localhost broker.
+    raise RuntimeError("REDIS_URL is not configured for this process; Celery cannot be used here")
+
 app = Celery("legal_scraper", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
+
+# Audit F30: with a rediss:// URL both the broker (kombu) and the result backend must verify the
+# Redis server certificate and hostname. kombu alone would fall back to CERT_NONE.
+_redis_tls = settings.redis_ssl_options()
+if _redis_tls:
+    app.conf.broker_use_ssl = dict(_redis_tls)
+    app.conf.redis_backend_use_ssl = dict(_redis_tls)
+
 app.conf.update(
     timezone=settings.TIMEZONE,
     enable_utc=True,
