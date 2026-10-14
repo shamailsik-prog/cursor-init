@@ -8,7 +8,7 @@ import {
   setAuthorityStoreForTests,
   type AuthorityStore,
 } from "../src/d4/authority"
-import { runGate } from "../src/d4/gate"
+import { runGate, unpleadedChecks } from "../src/d4/gate"
 import { GATE_SEVERITY, type TemporalCheck } from "../src/d4/types"
 
 // Fixtures follow P4-13: citations use the year 2099 (read by the extractor, impossible in a real report), statute
@@ -61,7 +61,7 @@ afterEach(() => {
 
 describe("GATE_SEVERITY (P4-6)", () => {
   it("lists the overall statuses most severe first", () => {
-    expect([...GATE_SEVERITY]).toEqual(["OVERRULED", "TEMPORAL_MISMATCH", "UNVERIFIED", "TEMPORAL_UNAVAILABLE", "OK"])
+    expect([...GATE_SEVERITY]).toEqual(["OVERRULED", "TEMPORAL_MISMATCH", "UNVERIFIED", "TEMPORAL_UNAVAILABLE", "NOT_ASSESSED", "OK"])
   })
 
   it("is frozen", () => {
@@ -79,6 +79,7 @@ describe("runGate: citations", () => {
       status: "OVERRULED",
       citations: [{ ref: "PLD 2099 SC 101", judgmentId: "j_101", status: "OVERRULED" }],
       temporal: [],
+      scope: { citations: 1, temporalChecks: 0, assessed: true },
     })
   })
 
@@ -108,6 +109,7 @@ describe("runGate: citations", () => {
       status: "OK",
       citations: [{ ref: "PLD 2099 SC 101", judgmentId: "j_101", status: "VERIFIED" }],
       temporal: [],
+      scope: { citations: 1, temporalChecks: 0, assessed: true },
     })
   })
 
@@ -117,6 +119,7 @@ describe("runGate: citations", () => {
       status: "UNVERIFIED",
       citations: [{ ref: "2099 SCMR 7", judgmentId: null, status: "UNVERIFIED" }],
       temporal: [],
+      scope: { citations: 1, temporalChecks: 0, assessed: true },
     })
   })
 
@@ -272,9 +275,9 @@ describe("runGate: an out-of-domain status fails closed", () => {
     expect(out.status).toBe("OVERRULED")
   })
 
-  it("an empty list is still OK", async () => {
+  it("an empty list is NOT_ASSESSED, never OK (F06)", async () => {
     const gate = await gateWithVerdicts(() => "SURPRISE")
-    expect((await gate("No authority cited.")).status).toBe("OK")
+    expect((await gate("No authority cited.")).status).toBe("NOT_ASSESSED")
   })
 })
 
@@ -406,16 +409,92 @@ describe("runGate: temporal checks (P4-6, E-39)", () => {
 })
 
 describe("runGate: nothing to gate", () => {
-  it("an empty body and no checks give OK with empty lists", async () => {
+  it("an empty body and no checks give NOT_ASSESSED with empty lists and an unassessed scope (F06)", async () => {
     const { store, calls } = spyStore(new InMemoryAuthorityStore())
     const out = await runGate({ title: "", body: "", temporalChecks: [] }, store)
-    expect(out).toEqual({ status: "OK", citations: [], temporal: [] })
+    expect(out).toEqual({ status: "NOT_ASSESSED", citations: [], temporal: [], scope: { citations: 0, temporalChecks: 0, assessed: false } })
     expect(calls).toEqual({ findJudgment: [], listTreatments: [], getSectionAsAt: [] })
   })
 
-  it("prose without a citation and no checks give OK", async () => {
+  it("prose without a citation and no checks give NOT_ASSESSED, never OK (F06)", async () => {
     const out = await runGate({ title: "Petition", body: "The petitioner prays for relief.", temporalChecks: [] }, EMPTY_AUTHORITY_STORE)
+    expect(out.status).toBe("NOT_ASSESSED")
+    expect(out.scope).toEqual({ citations: 0, temporalChecks: 0, assessed: false })
+  })
+})
+
+describe("runGate: assessed scope (F06)", () => {
+  it("the audit's scenario: uncited prose asserting a thirty-day statutory deadline is NOT_ASSESSED on the production store, not OK", async () => {
+    const body = "The appeal was filed within thirty days of the impugned order, the period the statute allows, so it is within time."
+    const out = await runGate({ title: "Appeal", body, temporalChecks: [] }, EMPTY_AUTHORITY_STORE)
+    expect(out).toEqual({ status: "NOT_ASSESSED", citations: [], temporal: [], scope: { citations: 0, temporalChecks: 0, assessed: false } })
+  })
+
+  it("counts the citation findings and the temporal checks that ran, and is assessed when any ran", async () => {
+    const store = sectionStore()
+    store.addJudgment("j_101", "PLD 2099 SC 101", "division")
+    const out = await runGate({ title: "T", body: "PLD 2099 SC 101 and 2099 SCMR 7", temporalChecks: [check(TEXT_A), check(TEXT_A, "2016-01-01")] }, store)
+    expect(out.scope).toEqual({ citations: 2, temporalChecks: 2, assessed: true })
+    expect(out.status).toBe("UNVERIFIED")
+  })
+
+  it("an UNRECOGNISED suspect alone is a citation finding: UNVERIFIED and assessed, not NOT_ASSESSED", async () => {
+    const out = await runGate({ title: "T", body: "Relied on 2099SCMR7 for the period.", temporalChecks: [] }, EMPTY_AUTHORITY_STORE)
+    expect(out.citations).toEqual([{ ref: "UNRECOGNISED: 2099SCMR7", judgmentId: null, status: "UNVERIFIED" }])
+    expect(out.scope).toEqual({ citations: 1, temporalChecks: 0, assessed: true })
+    expect(out.status).toBe("UNVERIFIED")
+  })
+
+  it("a temporal check alone is assessed: its status decides, OK when the text matches", async () => {
+    // Ruling C: the check applies to text the draft pleads, so the body pleads it (gateDraft refuses one it does not).
+    const input = { title: "T", body: `No authority is cited. The deadline is pleaded as: ${TEXT_A}`, temporalChecks: [check(TEXT_A)] }
+    expect(unpleadedChecks(input, input.temporalChecks)).toEqual([])
+    const out = await runGate(input, sectionStore())
+    expect(out.scope).toEqual({ citations: 0, temporalChecks: 1, assessed: true })
     expect(out.status).toBe("OK")
+  })
+
+  it("a VERIFIED citation alone is assessed and OK", async () => {
+    const store = new InMemoryAuthorityStore()
+    store.addJudgment("j_7", "2099 SCMR 7", "full")
+    const out = await runGate({ title: "T", body: "See 2099 SCMR 7.", temporalChecks: [] }, store)
+    expect(out.scope).toEqual({ citations: 1, temporalChecks: 0, assessed: true })
+    expect(out.status).toBe("OK")
+  })
+})
+
+describe("unpleadedChecks: a temporal check applies only to text the draft pleads (F06 ruling C)", () => {
+  it("a check whose usedText the draft does not plead is returned, so an unrelated true check cannot make uncited prose assessed", () => {
+    const input = { title: "Deed", body: "The vendor sells the property for the consideration stated in the schedule." }
+    expect(unpleadedChecks(input, [check(TEXT_A)])).toEqual([check(TEXT_A)])
+  })
+
+  it("a pleaded check is not returned, across line breaks and runs of whitespace", () => {
+    const body = "The limit is pleaded:\nTest Act s.1 as it stood in 2015:\n  the limit is\tthirty days.\r\nNothing else."
+    expect(unpleadedChecks({ title: "T", body }, [check(TEXT_A)])).toEqual([])
+  })
+
+  it("reads the title with the body, as runGate does", () => {
+    expect(unpleadedChecks({ title: TEXT_A, body: "No statute in the body." }, [check(TEXT_A)])).toEqual([])
+  })
+
+  it("compares after the body rule's normalisation: an em dash and Arabic-Indic digits in the usedText match the hyphen and ASCII digits the stored body holds", () => {
+    const usedText = "Test Act s.1 — the limit is ٣٠ days."
+    const storedBody = "The plaint pleads Test Act s.1 - the limit is 30 days."
+    expect(unpleadedChecks({ title: "T", body: storedBody }, [check(usedText)])).toEqual([])
+  })
+
+  it("returns only the unpleaded checks, in order, and is otherwise exact: a changed word is not pleaded", () => {
+    const body = `The plaint pleads ${TEXT_A}`
+    const changed = TEXT_A.replace("thirty", "forty")
+    expect(unpleadedChecks({ title: "T", body }, [check(changed, "2016-01-01"), check(TEXT_A), check(TEXT_B, "2019-01-01")])).toEqual([
+      check(changed, "2016-01-01"),
+      check(TEXT_B, "2019-01-01"),
+    ])
+  })
+
+  it("a usedText that is only whitespace is never pleaded", () => {
+    expect(unpleadedChecks({ title: "T", body: "Some body text." }, [check(" \n\t ")])).toEqual([check(" \n\t ")])
   })
 })
 

@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import seed from "@/data/documentTypes.json"
-import { courtAllowed, getDocumentType, listDocumentTypes, type DocumentType } from "../src/d4/doctypes"
+import {
+  LEGAL_VERIFICATION_ITEM,
+  courtAllowed,
+  getDocumentType,
+  isLawDependent,
+  listDocumentTypes,
+  reviewChecklistOf,
+  type DocumentType,
+} from "../src/d4/doctypes"
 
 const rows = seed.types as DocumentType[]
 const byId = (id: string) => rows.find((t) => t.id === id)!
@@ -227,5 +235,94 @@ describe("listDocumentTypes (P4-5)", () => {
     // The seed is in registry order, not id order, so sorting is the function's work.
     expect(isSorted(rows.map((t) => t.id))).toBe(false)
     expect(isSorted(listDocumentTypes({}).map((t) => t.id))).toBe(true)
+  })
+})
+
+/**
+ * The 19 NON_FORUM types whose own seed checklist names a legal-verification item (F06 re-audit A10, ruling A):
+ * originating pleadings, applications in proceedings or under statute, and legal memos.
+ */
+const LEGALLY_VERIFIED_NON_FORUM = [
+  "arguments_brief",
+  "cantonment_application",
+  "case_compendium",
+  "case_strategy_memo",
+  "company_incorporation_checklist",
+  "compromise_application",
+  "contract_review_memo",
+  "counter_arguments_brief",
+  "demarcation_application",
+  "dha_application",
+  "due_diligence_report",
+  "kda_application",
+  "land_regularization_application",
+  "legal_opinion",
+  "mutation_application",
+  "property_injunction_suit",
+  "property_suit_possession",
+  "record_of_rights_application",
+  "secp_complaint",
+]
+
+describe("the review checklist of a law-dependent type (F06)", () => {
+  it("every type filed in a forum (no NON_FORUM in its courts) is law-dependent", () => {
+    const forum = rows.filter((t) => !t.courtIds.includes("NON_FORUM"))
+    expect(forum).toHaveLength(85)
+    for (const t of forum) expect([t.id, isLawDependent(t)]).toEqual([t.id, true])
+    expect(isLawDependent(byId("constitutional_petition_199"))).toBe(true)
+    expect(isLawDependent(byId("bail_application_497"))).toBe(true)
+  })
+
+  it("among NON_FORUM types, exactly the 19 whose own checklist names a legal-verification item are law-dependent", () => {
+    const derived = rows.filter((t) => t.courtIds.includes("NON_FORUM") && isLawDependent(t)).map((t) => t.id)
+    expect(derived.sort()).toEqual(LEGALLY_VERIFIED_NON_FORUM)
+    expect(isLawDependent(byId("sale_deed"))).toBe(false)
+    // heirship_affidavit lists NON_FORUM beside a court family; the same rule decides it, and no item of its checklist
+    // is a legal-verification item, so it is not law-dependent.
+    expect(byId("heirship_affidavit").courtIds).toEqual(["CIVIL_KHI_*", "NON_FORUM"])
+    expect(byId("heirship_affidavit").checklist.filter((c) => LEGAL_VERIFICATION_ITEM.test(c))).toEqual([])
+    expect(isLawDependent(byId("heirship_affidavit"))).toBe(false)
+    // Over the whole seed: 85 forum types and 19 legally verified NON_FORUM types.
+    expect(rows.filter((t) => isLawDependent(t))).toHaveLength(104)
+  })
+
+  it("the legal-verification item test matches the seed's verification lines and nothing that only names a party, a fee or a form", () => {
+    for (const line of [
+      "Citations passed Gate 33",
+      "Statutory text pleaded as at relevant date (L17.1)",
+      "Limitation checked (Module 44)",
+      "Provision invoked",
+      "Provision invoked and correct forum",
+      "Jurisdiction and valuation pleaded (civil)",
+      "Sources cited and verified (Gate 33 where authorities are relied on)",
+      "limitation / laches addressed",
+    ]) {
+      expect([line, LEGAL_VERIFICATION_ITEM.test(line)]).toEqual([line, true])
+    }
+    for (const line of [
+      "Parties and identifiers verified (L17.2)",
+      "Fact / analysis / hypothesis kept apart (L17.4)",
+      "Certification required or not",
+      "Recitals and operative clauses",
+      "Court fee: MANUAL — do not compute",
+      "Stamp duty: MANUAL — do not compute",
+      "Cause of action / offence date pleaded",
+      "See L17.11",
+    ]) {
+      expect([line, LEGAL_VERIFICATION_ITEM.test(line)]).toEqual([line, false])
+    }
+  })
+
+  it("lists every distinct seed item once, in the seed's order", () => {
+    const petition = byId("constitutional_petition_199")
+    expect(reviewChecklistOf(petition)).toEqual([...petition.checklist])
+    const deed = byId("sale_deed")
+    expect(deed.checklist.filter((c) => c === "Stamp duty: MANUAL — do not compute")).toHaveLength(2)
+    expect(reviewChecklistOf(deed)).toEqual([...new Set(deed.checklist)])
+    expect(reviewChecklistOf(deed)).toHaveLength(deed.checklist.length - 1)
+  })
+
+  it("every verified type has at least one review item, so a law-dependent approval always has something to answer", () => {
+    for (const t of rows.filter((r) => r.status === "VERIFIED")) expect(reviewChecklistOf(t).length).toBeGreaterThan(0)
   })
 })
