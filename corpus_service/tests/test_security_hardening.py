@@ -21,12 +21,19 @@ from scraper import database  # noqa: E402
 from scraper.config import Settings, settings  # noqa: E402
 from scraper.main import app  # noqa: E402
 
-STRONG_DB_URL = "postgresql+asyncpg://legal:Zq8-long-random-Pw-2026@postgres:5432/legal_scraper"
+# Production also requires verified TLS to both stores (audit F30, tests/test_store_tls_config.py),
+# so the "otherwise valid" production fixtures carry it; each test below still fails only for the
+# property it names.
+STRONG_DB_URL = (
+    "postgresql+asyncpg://legal:Zq8-long-random-Pw-2026@postgres:5432/legal_scraper"
+    "?sslmode=verify-full&sslrootcert=/run/tls-ca/ca.crt"
+)
 
 PROD_SECRETS = {
     "ENCRYPTION_KEY": Fernet.generate_key().decode(),
     "ADMIN_API_KEY": "a-real-admin-key",
     "SECRET_KEY": "a-real-secret-key",
+    "REDIS_URL": "rediss://corpus_redis:Rk3-long-random-Pw-2026@redis:6379/0",
 }
 
 
