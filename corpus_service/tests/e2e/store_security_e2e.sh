@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Audit F30 end-to-end proof: TLS to both stores, Redis ACLs, least-privilege database roles.
+# Audit F30 end-to-end proof: TLS to both stores, Redis ACLs, least-privilege database roles. Since
+# audit F19 (PR 2b) also the Annex A corpus contract that postgres init applies: owned by the bootstrap
+# superuser, nothing of it held by the app or migration role, the runtime role publishing only as
+# corpus_writer (publish_batch and promotion), and corpus_reader reading the result through v_*.
 #
 #   corpus_service/tests/e2e/store_security_e2e.sh [CORPUS_SERVICE_DIR]
 #
@@ -30,6 +33,7 @@ REDIS_CLIENT=redis:7-alpine
 # Secrets go into .env exactly as README/.env.example tell operators (re-audit D1); they are plain
 # shell variables here, never exported, so compose can only get them from .env.
 new_store_secrets
+ANNEX_A_PAGE=$((RANDOM % 30000 + 10000))  # the synthetic "2099 SCMR <page>" judgments probe.py publishes
 WRONG_CA=$(mktemp -d)
 chmod 0755 "$WRONG_CA"
 make_wrong_ca "$WRONG_CA"
@@ -130,6 +134,16 @@ expect_out "postgres: bootstrap, migration and app passwords are stored as SCRAM
 expect_out "postgres: app and migration roles exist, differ from the bootstrap user, and hold no superuser/createrole/createdb/replication/bypassrls" '^2$' \
   as_superuser_local "select count(*) from pg_roles where rolname in ('$APP_DB_USER','$MIGRATE_DB_USER') and rolname <> '$POSTGRES_USER' and rolcanlogin and not (rolsuper or rolcreaterole or rolcreatedb or rolreplication or rolbypassrls)"
 
+echo "-- audit F19 (PR 2b): Annex A at init (15-apply-annex-a.sh), provisioned least privilege"
+annex_a_checks "Annex A at init"
+expect_refused "postgres: app role over TLS cannot INSERT into an Annex A table directly" 'permission denied for table judgment' \
+  psql_c "$APP_CONN sslmode=verify-full sslrootcert=/ca/ca.crt" \
+  "insert into judgment (case_title) values ('F19 E2E Probe v. Test 2099')" -e PGPASSWORD="$APP_DB_PASSWORD"
+for role in corpus_reader corpus_declassify; do
+  expect_refused "postgres: app role over TLS cannot SET ROLE $role (not a member)" 'permission denied to set role' \
+    psql_c "$APP_CONN sslmode=verify-full sslrootcert=/ca/ca.crt" "set role $role" -e PGPASSWORD="$APP_DB_PASSWORD"
+done
+
 echo "-- (c) Redis TLS + ACL"
 OK_RE='PONG' expect_refused "redis: plaintext on 6379 fails (even with the pre-F30 requirepass secret)" \
   'connection reset|closed|i/o error|error' redis_c --no-auth-warning -a "$REDIS_PASSWORD" PING
@@ -178,7 +192,10 @@ expect_out "postgres: application tables are owned by the migration role, none b
 run_probe "migration role (migrate service env)" \
   timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps migrate python tests/e2e/probe.py db-migrate
 run_probe "runtime role (api service env)" \
-  timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -e E2E_BOOTSTRAP_USER="$POSTGRES_USER" api python tests/e2e/probe.py db-runtime
+  timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -e E2E_BOOTSTRAP_USER="$POSTGRES_USER" -e E2E_ANNEX_A_PAGE="$ANNEX_A_PAGE" \
+  api python tests/e2e/probe.py db-runtime
+annex_a_reader_checks "Annex A reader" "$ANNEX_A_PAGE"
+annex_a_checks "Annex A after migrate and the probes"
 WRONG_CA_URL="postgresql+asyncpg://$APP_DB_USER:$APP_DB_PASSWORD@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/wrongca/ca.crt"
 run_probe "app engine, wrong CA" \
   timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -v "$WRONG_CA:/wrongca:ro" -e DATABASE_URL="$WRONG_CA_URL" \

@@ -5,6 +5,11 @@ settings from the container environment that docker-compose.yml sets, scraper.da
 
 Prints one "PASS <label>" / "FAIL <label>" line per assertion and exits 1 if any failed.
 
+Since audit F19 (PR 2b) db-runtime and db-migrate also check the Annex A corpus contract that postgres
+init applies: the runtime role reaches it only as corpus_writer (SET ROLE) and publishes through
+publish_batch and promotion; neither role owns or holds anything of it directly. db-runtime writes
+two synthetic "2099 SCMR <page>" judgments (E2E_ANNEX_A_PAGE and the next page).
+
     python tests/e2e/probe.py db-runtime          # as APP_DB_USER (api service environment)
     python tests/e2e/probe.py db-migrate          # as MIGRATE_DB_USER (migrate service environment)
     python tests/e2e/probe.py env-escalation      # inside a running app container (re-audit D1)
@@ -163,6 +168,7 @@ async def db_runtime():
              f"SET ROLE \"{os.environ.get('E2E_BOOTSTRAP_USER', 'postgres')}\""),
         ]:
             await _must_be_denied(engine, label, sql)
+        await annex_a_runtime(engine, expected)
     finally:
         await engine.dispose()
 
@@ -179,8 +185,233 @@ async def db_migrate():
         check("migration role owns the application tables", (owned or 0) >= 9, f"owned={owned}")
         for label, sql in PRIVILEGED:
             await _must_be_denied(engine, label, sql)
+        await annex_a_migrate(engine)
     finally:
         await engine.dispose()
+
+
+# ---- audit F19, PR 2b: the Annex A corpus contract in the compose stack ---------------------------
+# 003's corpus_contract_relations(). Neither application role may execute that function (EXECUTE is
+# revoked from PUBLIC), so the probe carries the list; store_security_e2e.sh checks the same
+# properties against the function itself, as the superuser.
+ANNEX_A_RELATIONS = (
+    "classification_rank", "source_provenance", "court", "judge", "instrument", "statute", "statute_section",
+    "statute_section_version", "judgment", "judgment_version", "citation", "treatment", "corpus_metadata",
+    "corpus_embeddings", "judgment_classification_declassify_audit", "judgment_declassify_grant",
+    "v_judgment", "v_citation", "v_treatment", "v_statute", "v_statute_section", "v_statute_section_version",
+    "v_instrument", "v_court", "v_judge", "v_source_provenance",
+    "corpus_publication", "corpus_publication_item", "corpus_publication_grant",
+)
+ANY_TABLE_PRIVILEGE = "SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"
+ANY_COLUMN_PRIVILEGE = "SELECT,INSERT,UPDATE,REFERENCES"
+PROBE_TITLE = "F19 E2E Probe v. Test 2099"  # synthetic: no real authority is written
+
+
+def annex_a_page():
+    """The synthetic "2099 SCMR <page>" the publication probes write (page, then page + 1). The e2e
+    scripts pass E2E_ANNEX_A_PAGE so they can check the reader's view of the same rows."""
+    raw = os.environ.get("E2E_ANNEX_A_PAGE", "")
+    return int(raw) if raw.isdigit() else 10000 + int.from_bytes(os.urandom(2), "big")
+
+
+async def _annex_a_inventory(engine):
+    """(missing, privileged, owned): inventory relations that do not exist, that the current role
+    holds any table or column privilege on (directly, through PUBLIC or an inherited role), and that
+    it owns."""
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        rows = (await conn.execute(text(
+            "SELECT n, r IS NOT NULL, "
+            "  coalesce(has_table_privilege(current_user, r, :tp) OR has_any_column_privilege(current_user, r, :cp), false), "
+            "  coalesce((SELECT c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) "
+            "            FROM pg_class c WHERE c.oid = r), false) "
+            "FROM (SELECT n, to_regclass('public.' || n) AS r FROM unnest(CAST(:names AS text[])) AS n) s"
+        ), {"names": list(ANNEX_A_RELATIONS), "tp": ANY_TABLE_PRIVILEGE, "cp": ANY_COLUMN_PRIVILEGE})).all()
+    missing = [n for n, present, _p, _o in rows if not present]
+    privileged = [n for n, _e, held, _o in rows if held]
+    owned = [n for n, _e, _p, mine in rows if mine]
+    return missing, privileged, owned
+
+
+async def _in_rolled_back_tx(engine, sql, params=None, role=None):
+    """Run ``sql`` (after SET LOCAL ROLE ``role``, if given) in a transaction that is always rolled
+    back. Returns ("SUCCEEDED", first row or None), (SQLSTATE or exception class, None), or
+    ("SET ROLE refused: <state>", None) when the role switch itself failed."""
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        trans = await conn.begin()
+        try:
+            if role:
+                try:
+                    await conn.execute(text(f'SET LOCAL ROLE "{role}"'))
+                except Exception as exc:  # noqa: BLE001 - reported by the caller
+                    return f"SET ROLE refused: {sqlstate(exc) or type(exc).__name__}", None
+            try:
+                result = await conn.execute(text(sql), params or {})
+                return "SUCCEEDED", (result.first() if result.returns_rows else None)
+            except Exception as exc:  # noqa: BLE001 - classified by the caller
+                return sqlstate(exc) or type(exc).__name__, None
+        finally:
+            await trans.rollback()
+
+
+async def _publish_probe_batch(engine, expected, page):
+    """publish_batch() of one synthetic trusted judgment, through the app's own engine (TLS, the
+    runtime role, which switches to corpus_writer with SET LOCAL ROLE). Returns the judgment id."""
+    import hashlib
+    import uuid
+    from datetime import datetime, timezone
+
+    from sqlalchemy import text
+
+    from scraper.publication.annex_a import publish_batch
+    from scraper.publication.batch import BATCH_FORMAT, parse_batch_json
+
+    body = f"synthetic F19 e2e probe text {page}"
+    doc = {
+        "format": BATCH_FORMAT, "batch_key": f"e2e/f19-2b/{uuid.uuid4()}", "source_kind": "curated",
+        "items": [{
+            "kind": "judgment", "item_key": "judgment", "trust": {"level": "trusted", "confidence": 0.9},
+            "provenance": {
+                "source_name": "f19-e2e-probe", "source_url": f"https://f19.example.invalid/e2e/{page}",
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "content_hash": hashlib.sha256(body.encode()).hexdigest(),
+                "extraction_method": "html", "extractor_version": "f19-e2e",
+            },
+            "citations": [{"text": f"2099 SCMR {page}"}], "case_title": PROBE_TITLE,
+            "bench_type": "Division Bench", "full_text": body,
+        }],
+    }
+    label = ("publish_batch through the app's engine (TLS, runtime role -> SET LOCAL ROLE corpus_writer) "
+             "promotes a trusted judgment into Annex A")
+    try:
+        async with engine.begin() as conn:
+            result = await publish_batch(conn, parse_batch_json(json.dumps(doc).encode()), "e2e-probe:f19-2b")
+            role_inside = (await conn.execute(text("SELECT current_user"))).scalar()
+    except Exception as exc:  # noqa: BLE001
+        check(label, False, f"{type(exc).__name__} {getattr(exc, 'code', '')} sqlstate={sqlstate(exc)}")
+        return None
+    primary = result.primary("judgment")
+    check(label, primary.decision == "promoted" and primary.review_status == "promoted" and not result.already,
+          f"decision={primary.decision} status={primary.review_status} reason={primary.reason}")
+    role_after = await _scalar(engine, "SELECT current_user")
+    check("the session role is the runtime role again after publish_batch (in its transaction and after COMMIT)",
+          role_inside == expected and role_after == expected, f"inside={role_inside} after={role_after}")
+    return primary.entity_id
+
+
+async def _promote_probe_record(page):
+    """The harvest path: a trusted staged record promoted by promote_staging_records() as the runtime
+    role. Returns its Annex A judgment id."""
+    from scraper.database import SessionLocal
+    from scraper.models import ScraperSource, ScraperStaging
+    from scraper.tasks.promotion import promote_staging_records
+
+    async with SessionLocal() as db:
+        src = ScraperSource(source_name=f"f19-e2e-{page}", source_url=f"https://f19.example.invalid/e2e/{page}",
+                            trust_level="trusted")
+        db.add(src)
+        await db.flush()
+        st = ScraperStaging(
+            source_id=src.id, source_site=src.source_name,
+            source_url=f"https://f19.example.invalid/e2e/{page}/judgment", extracted_title="F19 E2E Staged v. Test 2099",
+            extracted_year=2099, extracted_citation=f"2099 SCMR {page + 1}",
+            raw_text=f"synthetic F19 e2e staged text {page}", raw_html="<p>synthetic F19 e2e staged page</p>",
+            extracted_bench_type="Division Bench", confidence_score=0.9, normalised=True,
+        )
+        db.add(st)
+        await db.commit()
+        staging_id = st.id
+    counts = await promote_staging_records()
+    check("promotion (promote_staging_records) as the runtime role publishes a trusted staged record into Annex A",
+          counts == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}, json.dumps(counts))
+    async with SessionLocal() as db:
+        st = await db.get(ScraperStaging, staging_id)
+        state = (st.promoted, st.quarantined, st.quarantine_reason, st.promoted_to_id)
+    check("the staged record is closed promoted, pointing at its Annex A judgment",
+          state[:3] == (True, False, None) and state[3] is not None, repr(state[:3]))
+    return state[3]
+
+
+async def annex_a_runtime(engine, expected):
+    """PR 2b, Task B1: the runtime role reaches Annex A only as corpus_writer (SET ROLE, never
+    inherited), holds nothing on Annex A directly, cannot touch the grant tables even as
+    corpus_writer, and publishes only through an audited publication."""
+    membership = await _scalar(
+        engine,
+        "SELECT coalesce(string_agg(format('inherit=%s set=%s admin=%s', m.inherit_option, m.set_option, "
+        "m.admin_option), ';'), 'none') FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid "
+        "WHERE g.rolname = 'corpus_writer' AND m.member = (SELECT oid FROM pg_roles WHERE rolname = current_user)")
+    check("runtime role is a corpus_writer member WITH INHERIT FALSE, SET TRUE (pg_auth_members, PG16), no admin",
+          membership == "inherit=false set=true admin=false", membership)
+    missing, privileged, owned = await _annex_a_inventory(engine)
+    check(f"Annex A is applied: all {len(ANNEX_A_RELATIONS)} inventory relations exist", not missing,
+          "missing: " + ",".join(missing))
+    check("runtime role holds no privilege on any Annex A relation (table or column, direct or inherited)",
+          not privileged and not missing, "privileged: " + ",".join(privileged))
+    check("runtime role owns no Annex A relation", not owned, ",".join(owned))
+    for label, sql in (
+        ("INSERT into an Annex A table (judgment)", f"INSERT INTO public.judgment (case_title) VALUES ('{PROBE_TITLE}')"),
+        ("SELECT from an Annex A table (judgment)", "SELECT count(*) FROM public.judgment"),
+        ("calling corpus_publication_begin directly",
+         "SELECT * FROM public.corpus_publication_begin('e2e/direct', repeat('0', 64), 'curated', 'probe')"),
+    ):
+        state, _row = await _in_rolled_back_tx(engine, sql)
+        check(f"runtime role, directly: {label} is refused (insufficient_privilege)", state == INSUFFICIENT_PRIVILEGE,
+              f"result={state}")
+
+    state, row = await _in_rolled_back_tx(engine, "SELECT current_user", role="corpus_writer")
+    check("runtime role can SET ROLE corpus_writer", state == "SUCCEEDED" and row is not None and row[0] == "corpus_writer",
+          f"result={state} row={row}")
+    for label, sql, want in (
+        ("INSERT into corpus_publication_grant", "INSERT INTO public.corpus_publication_grant DEFAULT VALUES",
+         INSUFFICIENT_PRIVILEGE),
+        ("INSERT into judgment_declassify_grant", "INSERT INTO public.judgment_declassify_grant DEFAULT VALUES",
+         INSUFFICIENT_PRIVILEGE),
+        ("UPDATE corpus_publication (the audit)", "UPDATE public.corpus_publication SET actor_id = actor_id WHERE false",
+         INSUFFICIENT_PRIVILEGE),
+        ("a promoted judgment written outside a publication",
+         f"INSERT INTO public.judgment (case_title, review_status) VALUES ('{PROBE_TITLE}', 'promoted')", "SKP02"),
+    ):
+        state, _row = await _in_rolled_back_tx(engine, sql, role="corpus_writer")
+        check(f"as corpus_writer: {label} is refused ({want})", state == want, f"result={state}")
+
+    page = annex_a_page()
+    published = await _publish_probe_batch(engine, expected, page)
+    promoted = await _promote_probe_record(page)
+    for label, jid in (("publish_batch", published), ("promotion", promoted)):
+        state, row = await _in_rolled_back_tx(
+            engine, "SELECT review_status, publication_id IS NOT NULL FROM public.judgment WHERE id = :id",
+            {"id": jid}, role="corpus_writer")
+        check(f"the {label} judgment is committed promoted in Annex A and carries its publication",
+              jid is not None and state == "SUCCEEDED" and row is not None and tuple(row) == ("promoted", True),
+              f"result={state} row={row}")
+    check("runtime role is unchanged at the end (no role leaks into the pool)",
+          await _scalar(engine, "SELECT current_user") == expected)
+
+
+async def annex_a_migrate(engine):
+    """PR 2b, Task B1: the migration role (schema owner) owns nothing of Annex A and cannot change it."""
+    missing, privileged, owned = await _annex_a_inventory(engine)
+    check(f"Annex A is applied: all {len(ANNEX_A_RELATIONS)} inventory relations exist", not missing,
+          "missing: " + ",".join(missing))
+    check("migration role owns no Annex A relation", not owned and not missing, "owned: " + ",".join(owned))
+    check("migration role holds no privilege on any Annex A relation", not privileged, "privileged: " + ",".join(privileged))
+    for label, sql in (
+        ("ALTER TABLE judgment DISABLE TRIGGER judgment_publication_guard",
+         "ALTER TABLE public.judgment DISABLE TRIGGER judgment_publication_guard"),
+        ("DROP TRIGGER judgment_publication_guard", "DROP TRIGGER judgment_publication_guard ON public.judgment"),
+        ("CREATE OR REPLACE FUNCTION corpus_publication_begin",
+         "CREATE OR REPLACE FUNCTION public.corpus_publication_begin(p_batch_key text, p_input_sha256 text, "
+         "p_source_kind text, p_actor_id text) RETURNS TABLE (publication_id uuid, already boolean) "
+         "LANGUAGE sql AS $$ SELECT NULL::uuid, true $$"),
+        ("GRANT corpus_writer to itself", "GRANT corpus_writer TO CURRENT_USER"),
+    ):
+        state, _row = await _in_rolled_back_tx(engine, sql)
+        check(f"migration role: {label} is refused (insufficient_privilege)", state == INSUFFICIENT_PRIVILEGE,
+              f"result={state}")
 
 
 async def _attempt(url, sql):
