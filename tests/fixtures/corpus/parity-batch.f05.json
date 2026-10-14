@@ -330,6 +330,33 @@
       "confidence": 0.9
     },
     {
+      "kind": "treatment",
+      "item_key": "pt-6",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/16",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "1010101010101010101010101010101010101010101010101010101010101010",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "treating": {
+        "item_key": "p-single"
+      },
+      "treated": {
+        "item_key": "p-division"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "single",
+      "confidence": 0.6
+    },
+    {
       "kind": "statute_section_history",
       "item_key": "ph-federal",
       "trust": {

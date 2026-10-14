@@ -53,6 +53,7 @@ const V2 = "Section 5 as amended: sixty days."
 const S6_TEXT = "Section 6 current text."
 const MAIN_BATCH = path.join(CORPUS_FIXTURES, "curated-batch.f05.json")
 const LATE_BATCH = path.join(CORPUS_FIXTURES, "curated-batch.f05-late.json")
+const PENDING_BATCH = path.join(CORPUS_FIXTURES, "curated-batch.f05-pending.json")
 const SLOW = 60_000
 
 type Member = { uid: string; token: string }
@@ -206,6 +207,21 @@ describe("F05: the draft gate answers from the promoted Annex A corpus (end to e
     expect(g.status).toBe("OVERRULED")
     expectErr(await apiErrorOf(approve(f, d.draftId)), 409, "gate_blocked")
     expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+  }, SLOW)
+
+  it("F05-h a quarantined second overruling never hides a promoted larger-bench one: still OVERRULED, approval 409 (P4-2, #51 R1 D-1)", async () => {
+    const f = await newFirm()
+    const d = await create(f, cites("2099 SCMR 202"))
+    expect((await gate(f, d.draftId)).citations).toEqual([{ ref: "2099 SCMR 202", judgmentId: J["j-overruled"], status: "OVERRULED" }])
+    // A division-bench overruling of the same judgment, held at 0.6 (treatment_uncertain): pending review.
+    const pending = await db.publish(PENDING_BATCH)
+    expect(primary(pending, "t-pending-202")).toMatchObject({ decision: "quarantined", reason: "treatment_uncertain" })
+    await resetAuthorityStore()
+    const d2 = await create(f, cites("2099 SCMR 202"))
+    const g = await gate(f, d2.draftId)
+    expect(g.citations).toEqual([{ ref: "2099 SCMR 202", judgmentId: J["j-overruled"], status: "OVERRULED" }])
+    expect(g.status).toBe("OVERRULED")
+    expectErr(await apiErrorOf(approve(f, d2.draftId)), 409, "gate_blocked")
   }, SLOW)
 
   it("F05-c a later text pleaded for an earlier date gives TEMPORAL_MISMATCH with the text in force then", async () => {

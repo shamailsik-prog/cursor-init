@@ -134,7 +134,7 @@ A call carries only a canonical citation, a judgment id or a section key (with a
 
 In production the URL must ask for `verify-full`. Outside production, plaintext is allowed to loopback only. The login must be a `corpus_reader` member and nothing more (ruling 13). The store refuses a superuser, a `corpus_writer` or `corpus_declassify` member, or a session that is not read-only. The deployment binding (the secret, the corpus host, the network path) is out of scope here (spec §7).
 
-The store reads only 004's views (`postgres/ddl/004_authority_read_views.sql`) and `corpus_metadata`. A row shows only when it is promoted, written by a finished publication, and carries complete provenance, and so is every parent it reports. A judgment must also be public and have a bench. A row a superuser wrote outside any publication never shows (ruling 2). An overruling the reader cannot show is pending review, never absent. It reads as UNVERIFIED (ruling 3). Jurisdiction codes map to Annex A values by upper-case equality only (`FEDERAL` is `Federal`; `PK` maps to nothing, ruling 6). A section version is usable only with a confidence strictly above 0.5 (ruling 4). Dates travel as text, so the process time zone cannot move them.
+The store reads only 004's views (`postgres/ddl/004_authority_read_views.sql`) and `corpus_metadata`. A row shows only when it is promoted, written by a finished publication, and carries complete provenance, and so is every parent it reports. A judgment must also be public and have a bench. A row a superuser wrote outside any publication never shows (ruling 2). An overruling the reader cannot show (held for review, or hidden by these rules) is never absent. `listTreatments` reports it as `PENDING_OVERRULING`, an overruling whose bench cannot be relied on. On its own the citation reads UNVERIFIED (ruling 3), never VERIFIED. Beside a qualifying overruling the citation stays OVERRULED: a pending overruling never hides the strongest warning (P4-2; #51 fix round 1, D-1). `InMemoryAuthorityStore.addPendingOverruling` gives the same answer, for O-59 parity. Jurisdiction codes map to Annex A values by upper-case equality only (`FEDERAL` is `Federal`; `PK` maps to nothing, ruling 6). A section version is usable only with a confidence strictly above 0.5 (ruling 4). Dates travel as text, so the process time zone cannot move them.
 
 It fails closed. Every failure throws `AuthorityUnavailableError(reason)`, which the gate reads as UNVERIFIED / TEMPORAL_UNAVAILABLE. The gate catches that class and only that class: any other error still fails the request. The reasons are:
 
@@ -142,7 +142,7 @@ It fails closed. Every failure throws `AuthorityUnavailableError(reason)`, which
 - `contract_missing`: `publication_contract` is not `1`, or `last_refresh` is malformed or missing;
 - `stale`: `last_refresh` is older than the bound, or more than 5 minutes ahead;
 - `wrong_role`: the login is not a plain corpus reader;
-- `pending_review`: an overruling the reader cannot show;
+- `pending_review`: kept for adapters that cannot list treatments at all; the corpus store reports a pending overruling as a fact instead (above);
 - `inconsistent`: data that breaks the contract;
 - `circuit_open`: the breaker is open;
 - `error`: anything else.

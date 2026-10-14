@@ -11,10 +11,12 @@
 import { logger } from "firebase-functions"
 import { normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
+import { PENDING_OVERRULING } from "./authorityPending"
 import { PgAuthorityStore } from "./corpusAuthorityStore"
 import { readCorpusReaderConfig } from "./corpusReaderConfig"
 
 export { AUTHORITY_UNAVAILABLE_REASONS, AuthorityUnavailableError, type AuthorityUnavailableReason } from "./authorityErrors"
+export { PENDING_OVERRULING } from "./authorityPending"
 
 /**
  * The port's contract, which every adapter (the O-59 corpus connector included) must meet; the O-59 parity test asserts
@@ -54,6 +56,7 @@ export class InMemoryAuthorityStore implements AuthorityStore {
   private readonly judgments = new Map<string, { citation: string; bench: Bench }>()
   private readonly treatments: { treatingId: string; treatedId: string; kind: string; recordedTreatingBench: Bench }[] = []
   private readonly versions: SectionVersion[] = []
+  private readonly pending = new Set<string>()
 
   addJudgment(id: string, citation: string, bench: Bench): void {
     this.judgments.set(id, { citation, bench })
@@ -61,6 +64,11 @@ export class InMemoryAuthorityStore implements AuthorityStore {
 
   addTreatment(treatingId: string, treatedId: string, kind: string, recordedTreatingBench: Bench): void {
     this.treatments.push({ treatingId, treatedId, kind, recordedTreatingBench })
+  }
+
+  /** An overruling of `treatedId` held for review: listTreatments reports PENDING_OVERRULING for it, once. */
+  addPendingOverruling(treatedId: string): void {
+    this.pending.add(treatedId)
   }
 
   addSectionVersion(sectionId: string, jurisdiction: string, effectiveFrom: string, effectiveTo: string | null, text: string): void {
@@ -75,13 +83,15 @@ export class InMemoryAuthorityStore implements AuthorityStore {
   }
 
   async listTreatments(judgmentId: string): Promise<TreatmentFact[]> {
-    return this.treatments
+    const facts: TreatmentFact[] = this.treatments
       .filter((t) => t.treatedId === judgmentId)
       .map((t) => ({
         kind: t.kind,
         treatingJudgmentBench: this.judgments.get(t.treatingId)?.bench ?? null,
         recordedTreatingBench: t.recordedTreatingBench,
       }))
+    if (this.pending.has(judgmentId)) facts.push({ ...PENDING_OVERRULING })
+    return facts
   }
 
   async getSectionAsAt(sectionId: string, asAtDate: string, jurisdiction: string): Promise<{ text: string } | "no_history"> {

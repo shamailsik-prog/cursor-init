@@ -7,7 +7,8 @@ import pg from "pg"
 import { logger } from "firebase-functions"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { normaliseCitation } from "@/services/d4-2/citations"
-import { AuthorityUnavailableError } from "../src/d4/authority"
+import { verdictFromTreatments } from "@/services/d4-2/citationVerdict"
+import { AuthorityUnavailableError, PENDING_OVERRULING } from "../src/d4/authority"
 import {
   BREAKER_OPEN_MS,
   PgAuthorityStore,
@@ -108,9 +109,13 @@ beforeAll(async () => {
         judgment("t-overruled", [{ text: "2099 SCMR 9903" }], "DB"),
         judgment("t-followed", [{ text: "2099 SCMR 9904" }], "DB"),
         judgment("t-pending", [{ text: "2099 SCMR 9905" }], "DB"),
+        judgment("t-mixed", [{ text: "2099 SCMR 9906" }], "DB"),
         treatment("tr-overruled", "t-larger", "t-overruled", "Overruled", 0.9),
         treatment("tr-followed", "t-full", "t-followed", "followed", 0.9),
         treatment("tr-pending", "t-larger", "t-pending", "overruled", 0.6),
+        // #51 R1 D-1: a promoted larger-bench overruling and a quarantined one of the same judgment.
+        treatment("tr-mixed-promoted", "t-larger", "t-mixed", "overruled", 0.9),
+        treatment("tr-mixed-pending", "t-full", "t-mixed", "overruled", 0.6),
         history("h-5", "5", "amendment_history", [version(1, "2099-01-01", "2099-07-01", S5_V1, 0.9), version(2, "2099-07-01", null, S5_V2, 0.9)]),
         history("h-6", "6", "current_text_only", [version(1, "2099-01-01", null, "Section 6 current text.", 0.5)]),
       ],
@@ -207,8 +212,19 @@ describe("PgAuthorityStore lookups (F05 plan Task 6)", () => {
     expect(await s.listTreatments(byItem.get("t-larger") as string)).toEqual([])
   })
 
-  it("listTreatments throws pending_review for a quarantined overruling (ruling 3)", async () => {
-    await expect(store().listTreatments(byItem.get("t-pending") as string)).rejects.toMatchObject({ name: "AuthorityUnavailableError", reason: "pending_review" })
+  it("listTreatments reports a quarantined overruling as an overruling of unknown bench: UNVERIFIED, never VERIFIED (ruling 3)", async () => {
+    const facts = await store().listTreatments(byItem.get("t-pending") as string)
+    expect(facts).toEqual([PENDING_OVERRULING])
+    expect(verdictFromTreatments("division", facts)).toBe("UNVERIFIED")
+  })
+
+  it("a pending overruling does not hide a promoted larger-bench overruling: the verdict stays OVERRULED (P4-2, #51 R1 D-1)", async () => {
+    const facts = await store().listTreatments(byItem.get("t-mixed") as string)
+    expect(facts).toHaveLength(2)
+    expect(facts).toEqual(expect.arrayContaining([{ kind: "overruled", treatingJudgmentBench: "larger", recordedTreatingBench: "larger" }, PENDING_OVERRULING]))
+    expect(verdictFromTreatments("division", facts)).toBe("OVERRULED")
+    const out = await runGate({ title: "T", body: "Relying on 2099 SCMR 9906.", temporalChecks: [] }, store())
+    expect(out.citations).toEqual([{ ref: "2099 SCMR 9906", judgmentId: byItem.get("t-mixed"), status: "OVERRULED" }])
   })
 
   it("listTreatments throws inconsistent for a judgment id that is not a UUID, and never returns [] on failure (D5)", async () => {
@@ -455,9 +471,9 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     }
   }, 30_000)
 
-  it("pending_review and inconsistent do not open the breaker: the next call still reads", async () => {
+  it("a pending overruling is a fact, not a failure, and inconsistent does not open the breaker: the next call still reads", async () => {
     const s = store()
-    await expect(s.listTreatments(byItem.get("t-pending") as string)).rejects.toMatchObject(unavailableAs("pending_review"))
+    expect(await s.listTreatments(byItem.get("t-pending") as string)).toEqual([PENDING_OVERRULING])
     await expect(s.listTreatments("j_101")).rejects.toMatchObject(unavailableAs("inconsistent"))
     expect(await s.findJudgment(ANY)).toMatchObject({ benchType: "division" })
   })

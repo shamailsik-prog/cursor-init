@@ -7,8 +7,9 @@
  * It fails closed. Anything it cannot answer throws AuthorityUnavailableError, which the gate reads as UNVERIFIED /
  * TEMPORAL_UNAVAILABLE, never OK:
  * - a driver error;
- * - data that breaks the contract (D5);
- * - an overruling still pending review (ruling 3, D2).
+ * - data that breaks the contract (D5).
+ * An overruling still pending review, or hidden by the visibility rules (ruling 3, D2), is not a failure: it is
+ * reported as PENDING_OVERRULING, an overruling of unknown bench (#51 R1 D-1).
  * Questions it can refuse without the database (a non-canonical citation, a non-UUID section, an unmapped
  * jurisdiction, a malformed date; D18) answer "not found" / "no_history" directly.
  *
@@ -24,6 +25,7 @@ import { normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
 import type { AuthorityStore } from "./authority"
 import { AuthorityUnavailableError, type AuthorityUnavailableReason } from "./authorityErrors"
+import { PENDING_OVERRULING } from "./authorityPending"
 import type { CorpusReaderConfig } from "./corpusReaderConfig"
 
 /** A section version is usable only above this confidence (ruling 4: strictly greater than 0.5). */
@@ -227,13 +229,18 @@ export class PgAuthorityStore implements AuthorityStore {
       // Only an id this store returned can be asked about; anything else breaks the contract (D5).
       if (!UUID.test(judgmentId)) throw unavailable("inconsistent")
       const rows = await this.query<{ k: string; kind: unknown; recorded: unknown; treating: unknown }>(TREATMENTS_SQL, [judgmentId])
-      if (rows.some((r) => r.k === "pending")) throw unavailable("pending_review")
-      return rows.map((r) => {
-        if (typeof r.kind !== "string" || !TREATMENT_KINDS.has(r.kind) || !isBench(r.recorded) || !isBench(r.treating)) {
-          throw unavailable("inconsistent")
-        }
-        return { kind: r.kind, treatingJudgmentBench: r.treating, recordedTreatingBench: r.recorded }
-      })
+      const facts: TreatmentFact[] = rows
+        .filter((r) => r.k !== "pending")
+        .map((r) => {
+          if (typeof r.kind !== "string" || !TREATMENT_KINDS.has(r.kind) || !isBench(r.recorded) || !isBench(r.treating)) {
+            throw unavailable("inconsistent")
+          }
+          return { kind: r.kind, treatingJudgmentBench: r.treating, recordedTreatingBench: r.recorded }
+        })
+      // An overruling the reader cannot show (ruling 3, D2) is reported, never hidden, and never hides another
+      // (#51 R1 D-1, P4-2): with a qualifying overruling the verdict stays OVERRULED, without one it is UNVERIFIED.
+      if (rows.some((r) => r.k === "pending")) facts.push({ ...PENDING_OVERRULING })
+      return facts
     })
   }
 

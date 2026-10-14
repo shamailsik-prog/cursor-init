@@ -8,8 +8,9 @@ import { readCorpusReaderConfig } from "../src/d4/corpusReaderConfig"
 import { CORPUS_FIXTURES, type CorpusDb, createCorpusDb } from "./corpusPg"
 
 /**
- * O-59 parity (F05 plan Task 9, D17): the Pg store and the in-memory store, both built from one all-promoting
- * fixture, answer every query on its grid alike. The Pg store is seeded through the publication CLI. The in-memory
+ * O-59 parity (F05 plan Task 9, D17): the Pg store and the in-memory store, both built from one fixture, answer every
+ * query on its grid alike. Every item promotes except one overruling held for review (#51 R1 D-1), which the in-memory
+ * store records with addPendingOverruling. The Pg store is seeded through the publication CLI. The in-memory
  * store is built from the same JSON, using the ids, canonical citation texts and section ids the superuser reads back.
  * Runs only in `npm run test:f05-authority` (F05_AUTHORITY_SUITE=1, D14).
  */
@@ -35,7 +36,9 @@ const dayBefore = (iso: string) => new Date(Date.parse(`${iso}T00:00:00Z`) - 86_
 beforeAll(async () => {
   db = await createCorpusDb("parity")
   const summary = await db.publish(PARITY_BATCH)
-  expect(summary.items.filter((o) => ["judgment", "treatment", "statute_section"].includes(o.entity_type)).every((o) => o.decision === "promoted")).toBe(true)
+  const decisions = summary.items.filter((o) => ["judgment", "treatment", "statute_section"].includes(o.entity_type)).map((o) => [o.item_key, o.decision])
+  expect(decisions.filter(([, d]) => d !== "promoted")).toEqual([["pt-6", "quarantined"]])
+  const promoted = new Set(decisions.filter(([, d]) => d === "promoted").map(([k]) => k))
   const idOf = new Map(summary.items.filter((o) => o.entity_type === "judgment").map((o) => [o.item_key, o.entity_id as string]))
 
   // Judgments: their benches and canonical citation texts, as published.
@@ -45,11 +48,12 @@ beforeAll(async () => {
     citations.push(r.citation_text)
     if (!judgmentIds.includes(r.id)) judgmentIds.push(r.id)
   }
-  // Treatments: from the JSON, with the Pg ids.
+  // Treatments: from the JSON, with the Pg ids. One the publication held for review is a pending overruling.
   for (const t of FIXTURE.items.filter((i) => i.kind === "treatment")) {
     const treating = idOf.get((t.treating as { item_key: string }).item_key) as string
     const treated = idOf.get((t.treated as { item_key: string }).item_key) as string
-    mem.addTreatment(treating, treated, t.treatment as string, t.treating_bench_type as Bench)
+    if (promoted.has(t.item_key)) mem.addTreatment(treating, treated, t.treatment as string, t.treating_bench_type as Bench)
+    else if (t.treatment === "overruled") mem.addPendingOverruling(treated)
   }
   // Section versions: from the JSON, under the Pg section ids and the upper-case code of the statute's jurisdiction.
   for (const h of FIXTURE.items.filter((i) => i.kind === "statute_section_history")) {
@@ -101,6 +105,7 @@ describe("O-59 parity (F05 plan Task 9, D17)", () => {
       expect(sortTreatments(answer.pg), id).toEqual(sortTreatments(answer.mem))
       facts += answer.pg.length
     }
+    // Five promoted treatments and the one pending overruling.
     expect(facts).toBe(FIXTURE.items.filter((i) => i.kind === "treatment").length)
 
     let texts = 0

@@ -4,6 +4,7 @@ import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
 import {
   AuthorityUnavailableError,
   EMPTY_AUTHORITY_STORE,
+  PENDING_OVERRULING,
   InMemoryAuthorityStore,
   activeAuthorityStore,
   setAuthorityStoreForTests,
@@ -675,5 +676,36 @@ describe("runGate: an unavailable authority fails closed (F05)", () => {
     expect(both.temporal.map((t) => [t.status, t.inForceText])).toEqual([["TEMPORAL_UNAVAILABLE", null]])
     const nothing = await runGate({ title: "T", body: "The petitioner prays for relief.", temporalChecks: [] }, down)
     expect(nothing).toEqual({ status: "NOT_ASSESSED", citations: [], temporal: [], scope: { citations: 0, temporalChecks: 0, assessed: false } })
+  })
+})
+
+describe("runGate: a pending overruling (F05, #51 R1 D-1)", () => {
+  it("a pending overruling alone leaves the found judgment UNVERIFIED, never VERIFIED (ruling 3)", async () => {
+    const store = new InMemoryAuthorityStore()
+    store.addJudgment("j_101", "PLD 2099 SC 101", "division")
+    store.addPendingOverruling("j_101")
+    expect(await store.listTreatments("j_101")).toEqual([PENDING_OVERRULING])
+    const out = await runGate({ title: "T", body: "See PLD 2099 SC 101.", temporalChecks: [] }, store)
+    expect(out.citations).toEqual([{ ref: "PLD 2099 SC 101", judgmentId: "j_101", status: "UNVERIFIED" }])
+  })
+
+  it("a pending overruling never hides a qualifying one: a larger-bench overruling stays OVERRULED (P4-2)", async () => {
+    const store = new InMemoryAuthorityStore()
+    store.addJudgment("j_101", "PLD 2099 SC 101", "division")
+    store.addJudgment("j_larger", "PLD 2099 SC 300", "larger")
+    store.addTreatment("j_larger", "j_101", "overruled", "larger")
+    store.addPendingOverruling("j_101")
+    store.addPendingOverruling("j_101")
+    expect(await store.listTreatments("j_101")).toEqual([
+      { kind: "overruled", treatingJudgmentBench: "larger", recordedTreatingBench: "larger" },
+      PENDING_OVERRULING,
+    ])
+    const out = await runGate({ title: "T", body: "See PLD 2099 SC 101.", temporalChecks: [] }, store)
+    expect(out.citations).toEqual([{ ref: "PLD 2099 SC 101", judgmentId: "j_101", status: "OVERRULED" }])
+  })
+
+  it("PENDING_OVERRULING is an overruling whose bench cannot be relied on, and is frozen", () => {
+    expect(PENDING_OVERRULING).toEqual({ kind: "overruled", treatingJudgmentBench: null, recordedTreatingBench: "single" })
+    expect(Object.isFrozen(PENDING_OVERRULING)).toBe(true)
   })
 })
