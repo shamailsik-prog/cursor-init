@@ -50,19 +50,32 @@ export function isDocumentObjectS3Configured(): boolean {
   )
 }
 
+function documentObjectS3EndpointHostname(): string | null {
+  const raw = process.env.SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT?.trim()
+  if (!raw) return null
+  try {
+    const url = new URL(raw.includes("://") ? raw : `https://${raw}`)
+    return url.hostname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+function isCloudflareR2Hostname(hostname: string): boolean {
+  return hostname === "r2.cloudflarestorage.com" || hostname.endsWith(".r2.cloudflarestorage.com")
+}
+
+function isLocalOrDevMinioHostname(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "minio"
+}
+
 /** Omit SSE on PutObject when the target rejects x-amz-server-side-encryption (R2) or has no KMS (local MinIO). */
 export function documentObjectS3UsesServerSideEncryptionHeader(): boolean {
   const backend = process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND?.trim().toLowerCase()
   if (backend === "r2") return false
-  const endpoint = process.env.SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT?.trim().toLowerCase() ?? ""
-  if (endpoint.includes("r2.cloudflarestorage.com")) return false
-  if (
-    endpoint.includes("127.0.0.1") ||
-    endpoint.includes("localhost") ||
-    endpoint.includes("minio")
-  ) {
-    return false
-  }
+  const hostname = documentObjectS3EndpointHostname()
+  if (!hostname) return true
+  if (isCloudflareR2Hostname(hostname) || isLocalOrDevMinioHostname(hostname)) return false
   return true
 }
 
