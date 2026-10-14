@@ -39,6 +39,28 @@ jobs:
           path: reports/mutation/next/
           retention-days: 30
 
+  documents:
+    # The document vault (F03, FA-D16-001/002/003). Fails when any file scores below its own
+    # floor (perFileBreak in stryker.documents.config.mjs, checked by scripts/check-mutation-per-file.mjs).
+    name: Mutation (document vault, per-file floors)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Stryker (npm run mutation:documents)
+        run: npm run mutation:documents
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-documents
+          path: reports/mutation/documents/
+          retention-days: 30
+
   functions:
     name: Mutation (functions P5 + HTTP, under emulators)
     runs-on: ubuntu-latest

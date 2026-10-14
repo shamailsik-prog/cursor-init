@@ -175,7 +175,7 @@ describe("FA-D16-001: R2 backend status handling", () => {
   it("an error body without an S3 code still reports the status", async () => {
     fake.intercept(() => new Response("gateway exploded", { status: 502 }))
     const backend = createR2DocumentObjectBackend(config())
-    await expect(backend.get(KEY)).rejects.toThrow(`R2 GET ${KEY} failed: HTTP 502`)
+    await expect(backend.get(KEY)).rejects.toThrow(new Error(`R2 GET ${KEY} failed: HTTP 502`))
     await expect(backend.get(KEY)).rejects.not.toThrow(/exploded/)
   })
 

@@ -106,6 +106,7 @@ services do not depend on the vault.
 | Test | Proves |
 |---|---|
 | `tests/fa-d16-001.document-vault-s3.e2e.test.ts` (`npm run test:document-vault-s3`, CI job `document-vault-s3`, MinIO) | upload → bucket holds only ciphertext → a fresh store instance reads it → download bytes and hash match; overwrite refused; tamper, truncation and deletion detected; restore drill into a second bucket; FA-D16-003 on S3 |
+| `scripts/e2e-document-vault-server.mjs` (`npm run test:document-vault-server`, same CI job) | the same flow through a running Next.js server: the bundled route and Next's extended fetch (body sent with a known length, `cache: "no-store"`) |
 | `tests/fa-d16-001.r2-object-backend.unit.test.ts` | SigV4 (checked by an independent verifier), the conditional PUT, payload hashes, status handling, timeouts, settling an ambiguous PUT, the identical envelope across backends |
 | `tests/fa-d16-001.object-store-config.unit.test.ts` | the fail-closed selection rules above, including the 503 from the upload route |
 | `tests/fa-d16-002.*.unit.test.ts` | tampered and truncated ciphertext, the wrong key, malformed keys, the format version, hash mismatches, storagePath validation, uploadDocument's rollback and dedup paths |

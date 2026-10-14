@@ -49,8 +49,9 @@ export function filesystemObjectFile(root: string, key: string): string {
   return file
 }
 
+/** node:fs/promises rejects with an Error carrying `code`. */
 function errorCode(err: unknown): string | undefined {
-  return (err as NodeJS.ErrnoException | undefined)?.code
+  return (err as NodeJS.ErrnoException).code
 }
 
 export function createFilesystemDocumentObjectBackend(root: string): DocumentObjectBackend {

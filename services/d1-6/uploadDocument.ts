@@ -43,10 +43,25 @@ async function putObjectOrDiscard(input: DocumentObjectPutInput): Promise<Docume
   }
 }
 
-function hasRetainedBytes(doc: DocumentRecord): boolean {
-  return Boolean(doc.storagePath) && doc.objectBytesStatus === "available"
+/**
+ * Whether the row's object can be read back and verified now. The recorded objectBytesStatus is
+ * not trusted either way: a row marked "missing" after a transient read failure (a network
+ * backend such as R2) still has its object, and the immutable key would refuse a rewrite. A row
+ * without a storagePath (legacy metadata only) fails the read as a malformed path.
+ */
+async function storedObjectVerifies(store: SpineStore, doc: DocumentRecord): Promise<boolean> {
+  try {
+    await getImmutableDocumentObject(store, doc.firmId, doc.storagePath, doc.contentHash)
+  } catch {
+    return false
+  }
+  return true
 }
 
+/**
+ * Writes the bytes of an existing row whose object did not verify. If an unverifiable object
+ * still holds the key (tampered or corrupt), the immutable write is refused and it is preserved.
+ */
 async function ensureObjectBytes(
   store: SpineStore,
   doc: DocumentRecord,
@@ -54,14 +69,6 @@ async function ensureObjectBytes(
   contentHash: string,
   mimeType: string
 ): Promise<void> {
-  if (hasRetainedBytes(doc)) {
-    try {
-      await getImmutableDocumentObject(store, doc.firmId, doc.storagePath, doc.contentHash)
-      return
-    } catch {
-      doc.objectBytesStatus = "missing"
-    }
-  }
   const stored = await putObjectOrDiscard({
     store,
     firmId: doc.firmId,
@@ -180,15 +187,11 @@ async function uploadDocumentAsync(
   }
   if (existing) {
     const existingId = existing.id
-    if (!hasRetainedBytes(existing)) {
-      await ensureObjectBytes(store, existing, input.bytes, hash, mimeType)
+    if (await storedObjectVerifies(store, existing)) {
+      existing.objectBytesStatus = "available"
     } else {
-      try {
-        await getImmutableDocumentObject(store, existing.firmId, existing.storagePath, existing.contentHash)
-      } catch {
-        existing.objectBytesStatus = "missing"
-        await ensureObjectBytes(store, existing, input.bytes, hash, mimeType)
-      }
+      existing.objectBytesStatus = "missing"
+      await ensureObjectBytes(store, existing, input.bytes, hash, mimeType)
     }
     if (rankOf(input.classification) > rankOfStoredOrMax(existing.classification)) {
       existing.classification = input.classification
