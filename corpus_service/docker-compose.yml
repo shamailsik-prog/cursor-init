@@ -1,7 +1,33 @@
-# Production-safe compose (audit F30). Data stores are NOT published on host interfaces and sit
-# on an internal-only network. All credentials are required and have no defaults: compose refuses
-# to start if POSTGRES_PASSWORD or REDIS_PASSWORD is unset. Policy enforced by
-# ci_gates/check_compose_policy.py and proven end to end in .github/workflows/corpus-compose-policy.yml.
+# Production-safe compose (audit F30).
+# - Data stores are NOT published on host interfaces and sit on an internal-only network.
+# - Every credential is required and has no default: compose refuses to start without
+#   POSTGRES_USER/POSTGRES_PASSWORD (bootstrap superuser), APP_DB_USER/APP_DB_PASSWORD (runtime
+#   role), MIGRATE_DB_USER/MIGRATE_DB_PASSWORD (schema owner) and REDIS_APP_USER/REDIS_APP_PASSWORD.
+# - Both stores speak TLS only, with certificates from a private CA issued by the one-shot `certs`
+#   service (or supplied by the operator, see README). Clients verify the server certificate and
+#   hostname against that CA.
+# - Postgres: TLS + SCRAM only for the application roles; the bootstrap superuser cannot log in over
+#   the network. The app runs as a DML-only role; schema DDL runs once as the migration role.
+# - Redis: TLS only (plaintext port disabled), the `default` user is disabled, and the app uses an
+#   ACL user without @admin/@dangerous commands.
+# Policy enforced by ci_gates/check_compose_policy.py and proven end to end in
+# .github/workflows/corpus-compose-policy.yml.
+
+# Connection settings for every app container. compose `environment` overrides env_file (.env), so
+# a stale .env cannot point the app at the superuser or at a plaintext store.
+x-app-env: &app-env
+  DATABASE_URL: "postgresql+asyncpg://${APP_DB_USER:?APP_DB_USER_required}:${APP_DB_PASSWORD:?APP_DB_PASSWORD_required}@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/run/tls-ca/ca.crt"
+  REDIS_URL: "rediss://${REDIS_APP_USER:?REDIS_APP_USER_required}:${REDIS_APP_PASSWORD:?REDIS_APP_PASSWORD_required}@redis:6379/0"
+  REDIS_TLS_CA_FILE: /run/tls-ca/ca.crt
+
+x-app-depends: &app-depends
+  migrate:
+    condition: service_completed_successfully
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
 services:
   api:
     build: .
@@ -9,88 +35,206 @@ services:
       # Bind to loopback by default; put a TLS reverse proxy in front. Override API_BIND only deliberately.
       - "${API_BIND:-127.0.0.1}:8000:8000"
     env_file: .env
+    environment:
+      <<: *app-env
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state
+      - tls-ca:/run/tls-ca:ro
     networks: [edge, data]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    depends_on: *app-depends
     command: uvicorn scraper.main:app --host 0.0.0.0 --port 8000
 
   worker-a:
     build: .
     env_file: .env
+    environment:
+      <<: *app-env
+      PLS_SEAT: A
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state
+      - tls-ca:/run/tls-ca:ro
     networks: [edge, data]
-    depends_on: [postgres, redis]
+    depends_on: *app-depends
     command: python -m scraper.workers.harvester
-    environment:
-      - PLS_SEAT=A
     restart: unless-stopped
 
   worker-b:
     build: .
     env_file: .env
+    environment:
+      <<: *app-env
+      PLS_SEAT: B
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state
+      - tls-ca:/run/tls-ca:ro
     networks: [edge, data]
-    depends_on: [postgres, redis]
+    depends_on: *app-depends
     command: python -m scraper.workers.harvester
-    environment:
-      - PLS_SEAT=B
     restart: unless-stopped
 
   worker-embed:
     build: .
     env_file: .env
+    environment:
+      <<: *app-env
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state
+      - tls-ca:/run/tls-ca:ro
     networks: [edge, data]
-    depends_on: [postgres, redis]
+    depends_on: *app-depends
     command: celery -A scraper.tasks.celery_app worker -Q celery,embeddings --loglevel=INFO
     restart: unless-stopped
 
   celery-beat:
     build: .
     env_file: .env
+    environment:
+      <<: *app-env
+    volumes:
+      - tls-ca:/run/tls-ca:ro
     networks: [data]
-    depends_on: [postgres, redis]
+    depends_on: *app-depends
     command: celery -A scraper.tasks.celery_app beat --loglevel=INFO
     restart: unless-stopped
 
+  # One-shot schema migration: Base.metadata.create_all + seed, as the schema-owner role. The
+  # runtime role has no DDL rights, so api/workers start only after this completes.
+  migrate:
+    build: .
+    env_file: .env
+    environment:
+      <<: *app-env
+      DATABASE_URL: "postgresql+asyncpg://${MIGRATE_DB_USER:?MIGRATE_DB_USER_required}:${MIGRATE_DB_PASSWORD:?MIGRATE_DB_PASSWORD_required}@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/run/tls-ca/ca.crt"
+    volumes:
+      - tls-ca:/run/tls-ca:ro
+    networks: [data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m scraper.migrate
+    restart: "no"
+
+  # One-shot: issue (or validate operator-supplied) TLS material for the stores. Same pinned image
+  # as Postgres (it ships openssl), no network.
+  certs:
+    image: pgvector/pgvector:pg16
+    entrypoint: ["/bin/sh", "/usr/local/bin/generate-certs.sh"]
+    environment:
+      TLS_CERTS_MODE: ${TLS_CERTS_MODE:-auto}
+    volumes:
+      - ./docker/certs/generate-certs.sh:/usr/local/bin/generate-certs.sh:ro
+      - tls-ca:/tls/ca
+      - tls-postgres:/tls/postgres
+      - tls-redis:/tls/redis
+    # The image declares VOLUME /var/lib/postgresql/data; give this one-shot a tmpfs there so it
+    # leaves no anonymous volume behind.
+    tmpfs:
+      - /var/lib/postgresql/data
+    network_mode: none
+    restart: "no"
+
   postgres:
     image: pgvector/pgvector:pg16
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/tls/server.crt
+      - -c
+      - ssl_key_file=/run/tls/server.key
+      - -c
+      - ssl_ca_file=/run/tls-ca/ca.crt
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - hba_file=/etc/postgresql/corpus/pg_hba.conf
+      - -c
+      - ident_file=/etc/postgresql/corpus/pg_ident.conf
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER_required}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD_required}
       POSTGRES_DB: legal_scraper
+      # Read by docker/postgres/provision-roles.sh (init and upgrade) to create the roles.
+      APP_DB_USER: ${APP_DB_USER:?APP_DB_USER_required}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD_required}
+      MIGRATE_DB_USER: ${MIGRATE_DB_USER:?MIGRATE_DB_USER_required}
+      MIGRATE_DB_PASSWORD: ${MIGRATE_DB_PASSWORD:?MIGRATE_DB_PASSWORD_required}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+      - ./docker/postgres/provision-roles.sh:/docker-entrypoint-initdb.d/20-provision-roles.sh:ro
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/corpus/pg_hba.conf:ro
+      - ./docker/postgres/pg_ident.conf:/etc/postgresql/corpus/pg_ident.conf:ro
+      - tls-postgres:/run/tls:ro
+      - tls-ca:/run/tls-ca:ro
     networks: [data]
+    depends_on:
+      certs:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "gosu postgres pg_isready -U \"$${POSTGRES_USER}\" -d legal_scraper"]
       interval: 5s
-      retries: 5
+      retries: 10
     # No "ports:" on purpose: reachable only from the internal data network.
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD_required}", "--protected-mode", "yes"]
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6379"
+      - --tls-cert-file
+      - /run/tls/server.crt
+      - --tls-key-file
+      - /run/tls/server.key
+      - --tls-ca-cert-file
+      - /run/tls-ca/ca.crt
+      # Server-authenticated TLS; clients authenticate with their ACL user + password.
+      - --tls-auth-clients
+      - "no"
+      - --protected-mode
+      - "yes"
+      # The built-in `default` user is disabled and has no password, keys, channels or commands.
+      - --user
+      - default
+      - "off"
+      - resetpass
+      - resetkeys
+      - resetchannels
+      - "-@all"
+      # Application ACL user (Celery broker + result backend): no @admin, no @dangerous.
+      - --user
+      - "${REDIS_APP_USER:?REDIS_APP_USER_required}"
+      - "on"
+      - ">${REDIS_APP_PASSWORD:?REDIS_APP_PASSWORD_required}"
+      - "~*"
+      - "&*"
+      - "+@all"
+      - "-@admin"
+      - "-@dangerous"
     environment:
-      REDISCLI_AUTH: ${REDIS_PASSWORD}
+      REDIS_APP_USER: ${REDIS_APP_USER:?REDIS_APP_USER_required}
+      REDISCLI_AUTH: ${REDIS_APP_PASSWORD:?REDIS_APP_PASSWORD_required}
+    volumes:
+      - tls-redis:/run/tls:ro
+      - tls-ca:/run/tls-ca:ro
     networks: [data]
+    depends_on:
+      certs:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --tls --cacert /run/tls-ca/ca.crt -h redis -p 6379 --user \"$$REDIS_APP_USER\" ping | grep -qx PONG"]
       interval: 5s
-      retries: 5
+      retries: 10
     # No "ports:" on purpose.
 
 networks:
@@ -100,3 +244,6 @@ networks:
 
 volumes:
   pgdata:
+  tls-ca:
+  tls-postgres:
+  tls-redis:
