@@ -88,7 +88,7 @@ what the matching CI job runs. Requirements: Node 22, Java 21+ (Firebase emulato
 | gates | `npm run gate:g0`, `npm run gate:g1`, `npm run gate:g2` | See below. |
 | next-build | `npm run build` | `next build`. |
 | postgres-ddl | `SIKANDER_POSTGRES_URL=postgres://… npm run test:postgres-ddl` | Requires Postgres 16 with the `vector` extension (CI uses `pgvector/pgvector:pg16`). Applies `postgres/ddl/001_corpus_contract.sql` and `002_platform.sql`, then runs trigger and grant tests. |
-| corpus-service | `python3.12 -m venv .venv && .venv/bin/pip install -r corpus_service/requirements-test.txt && .venv/bin/python -m pytest corpus_service/tests -q` | Node must be on the path for the dashboard harness test. Keep the venv outside the repo or ignored. |
+| corpus-service | `python3.12 -m venv .venv && .venv/bin/pip install -r corpus_service/requirements-test.txt && CORPUS_TEST_DATABASE_URL=postgresql+asyncpg://… .venv/bin/python -m pytest corpus_service/tests -q` | Node must be on the path for the dashboard harness test. Keep the venv outside the repo or ignored. The F20 trust tests need Postgres 16 with `vector` (CI uses `pgvector/pgvector:pg16`); without the URL they skip locally, and with `CI` set the run fails instead (`corpus_service/tests/conftest.py`). |
 | pr-phase-claim-gate | `PR_TITLE="…" PR_BODY="$(cat body.md)" BASE_SHA=$(git merge-base origin/main HEAD) HEAD_SHA=$(git rev-parse HEAD) python3 ci_gates/check_pr_phase_claims.py` | Checks the PR title and body against the changed files (flags, `/ops` evidence, no unqualified completion claims). |
 
 Gates:

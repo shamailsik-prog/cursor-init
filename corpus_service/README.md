@@ -15,6 +15,37 @@ Governing build prompt: `FINAL_CORPUS_SERVICE_PROMPT_2.md` (supersedes withdrawn
    non-overridable in production).
 4. No legal rules of decision live here — corpus storage only.
 
+## Trust levels (audit F20)
+
+`scraper_sources.trust_level` is exactly one of `trusted`, `review` or `blocked`, default `review`
+(FINAL_2 :252-253). The vocabulary and the promotion decision live in `scraper/trust.py`; the
+database CHECK and default are built from it. Matching is exact, and anything else fails closed.
+
+| Source trust | Harvested by the dispatcher | Staged record at promotion |
+|---|---|---|
+| `trusted` | yes | promoted if confidence >= 0.5, else quarantined `low_confidence` |
+| `review` | yes | quarantined `review_source` |
+| `blocked` | no | quarantined `blocked_source` |
+| any other value, or no / deleted source | no | quarantined `unknown_source` |
+
+A staged record with no citation is quarantined `citation_missing`. Promotion finds the source by
+`source_id`, then `parsing_metadata.source_name`, then `source_site`. One failing record is rolled
+back and left pending; the rest of the batch continues. Seeds: PakistanLawSite, PakistanCode and
+NationalAssembly are `trusted`; every other source is `review`.
+
+**Upgrading an existing database.** `python -m scraper.migrate` (the `migrate` service, as
+`MIGRATE_DB_USER`) replaces the pre-F20 CHECK (`trusted|semi_trusted|untrusted|quarantined`, default
+`trusted`), maps `semi_trusted`, `untrusted`, `quarantined` and any other value to `review`, and sets
+the default to `review`, all before it seeds. It is idempotent: on a current database it changes
+nothing. The API's startup `init_db()` never runs it: it is DDL, and the runtime role is DML-only.
+A row the old default made `trusted` stays `trusted`, so review the `trusted` sources after upgrading.
+
+**Tests.** `tests/test_f20_trust_policy_db.py` runs against a real Postgres 16 + pgvector named by
+`CORPUS_TEST_DATABASE_URL` (a `postgresql+asyncpg://` URL for a role that can create databases,
+roles and extensions, such as a throwaway `pgvector/pgvector:pg16` container's superuser). Each test
+creates and drops its own database. Without the URL, those tests skip locally and the run fails
+under CI.
+
 ## Quick start (no Docker)
 
 ```bash
