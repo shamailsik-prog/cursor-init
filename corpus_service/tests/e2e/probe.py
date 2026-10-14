@@ -341,8 +341,8 @@ async def annex_a_runtime(engine, expected):
     corpus_writer, and publishes only through an audited publication."""
     membership = await _scalar(
         engine,
-        "SELECT coalesce(string_agg(format('inherit=%s set=%s admin=%s', m.inherit_option, m.set_option, "
-        "m.admin_option), ';'), 'none') FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid "
+        "SELECT coalesce(string_agg(format('inherit=%s set=%s admin=%s', m.inherit_option::text, m.set_option::text, "
+        "m.admin_option::text), ';'), 'none') FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid "
         "WHERE g.rolname = 'corpus_writer' AND m.member = (SELECT oid FROM pg_roles WHERE rolname = current_user)")
     check("runtime role is a corpus_writer member WITH INHERIT FALSE, SET TRUE (pg_auth_members, PG16), no admin",
           membership == "inherit=false set=true admin=false", membership)

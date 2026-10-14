@@ -196,6 +196,53 @@ run_probe "runtime role (api service env)" \
   api python tests/e2e/probe.py db-runtime
 annex_a_reader_checks "Annex A reader" "$ANNEX_A_PAGE"
 annex_a_checks "Annex A after migrate and the probes"
+
+echo "-- audit F19 (PR 2b): re-provisioning is idempotent, re-asserts the Annex A posture, and fails closed"
+provision() { # [docker compose exec options...]: 20-provision-roles.sh on the running stack, as rotate runs it
+  "${COMPOSE[@]}" exec -T -u postgres "$@" postgres /docker-entrypoint-initdb.d/20-provision-roles.sh
+}
+writer_membership() {
+  as_superuser_local "select coalesce(string_agg('inherit=' || m.inherit_option || ':set=' || m.set_option
+      || ':admin=' || m.admin_option, ','), 'none') from pg_auth_members m join pg_roles g on g.oid = m.roleid
+      join pg_roles u on u.oid = m.member where g.rolname = 'corpus_writer' and u.rolname = '$APP_DB_USER'"
+}
+expect_ok "re-running 20-provision-roles.sh on the running stack succeeds" provision
+annex_a_checks "after re-provisioning"
+# Drift an operator (or an older script) could leave behind; a re-run must put it back.
+as_superuser_local "grant corpus_writer to \"$APP_DB_USER\" with inherit true, admin true" >/dev/null 2>&1
+as_superuser_local "grant insert, update on public.judgment, public.corpus_publication_grant to \"$APP_DB_USER\"" >/dev/null 2>&1
+as_superuser_local "grant select on public.citation to \"$MIGRATE_DB_USER\"" >/dev/null 2>&1
+expect_out "drift control: the runtime role's membership was widened (INHERIT TRUE, ADMIN TRUE)" '^inherit=true:set=true:admin=true$' \
+  writer_membership
+annex_a_grants() {
+  as_superuser_local "select has_table_privilege('$APP_DB_USER', 'public.judgment', 'INSERT,UPDATE') || '|'
+    || has_table_privilege('$APP_DB_USER', 'public.corpus_publication_grant', 'INSERT,UPDATE') || '|'
+    || has_table_privilege('$MIGRATE_DB_USER', 'public.citation', 'SELECT')"
+}
+expect_out "drift control: direct grants on Annex A to the runtime and migration roles are in place" '^true\|true\|true$' \
+  annex_a_grants
+expect_ok "re-provisioning after drift succeeds" provision
+expect_out "re-provisioning resets the runtime role's membership to INHERIT FALSE, SET TRUE, no admin" \
+  '^inherit=false:set=true:admin=false$' writer_membership
+expect_out "re-provisioning clears direct grants on Annex A to the runtime and migration roles" '^false\|false\|false$' \
+  annex_a_grants
+# Fail closed: refusals leave everything as it was (one transaction).
+as_superuser_local "create database f19_no_annex_a" >/dev/null
+expect_refused "provision-roles refuses a database without Annex A" 'Annex A is not applied: run 15-apply-annex-a.sh first' \
+  provision -e POSTGRES_DB=f19_no_annex_a
+expect_out "... and changes nothing there (the database still has its default PUBLIC CONNECT)" '^t$' \
+  as_superuser_local "select has_database_privilege('public', 'f19_no_annex_a', 'CONNECT')"
+as_superuser_local "drop database f19_no_annex_a" >/dev/null
+as_superuser_local "alter table public.classification_rank owner to \"$MIGRATE_DB_USER\"" >/dev/null
+expect_refused "provision-roles refuses when an Annex A relation has passed to the migration role" \
+  'an Annex A relation is not owned by a superuser' provision
+as_superuser_local "alter table public.classification_rank owner to \"$POSTGRES_USER\"" >/dev/null
+as_superuser_local "alter function public.corpus_contract_relations() owner to \"$MIGRATE_DB_USER\"" >/dev/null
+expect_refused "provision-roles refuses when an Annex A function has passed to the migration role" \
+  'an Annex A function is not owned by a superuser' provision
+as_superuser_local "alter function public.corpus_contract_relations() owner to \"$POSTGRES_USER\"" >/dev/null
+expect_ok "after the operator restores ownership, provision-roles succeeds again" provision
+annex_a_checks "after the fail-closed cases"
 WRONG_CA_URL="postgresql+asyncpg://$APP_DB_USER:$APP_DB_PASSWORD@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/wrongca/ca.crt"
 run_probe "app engine, wrong CA" \
   timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -v "$WRONG_CA:/wrongca:ro" -e DATABASE_URL="$WRONG_CA_URL" \
