@@ -8,6 +8,7 @@
     "start": "next start --port 43127",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit -p .",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "test:unit": "vitest run",
     "functions:build": "npm --prefix functions run build",
