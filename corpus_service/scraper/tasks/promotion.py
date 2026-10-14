@@ -1,4 +1,4 @@
-"""Promote normalised staging records (audit F20, F22; PR #48 re-audit rounds 1 and 2).
+"""Promote normalised staging records (audit F20, F22; PR #48 re-audit rounds 1, 2 and 4).
 
 For each record, in this order:
 1. Resolve its source by the most specific identifier present (source_id FK, the harvester's stamped
@@ -14,10 +14,15 @@ For each record, in this order:
    per-citation advisory lock, so concurrent runs cannot both publish one citation.
 
 Each record is re-read FOR UPDATE and decided in its own transaction, so one bad record cannot stop
-or roll back the rest. A record whose promotion raises is rolled back. A transient database error
-(connection lost; SQLSTATE class 08, 40, 53 or 57; 55P03) is not the record's fault: the record is
-left pending for the next run. Any other error quarantines it as promotion_error:<ExceptionClass>,
-so it is not retried forever. Both count as failed.
+or roll back the rest. A record whose promotion raises is rolled back and counted as failed. Only a
+failure confirmed to be about the record itself, a database error with SQLSTATE class 22 (data
+exception) or 23 (integrity constraint violation), quarantines it as
+promotion_error:<ExceptionClass>, so it is not retried forever. Every other failure leaves it
+pending for the next run: a transient error (connection lost; SQLSTATE class 08, 40, 53 or 57;
+55P03), and any systemic or unknown one (permission, schema drift, internal error, a generic
+RAISE, a Python exception), which may be a deployment or schema fault rather than bad input. After
+SYSTEMIC_FAILURE_LIMIT consecutive systemic failures with the same SQLSTATE or class the run stops
+early and leaves the rest pending.
 
 Promoted rows are still written to case_law_master and queued for embedding; moving publication to
 the Annex A contract is audit F19. Nothing schedules this routine yet (audit F21).
@@ -42,6 +47,17 @@ _CITATION_LOCK_NAMESPACE = 0x0F20
 # Round-2 L2: database errors that say nothing about the record itself.
 _TRANSIENT_SQLSTATE_CLASSES = ("08", "40", "53", "57")  # connection, transaction rollback, resources, operator intervention
 _TRANSIENT_SQLSTATES = ("55P03",)  # lock_not_available
+
+# Round 4 (Codex P1 on PR #48): the only failures confirmed to be about the record itself, and so
+# the only ones quarantined: data exception (22) and integrity constraint violation (23). Anything
+# else (permission 42501, schema drift 42P01/42703, internal XX000, a generic RAISE P0001, any
+# unknown code, a Python exception with no SQLSTATE) may be a deployment or schema fault that
+# would hit every record, so the record is left pending to retry once that is fixed.
+_RECORD_SPECIFIC_SQLSTATE_CLASSES = ("22", "23")
+
+# Consecutive systemic/unknown failures with the same SQLSTATE (or exception class) that stop a
+# run early, leaving the rest of the backlog pending instead of failing every record in turn.
+SYSTEMIC_FAILURE_LIMIT = 3
 
 
 def _sqlstate(exc: BaseException) -> Optional[str]:
@@ -69,6 +85,14 @@ def is_transient_db_error(exc: BaseException) -> bool:
         return True
     code = _sqlstate(exc)
     return code is not None and (code[:2] in _TRANSIENT_SQLSTATE_CLASSES or code in _TRANSIENT_SQLSTATES)
+
+
+def is_record_specific_db_error(exc: BaseException) -> bool:
+    """True only when the failure is confirmed to be about the record itself: SQLSTATE class 22
+    (data exception) or 23 (integrity constraint violation). Such a record is quarantined
+    promotion_error:<ExceptionClass>; every other failure leaves it pending."""
+    code = _sqlstate(exc)
+    return code is not None and code[:2] in _RECORD_SPECIFIC_SQLSTATE_CLASSES
 
 
 async def _source_by_name(db, name: str) -> Optional[ScraperSource]:
@@ -195,10 +219,16 @@ async def _quarantine_after_error(db, staging_id, exc: BaseException) -> None:
 
 async def promote_staging_records() -> dict:
     """Decide every normalised, undecided staging record. Returns counts of promoted, attached
-    (a duplicate of an already-published citation), quarantined and failed records. A failed
-    record is rolled back; it is then left pending if the error was transient, otherwise
-    quarantined as promotion_error:<ExceptionClass>."""
+    (a duplicate of an already-published citation), quarantined and failed records.
+
+    A failed record is rolled back and counted as failed. Only a record-specific database error
+    (SQLSTATE class 22 or 23) quarantines it as promotion_error:<ExceptionClass>; a transient error
+    and every systemic or unknown failure leave it pending for the next run. After
+    SYSTEMIC_FAILURE_LIMIT consecutive systemic/unknown failures with the same SQLSTATE (or
+    exception class) the run stops early, leaves the rest pending, and the result gains
+    "aborted": "systemic:<SQLSTATE or class>" (the key is present only when the run was aborted)."""
     counts = {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}
+    streak_key, streak = None, 0
     async with SessionLocal() as db:
         ids = (
             await db.execute(
@@ -211,7 +241,7 @@ async def promote_staging_records() -> dict:
                 .order_by(ScraperStaging.id)  # one lock order for every concurrent run
             )
         ).scalars().all()
-        for staging_id in ids:
+        for index, staging_id in enumerate(ids):
             try:
                 async with db.begin_nested():
                     st = await db.get(ScraperStaging, staging_id, populate_existing=True, with_for_update=True)
@@ -223,19 +253,40 @@ async def promote_staging_records() -> dict:
             except Exception as exc:  # noqa: BLE001 - one record must not stop the batch
                 await db.rollback()
                 counts["failed"] += 1
+                code = _sqlstate(exc)
                 transient = is_transient_db_error(exc)
-                # Identifier and exception class only: the message can carry row data.
-                logger.warning(
-                    "promotion.record_failed staging_id=%s error=%s transient=%s",
-                    staging_id, type(exc).__name__, "true" if transient else "false",
+                record_specific = not transient and is_record_specific_db_error(exc)
+                systemic = not transient and not record_specific
+                # Identifier, exception class and SQLSTATE only: the message can carry row data.
+                (logger.error if systemic else logger.warning)(
+                    "promotion.record_failed staging_id=%s error=%s sqlstate=%s transient=%s systemic=%s",
+                    staging_id, type(exc).__name__, code or "none",
+                    "true" if transient else "false", "true" if systemic else "false",
                 )
-                if not transient:  # a transient error leaves the record pending for the next run
+                if record_specific:
                     await _quarantine_after_error(db, staging_id, exc)
+                if not systemic:
+                    streak_key, streak = None, 0
+                    continue
+                # Systemic or unknown: the record stays pending. Stop the run once the same
+                # failure repeats SYSTEMIC_FAILURE_LIMIT times in a row.
+                key = code or type(exc).__name__
+                streak = streak + 1 if key == streak_key else 1
+                streak_key = key
+                if streak >= SYSTEMIC_FAILURE_LIMIT:
+                    counts["aborted"] = f"systemic:{key}"
+                    logger.error(
+                        "promotion.aborted reason=systemic key=%s consecutive=%d left_pending=%d",
+                        key, streak, len(ids) - index - 1,
+                    )
+                    break
                 continue
+            streak_key, streak = None, 0
             if outcome in counts:
                 counts[outcome] += 1
     logger.info(
-        "promotion.finished promoted=%d attached=%d quarantined=%d failed=%d",
+        "promotion.finished promoted=%d attached=%d quarantined=%d failed=%d aborted=%s",
         counts["promoted"], counts["attached"], counts["quarantined"], counts["failed"],
+        counts.get("aborted", "false"),
     )
     return counts

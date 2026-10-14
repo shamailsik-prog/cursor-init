@@ -62,14 +62,25 @@ Promotion (`scraper/tasks/promotion.py`) decides each normalised record in this 
    `promoted_at`, `promoted_to_id` on the staging row.
 
 Each record is re-read `FOR UPDATE` and decided in its own transaction. A record whose promotion
-raises is rolled back. A transient database error (connection lost, or SQLSTATE class 08, 40, 53 or
-57, or 55P03) is not the record's fault: the record is left pending for the next run. Any other error
+raises is rolled back and counted as failed. Only a failure confirmed to be about the record itself,
+a database error with SQLSTATE class 22 (data exception) or 23 (integrity constraint violation),
 quarantines it `promotion_error:<ExceptionClass>` (class name only, never the message) so it is not
-retried forever; if even that write fails, the failure is logged and the record stays pending. The
-rest of the batch always continues. Every quarantine reason is written to the staging row's
-`quarantine_reason` and to a `quarantine_queue` row. The run returns
-`{"promoted", "attached", "quarantined", "failed"}`; a record that raised counts as failed, whether
-it was left pending or quarantined `promotion_error`.
+retried forever; if even that write fails, the failure is logged and the record stays pending. Every
+other failure leaves the record pending for the next run:
+- a transient database error (connection lost, or SQLSTATE class 08, 40, 53 or 57, or 55P03);
+- a systemic or unknown one: permission (42501), schema drift (42P01, 42703), an internal error
+  (XX000), a generic RAISE (P0001), any other SQLSTATE, or a Python exception with none. These may be
+  a deployment or schema fault that would hit every record, so the backlog must survive it. They are
+  logged at error level with the id, class and SQLSTATE and `systemic=true`, never row data.
+
+After three consecutive systemic failures with the same SQLSTATE (or exception class)
+(`SYSTEMIC_FAILURE_LIMIT`), the run stops early and leaves the rest pending; any other outcome in
+between resets the count. Otherwise the rest of the batch always continues. Every quarantine reason is
+written to the staging row's `quarantine_reason` and to a `quarantine_queue` row. The run returns
+`{"promoted", "attached", "quarantined", "failed"}`, plus `"aborted": "systemic:<SQLSTATE or class>"`
+when it stopped early. A record that raised counts as failed whether it was left pending or
+quarantined `promotion_error`. A record that always raises a systemic or unknown error stays pending
+and is retried on every run; there is no retry cap yet (F28).
 
 Seeds: PakistanLawSite, PakistanCode and NationalAssembly are `trusted`; every other source is
 `review`.
