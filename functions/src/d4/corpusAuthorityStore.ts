@@ -309,7 +309,8 @@ export class PgAuthorityStore implements AuthorityStore {
 
   /**
    * The breaker (D9). While it is open every call throws circuit_open without connecting. Any other failure except
-   * one about the data (pending_review, inconsistent) opens it for BREAKER_OPEN_MS and logs the reason once (D16).
+   * one about the data (pending_review, inconsistent) or a busy pool (D24) opens it for BREAKER_OPEN_MS and logs the
+   * reason once (D16).
    *
    * Only an AuthorityUnavailableError is a failure here (plan D5 and D23, #51 R1 D-6): a driver error, which run()
    * has already wrapped, or the adapter's own explicit throw. Anything else is a programming error. It propagates

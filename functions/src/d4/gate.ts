@@ -1,6 +1,6 @@
 /**
- * The citation and temporal gate as a pure function of a draft and an authority store (spec P4-6; E-22, E-39).
- * It reports and never edits the body. Persistence, the draft's current version and the audit row belong to the
+ * The citation and temporal gate as a pure function of a draft and an authority store (spec P4-6; E-22, E-39); its one
+ * side effect is a log line when a run spends its authority budget (D24). It reports and never edits the body. Persistence, the draft's current version and the audit row belong to the
  * route, not here. It reports what it assessed (F06): a run with no citation and no temporal check is NOT_ASSESSED.
  *
  * Citations come from the one extractor the Next.js gate uses, de-duplicated as verifyCitations does (by judgment
