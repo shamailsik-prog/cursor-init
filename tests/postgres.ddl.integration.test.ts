@@ -1027,8 +1027,9 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     ]);
     const naturalKey = await admin.query("SELECT count(*)::int AS n FROM pg_indexes WHERE indexname = 'treatment_natural_key'");
     expect(naturalKey.rows[0].n).toBe(1);
+    // 29 relations from 003, and 004's four v_authority_* views (F05, plan D13): the chain ends with 004.
     const inventory = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_relations()");
-    expect(inventory.rows[0].n).toBe(29);
+    expect(inventory.rows[0].n).toBe(33);
     const reader = roleClient("corpus_reader", "reader");
     await reader.connect();
     const readable = await reader.query("SELECT count(*)::int AS n FROM v_judgment");
@@ -1511,6 +1512,402 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     } finally {
       await a.end();
       await b.end();
+    }
+  });
+
+  // ---- F05 (004_authority_read_views.sql): the reader's promoted-only authority views ------------------
+  // Rows are published as corpus_writer (publishAs, "audit-rows"); states a publication cannot produce are forced
+  // by the superuser, which the guard exempts (ruling 2). The reader is the corpus_reader login.
+  const AUTHORITY_VIEWS = ["v_authority_citation", "v_authority_pending_adverse", "v_authority_section_version", "v_authority_treatment"];
+  const TREATMENT_SQL = `INSERT INTO treatment (id, treating_judgment_id, treated_judgment_id, treatment, treating_bench_type,
+      confidence, source_id, review_status, publication_id)
+    VALUES ($1, $2, $3, $4, 'larger', $5, $6, $7, $8)`;
+
+  async function asReader<T>(fn: (reader: pg.Client) => Promise<T>): Promise<T> {
+    const reader = roleClient("corpus_reader", "reader");
+    await reader.connect();
+    try {
+      return await fn(reader);
+    } finally {
+      await reader.end();
+    }
+  }
+
+  async function publishedAsWriter(n: number, body: (writer: pg.Client, pid: string) => Promise<void>): Promise<string> {
+    const writer = roleClient("corpus_writer", "writer");
+    await writer.connect();
+    try {
+      let publicationId = "";
+      await publishAs(writer, batchKey(n), sha(`${n}-${randomUUID()}`), async (pid) => {
+        publicationId = pid;
+        await body(writer, pid);
+      }, "audit-rows");
+      return publicationId;
+    } finally {
+      await writer.end();
+    }
+  }
+
+  /** One published judgment (bench given) with one citation, each on its own complete provenance row. */
+  async function publishCitedJudgment(n: number, citation: string, bench = "division") {
+    await admin.query("DELETE FROM citation WHERE citation_text = $1", [citation]);
+    const judgment = randomUUID();
+    let judgmentSource = "";
+    let citationSource = "";
+    const publication = await publishedAsWriter(n, async (w, pid) => {
+      judgmentSource = await insertProvenance(w);
+      citationSource = await insertProvenance(w);
+      await w.query(INSERT_JUDGMENT, [judgment, `F05 PG-DDL-${n} 2099`, bench, judgmentSource, "promoted", pid]);
+      await w.query(INSERT_CITATION, [randomUUID(), judgment, citation, citationSource, "promoted", pid]);
+    });
+    return { judgment, judgmentSource, citationSource, publication };
+  }
+
+  /** A larger-bench treating judgment, a division-bench treated one, and one treatment, each on its own provenance. */
+  async function publishTreatmentCase(n: number, kind: string, status: "promoted" | "quarantined" = "promoted", confidence = 0.9) {
+    const treating = randomUUID();
+    const treated = randomUUID();
+    const sources = { treating: "", treated: "", treatment: "" };
+    await publishedAsWriter(n, async (w, pid) => {
+      sources.treating = await insertProvenance(w);
+      sources.treated = await insertProvenance(w);
+      sources.treatment = await insertProvenance(w);
+      await w.query(INSERT_JUDGMENT, [treating, `F05 PG-DDL-${n} treating 2099`, "larger", sources.treating, "promoted", pid]);
+      await w.query(INSERT_JUDGMENT, [treated, `F05 PG-DDL-${n} treated 2099`, "division", sources.treated, "promoted", pid]);
+      await w.query(TREATMENT_SQL, [randomUUID(), treating, treated, kind, confidence, sources.treatment, status, pid]);
+    });
+    return { treating, treated, sources };
+  }
+
+  /** A published Punjab statute, its section 9 and two versions (0.9, then 0.5), each row on its own provenance. */
+  async function publishSection(n: number) {
+    const statute = randomUUID();
+    const section = randomUUID();
+    const sources = { statute: "", section: "", version: "" };
+    await publishedAsWriter(n, async (w, pid) => {
+      sources.statute = await insertProvenance(w);
+      sources.section = await insertProvenance(w);
+      sources.version = await insertProvenance(w);
+      await w.query(
+        "INSERT INTO statute (id, name, jurisdiction, source_id, review_status, publication_id) VALUES ($1, $2, 'Punjab', $3, 'promoted', $4)",
+        [statute, `F05 PG-DDL-${n} Test Act 2099 ${randomUUID().slice(0, 8)}`, sources.statute, pid],
+      );
+      await w.query(
+        "INSERT INTO statute_section (id, statute_id, section_number, source_id, review_status, publication_id) VALUES ($1, $2, '9', $3, 'promoted', $4)",
+        [section, statute, sources.section, pid],
+      );
+      await w.query(
+        `INSERT INTO statute_section_version (id, section_id, version_no, effective_from, effective_to, text, version_confidence,
+           source_id, review_status, publication_id)
+         VALUES ($1, $2, 1, '2099-01-01', '2099-06-01', 'Section 9 as enacted.', 0.9, $3, 'promoted', $4),
+                ($5, $2, 2, '2099-06-01', NULL, 'Section 9 as amended.', 0.5, $3, 'promoted', $4)`,
+        [randomUUID(), section, sources.version, pid, randomUUID()],
+      );
+    });
+    return { statute, section, sources };
+  }
+
+  const citationRows = (citation: string) =>
+    asReader(async (r) => (await r.query("SELECT citation_text, judgment_id, bench_type FROM v_authority_citation WHERE citation_text = $1", [citation])).rows);
+  const treatmentRows = (treated: string) =>
+    asReader(async (r) => (await r.query(
+      "SELECT treatment, treating_bench_type, treating_judgment_bench FROM v_authority_treatment WHERE treated_judgment_id = $1 ORDER BY 1",
+      [treated],
+    )).rows);
+  const pending = (treated: string) =>
+    asReader(async (r) => (await r.query("SELECT count(*)::int AS n FROM v_authority_pending_adverse WHERE treated_judgment_id = $1", [treated])).rows[0].n);
+  const sectionVersions = (section: string) =>
+    asReader(async (r) => (await r.query(
+      `SELECT jurisdiction, version_no, effective_from::text AS f, effective_to::text AS t, text, version_confidence AS c
+         FROM v_authority_section_version WHERE section_id = $1 ORDER BY version_no`,
+      [section],
+    )).rows);
+
+  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_reader only, no provenance column, and corpus_contract_relations() lists them (33) while corpus_contract_routines() still lists 12", async () => {
+    const views = await admin.query(
+      `SELECT c.relname, c.reloptions FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'v' AND c.relname LIKE 'v\\_authority\\_%' ORDER BY 1`,
+    );
+    expect(views.rows).toEqual(AUTHORITY_VIEWS.map((relname) => ({ relname, reloptions: ["security_barrier=true"] })));
+    for (const view of AUTHORITY_VIEWS) {
+      const p = await admin.query(
+        `SELECT has_table_privilege('corpus_reader', $1, 'SELECT') AS reader,
+                has_table_privilege('corpus_reader', $1, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS reader_writes,
+                has_table_privilege('corpus_writer', $1, 'SELECT') AS writer,
+                has_table_privilege('corpus_declassify', $1, 'SELECT') AS declassify,
+                has_table_privilege('public', $1, 'SELECT') AS everyone`,
+        [`public.${view}`],
+      );
+      expect({ view, ...p.rows[0] }).toEqual({ view, reader: true, reader_writes: false, writer: false, declassify: false, everyone: false });
+    }
+    const columns = await admin.query(
+      `SELECT table_name, string_agg(column_name || ':' || data_type, ',' ORDER BY ordinal_position) AS cols
+         FROM information_schema.columns WHERE table_schema = 'public' AND table_name LIKE 'v\\_authority\\_%' GROUP BY 1 ORDER BY 1`,
+    );
+    expect(Object.fromEntries(columns.rows.map((r) => [r.table_name, r.cols]))).toEqual({
+      v_authority_citation: "citation_text:text,judgment_id:uuid,bench_type:text",
+      v_authority_pending_adverse: "treated_judgment_id:uuid",
+      v_authority_section_version:
+        "section_id:uuid,jurisdiction:text,version_no:integer,effective_from:date,effective_to:date,text:text,version_confidence:double precision",
+      v_authority_treatment: "treated_judgment_id:uuid,treatment:text,treating_bench_type:text,treating_judgment_bench:text",
+    });
+    const inventory = await admin.query(
+      "SELECT count(*)::int AS n, count(*) FILTER (WHERE a::text LIKE 'v\\_authority\\_%')::int AS views FROM corpus_contract_relations() a",
+    );
+    expect(inventory.rows[0]).toEqual({ n: 33, views: 4 });
+    const routines = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_routines()");
+    expect(routines.rows[0].n).toBe(12);
+  });
+
+  it("PG-DDL-27 004: a published citation is visible with its judgment's bench; under a quarantined, bench-less or non-public judgment it is not (requirement 3, ruling 8)", async () => {
+    const citation = "2099 SCMR 926027";
+    const { judgment, publication } = await publishCitedJudgment(27, citation);
+    expect(await citationRows(citation)).toEqual([{ citation_text: citation, judgment_id: judgment, bench_type: "division" }]);
+    // The bench is the judgment's own, as it stands now.
+    await admin.query("UPDATE judgment SET bench_type = 'larger' WHERE id = $1", [judgment]);
+    expect(await citationRows(citation)).toEqual([{ citation_text: citation, judgment_id: judgment, bench_type: "larger" }]);
+    for (const [hide, restore] of [
+      ["UPDATE judgment SET review_status = 'quarantined' WHERE id = $1", "UPDATE judgment SET review_status = 'promoted' WHERE id = $1"],
+      ["UPDATE judgment SET bench_type = NULL WHERE id = $1", "UPDATE judgment SET bench_type = 'larger' WHERE id = $1"],
+    ]) {
+      await admin.query(hide, [judgment]);
+      expect(await citationRows(citation), hide).toEqual([]);
+      const row = await admin.query("SELECT review_status FROM citation WHERE citation_text = $1", [citation]);
+      expect(row.rows[0].review_status).toBe("promoted");
+      await admin.query(restore, [judgment]);
+      expect(await citationRows(citation), restore).toHaveLength(1);
+    }
+    // The citation row's own status counts too.
+    await admin.query("UPDATE citation SET review_status = 'quarantined' WHERE citation_text = $1", [citation]);
+    expect(await citationRows(citation)).toEqual([]);
+    await admin.query("UPDATE citation SET review_status = 'promoted' WHERE citation_text = $1", [citation]);
+    // A raise cannot be undone outside declassify(): last.
+    await admin.query("UPDATE judgment SET classification = 'internal' WHERE id = $1", [judgment]);
+    expect(await citationRows(citation)).toEqual([]);
+    // An unknown label fails the rank join, so it fails closed too. 001's trigger refuses one on UPDATE, so the
+    // superuser inserts the judgment with it, stamped with a finished publication; the control with 'public' shows.
+    for (const [label, cite, rows] of [["public", "2099 SCMR 9260271", 1], ["not-a-label", "2099 SCMR 9260272", 0]] as const) {
+      const prov = await insertProvenance(admin);
+      const id = randomUUID();
+      await admin.query("DELETE FROM citation WHERE citation_text = $1", [cite]);
+      await admin.query(
+        `INSERT INTO judgment (id, case_title, bench_type, classification, source_id, review_status, publication_id)
+         VALUES ($1, 'F05 PG-DDL-27 label 2099', 'division', $2, $3, 'promoted', $4)`,
+        [id, label, prov, publication],
+      );
+      await admin.query(INSERT_CITATION, [randomUUID(), id, cite, prov, "promoted", publication]);
+      expect(await citationRows(cite), label).toHaveLength(rows);
+    }
+  });
+
+  it("PG-DDL-28 004: a treatment is visible only with both judgments visible; an overruled one hidden by either parent or held quarantined is pending adverse, a rejected one is not (D2, ruling 3)", async () => {
+    let n = 2800;
+    const next = () => (n += 1);
+    const shown = await publishTreatmentCase(next(), "overruled");
+    expect(await treatmentRows(shown.treated)).toEqual([{ treatment: "overruled", treating_bench_type: "larger", treating_judgment_bench: "larger" }]);
+    expect(await pending(shown.treated)).toBe(0);
+    // treating_judgment_bench is the treating judgment's own bench, as it stands now.
+    await admin.query("UPDATE judgment SET bench_type = 'full' WHERE id = $1", [shown.treating]);
+    expect(await treatmentRows(shown.treated)).toEqual([{ treatment: "overruled", treating_bench_type: "larger", treating_judgment_bench: "full" }]);
+
+    const parentStates: Array<[string, (id: string) => Promise<unknown>]> = [
+      ["quarantined", (id) => admin.query("UPDATE judgment SET review_status = 'quarantined' WHERE id = $1", [id])],
+      ["confidential", (id) => admin.query("UPDATE judgment SET classification = 'confidential' WHERE id = $1", [id])],
+      ["bench-less", (id) => admin.query("UPDATE judgment SET bench_type = NULL WHERE id = $1", [id])],
+    ];
+    for (const side of ["treating", "treated"] as const) {
+      for (const [state, apply] of parentStates) {
+        const c = await publishTreatmentCase(next(), "overruled");
+        await apply(c[side]);
+        expect(await treatmentRows(c.treated), `${side} ${state}`).toEqual([]);
+        expect(await pending(c.treated), `${side} ${state}`).toBe(1);
+      }
+    }
+
+    // Ruling 3: a quarantined overruling (below B-7's 0.7) is pending.
+    const held = await publishTreatmentCase(next(), "overruled", "quarantined", 0.6);
+    expect(await treatmentRows(held.treated)).toEqual([]);
+    expect(await pending(held.treated)).toBe(1);
+    // A treatment the superuser stripped of its recorded bench is hidden, and so pending.
+    const benchless = await publishTreatmentCase(next(), "overruled");
+    await admin.query("UPDATE treatment SET treating_bench_type = NULL WHERE treated_judgment_id = $1", [benchless.treated]);
+    expect(await treatmentRows(benchless.treated)).toEqual([]);
+    expect(await pending(benchless.treated)).toBe(1);
+    // A rejected overruling is neither shown nor pending.
+    const rejected = await publishTreatmentCase(next(), "overruled", "quarantined", 0.6);
+    await admin.query("UPDATE treatment SET review_status = 'rejected' WHERE treated_judgment_id = $1", [rejected.treated]);
+    expect(await treatmentRows(rejected.treated)).toEqual([]);
+    expect(await pending(rejected.treated)).toBe(0);
+    // A hidden 'followed' treatment is not adverse: hidden, not pending.
+    const followed = await publishTreatmentCase(next(), "followed");
+    expect(await treatmentRows(followed.treated)).toEqual([{ treatment: "followed", treating_bench_type: "larger", treating_judgment_bench: "larger" }]);
+    await admin.query("UPDATE judgment SET review_status = 'quarantined' WHERE id = $1", [followed.treating]);
+    expect(await treatmentRows(followed.treated)).toEqual([]);
+    expect(await pending(followed.treated)).toBe(0);
+  });
+
+  it("PG-DDL-29 004: a section version is visible only under a visible section and statute, with the statute's jurisdiction; version_confidence 0.5 is shown as stored", async () => {
+    const { statute, section } = await publishSection(29);
+    const both = [
+      { jurisdiction: "Punjab", version_no: 1, f: "2099-01-01", t: "2099-06-01", text: "Section 9 as enacted.", c: 0.9 },
+      { jurisdiction: "Punjab", version_no: 2, f: "2099-06-01", t: null, text: "Section 9 as amended.", c: 0.5 },
+    ];
+    expect(await sectionVersions(section)).toEqual(both);
+    // A version a superuser adds outside any publication stays invisible under the published section (ruling 2).
+    const prov = await insertProvenance(admin);
+    await admin.query(
+      `INSERT INTO statute_section_version (id, section_id, version_no, effective_from, text, version_confidence, source_id, review_status)
+       VALUES ($1, $2, 3, '2100-01-01', 'Seeded text.', 0.9, $3, 'promoted')`,
+      [randomUUID(), section, prov],
+    );
+    expect(await sectionVersions(section)).toEqual(both);
+    for (const [table, id] of [["statute_section", section], ["statute", statute]]) {
+      await admin.query(`UPDATE ${table} SET review_status = 'quarantined' WHERE id = $1`, [id]);
+      expect(await sectionVersions(section), table).toEqual([]);
+      await admin.query(`UPDATE ${table} SET review_status = 'promoted' WHERE id = $1`, [id]);
+      expect(await sectionVersions(section), table).toEqual(both);
+    }
+    await admin.query("UPDATE statute_section_version SET review_status = 'quarantined' WHERE section_id = $1 AND version_no = 2", [section]);
+    expect((await sectionVersions(section)).map((v) => v.version_no)).toEqual([1]);
+  });
+
+  it("PG-DDL-30 004: superuser-seeded promoted rows with no publication are invisible in every v_authority view, with or without complete provenance, while 001's v_judgment shows them (ruling 2, requirement 4)", async () => {
+    const seeded: string[] = [];
+    for (const [i, complete] of [[1, true], [2, false]] as const) {
+      const prov = await insertProvenance(admin, complete ? {} : { content_hash: null });
+      const judgment = randomUUID();
+      const citation = `2099 SCMR 92630${i}`;
+      await admin.query("DELETE FROM citation WHERE citation_text = $1", [citation]);
+      await admin.query(INSERT_JUDGMENT, [judgment, `F05 PG-DDL-30 seeded ${i} 2099`, "division", prov, "promoted", null]);
+      await admin.query(INSERT_CITATION, [randomUUID(), judgment, citation, prov, "promoted", null]);
+      expect(await citationRows(citation), citation).toEqual([]);
+      seeded.push(judgment);
+    }
+    const viaV1 = await asReader(async (r) => (await r.query("SELECT count(*)::int AS n FROM v_judgment WHERE id = ANY($1::uuid[])", [seeded])).rows[0].n);
+    expect(viaV1).toBe(2);
+    const prov = await insertProvenance(admin);
+    // A seeded citation under a published judgment: the citation's own publication counts.
+    const published = await publishCitedJudgment(3001, "2099 SCMR 926303");
+    await admin.query("DELETE FROM citation WHERE citation_text = '2099 SCMR 926304'");
+    await admin.query(INSERT_CITATION, [randomUUID(), published.judgment, "2099 SCMR 926304", prov, "promoted", null]);
+    expect(await citationRows("2099 SCMR 926303")).toHaveLength(1);
+    expect(await citationRows("2099 SCMR 926304")).toEqual([]);
+    // Seeded treatments, between seeded judgments or between published ones: never shown. An overruling the reader
+    // cannot show holds the treated judgment pending (D2), so a seed can only make a citation read UNVERIFIED.
+    await admin.query(TREATMENT_SQL, [randomUUID(), seeded[0], seeded[1], "followed", 0.9, prov, "promoted", null]);
+    expect(await treatmentRows(seeded[1])).toEqual([]);
+    expect(await pending(seeded[1])).toBe(0);
+    await admin.query(TREATMENT_SQL, [randomUUID(), seeded[0], seeded[1], "overruled", 0.9, prov, "promoted", null]);
+    expect(await treatmentRows(seeded[1])).toEqual([]);
+    expect(await pending(seeded[1])).toBe(1);
+    const between = await publishTreatmentCase(3002, "followed");
+    await admin.query(TREATMENT_SQL, [randomUUID(), between.treating, between.treated, "overruled", 0.9, prov, "promoted", null]);
+    expect(await treatmentRows(between.treated)).toEqual([{ treatment: "followed", treating_bench_type: "larger", treating_judgment_bench: "larger" }]);
+    expect(await pending(between.treated)).toBe(1);
+    // A seeded statute, section and version: invisible.
+    const statute = randomUUID();
+    const section = randomUUID();
+    await admin.query(
+      "INSERT INTO statute (id, name, jurisdiction, source_id, review_status) VALUES ($1, $2, 'Federal', $3, 'promoted')",
+      [statute, `F05 PG-DDL-30 Test Act 2099 ${randomUUID().slice(0, 8)}`, prov],
+    );
+    await admin.query("INSERT INTO statute_section (id, statute_id, section_number, source_id, review_status) VALUES ($1, $2, '1', $3, 'promoted')", [section, statute, prov]);
+    await admin.query(
+      `INSERT INTO statute_section_version (id, section_id, version_no, effective_from, text, version_confidence, source_id, review_status)
+       VALUES ($1, $2, 1, '2099-01-01', 'Seeded text.', 0.9, $3, 'promoted')`,
+      [randomUUID(), section, prov],
+    );
+    expect(await sectionVersions(section)).toEqual([]);
+  });
+
+  it("PG-DDL-31 004: a row whose publication is unfinished, or whose provenance lacks content_hash, source_name or both source_url and raw_storage_key, is invisible", async () => {
+    // An unfinished publication, built by the superuser (a writer's could not commit: 003 R1 D1).
+    const unfinished = randomUUID();
+    await admin.query(
+      `INSERT INTO corpus_publication (id, batch_key, input_sha256, source_kind, actor_id, publisher_session_user)
+       VALUES ($1, $2, $3, 'curated', 'pgddl-actor', 'pgddl')`,
+      [unfinished, batchKey(31), sha(`31-${unfinished}`)],
+    );
+    const prov = await insertProvenance(admin);
+    const judgment = randomUUID();
+    await admin.query("DELETE FROM citation WHERE citation_text = '2099 SCMR 926310'");
+    await admin.query(INSERT_JUDGMENT, [judgment, "F05 PG-DDL-31 unfinished 2099", "division", prov, "promoted", unfinished]);
+    await admin.query(INSERT_CITATION, [randomUUID(), judgment, "2099 SCMR 926310", prov, "promoted", unfinished]);
+    expect(await citationRows("2099 SCMR 926310")).toEqual([]);
+    // A published row under a parent whose publication is unfinished is hidden too: every parent's own publication
+    // counts (the superuser moves the parent onto the unfinished publication).
+    const toUnfinished = (table: string, id: string) => admin.query(`UPDATE ${table} SET publication_id = $1 WHERE id = $2`, [unfinished, id]);
+    const cited = await publishCitedJudgment(3150, "2099 SCMR 923150");
+    await toUnfinished("judgment", cited.judgment);
+    expect(await citationRows("2099 SCMR 923150")).toEqual([]);
+    for (const [k, side] of [[3151, "treating"], [3152, "treated"]] as const) {
+      const c = await publishTreatmentCase(k, "overruled");
+      expect(await treatmentRows(c.treated), `${side}: before`).toHaveLength(1);
+      await toUnfinished("judgment", c[side]);
+      expect(await treatmentRows(c.treated), side).toEqual([]);
+      expect(await pending(c.treated), side).toBe(1);
+    }
+    for (const [k, table] of [[3153, "statute_section"], [3154, "statute"]] as const) {
+      const s = await publishSection(k);
+      await toUnfinished(table, table === "statute" ? s.statute : s.section);
+      expect(await sectionVersions(s.section), table).toEqual([]);
+    }
+
+    const blanks: Array<[string, string]> = [
+      ["content_hash", "content_hash = NULL"],
+      ["source_name", "source_name = '  '"],
+      ["source_url and raw_storage_key", "source_url = NULL, raw_storage_key = NULL"],
+    ];
+    let n = 3100;
+    for (const [what, set] of blanks) {
+      const blank = (source: string) => admin.query(`UPDATE source_provenance SET ${set} WHERE id = $1`, [source]);
+      for (const owner of ["citation", "judgment"] as const) {
+        n += 1;
+        const citation = `2099 SCMR 92${n}`;
+        const ids = await publishCitedJudgment(n, citation);
+        expect(await citationRows(citation), `${what} on the ${owner}: before`).toHaveLength(1);
+        await blank(owner === "citation" ? ids.citationSource : ids.judgmentSource);
+        expect(await citationRows(citation), `${what} on the ${owner}`).toEqual([]);
+      }
+      // On an overruling, or either of its judgments: hidden, and so pending.
+      for (const owner of ["treatment", "treating", "treated"] as const) {
+        n += 1;
+        const c = await publishTreatmentCase(n, "overruled");
+        expect(await treatmentRows(c.treated), `${what} on the ${owner}: before`).toHaveLength(1);
+        await blank(c.sources[owner]);
+        expect(await treatmentRows(c.treated), `${what} on the ${owner}`).toEqual([]);
+        expect(await pending(c.treated), `${what} on the ${owner}`).toBe(1);
+      }
+      // On a version, its section or its statute.
+      for (const owner of ["version", "section", "statute"] as const) {
+        n += 1;
+        const s = await publishSection(n);
+        expect(await sectionVersions(s.section), `${what} on the ${owner}: before`).toHaveLength(2);
+        await blank(s.sources[owner]);
+        expect(await sectionVersions(s.section), `${what} on the ${owner}`).toEqual([]);
+      }
+    }
+    // Either location alone is enough: a raw_storage_key without a source_url keeps the row visible.
+    const keyed = await publishCitedJudgment(3199, "2099 SCMR 923199");
+    await admin.query("UPDATE source_provenance SET source_url = NULL, raw_storage_key = 'raw/f05/2099' WHERE id = ANY($1::uuid[])", [
+      [keyed.citationSource, keyed.judgmentSource],
+    ]);
+    expect(await citationRows("2099 SCMR 923199")).toHaveLength(1);
+  });
+
+  it("PG-DDL-32 004: the DDL chain re-applies cleanly twice and the inventory is 33 after each full pass (D13)", async () => {
+    for (let pass = 1; pass <= 2; pass += 1) {
+      for (const file of ddlFiles()) {
+        await admin.query(fs.readFileSync(path.join(DDL_DIR, file), "utf8"));
+      }
+      const inventory = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_relations()");
+      expect(inventory.rows[0].n, `pass ${pass}`).toBe(33);
+      const options = await admin.query(
+        "SELECT count(*)::int AS n FROM pg_class WHERE relname LIKE 'v\\_authority\\_%' AND reloptions = ARRAY['security_barrier=true']",
+      );
+      expect(options.rows[0].n, `pass ${pass}`).toBe(4);
+      const readable = await asReader(async (r) => (await r.query("SELECT count(*)::int AS n FROM v_authority_citation")).rows[0].n);
+      expect(readable, `pass ${pass}`).toBeGreaterThan(0);
     }
   });
 });
