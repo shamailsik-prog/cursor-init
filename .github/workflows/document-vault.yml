@@ -1,0 +1,69 @@
+name: Document vault (S3)
+
+# FA-D16-001: the document vault (platform/documents) against a real S3-compatible server.
+# MinIO runs as a service container; the test creates its own buckets and speaks the S3 API with
+# AWS SigV4 to it, exactly as the R2 backend speaks to Cloudflare R2: upload through the real
+# route, read-after-write from a fresh store instance, download, overwrite refusal, tamper
+# detection and a restore drill into a second bucket (tests/fa-d16-001.document-vault-s3.e2e.test.ts),
+# then the same upload and download through a running Next.js server (scripts/e2e-document-vault-server.mjs).
+# The live R2 test (architecture open item O-2) needs real credentials and does not run here.
+# Third-party actions and the image are pinned (tag in the trailing comment).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  document-vault-s3:
+    name: Document vault against MinIO (S3 API, SigV4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      minio:
+        # A service container cannot be given a command; Bitnami's image starts the server by
+        # default. bitnamilegacy/minio:2025.7.23-debian-12-r5, pinned by digest.
+        image: bitnamilegacy/minio@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20
+        env:
+          # Throwaway credentials for a container that lives for this job only: not secrets.
+          MINIO_ROOT_USER: ci-minio-user
+          MINIO_ROOT_PASSWORD: ci-minio-password
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -fsS http://127.0.0.1:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
+    env:
+      SIKANDER_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      SIKANDER_TEST_S3_ACCESS_KEY_ID: ci-minio-user
+      SIKANDER_TEST_S3_SECRET_ACCESS_KEY: ci-minio-password
+      SIKANDER_TEST_S3_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Wait for MinIO
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null "$SIKANDER_TEST_S3_ENDPOINT/minio/health/live"; then exit 0; fi
+            sleep 2
+          done
+          echo "MinIO did not become ready"; exit 1
+      - name: Document vault e2e against MinIO (npm run test:document-vault-s3)
+        run: npm run test:document-vault-s3
+      # The running Next.js server (bundled route, Next's extended fetch) against the same MinIO.
+      - name: Document vault through the Next.js server (npm run test:document-vault-server)
+        if: ${{ !cancelled() }}
+        run: npm run test:document-vault-server

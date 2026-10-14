@@ -11,6 +11,9 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "test:unit": "vitest run",
+    "test:document-vault-s3": "vitest run tests/fa-d16-001.document-vault-s3.e2e.test.ts",
+    "test:document-vault-server": "node scripts/e2e-document-vault-server.mjs",
+    "test:r2-live": "R2_LIVE_REQUIRED=1 vitest run tests/fa-d16-001.r2-live.o2.test.ts",
     "functions:build": "npm --prefix functions run build",
     "functions:test": "npm --prefix functions test",
     "test:all": "npm run test:unit && npm run test:rules",
@@ -36,6 +39,7 @@
   "dependencies": {
     "@base-ui/react": "^1.8.0",
     "ai": "^7.0.93",
+    "aws4fetch": "1.0.20",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.2.6",
     "eve": "^0.56.0",

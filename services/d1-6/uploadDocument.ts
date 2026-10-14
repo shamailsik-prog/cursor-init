@@ -4,6 +4,9 @@ import {
   deleteDocumentObject,
   getImmutableDocumentObject,
   putImmutableDocumentObject,
+  unremovedObjectPathOf,
+  type DocumentObjectPutInput,
+  type DocumentObjectPutResult,
 } from "@/platform/documents/documentObjectStore"
 import { sniffMimeType } from "@/platform/documents/mimeSniff"
 import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
@@ -25,6 +28,21 @@ export function uploadDocument(
   return uploadDocumentAsync(store, input)
 }
 
+/**
+ * Writes the object; if the write landed but did not verify and the store could not remove it
+ * (FA-D16-003), the delete is retried here before the error propagates, so no unverified object
+ * stays addressable even though the caller never received a storagePath.
+ */
+async function putObjectOrDiscard(input: DocumentObjectPutInput): Promise<DocumentObjectPutResult> {
+  try {
+    return await putImmutableDocumentObject(input)
+  } catch (err) {
+    const leftover = unremovedObjectPathOf(err)
+    if (leftover) await deleteDocumentObject(leftover)
+    throw err
+  }
+}
+
 function hasRetainedBytes(doc: DocumentRecord): boolean {
   return Boolean(doc.storagePath) && doc.objectBytesStatus === "available"
 }
@@ -44,7 +62,7 @@ async function ensureObjectBytes(
       doc.objectBytesStatus = "missing"
     }
   }
-  const stored = await putImmutableDocumentObject({
+  const stored = await putObjectOrDiscard({
     store,
     firmId: doc.firmId,
     docId: doc.id,
@@ -78,7 +96,7 @@ async function commitNewDocumentIngest(
   const id = store.id("doc")
   let storagePath: string | undefined
   try {
-    const stored = await putImmutableDocumentObject({
+    const stored = await putObjectOrDiscard({
       store,
       firmId: input.firmId,
       docId: id,

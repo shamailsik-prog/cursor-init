@@ -40,6 +40,10 @@ export default defineConfig({
             "tests/audit-f02-console-functions-auth.e2e.test.ts",
             "tests/audit-f02-functions-http-emulator.e2e.test.ts",
           ]),
+      // FA-D16-001: the document vault against a real S3-compatible server (MinIO). It runs via
+      // `npm run test:document-vault-s3` (CI job `document-vault-s3`), which supplies the
+      // SIKANDER_TEST_S3_* endpoint and credentials; run without them it fails, never skips.
+      ...(process.env.SIKANDER_TEST_S3_ENDPOINT ? [] : ["tests/fa-d16-001.document-vault-s3.e2e.test.ts"]),
     ],
   },
   resolve: {
