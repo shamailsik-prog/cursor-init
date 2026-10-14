@@ -18,6 +18,9 @@ import { EMULATORS, mintIdToken, uniq } from "./emu"
  *    on a petition that pleads law no longer in force. Now approval applies the same guard to the recorded checks:
  *    422 temporal_check_not_in_draft, nothing stored, nothing approved. The recovery is a re-gate on the same key with
  *    the text the version pleads, which shows the partner the mismatch; the partner's override then carries approval.
+ *    The re-audit of the follow-up (FU-D1) found the override path open in the same way: a partner could write an
+ *    immutable override on such a result, which no approval could use and which froze the version (R5). overrideGate
+ *    now applies the same guard (case v).
  * 2. will_wasiyat was not law-dependent. It is NON_FORUM and no line of its checklist matches LEGAL_VERIFICATION_ITEM,
  *    yet "Dispositions within the permitted third or heirs' consent" is a condition of the will's validity (the limit
  *    on bequests). Approval accepted no review checklist for a will. Now the code-side ruling map
@@ -114,34 +117,39 @@ const draftDoc = async (id: string) => (await adminDb().collection("drafts").doc
 const resultDoc = async (id: string) => (await adminDb().collection("draft_gate_results").doc(`${id}_1`).get()).data()
 const approvedEvents = async (firmId: string, draftId: string) =>
   (await adminDb().collection("events").where("firmId", "==", firmId).get()).docs.filter((d) => d.data().name === "draft.approved" && d.data().payload?.draftId === draftId)
-const approveAudit = async (draftId: string) =>
-  (await adminDb().collection("audit_log").where("action", "==", "draft.approve").where("target", "==", `drafts/${draftId}`).get()).docs.map((d) => [
-    d.data().decision,
-    d.data().reason,
-  ])
+const overrideExists = async (id: string) => (await adminDb().collection("draft_gate_overrides").doc(`${id}_1`).get()).exists
+const auditOf = async (action: string, target: string) =>
+  (await adminDb().collection("audit_log").where("action", "==", action).where("target", "==", target).get()).docs.map((d) => [d.data().decision, d.data().reason])
+const approveAudit = (draftId: string) => auditOf("draft.approve", `drafts/${draftId}`)
+const overrideAudit = (draftId: string) => auditOf("draft.gate_override", `draft_gate_overrides/${draftId}_1`)
 
 function expectErr(err: ApiError, status: number, code: string): void {
   expect({ status: err.status, code: err.code }).toEqual({ status, code })
 }
 
 /**
- * A petition gated once, whose stored result is then rewritten as the gate stored results before F06 ruling C: status
- * OK, no scope, and a recorded temporal check (true for 2020) on text the petition never pleads. The draft's summary
- * says OK with the same result id. Returns the draft id and the stored result as seeded.
+ * A petition gated once, whose stored result is then rewritten as the gate stored results before F06 ruling C: no
+ * scope, and a recorded temporal check on text the petition never pleads. By default the status is OK and the check is
+ * the 2018 text in force for 2020 (a true check); a test may give another status, other recorded findings and another
+ * body. The draft's summary carries the same status and result id. Returns the draft id and the stored result as seeded.
  */
-async function legacyPetition(f: Firm): Promise<{ draftId: string; seeded: Record<string, unknown> }> {
-  const d = await create(f, f.A, PETITION_TYPE, PETITION_PROSE)
-  // A real first run (no check: NOT_ASSESSED) gives the result, the summary and lastGatedVersion a real shape.
-  expect((await gate(f, f.A, d.draftId)).status).toBe("NOT_ASSESSED")
+async function legacyPetition(
+  f: Firm,
+  legacy: { status?: string; temporal?: TemporalFinding[]; body?: string } = {}
+): Promise<{ draftId: string; seeded: Record<string, unknown> }> {
+  const status = legacy.status ?? "OK"
+  const d = await create(f, f.A, PETITION_TYPE, legacy.body ?? PETITION_PROSE)
+  // A real first run (no check) gives the result, its citations, the summary and lastGatedVersion a real shape.
+  expect(typeof (await gate(f, f.A, d.draftId)).resultId).toBe("string")
   const seeded: Record<string, unknown> = { ...(await resultDoc(d.draftId)) }
   delete seeded.scope
   Object.assign(seeded, {
-    status: "OK",
+    status,
     resultId: LEGACY_RESULT_ID,
-    temporal: [{ ...UNPLEADED_CHECK, status: "OK", inForceText: TEXT_2018 }],
+    temporal: legacy.temporal ?? [{ ...UNPLEADED_CHECK, status: "OK", inForceText: TEXT_2018 }],
   })
   await adminDb().collection("draft_gate_results").doc(`${d.draftId}_1`).set(seeded)
-  await adminDb().collection("drafts").doc(d.draftId).update({ "gateResult.status": "OK", "gateResult.resultId": LEGACY_RESULT_ID })
+  await adminDb().collection("drafts").doc(d.draftId).update({ "gateResult.status": status, "gateResult.resultId": LEGACY_RESULT_ID })
   return { draftId: d.draftId, seeded }
 }
 
@@ -264,5 +272,49 @@ describe.skipIf(!EMULATORS)("F06 follow-up: approval holds recorded checks to th
     expect(a.reviewChecklist).toEqual(stored)
     expect(await draftDoc(draftId)).toMatchObject({ status: "approved", locked: true, reviewChecklist: stored })
     expect(await approvedEvents(f.firmId, draftId)).toHaveLength(1)
+  })
+
+  it("(v) a partner override of a legacy non-OK result whose recorded check the version does not plead is refused 422 temporal_check_not_in_draft, so the version is not frozen: a re-gate re-supplying the key, then override and approval, pass", async () => {
+    const f = await newFirm()
+    const full = fullChecklist(await checklistOf(f, PETITION_TYPE))
+    // A legacy TEMPORAL_MISMATCH whose recorded check is a wording of the section the petition never pleads.
+    const neverPleaded = { ...CHECK_2020, usedText: "Test Act s.1 in a wording the petition never pleads." }
+    const { draftId, seeded } = await legacyPetition(f, {
+      status: "TEMPORAL_MISMATCH",
+      temporal: [{ ...neverPleaded, status: "TEMPORAL_MISMATCH", inForceText: TEXT_2018 }],
+    })
+    expect((await send(reportApi, f, f.P, { draftId })).gateResult).toMatchObject({ status: "TEMPORAL_MISMATCH", resultId: LEGACY_RESULT_ID })
+
+    // Before the guard, the partner's override was written and froze the version (R5): approval then answered 422 and
+    // a re-gate 409 already_overridden. Now the override is refused before anything is written.
+    expectErr(await apiErrorOf(override(f, draftId)), 422, "temporal_check_not_in_draft")
+    expect(await overrideExists(draftId)).toBe(false)
+    expect(await overrideAudit(draftId)).toEqual([["deny", "temporal_check_not_in_draft"]])
+    expect(await resultDoc(draftId)).toEqual(seeded)
+    expect(await draftDoc(draftId)).toMatchObject({ status: "draft", locked: false, gateResult: { status: "TEMPORAL_MISMATCH", overridden: false, resultId: LEGACY_RESULT_ID } })
+
+    // With no override the version is not frozen: the same key re-supplied with the text the petition pleads re-gates it.
+    const g = await gate(f, f.A, draftId, [PLEADED_CHECK])
+    expect(g.status).toBe("TEMPORAL_MISMATCH")
+    expect(g.temporal).toEqual([{ ...PLEADED_CHECK, status: "TEMPORAL_MISMATCH", inForceText: TEXT_2018 }])
+    // The normal path: the partner overrides the run they were shown, then approves.
+    const o = await override(f, draftId)
+    expect(o.override.cleared).toEqual([{ kind: "temporal", ...CHECK_2020, status: "TEMPORAL_MISMATCH" }])
+    const a = await approve(f, draftId, { reviewChecklist: full })
+    expect(a.draft).toMatchObject({ status: "approved", locked: true, approvedBy: f.P.uid, approvedVersion: 1 })
+    expect(a.draft.gateResult).toMatchObject({ status: "TEMPORAL_MISMATCH", overridden: true })
+    expect((await overrideAudit(draftId)).map((row) => row.join(":")).sort()).toEqual(["allow:ok", "deny:temporal_check_not_in_draft"])
+
+    // The same refusal for a legacy UNVERIFIED citation beside an unpleaded check the store says is true: the override
+    // would clear the citation and leave a version no approval and no re-gate could move.
+    const cited = await legacyPetition(f, {
+      status: "UNVERIFIED",
+      body: `${PETITION_PROSE}\nThe petitioner relies on 2099 SCMR 7.`,
+      temporal: [{ ...UNPLEADED_CHECK, status: "OK", inForceText: TEXT_2018 }],
+    })
+    expect((cited.seeded.citations as Array<{ status: string }>).map((c) => c.status)).toEqual(["UNVERIFIED"])
+    expectErr(await apiErrorOf(override(f, cited.draftId)), 422, "temporal_check_not_in_draft")
+    expect(await overrideExists(cited.draftId)).toBe(false)
+    expect(await overrideAudit(cited.draftId)).toEqual([["deny", "temporal_check_not_in_draft"]])
   })
 })

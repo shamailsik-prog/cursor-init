@@ -268,9 +268,10 @@ const LEGALLY_VERIFIED_NON_FORUM = [
 /**
  * The 17 NON_FORUM types law-dependent by ruling (F06 follow-up audit, LAW_DEPENDENT_BY_RULING): their validity turns
  * on a substantive rule that no line of their checklist matches LEGAL_VERIFICATION_ITEM for. The will (the limit on
- * bequests), the gift (hiba), the ten instruments of immovable property (registration compulsory by statute), the
- * notices whose period or precondition is statutory, the regulatory reply that opens on limitation, the declaration
- * of legal heirs and the covenant in restraint of trade.
+ * bequests), the gift (hiba), the nine other instruments of immovable property (registration compulsory by statute;
+ * with the gift deed, the ten the property-instrument test below derives), the three notices whose period or
+ * precondition is statutory, the regulatory reply that opens on limitation, the declaration of legal heirs and the
+ * covenant in restraint of trade: 2 + 9 + 3 + 1 + 1 + 1 = 17.
  */
 const LAW_DEPENDENT_BY_RULING_IDS = [
   "defamation_notice",

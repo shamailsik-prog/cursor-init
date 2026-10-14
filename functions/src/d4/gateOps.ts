@@ -704,7 +704,15 @@ export type OverrideResult = { override: OverrideView; draft: DraftView }
  * the reason (422 `unsupported_characters`, R7). In one transaction: a locked draft is 409 `draft_locked`; a version
  * that is not the current one 409 `draft_changed`; no stored result for it (or one for another body) 409 `not_gated`;
  * a stored result that is not the one the partner reviewed (another `resultId`) 409 `gate_result_changed` (R6); an OK
- * result 409 `nothing_to_override`; an existing override 409 `already_overridden`. Otherwise it creates the immutable
+ * result 409 `nothing_to_override`; an existing override 409 `already_overridden`. Then the pleaded-text rule on the
+ * temporal checks the reviewed result recorded (F06 ruling C, `unpleadedChecks` on the version's stored title and body,
+ * loaded before the transaction as approveDraft loads them, so a missing version is 404 `version_not_found` and a body
+ * that is no longer the current one 409 `draft_changed`; FU-D1): a recorded check the version does not plead is 422
+ * `temporal_check_not_in_draft`, with nothing written and one deny row; a record that is not well formed is 409
+ * `not_gated` (`recordedChecks`), as approval treats it. A result stored before the ruling can hold such a check, and
+ * an override of it could never carry an approval (approval refuses it the same way) while it froze the version (R5);
+ * refused, the version stays open to the recovery: a re-gate that re-supplies the check on the same key with the text
+ * the version pleads. Otherwise it creates the immutable
  * override `{ firmId, matterId, draftId, version, bodySha256, resultId, classification, by, at, reason, cleared }`
  * (`classification` is the draft's label; `by` is the authenticated caller, never a body field; `cleared` lists every
  * non-OK item of the reviewed result with its status, and for a NOT_ASSESSED result the one scope item
@@ -728,6 +736,8 @@ export const overrideGateOp: FirmOperation<OverrideResult> = {
     const { ref, draft } = await loadDraftForCaller(caller, draftId, "draft.override")
     refuseStale(draft, version)
     const reason = supportedReason(parsedReason)
+    // The version's stored text (versions are immutable), for the pleaded-text rule below, as approveDraft loads it.
+    const text = await loadVersionText(caller, draftId, version, draft)
 
     const resultRef = results().doc(versionId(draftId, version))
     const overrideRef = overrides().doc(versionId(draftId, version))
@@ -746,6 +756,10 @@ export const overrideGateOp: FirmOperation<OverrideResult> = {
       const evaluation = storedEvaluation(stored)
       if (evaluation.status === "OK") throw conflict("nothing_to_override")
       if ((await tx.get(overrideRef)).exists) throw conflict("already_overridden")
+      // F06 ruling C, as gateDraft and approveDraft apply it (FU-D1): an override of a result whose recorded check the
+      // version does not plead could never carry an approval, and it would freeze the version (R5). Nothing is written.
+      if (text.bodySha256 !== stored.bodySha256) throw conflict("draft_changed")
+      if (unpleadedChecks(text, recordedChecks(stored)).length > 0) throw new HttpError(422, "temporal_check_not_in_draft")
       await audit.stage(tx, "allow", "ok")
       const doc = {
         firmId: current.firmId,
