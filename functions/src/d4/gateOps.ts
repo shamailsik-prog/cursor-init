@@ -199,8 +199,9 @@ export function parseReviewChecklist(value: unknown): ReviewChecklistEntry[] | n
 
 /**
  * The review checklist an approval of `documentTypeId` needs and stores (F06), or null when it needs and has none.
- * A law-dependent type (`isLawDependent`: filed in a forum, or its own checklist names a legal-verification item,
- * ruling A) needs one; for any other type it is optional, but one that is sent is held to the same rule. The rule:
+ * A law-dependent type (`isLawDependent`: filed in a forum, its own checklist names a legal-verification item, ruling
+ * A, or it is in `LAW_DEPENDENT_BY_RULING`, the follow-up audit) needs one; for any other type it is optional, but one
+ * that is sent is held to the same rule. The rule:
  * the entries name every item of the type's checklist (`reviewChecklistOf`) exactly once, by exact string, in any
  * order, and nothing else, and every evidence is at least 20 characters once trimmed (ruling B, the override reason's
  * floor); otherwise 422 `review_checklist_incomplete`. Each evidence then passes the draft charset rule (422
@@ -800,9 +801,14 @@ function recordedChecks(stored: DocumentData): TemporalCheck[] {
  * 409 `draft_locked`, a version that is not the current one 409 `draft_changed`, and a version with no stored result
  * (or a summary that is null or for another version) 409 `not_gated`. Then the review checklist (F06,
  * `requireReviewChecklist`): a law-dependent type needs every item of its checklist with evidence (422
- * `review_checklist_incomplete`), whatever the gate says. It re-runs the gate on that version with the temporal checks
- * recorded in its result, against the authority store as it is now, and passes when the fresh result is OK or the
- * override bound to this version and hash cleared every non-OK item with the same status (`approvalPasses`; a
+ * `review_checklist_incomplete`), whatever the gate says. Then the pleaded-text rule on the temporal checks recorded in
+ * the version's result (F06 ruling C, `unpleadedChecks`, as gateDraft applies it): a recorded check whose usedText the
+ * version does not plead is 422 `temporal_check_not_in_draft` before any evaluation, with nothing stored, nothing
+ * approved and one deny row (a result stored before the ruling can hold one, and a true one would make the re-run OK
+ * with no override). The recovery is a re-gate of the version that re-supplies the check on the same key with the text
+ * the version pleads (R10: the caller's usedText wins), then approval on that run. Otherwise it re-runs the gate on
+ * that version with the recorded checks, against the authority store as it is now, and passes when the fresh result is
+ * OK or the override bound to this version and hash cleared every non-OK item with the same status (`approvalPasses`; a
  * NOT_ASSESSED result needs the override's not-assessed scope item, F06). The fresh run decides, never a stored status:
  * a stored OK with no findings is NOT_ASSESSED again here. Findings over 900,000 bytes are 422
  * `gate_result_too_large` (R8), with nothing stored. One transaction, which re-reads the draft (lock, version,
@@ -844,6 +850,9 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
     }
     const temporalChecks = recordedChecks(stored)
     const text = await loadVersionText(caller, draftId, version, draft)
+    // F06 ruling C, as gateDraft applies it: a recorded check the version does not plead verifies nothing the draft
+    // says. A result stored before the ruling can hold one; it must not make the approval's run OK.
+    if (unpleadedChecks(text, temporalChecks).length > 0) throw new HttpError(422, "temporal_check_not_in_draft")
     const fresh = normaliseEvaluation(await runGate({ title: text.title, body: text.body, temporalChecks }, activeAuthorityStore()))
     requireStorable(fresh)
 

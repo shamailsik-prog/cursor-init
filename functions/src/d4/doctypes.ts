@@ -59,14 +59,59 @@ export const LEGAL_VERIFICATION_ITEM =
   /\bgate\s*33\b|\bL17\.1\b|\bcitations?\b|\bstatut(?:e|es|ory)\b|\blimitation\b|\bprovisions?\b|\bjurisdiction\b|\bsources?\s+cited\b/i
 
 /**
- * Whether a document of this type is law-dependent (F06, ruling A): it is filed in a forum (its `courtIds` do not list
- * NON_FORUM), or its own seed checklist names a legal-verification item (`LEGAL_VERIFICATION_ITEM`), as a suit for
- * possession, a statutory application or a legal opinion does even when the seed marks it NON_FORUM. Approving one
- * needs the type's review checklist with evidence. Every other NON_FORUM type (a notice, a contract, an affidavit, an
- * instrument) is not law-dependent, even one that also lists a court (`heirship_affidavit`).
+ * NON_FORUM types that are law-dependent by ruling (F06 follow-up audit, 2026-10-14), each with the one-line reason: the
+ * checklist item or the rule on which the document's validity turns. Every VERIFIED NON_FORUM seed type was read
+ * (its checklist, firstGroundRule and required fields); these are the 17 whose validity turns on a substantive rule of
+ * law a partner must verify although no line of their checklist matches `LEGAL_VERIFICATION_ITEM`. Clerical items
+ * (parties, recitals, consideration, the execution block, stamp duty and court fee marked MANUAL, formatting) never put
+ * a type here. "Registration where compulsory" does so only for the instruments of immovable property, whose own
+ * transaction a statute requires to be registered; in a contract on the general law of contract the same template line
+ * names no rule that applies to the type. The seed (data/documentTypes.json, L18 Annex C) is partner-approved and is
+ * not edited for this: the ruling lives here. functions/test/d4.doctypes.test.ts pins the set and checks that every id
+ * is a VERIFIED NON_FORUM seed id the checklist rule leaves out.
+ */
+export const LAW_DEPENDENT_BY_RULING: ReadonlyMap<string, string> = new Map([
+  // The limit on bequests.
+  ["will_wasiyat", "\"Dispositions within the permitted third or heirs' consent\": a bequest beyond the third, or to an heir, fails without the heirs' consent"],
+  // Gifts (hiba).
+  ["gift_deed", "\"Registration where compulsory\" and the acceptanceAndDelivery field: a hiba needs declaration, acceptance and delivery of possession, and a written gift of immovable property must be registered"],
+  // Instruments of immovable property: registration compulsory by statute (and, for a sale, pre-emption).
+  ["sale_deed", "\"Registration where compulsory\": a sale of immovable property passes only by a registered instrument, and a right of pre-emption attaches to the sale"],
+  ["sale_agreement", "\"Registration where compulsory\": whether an agreement to sell immovable property must be registered, and what an unregistered one can prove, is a statutory question"],
+  ["mortgage_deed", "\"Registration where compulsory\": a mortgage of immovable property, other than by deposit of title deeds, is effected only by a registered instrument"],
+  ["lease_agreement_commercial", "\"Registration where compulsory\": a lease from year to year, for more than a year or reserving a yearly rent is made only by a registered instrument"],
+  ["lease_agreement_residential", "\"Registration where compulsory\": a lease from year to year, for more than a year or reserving a yearly rent is made only by a registered instrument"],
+  ["tenancy_agreement", "\"Registration where compulsory\": a tenancy from year to year or for more than a year is made only by a registered instrument, and the rent law governs the tenancy"],
+  ["development_agreement", "\"Registration where compulsory\": an agreement that passes an interest in the land to the developer must be registered"],
+  ["release_deed", "\"Registration where compulsory\": an instrument that relinquishes an interest in immovable property must be registered"],
+  ["partition_deed", "\"Registration where compulsory\": an instrument of partition that declares shares in immovable property must be registered"],
+  // Notices whose period or precondition is fixed by statute.
+  ["eviction_notice", "\"Demand and time to comply stated\": the time to quit and the grounds of eviction are fixed by the tenancy and rent laws, a statutory notice period"],
+  ["termination_notice", "\"Demand and time to comply stated\": the notice period and procedure for ending a worker's employment are fixed by the standing-orders law"],
+  ["defamation_notice", "\"Demand and time to comply stated\": the defamation law requires notice of the intended action within a fixed time of knowledge of the publication"],
+  // A responsive pleading before the regulator (its complaint, secp_complaint, is law-dependent by its checklist).
+  ["secp_response", "firstGroundRule: the reply opens with preliminary objections on maintainability and limitation, which turn on the statute"],
+  // A sworn declaration of who the legal heirs are.
+  ["heirship_affidavit", "\"Family tree / list of heirs\": who is a legal heir (a predeceased child's children included) is fixed by the law of succession, not by the deponent"],
+  // A covenant in restraint of trade.
+  ["non_compete_agreement", "the covenant itself: an agreement in restraint of a lawful profession, trade or business is void except as the law saves it"],
+])
+
+/**
+ * Whether a document of this type is law-dependent (F06): it is filed in a forum (its `courtIds` do not list
+ * NON_FORUM); or its own seed checklist names a legal-verification item (`LEGAL_VERIFICATION_ITEM`, ruling A), as a suit
+ * for possession, a statutory application or a legal opinion does even when the seed marks it NON_FORUM; or its id is
+ * in `LAW_DEPENDENT_BY_RULING` (the follow-up audit: a will, a gift, an instrument of immovable property, a notice with
+ * a statutory period, a declaration of heirs). Approving one needs the type's review checklist with evidence. Every
+ * other NON_FORUM type (a contract on the general law, a corporate record, a generic notice, an affidavit of fact) is
+ * not law-dependent.
  */
 export function isLawDependent(type: DocumentType): boolean {
-  return !type.courtIds.includes("NON_FORUM") || type.checklist.some((line) => LEGAL_VERIFICATION_ITEM.test(line))
+  return (
+    !type.courtIds.includes("NON_FORUM") ||
+    type.checklist.some((line) => LEGAL_VERIFICATION_ITEM.test(line)) ||
+    LAW_DEPENDENT_BY_RULING.has(type.id)
+  )
 }
 
 /**

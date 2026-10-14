@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import seed from "@/data/documentTypes.json"
 import {
+  LAW_DEPENDENT_BY_RULING,
   LEGAL_VERIFICATION_ITEM,
   courtAllowed,
   getDocumentType,
@@ -264,6 +265,82 @@ const LEGALLY_VERIFIED_NON_FORUM = [
   "secp_complaint",
 ]
 
+/**
+ * The 17 NON_FORUM types law-dependent by ruling (F06 follow-up audit, LAW_DEPENDENT_BY_RULING): their validity turns
+ * on a substantive rule that no line of their checklist matches LEGAL_VERIFICATION_ITEM for. The will (the limit on
+ * bequests), the gift (hiba), the ten instruments of immovable property (registration compulsory by statute), the
+ * notices whose period or precondition is statutory, the regulatory reply that opens on limitation, the declaration
+ * of legal heirs and the covenant in restraint of trade.
+ */
+const LAW_DEPENDENT_BY_RULING_IDS = [
+  "defamation_notice",
+  "development_agreement",
+  "eviction_notice",
+  "gift_deed",
+  "heirship_affidavit",
+  "lease_agreement_commercial",
+  "lease_agreement_residential",
+  "mortgage_deed",
+  "non_compete_agreement",
+  "partition_deed",
+  "release_deed",
+  "sale_agreement",
+  "sale_deed",
+  "secp_response",
+  "tenancy_agreement",
+  "termination_notice",
+  "will_wasiyat",
+]
+
+/**
+ * The 38 NON_FORUM types the audit left not law-dependent: agreements on the general law of contract, corporate
+ * records, generic notices and replies, affidavits of fact, a translation, a retainer letter and a vakalatnama. Their
+ * items are clerical or drafting items, or the rule that governs them is the parties' own terms.
+ */
+const NOT_LAW_DEPENDENT_NON_FORUM = [
+  "affidavit",
+  "agency_agreement",
+  "anti_dumping_notice",
+  "arbitration_clause",
+  "articles_of_association",
+  "board_minutes",
+  "cease_desist_notice",
+  "client_retainer_letter",
+  "consultancy_agreement",
+  "demand_notice",
+  "directors_resolution",
+  "distributor_agreement",
+  "employment_agreement",
+  "fir_translation",
+  "franchise_agreement",
+  "indemnity_bond",
+  "ip_assignment_agreement",
+  "ip_infringement_notice",
+  "joint_venture_agreement",
+  "legal_notice",
+  "mediation_agreement",
+  "memorandum_of_association",
+  "nda_mutual",
+  "nda_unilateral",
+  "power_of_attorney_general",
+  "power_of_attorney_special",
+  "response_to_notice",
+  "revenue_sharing_agreement",
+  "service_agreement",
+  "settlement_deed",
+  "share_purchase_agreement",
+  "share_subscription_agreement",
+  "shareholders_agreement",
+  "shareholders_resolution",
+  "show_cause_reply",
+  "statutory_declaration",
+  "undertaking",
+  "vakalatnama",
+]
+
+const isNonForum = (t: DocumentType) => t.courtIds.includes("NON_FORUM")
+const namesLegalVerification = (t: DocumentType) => t.checklist.some((line) => LEGAL_VERIFICATION_ITEM.test(line))
+
 describe("the review checklist of a law-dependent type (F06)", () => {
   it("every type filed in a forum (no NON_FORUM in its courts) is law-dependent", () => {
     const forum = rows.filter((t) => !t.courtIds.includes("NON_FORUM"))
@@ -273,17 +350,65 @@ describe("the review checklist of a law-dependent type (F06)", () => {
     expect(isLawDependent(byId("bail_application_497"))).toBe(true)
   })
 
-  it("among NON_FORUM types, exactly the 19 whose own checklist names a legal-verification item are law-dependent", () => {
-    const derived = rows.filter((t) => t.courtIds.includes("NON_FORUM") && isLawDependent(t)).map((t) => t.id)
-    expect(derived.sort()).toEqual(LEGALLY_VERIFIED_NON_FORUM)
-    expect(isLawDependent(byId("sale_deed"))).toBe(false)
-    // heirship_affidavit lists NON_FORUM beside a court family; the same rule decides it, and no item of its checklist
-    // is a legal-verification item, so it is not law-dependent.
+  it("among NON_FORUM types, the 19 whose own checklist names a legal-verification item and the 17 of the ruling map are law-dependent, and no other", () => {
+    expect(rows.filter(isNonForum)).toHaveLength(74)
+    expect(rows.filter((t) => isNonForum(t) && namesLegalVerification(t)).map((t) => t.id).sort()).toEqual(LEGALLY_VERIFIED_NON_FORUM)
+    const derived = rows.filter((t) => isNonForum(t) && isLawDependent(t)).map((t) => t.id)
+    expect(derived.sort()).toEqual([...LEGALLY_VERIFIED_NON_FORUM, ...LAW_DEPENDENT_BY_RULING_IDS].sort())
+    expect(rows.filter((t) => isNonForum(t) && !isLawDependent(t)).map((t) => t.id).sort()).toEqual(NOT_LAW_DEPENDENT_NON_FORUM)
+    // heirship_affidavit lists NON_FORUM beside a court family. No item of its checklist is a legal-verification item,
+    // but its list of heirs is fixed by the law of succession: law-dependent by ruling.
     expect(byId("heirship_affidavit").courtIds).toEqual(["CIVIL_KHI_*", "NON_FORUM"])
     expect(byId("heirship_affidavit").checklist.filter((c) => LEGAL_VERIFICATION_ITEM.test(c))).toEqual([])
-    expect(isLawDependent(byId("heirship_affidavit"))).toBe(false)
-    // Over the whole seed: 85 forum types and 19 legally verified NON_FORUM types.
-    expect(rows.filter((t) => isLawDependent(t))).toHaveLength(104)
+    expect(isLawDependent(byId("heirship_affidavit"))).toBe(true)
+    expect(isLawDependent(byId("service_agreement"))).toBe(false)
+    // Over the whole seed: 85 forum types, 19 legally verified NON_FORUM types and 17 by ruling.
+    expect(rows.filter((t) => isLawDependent(t))).toHaveLength(121)
+  })
+
+  it("the ruling map names exactly the audited ids, each a VERIFIED NON_FORUM seed id the forum and checklist rules leave out, with its reason", () => {
+    expect([...LAW_DEPENDENT_BY_RULING.keys()].sort()).toEqual(LAW_DEPENDENT_BY_RULING_IDS)
+    for (const [id, reason] of LAW_DEPENDENT_BY_RULING) {
+      // A VERIFIED seed id (getDocumentType returns only those), so a renamed or withdrawn seed row fails here.
+      const type = getDocumentType(id)
+      expect([id, type?.id]).toEqual([id, id])
+      // NON_FORUM, and not already law-dependent by the checklist rule: the map adds only what the other rules miss.
+      expect([id, isNonForum(type!), namesLegalVerification(type!)]).toEqual([id, true, false])
+      // A one-line reason naming the item or the rule.
+      expect([id, typeof reason, reason.trim().length > 20, reason.includes("\n")]).toEqual([id, "string", true, false])
+    }
+  })
+
+  it("a will is law-dependent by ruling: its permitted-third item is a condition of validity that no legal-verification line matches", () => {
+    const will = byId("will_wasiyat")
+    expect(will.courtIds).toEqual(["NON_FORUM"])
+    expect(will.checklist).toContain("Dispositions within the permitted third or heirs' consent")
+    expect(will.checklist.filter((c) => LEGAL_VERIFICATION_ITEM.test(c))).toEqual([])
+    expect(isLawDependent(will)).toBe(true)
+    expect(LAW_DEPENDENT_BY_RULING.get("will_wasiyat")).toContain("Dispositions within the permitted third or heirs' consent")
+  })
+
+  it("every NON_FORUM instrument of immovable property (an exact land description in its checklist) is law-dependent by ruling", () => {
+    const property = rows.filter((t) => isNonForum(t) && t.posture === "instrument" && t.checklist.includes("Exact land description from source documents"))
+    expect(property.map((t) => t.id).sort()).toEqual([
+      "development_agreement",
+      "gift_deed",
+      "lease_agreement_commercial",
+      "lease_agreement_residential",
+      "mortgage_deed",
+      "partition_deed",
+      "release_deed",
+      "sale_agreement",
+      "sale_deed",
+      "tenancy_agreement",
+    ])
+    for (const t of property) expect([t.id, LAW_DEPENDENT_BY_RULING.has(t.id), isLawDependent(t)]).toEqual([t.id, true, true])
+  })
+
+  it("the ruling is read by the type's id: a copy of a ruled row is law-dependent, the same row under another id is not", () => {
+    expect(isLawDependent({ ...byId("will_wasiyat") })).toBe(true)
+    expect(isLawDependent({ ...byId("will_wasiyat"), id: "will_not_ruled" })).toBe(false)
+    expect(isLawDependent({ ...byId("sale_deed"), id: "constructor" })).toBe(false)
   })
 
   it("the legal-verification item test matches the seed's verification lines and nothing that only names a party, a fee or a form", () => {
