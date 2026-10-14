@@ -1188,6 +1188,7 @@ Steps:
 ## Notes for PR 3 (recorded, not built here)
 
 - 004 must `CREATE OR REPLACE` `corpus_contract_relations()` to add the four `v_authority_*` views. Otherwise PR 2b's provisioning would move them to the migration role, which could redefine them.
+- 004 must likewise `CREATE OR REPLACE` `corpus_contract_routines()` (added in PR 2b fix round 1) with any routine it defines, and its `public_execute`, so provisioning resets EXECUTE drift on it and checks its owner.
 - The view predicate for complete provenance should be inlined as a join on `source_provenance`, mirroring `corpus_provenance_complete()`. Calling the DEFINER function from a view would need EXECUTE for `corpus_reader`.
 - Seed the F05 fixture through `python -m scraper.publication.cli publish` as a `corpus_writer` member. The format is `corpus-publication-batch/1`.
 - Read `publication_contract = '1'` and `last_refresh`, whose format is fixed by D30.

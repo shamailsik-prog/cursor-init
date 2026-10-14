@@ -172,6 +172,36 @@ AS $$
   WHERE r IS NOT NULL
 $$;
 
+-- The inventory of Annex A routines (PR 2b fix round 1): every function 001 and 003 define, and whether
+-- the DDL itself leaves EXECUTE to PUBLIC. Only 001's trigger function keeps PostgreSQL's default
+-- (001 is not edited; a trigger function cannot be called directly, and firing it needs no EXECUTE).
+-- Every other one is revoked from PUBLIC below (or in 001) and granted only where a role needs it:
+-- corpus_publication_begin/finish to corpus_writer, declassify to corpus_declassify. Provisioning resets
+-- EXECUTE drift on these; PR 3's 004 must extend the list with any routine it adds.
+CREATE OR REPLACE FUNCTION corpus_contract_routines() RETURNS TABLE (routine regprocedure, public_execute boolean)
+LANGUAGE sql STABLE
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT p, x.public_execute FROM (
+    SELECT pg_catalog.to_regprocedure('public.' || v.signature) AS p, v.public_execute
+    FROM (VALUES
+      ('enforce_monotonic_classification()', true),
+      ('declassify(uuid, text, text, text)', false),
+      ('corpus_session_is_superuser()', false),
+      ('corpus_provenance_complete(uuid)', false),
+      ('corpus_contract_relations()', false),
+      ('corpus_contract_routines()', false),
+      ('enforce_promoted_via_publication()', false),
+      ('corpus_publication_commit_check()', false),
+      ('corpus_publication_append_only()', false),
+      ('corpus_publication_item_guard()', false),
+      ('corpus_publication_begin(text, text, text, text)', false),
+      ('corpus_publication_finish(uuid, jsonb)', false)
+    ) AS v(signature, public_execute)
+  ) x
+  WHERE p IS NOT NULL
+$$;
+
 -- 6. The publication guard, BEFORE INSERT OR UPDATE on every contract table.
 --    Fires when a row becomes promoted, or when a promoted row changes anything but classification
 --    and updated_at (D4: declassify() and classification raises are unaffected; columns added later
@@ -660,7 +690,7 @@ GRANT SELECT, INSERT ON source_provenance TO corpus_writer;
 REVOKE ALL ON FUNCTION corpus_publication_begin(text, text, text, text), corpus_publication_finish(uuid, jsonb),
   enforce_promoted_via_publication(), corpus_publication_append_only(), corpus_publication_item_guard(),
   corpus_publication_commit_check(), corpus_provenance_complete(uuid), corpus_session_is_superuser(),
-  corpus_contract_relations() FROM PUBLIC;
+  corpus_contract_relations(), corpus_contract_routines() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION corpus_publication_begin(text, text, text, text), corpus_publication_finish(uuid, jsonb)
   TO corpus_writer;
 DO $$ BEGIN

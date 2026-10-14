@@ -194,6 +194,58 @@ def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
     assert relations == set(inventory)
 
 
+# PR 2b fix round 1 (re-audit D1): 003's corpus_contract_routines() lists every routine 001 and 003
+# define, with public_execute = whether the DDL itself leaves EXECUTE to PUBLIC (only 001's trigger
+# function keeps PostgreSQL's default). Provisioning resets EXECUTE drift on exactly these.
+ANNEX_A_ROUTINES = {
+    "enforce_monotonic_classification()": True,
+    "declassify(uuid,text,text,text)": False,
+    "corpus_session_is_superuser()": False,
+    "corpus_provenance_complete(uuid)": False,
+    "corpus_contract_relations()": False,
+    "corpus_contract_routines()": False,
+    "enforce_promoted_via_publication()": False,
+    "corpus_publication_commit_check()": False,
+    "corpus_publication_append_only()": False,
+    "corpus_publication_item_guard()": False,
+    "corpus_publication_begin(text,text,text,text)": False,
+    "corpus_publication_finish(uuid,jsonb)": False,
+}
+
+
+def test_f19_contract_routines_list_every_annex_a_function_and_who_may_execute_it(corpus_db):
+    corpus_db.apply_annex_a()  # a fresh database with only 001 + 003 (no migrate)
+    defined = {
+        r[0] for r in admin_fetch(
+            corpus_db,
+            "SELECT CAST(CAST(p.oid AS regprocedure) AS text) FROM pg_proc p "
+            "WHERE p.pronamespace = CAST('public' AS regnamespace) AND NOT EXISTS ("
+            "  SELECT 1 FROM pg_depend d WHERE d.classid = CAST('pg_proc' AS regclass) AND d.objid = p.oid "
+            "  AND d.deptype = 'e')",
+        )
+    }
+    listed = admin_fetch(
+        corpus_db,
+        "SELECT CAST(routine AS text), public_execute, has_function_privilege('public', routine, 'EXECUTE') "
+        "FROM corpus_contract_routines()",
+    )
+    assert len(listed) == len(ANNEX_A_ROUTINES)
+    assert {name: public for name, public, _held in listed} == ANNEX_A_ROUTINES
+    assert defined == set(ANNEX_A_ROUTINES), "every routine 001 and 003 define is listed, and nothing else"
+    assert [name for name, public, held in listed if public != held] == [], "public_execute is the DDL's PUBLIC grant"
+    grants = admin_fetch(
+        corpus_db,
+        "SELECT CAST(r.routine AS text), g.n FROM corpus_contract_routines() r "
+        "CROSS JOIN (VALUES ('corpus_writer'), ('corpus_reader'), ('corpus_declassify')) AS g(n) "
+        "WHERE NOT r.public_execute AND has_function_privilege(g.n, r.routine, 'EXECUTE')",
+    )
+    assert sorted(grants) == [
+        ("corpus_publication_begin(text,text,text,text)", "corpus_writer"),
+        ("corpus_publication_finish(uuid,jsonb)", "corpus_writer"),
+        ("declassify(uuid,text,text,text)", "corpus_declassify"),
+    ]
+
+
 # ---------------------------------------------------------------------------------------------
 # judgments, citations, provenance and the audit
 # ---------------------------------------------------------------------------------------------
