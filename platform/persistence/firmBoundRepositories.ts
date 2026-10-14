@@ -37,7 +37,8 @@ type BoundListByField<F> = F extends (
 
 type BoundRepo<R> = {
   [K in keyof R]: K extends "get"
-    ? BoundGet<Extract<R[K], (...args: never) => unknown>>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Extract needs a wide function type for repo method unions
+    ? BoundGet<Extract<R[K], (...args: any[]) => any>>
     : K extends "update"
       ? BoundUpdate<R[K]>
       : K extends "setLocked"
