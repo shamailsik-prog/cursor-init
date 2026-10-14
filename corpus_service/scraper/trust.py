@@ -33,13 +33,23 @@ REASON_LOW_CONFIDENCE: Final = "low_confidence"
 REASON_BLOCKED_SOURCE: Final = "blocked_source"
 REASON_UNKNOWN_SOURCE: Final = "unknown_source"
 REASON_CITATION_MISSING: Final = "citation_missing"  # decided by promotion, before trust (F22)
+REASON_DUPLICATE_CITATION: Final = "duplicate_citation"  # promotable, but the citation is already published
 QUARANTINE_REASONS: Final[Tuple[str, ...]] = (
     REASON_REVIEW_SOURCE,
     REASON_LOW_CONFIDENCE,
     REASON_BLOCKED_SOURCE,
     REASON_UNKNOWN_SOURCE,
     REASON_CITATION_MISSING,
+    REASON_DUPLICATE_CITATION,
 )
+# A record whose promotion raised is quarantined as "promotion_error:<ExceptionClass>".
+REASON_PROMOTION_ERROR_PREFIX: Final = "promotion_error:"
+
+
+def promotion_error_reason(exc: BaseException) -> str:
+    """The durable reason for a record whose promotion raised: the exception class only, never its
+    message (which can carry row data)."""
+    return f"{REASON_PROMOTION_ERROR_PREFIX}{type(exc).__name__}"
 
 # The pre-F20 schema allowed these (models.py CHECK on main before this fix). None of them is an
 # explicit approval, so the upgrade maps each to review.
@@ -95,6 +105,13 @@ def publication_decision(trust_raw: Optional[str], confidence: Optional[float]) 
 def may_harvest(trust_raw: Optional[str]) -> bool:
     """Only trusted and review sources are harvested; blocked and anything unknown are not."""
     return _known(trust_raw) in (TRUSTED, REVIEW)
+
+
+def may_publish_directly(trust_raw: Optional[str]) -> bool:
+    """Whether a harvester that writes a master table itself (no staging, so no promotion decision)
+    may run for this source. Only trusted: a review source's output must always be quarantined
+    (FINAL_2 :897), and such a harvester has no quarantine step."""
+    return _known(trust_raw) == TRUSTED
 
 
 def normalise_legacy_trust(value: Optional[str]) -> str:

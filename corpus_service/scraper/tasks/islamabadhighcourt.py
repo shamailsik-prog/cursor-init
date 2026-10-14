@@ -352,6 +352,7 @@ async def scrape_islamabadhighcourt(source, db):
     try:
         from scraper.models import ScraperStaging
         from scraper.parsers.pdf_extractor import extract_pdf_text
+        from scraper.source_identity import stamp_metadata
 
         pdf_urls, pdf_sources = await _discover_pdf_urls()
         if not pdf_urls:
@@ -371,18 +372,18 @@ async def scrape_islamabadhighcourt(source, db):
                     text = extract_pdf_text(response.content)
                     provenance = pdf_sources.get(pdf_url, {})
                     staging = ScraperStaging(
+                        source_id=source.id,
                         source_site="IslamabadHighCourt",
                         source_url=pdf_url,
                         raw_text=text[:50000],
                         confidence_score=0.6,
                         quarantined=True,
                         quarantine_reason="review source",
-                        parsing_metadata={
+                        parsing_metadata=stamp_metadata(source, {
                             "listing_url": provenance.get("listing_url"),
                             "feed_url": provenance.get("feed_url"),
                             "discovery_method": provenance.get("discovery_method"),
-                            "source_name": source.source_name,
-                        },
+                        }),
                     )
                     db.add(staging)
                     await db.commit()

@@ -18,33 +18,70 @@ Governing build prompt: `FINAL_CORPUS_SERVICE_PROMPT_2.md` (supersedes withdrawn
 ## Trust levels (audit F20)
 
 `scraper_sources.trust_level` is exactly one of `trusted`, `review` or `blocked`, default `review`
-(FINAL_2 :252-253). The vocabulary and the promotion decision live in `scraper/trust.py`; the
+(FINAL_2 :252-253). The vocabulary and every decision below live in `scraper/trust.py`; the
 database CHECK and default are built from it. Matching is exact, and anything else fails closed.
 
-| Source trust | Harvested by the dispatcher | Staged record at promotion |
-|---|---|---|
-| `trusted` | yes | promoted if confidence >= 0.5, else quarantined `low_confidence` |
-| `review` | yes | quarantined `review_source` |
-| `blocked` | no | quarantined `blocked_source` |
-| any other value, or no / deleted source | no | quarantined `unknown_source` |
+| Source trust | Staging harvesters (dispatcher) | Direct publishers: PakistanCode, NationalAssembly (dispatcher) | Staged record at promotion |
+|---|---|---|---|
+| `trusted` | run | run (they write `statutes_master` themselves) | promoted if confidence >= 0.5, else quarantined `low_confidence` |
+| `review` | run | skipped (FINAL_2 :897: a review source's output is always quarantined, and these write no staging row) | quarantined `review_source` |
+| `blocked` | skipped | skipped | quarantined `blocked_source` |
+| any other value, or a missing, deleted or renamed source | skipped | skipped | quarantined `unknown_source` |
 
-A staged record with no citation is quarantined `citation_missing`. Promotion finds the source by
-`source_id`, then `parsing_metadata.source_name`, then `source_site`. One failing record is rolled
-back and left pending; the rest of the batch continues. Seeds: PakistanLawSite, PakistanCode and
-NationalAssembly are `trusted`; every other source is `review`.
+Every staging row a harvester writes carries its source: `source_id` plus
+`parsing_metadata.source_id` and `parsing_metadata.source_name` (`scraper/source_identity.py`).
+`source_id` is `ON DELETE SET NULL`; the stamped id still names the source after a delete. The six
+court harvesters (SHC, SC, LHC, PHC, BHC, IHC) also write their rows already quarantined
+(`quarantine_reason` `review source`), so promotion never selects them; NasirLawSite rows wait for
+normalisation, which nothing schedules yet (audit F21).
+
+Promotion (`scraper/tasks/promotion.py`) decides each normalised record in this order:
+
+1. **Source.** Only the most specific identifier present is used: `source_id`, else
+   `parsing_metadata.source_id`, else `parsing_metadata.source_name`, else `source_site`. If that
+   identifier no longer resolves (deleted, renamed, malformed) the source is unknown; it never falls
+   through to a less specific label such as a court family's shared `source_site`.
+2. **Citation.** None or blank: quarantined `citation_missing`.
+3. **Trust.** The table above: `review_source`, `blocked_source`, `unknown_source` or `low_confidence`.
+4. **Publication (audit F19).** A promotable record is published into the Annex A contract as one
+   audited publication, under a per-citation advisory lock keyed by the canonical citation (so
+   concurrent runs never publish one citation at once, and "PLD 2099 Karachi 12" and
+   "PLD 2099 Sindh 12" take the same lock). The publication decides an already published citation:
+   identical content is `unchanged` and changed trusted content `updated` (the record is promoted
+   onto the existing judgment either way); a re-scrape that would be quarantined (no bench, for
+   example) never touches the published authority (`promoted_row_protected`). The record is promoted
+   (`promoted`, `promoted_at`, `promoted_to_id` = the Annex A judgment) only if Annex A promoted it;
+   otherwise it is quarantined with the publication's reason (see "Publication into Annex A"
+   below). `duplicate_citation`, which the pre-F19 duplicate check against `case_law_master`
+   produced, is no longer produced; nothing is written to `case_law_master` or `embedding_queue`.
+
+Each record is re-read `FOR UPDATE` and decided in its own transaction. A record whose promotion
+raises is rolled back, then quarantined `promotion_error:<ExceptionClass>` (class name only, never
+the message) so it is not retried forever; if even that write fails, the failure is logged and the
+record stays pending. The rest of the batch always continues. Every reason is written to the staging
+row's `quarantine_reason` and to a `quarantine_queue` row. The run returns
+`{"promoted", "quarantined", "failed"}` (a `promotion_error` record counts as failed).
+
+Seeds: PakistanLawSite, PakistanCode and NationalAssembly are `trusted`; every other source is
+`review`.
 
 **Upgrading an existing database.** `python -m scraper.migrate` (the `migrate` service, as
 `MIGRATE_DB_USER`) replaces the pre-F20 CHECK (`trusted|semi_trusted|untrusted|quarantined`, default
 `trusted`), maps `semi_trusted`, `untrusted`, `quarantined` and any other value to `review`, and sets
-the default to `review`, all before it seeds. It is idempotent: on a current database it changes
-nothing. The API's startup `init_db()` never runs it: it is DDL, and the runtime role is DML-only.
-A row the old default made `trusted` stays `trusted`, so review the `trusted` sources after upgrading.
+the default to `review`, all before it seeds. It is idempotent: when `ck_trust_level_values` is
+validated and identical to PostgreSQL's own rendering of the F20 CHECK, and the default is `review`,
+it changes nothing. Any other same-named CHECK (NOT VALID, or a different body such as
+`... OR trust_level IS NOT NULL`) is replaced. The comparison builds the expected CHECK on a
+throwaway table in `public` inside a savepoint that is always rolled back, so the migration role
+needs CREATE on `public`, which it has, and no TEMP. The API's startup `init_db()` never runs any
+of this: it is DDL, and the runtime role is DML-only. A row the old default made `trusted` stays
+`trusted`, so review the `trusted` sources after upgrading.
 
-**Tests.** `tests/test_f20_trust_policy_db.py` runs against a real Postgres 16 + pgvector named by
-`CORPUS_TEST_DATABASE_URL` (a `postgresql+asyncpg://` URL for a role that can create databases,
-roles and extensions, such as a throwaway `pgvector/pgvector:pg16` container's superuser). Each test
-creates and drops its own database. Without the URL, those tests skip locally and the run fails
-under CI.
+**Tests.** `tests/test_f20_trust_policy_db.py` and `tests/test_f20_harvesters_db.py` run against a
+real Postgres 16 + pgvector named by `CORPUS_TEST_DATABASE_URL` (a `postgresql+asyncpg://` URL for a
+role that can create databases, roles and extensions, such as a throwaway `pgvector/pgvector:pg16`
+container's superuser). Each test creates and drops its own database. Without the URL, those tests
+skip locally and the run fails under CI.
 
 ## Publication into Annex A (audit F19)
 

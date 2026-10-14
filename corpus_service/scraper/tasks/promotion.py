@@ -1,55 +1,98 @@
-"""Promote normalised staging records (audit F20, F22, F19).
+"""Promote normalised staging records (audit F20, F22, F19; PR #48 re-audit round 1).
 
-Each record's source is resolved through its foreign key first, and the trust decision comes from
-scraper.trust: only a trusted source with confidence >= 0.5 is promoted; review, blocked, low
-confidence and an unknown, missing or deleted source are quarantined with a durable reason. A
-record with no citation is quarantined as citation_missing (F22). Each record is decided in its own
-savepoint and committed on its own, so one bad record cannot stop or roll back the rest.
+For each record, in this order:
+1. Resolve its source by the most specific identifier present (source_id FK, the harvester's stamped
+   parsing_metadata source_id, then source_name, then the source_site label). A present identifier
+   that no longer resolves makes the source unknown; it never falls through to a less specific one.
+2. No citation -> quarantined citation_missing (F22).
+3. The trust decision from scraper.trust: only a trusted source with confidence >= 0.5 may be
+   promoted; review, blocked, low confidence and an unknown source are quarantined with that reason.
+   Such records never reach the Annex A contract (F19 plan D8).
+4. A promotable record is published into the Annex A corpus contract as one audited publication
+   (scraper.publication.annex_a.publish_batch, batch_key "staging/<id>", plan D7), under a
+   per-citation advisory lock keyed by the canonical citation, so two concurrent runs never publish
+   the same citation at once and two spellings of one citation ("PLD 2099 Karachi 12",
+   "PLD 2099 Sindh 12") serialise together. The publication decides what an already published
+   citation means: identical content is unchanged and different trusted content is updated (the
+   staging row is promoted either way, promoted_to_id = the existing Annex A judgment); a bench-less
+   or otherwise quarantined re-scrape can never demote or rewrite it (promoted_row_protected, D9).
+   The record is promoted only if Annex A promoted it; otherwise it is quarantined with the
+   publication's reason (missing_bench, citation_not_canonical, provenance_incomplete,
+   invalid_bench, promoted_row_protected, ...), recorded in quarantine_queue with details.annex_a.
 
-A record the trust decision promotes is published into the Annex A corpus contract as one audited
-publication (scraper.publication.annex_a.publish_batch, batch_key "staging/<id>", plan D7), in the
-same transaction as the staging update. It is promoted only if Annex A promotes it: with no bench it
-is published quarantined (missing_bench, ruling 9), a non-canonical citation is quarantined
-(citation_not_canonical), incomplete provenance or an invalid bench is rejected, and a re-scrape can
-never demote or rewrite a published authority (promoted_row_protected); each of those reasons is
-recorded on the staging row and in quarantine_queue. Records quarantined for trust or a missing
-citation never reach Annex A (D8). promoted_to_id is the Annex A judgment id.
+Each record is re-read FOR UPDATE and decided in its own transaction, so one bad record cannot stop
+or roll back the rest. A record whose promotion raises is rolled back (its publication with it) and
+then quarantined as promotion_error:<ExceptionClass>, so it is not retried forever.
 
-case_law_master is no longer written here and nothing is queued for embedding (spec ruling 10;
-Annex A embeddings are audit F27). Nothing schedules this routine yet (audit F21).
+case_law_master is no longer written here and nothing is queued for embedding (F19, spec ruling 10;
+Annex A embeddings are audit F27); the duplicate check against case_law_master that PR #48 added is
+replaced by the publication's own decision against Annex A. Nothing schedules this routine yet
+(audit F21).
 """
 
 import logging
 from typing import Mapping, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from scraper.database import SessionLocal
 from scraper.models import QuarantineQueue, ScraperSource, ScraperStaging
 from scraper.publication.annex_a import publish_batch
+from scraper.publication.citations import canonical_key
 from scraper.publication.from_staging import STAGING_ACTOR_ID, staging_batch, staging_outcome
-from scraper.trust import REASON_CITATION_MISSING, publication_decision
+from scraper.source_identity import META_SOURCE_ID, META_SOURCE_NAME, as_source_uuid, is_present
+from scraper.trust import (
+    REASON_CITATION_MISSING,
+    promotion_error_reason,
+    publication_decision,
+)
 
 logger = logging.getLogger(__name__)
 
+# First key of pg_advisory_xact_lock(int, int) for "promoting this citation"; the second key is
+# hashtext(<citation lock key>). A collision only serialises two promotions; it cannot let one through.
+_CITATION_LOCK_NAMESPACE = 0x0F20
+
+
+def citation_lock_key(raw: Optional[str]) -> str:
+    """The per-citation lock key (F19): the TypeScript canonical key when the citation has one, so
+    every spelling of one authority takes the same lock; otherwise the trimmed text."""
+    stripped = (raw or "").strip()
+    return canonical_key(stripped) or stripped
+
+
+async def _source_by_name(db, name: str) -> Optional[ScraperSource]:
+    return (await db.execute(select(ScraperSource).where(ScraperSource.source_name == name))).scalars().first()
+
 
 async def _resolve_source(db, st: ScraperStaging) -> Tuple[Optional[ScraperSource], Optional[str]]:
-    """The source record behind a staging row, and how it was found.
+    """The source record behind a staging row, and the identifier that decided it.
 
-    1. the source_id foreign key (survives a rename; NULL once the source is deleted);
-    2. parsing_metadata["source_name"], the harvester's own source record name;
-    3. source_site, a label that may be stale.
-    The FK, when set, is authoritative: a row cannot borrow another source's trust by its label.
+    Only the most specific identifier present is used:
+    1. the source_id FK (survives a rename; NULL once the source is deleted);
+    2. parsing_metadata["source_id"], stamped by the harvester (survives the delete);
+    3. parsing_metadata["source_name"], stamped by the harvester;
+    4. source_site, a label that court harvesters share across a family of sources.
+    If that identifier does not resolve (deleted, renamed, malformed), the source is unknown: the
+    record must not borrow the trust of a less specific label.
     """
     if st.source_id is not None:
-        src = await db.get(ScraperSource, st.source_id, populate_existing=True)
-        return src, ("source_id" if src is not None else None)
-    metadata = st.parsing_metadata if isinstance(st.parsing_metadata, dict) else {}
-    for how, name in (("parsing_metadata.source_name", metadata.get("source_name")), ("source_site", st.source_site)):
-        if isinstance(name, str) and name:
-            src = (await db.execute(select(ScraperSource).where(ScraperSource.source_name == name))).scalars().first()
-            if src is not None:
-                return src, how
+        return await db.get(ScraperSource, st.source_id, populate_existing=True), "source_id"
+    metadata = st.parsing_metadata
+    if metadata is not None and not isinstance(metadata, dict):
+        return None, "parsing_metadata"
+    metadata = metadata or {}
+    stamped_id = metadata.get(META_SOURCE_ID)
+    if is_present(stamped_id):
+        source_uuid = as_source_uuid(stamped_id)
+        src = await db.get(ScraperSource, source_uuid, populate_existing=True) if source_uuid is not None else None
+        return src, "parsing_metadata.source_id"
+    stamped_name = metadata.get(META_SOURCE_NAME)
+    if is_present(stamped_name):
+        src = await _source_by_name(db, stamped_name) if isinstance(stamped_name, str) else None
+        return src, "parsing_metadata.source_name"
+    if is_present(st.source_site):
+        return await _source_by_name(db, st.source_site), "source_site"
     return None, None
 
 
@@ -94,8 +137,15 @@ async def _decide(db, st: ScraperStaging) -> str:
     if not decision.promote:
         _quarantine(db, st, src, decision.reason, resolved_by)
         return "quarantined"
-    # Audit F19: publish into Annex A in this record's transaction. A PublicationError or a database
-    # error propagates to the per-record handler: the record is rolled back, counted failed, left pending.
+    # Trust first, then the publication (re-audit LOW-4), serialised per citation so two concurrent
+    # runs cannot both decide the same citation unpublished. Since F19 the duplicate decision is the
+    # audited publication's own, against Annex A (unchanged / updated / promoted_row_protected).
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(:namespace, hashtext(:citation))"),
+        {"namespace": _CITATION_LOCK_NAMESPACE, "citation": citation_lock_key(citation)},
+    )
+    # A PublicationError or a database error propagates to the per-record handler: the record and
+    # its publication are rolled back, then it is quarantined as promotion_error:<ExceptionClass>.
     await db.flush()
     conn = await db.connection()
     result = await publish_batch(conn, staging_batch(st, src), STAGING_ACTOR_ID)
@@ -109,18 +159,36 @@ async def _decide(db, st: ScraperStaging) -> str:
     return "promoted"
 
 
+async def _quarantine_after_error(db, staging_id, exc: BaseException) -> None:
+    """Make a failed record's outcome durable (re-audit LOW-3): after its own work is rolled back,
+    quarantine it as promotion_error:<ExceptionClass> in a fresh transaction. If even that fails,
+    log it (identifier and class only) and leave the record pending."""
+    reason = promotion_error_reason(exc)
+    try:
+        async with db.begin_nested():
+            st = await db.get(ScraperStaging, staging_id, populate_existing=True, with_for_update=True)
+            if st is not None and not st.promoted and not st.quarantined:
+                _quarantine(db, st, None, reason, None)
+        await db.commit()
+    except Exception as second:  # noqa: BLE001 - the batch must continue
+        await db.rollback()
+        logger.error("promotion.error_quarantine_failed staging_id=%s error=%s", staging_id, type(second).__name__)
+
+
 async def promote_staging_records() -> dict:
     """Decide every normalised, undecided staging record. Returns counts of promoted, quarantined
-    and failed records (a failed record is rolled back and left pending)."""
+    and failed records (a failed record is rolled back, then quarantined as promotion_error)."""
     counts = {"promoted": 0, "quarantined": 0, "failed": 0}
     async with SessionLocal() as db:
         ids = (
             await db.execute(
-                select(ScraperStaging.id).where(
+                select(ScraperStaging.id)
+                .where(
                     ScraperStaging.normalised.is_(True),
                     ScraperStaging.promoted.is_(False),
                     ScraperStaging.quarantined.is_(False),
                 )
+                .order_by(ScraperStaging.id)  # one lock order for every concurrent run
             )
         ).scalars().all()
         for staging_id in ids:
@@ -128,14 +196,16 @@ async def promote_staging_records() -> dict:
                 async with db.begin_nested():
                     st = await db.get(ScraperStaging, staging_id, populate_existing=True, with_for_update=True)
                     if st is None or not st.normalised or st.promoted or st.quarantined:
-                        continue  # decided elsewhere since the list was read
-                    outcome = await _decide(db, st)
-                await db.commit()
+                        outcome = "skipped"  # decided elsewhere since the list was read
+                    else:
+                        outcome = await _decide(db, st)
+                await db.commit()  # one record per transaction; also releases the row lock when skipped
             except Exception as exc:  # noqa: BLE001 - one record must not stop the batch
                 await db.rollback()
                 counts["failed"] += 1
                 # Identifier and exception class only: the message can carry row data.
                 logger.warning("promotion.record_failed staging_id=%s error=%s", staging_id, type(exc).__name__)
+                await _quarantine_after_error(db, staging_id, exc)
                 continue
             if outcome in counts:
                 counts[outcome] += 1

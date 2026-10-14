@@ -135,7 +135,108 @@ class ModuleSurfaceTests(unittest.TestCase):
     def test_reasons_are_the_documented_set(self):
         self.assertEqual(
             set(trust.QUARANTINE_REASONS),
-            {"review_source", "low_confidence", "blocked_source", "unknown_source", "citation_missing"},
+            {"review_source", "low_confidence", "blocked_source", "unknown_source", "citation_missing",
+             "duplicate_citation"},
+        )
+
+    def test_a_record_that_raises_gets_a_class_only_reason(self):
+        class ExplodingRowError(Exception):
+            pass
+
+        reason = trust.promotion_error_reason(ExplodingRowError("row data 2099 X 1"))
+        self.assertEqual(reason, "promotion_error:ExplodingRowError")
+        self.assertNotIn("2099", reason)
+
+
+class MayPublishDirectlyTests(unittest.TestCase):
+    """FINAL_2 :897 (review -> always quarantine): a harvester that writes a master table itself
+    bypasses promotion, so only a trusted source may run it."""
+
+    def test_only_trusted_may_publish_without_promotion(self):
+        from scraper.trust import may_publish_directly
+
+        self.assertTrue(may_publish_directly("trusted"))
+        for raw in ("review", "blocked", None, "", "TRUSTED", " trusted", "semi_trusted", 1, True):
+            with self.subTest(raw=raw):
+                self.assertFalse(may_publish_directly(raw))
+
+
+class SourceStampTests(unittest.TestCase):
+    """Harvesters stamp the scraper_sources row a staged record came from (audit F20 MEDIUM-1)."""
+
+    class _Source:
+        def __init__(self, source_id, name):
+            self.id = source_id
+            self.source_name = name
+
+    def test_stamp_adds_id_and_name_and_overrides_conflicting_keys(self):
+        import uuid
+
+        from scraper.source_identity import stamp_metadata
+
+        sid = uuid.uuid4()
+        given = {"listing_url": "https://f20.example.invalid/l", "source_name": "Spoofed", "source_id": "x"}
+        stamped = stamp_metadata(self._Source(sid, "SupremeCourtPublic"), given)
+        self.assertEqual(
+            stamped,
+            {"listing_url": "https://f20.example.invalid/l", "source_id": str(sid), "source_name": "SupremeCourtPublic"},
+        )
+        self.assertEqual(given["source_name"], "Spoofed", "the caller's dict must not be modified")
+        self.assertEqual(stamp_metadata(self._Source(sid, "NasirLawSite")),
+                         {"source_id": str(sid), "source_name": "NasirLawSite"})
+
+
+TASKS_DIR = PROJECT_ROOT / "scraper" / "tasks"
+
+
+class HarvesterStaticGuardTests(unittest.TestCase):
+    """Every write path in scraper/tasks is accounted for, so no harvester is missed."""
+
+    def test_every_staging_row_a_harvester_creates_is_stamped_with_its_source(self):
+        import ast
+
+        sites = []
+        for path in sorted(TASKS_DIR.glob("*.py")):
+            if path.name == "promotion.py":
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "ScraperStaging":
+                    kw = {k.arg: ast.unparse(k.value) for k in node.keywords}
+                    sites.append((path.name, kw.get("source_id"), kw.get("parsing_metadata", "")))
+        self.assertEqual(len(sites), 7, sites)
+        self.assertEqual(
+            sorted(name for name, _sid, _meta in sites),
+            ["balochistanhighcourt.py", "islamabadhighcourt.py", "lahorehighcourt.py", "nasirlawsite.py",
+             "peshawarhighcourt.py", "shc.py", "supremecourt.py"],
+        )
+        unstamped = {
+            name: {"source_id": sid, "parsing_metadata": meta}
+            for name, sid, meta in sites
+            if sid != "source.id" or not meta.startswith("stamp_metadata(source")
+        }
+        self.assertEqual(unstamped, {}, "staging rows written without the source stamp")
+
+    def test_every_direct_master_writer_is_gated_on_trusted(self):
+        import re
+
+        from scraper.tasks import dispatcher
+
+        writes = re.compile(r"\b(?:StatutesMaster|CaseLawMaster)\s*\(|INSERT\s+INTO\s+(?:case_law_master|statutes_master)", re.I)
+        writers = {
+            f"scraper.tasks.{path.stem}"
+            for path in TASKS_DIR.glob("*.py")
+            if path.name != "promotion.py" and writes.search(path.read_text())
+        }
+        self.assertEqual(writers, {"scraper.tasks.pakistancode", "scraper.tasks.nationalassembly"})
+        self.assertTrue(writers <= set(dispatcher.DIRECT_PUBLISHER_MODULES), writers)
+        routed = {module for module, _func in dispatcher.ROUTES.values()}
+        self.assertTrue(writers <= routed)
+        self.assertEqual(
+            set(dispatcher.ROUTES),
+            {"PakistanLawSite", "NasirLawSite", "PakistanCode", "SindhHighCourt", "SindhHighCourtPublic",
+             "SupremeCourt", "SupremeCourtPublic", "LahoreHighCourt", "PeshawarHighCourt",
+             "PeshawarHighCourtPublic", "BalochistanHighCourt", "BalochistanHighCourtPublic",
+             "IslamabadHighCourt", "IslamabadHighCourtPublic", "NationalAssembly"},
         )
 
 
