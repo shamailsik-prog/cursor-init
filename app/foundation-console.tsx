@@ -32,7 +32,10 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { CourtRecord, NormaliseResult } from "@/core/case-number-normaliser"
 import type { DocumentType } from "@/lib/foundation-data"
+import { useConsoleAuth } from "@/app/console-auth-provider"
 import { SystemMonitor } from "@/app/system-monitor"
+import { committeeBrainViaFunctions } from "@/lib/console/functions-client"
+import { consoleHttpRequest } from "@/lib/console/http"
 import {
   CLASSIFICATION_RANKS,
   FEATURE_FLAGS,
@@ -73,6 +76,7 @@ type CommitteeBrainResult = {
 }
 
 export function FoundationConsole({ courts, fixtures, types }: Props) {
+  const consoleAuth = useConsoleAuth()
   const [tab, setTab] = useState("monitor")
   const [courtId, setCourtId] = useState("SHC")
   const [raw, setRaw] = useState("C.P. No. D-1234 of 2025")
@@ -116,15 +120,12 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const res = await fetch("/api/g0/normalise", {
+      const res = await consoleHttpRequest(consoleAuth, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": crypto.randomUUID(),
-        },
-        body: JSON.stringify({ raw, courtId }),
+        url: "/api/g0/normalise",
+        body: { raw, courtId },
       })
-      const json = (await res.json()) as {
+      const json = res.body as {
         result?: NormaliseResult
         error?: string
       }
@@ -146,33 +147,35 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
     setP1Busy(true)
     setP1Error(null)
     try {
+      if (!consoleAuth.idToken) {
+        setP1Result(null)
+        setP1Error("Sign in to call the Functions Committee Brain API.")
+        return
+      }
       const partyNames = p1Parties
         .split(",")
         .map((n) => n.trim())
         .filter(Boolean)
-      const res = await fetch("/api/p1/committee-brain", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": crypto.randomUUID(),
-        },
-        body: JSON.stringify({
-          body: p1Body,
-          classification: p1Classification,
-          purpose: p1Purpose,
-          partyNames,
-        }),
+      const res = await committeeBrainViaFunctions(consoleAuth, {
+        body: p1Body,
+        classification: p1Classification,
+        purpose: p1Purpose,
+        partyNames,
       })
-      const json = (await res.json()) as {
+      const json = res.body as {
         result?: CommitteeBrainResult
-        error?: string
+        error?: { code?: string } | string
       }
       if (!res.ok) {
         setP1Result(null)
-        setP1Error(json.error ?? "Committee Brain request failed.")
+        const err =
+          typeof json.error === "string"
+            ? json.error
+            : json.error?.code ?? "Committee Brain request failed."
+        setP1Error(err)
         return
       }
-      setP1Result(json.result ?? null)
+      setP1Result((json as { result?: CommitteeBrainResult }).result ?? (json as CommitteeBrainResult))
     } catch {
       setP1Result(null)
       setP1Error("Could not reach P1 Committee Brain.")

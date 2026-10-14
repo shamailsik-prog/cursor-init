@@ -11,7 +11,6 @@ const saved = {
   mode: env.SIKANDER_PERSISTENCE_MODE,
   nodeEnv: env.NODE_ENV,
   vitest: env.VITEST,
-  allowMemoryInProduction: env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION,
 }
 
 function restore(key: string, value: string | undefined) {
@@ -27,7 +26,6 @@ afterEach(() => {
   restore("SIKANDER_PERSISTENCE_MODE", saved.mode)
   restore("NODE_ENV", saved.nodeEnv)
   restore("VITEST", saved.vitest)
-  restore("SIKANDER_ALLOW_MEMORY_IN_PRODUCTION", saved.allowMemoryInProduction)
   setFirestorePersistenceForTests(null)
 })
 
@@ -39,7 +37,9 @@ describe("runtime repositories fail closed", () => {
       PersistenceConfigurationError
     )
     await expect(getRuntimeRepositories(store)).rejects.toThrow(/firestore/i)
-    await expect(getRuntimeRepositories(store)).rejects.toThrow(/firebase-admin/)
+    await expect(getRuntimeRepositories(store)).rejects.toThrow(
+      /no Firestore database is configured/
+    )
   })
 
   it("does not silently fall back to memory for firestore mode (case/whitespace-insensitive)", async () => {
@@ -105,23 +105,9 @@ describe("runtime repositories fail closed", () => {
     )
   })
 
-  it("refuses explicit memory mode in production without the opt-in", async () => {
+  it("refuses explicit memory mode in production", async () => {
     env.SIKANDER_PERSISTENCE_MODE = "memory"
     env.NODE_ENV = "production"
-    delete env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION
-    await expect(getRuntimeRepositories(newStore())).rejects.toThrow(
-      /SIKANDER_ALLOW_MEMORY_IN_PRODUCTION=true/
-    )
-    env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION = "1"
-    await expect(getRuntimeRepositories(newStore())).rejects.toBeInstanceOf(
-      PersistenceConfigurationError
-    )
-  })
-
-  it("allows explicit memory mode in production only with SIKANDER_ALLOW_MEMORY_IN_PRODUCTION=true", async () => {
-    env.SIKANDER_PERSISTENCE_MODE = "memory"
-    env.NODE_ENV = "production"
-    env.SIKANDER_ALLOW_MEMORY_IN_PRODUCTION = "true"
-    await expect(getRuntimeRepositories(newStore())).resolves.toBeDefined()
+    await expect(getRuntimeRepositories(newStore())).rejects.toThrow(/NODE_ENV=production/)
   })
 })
