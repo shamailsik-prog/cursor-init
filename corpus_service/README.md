@@ -46,6 +46,81 @@ roles and extensions, such as a throwaway `pgvector/pgvector:pg16` container's s
 creates and drops its own database. Without the URL, those tests skip locally and the run fails
 under CI.
 
+## Publication into Annex A (audit F19)
+
+Harvested and curated authority reaches the application only through the Annex A corpus contract
+(`postgres/ddl/001_corpus_contract.sql`, plus `003_corpus_publication.sql`), which the application
+reads through the promoted-only `v_*` views as `corpus_reader`. `scraper/publication/` is the only
+code here that writes it, and every write is part of one audited, idempotent **corpus publication**:
+
+1. `corpus_publication_begin(batch_key, sha256, source_kind, actor)` takes an advisory lock, writes
+   the audit row and a transaction-scoped grant. The same key with the same content returns
+   `already` and writes nothing; the same key with other content is refused (`batch_key_reused`).
+2. Each item is planned and written in its own savepoint, with `publication_id` on every row and one
+   `corpus_publication_item` audit row per entity (`promoted`, `quarantined`, `updated` with the
+   previous hash, `unchanged`, or `rejected` with a reason).
+3. `corpus_publication_finish(id, counts)` checks the counts against the audit, removes the grant and
+   sets `corpus_metadata` `last_refresh`, `publication_seq` and `publication_contract = '1'`.
+
+The database enforces it: a trigger refuses any promotion, or any change to a promoted row other
+than its classification, outside an open publication (`SKP02`), and refuses a promoted row without
+complete provenance, a judgment without a bench, a treatment below 0.7, or an invalid or overlapping
+statute version. The audit tables are append-only. Superuser sessions are exempt from the trigger
+(spec ruling 2) but cannot publish. Publishing runs as `corpus_writer` (`SET LOCAL ROLE`); the
+runtime role reaches it by `SET ROLE` only.
+
+| Case | Outcome |
+|---|---|
+| Missing or incomplete provenance | rejected `provenance_incomplete` |
+| Invalid bench (not single / division / full / larger or an alias) | rejected `invalid_bench` |
+| Invalid treatment kind | rejected `invalid_treatment_kind` |
+| Unresolvable judgment (treatment) | rejected `unresolvable_judgment` |
+| Citations of one item resolving to two judgments | rejected `citation_conflict` |
+| History missing `effective_from` / overlapping / out of order | rejected `history_missing_effective_from` / `history_overlap` / `history_out_of_order` |
+| Invalid jurisdiction (not one of the eight; `PK` refused) or statute status | rejected `invalid_jurisdiction` / `invalid_statute_status` |
+| A quarantine that would demote or rewrite a promoted row | rejected `promoted_row_protected` |
+| Batch key reused with different content | the whole batch refused (`batch_key_reused`) |
+| Treatment confidence below 0.7 | quarantined `treatment_uncertain` |
+| Source not trusted (F20) | quarantined with the trust reason |
+| No bench | quarantined `missing_bench` |
+| Citation not canonical | quarantined `citation_not_canonical` |
+| Current text only | stored at `version_confidence` 0.5, which the reader ignores |
+
+**Promotion.** `promote_staging_records()` applies the F20 decision first. A record it promotes is
+published as its own publication (`batch_key = "staging/<id>"`); the staging row is promoted (with
+`promoted_to_id` = the Annex A judgment id) only if Annex A promoted it, and otherwise quarantined with
+the publication's reason. Trust-quarantined and citation-free records never reach Annex A.
+Promotion no longer writes `case_law_master` and no longer queues embeddings (Annex A embeddings are
+audit F27). A harvested row with no bench (`scraper_staging.extracted_bench_type`, which
+`python -m scraper.migrate` adds to an older database) is published quarantined `missing_bench`
+until a bench is supplied (spec ruling 9). Citations are stored under the gate's canonical keys
+(`services/d4-2/citations.ts`): the extractor's "Karachi" becomes "Sindh".
+
+**Curated batches.** Treatments and statute section histories come from curated batches in the
+versioned format `corpus-publication-batch/1` (`scraper/publication/batch.py`; the JSON Schema is in
+`docs/superpowers/plans/2026-10-14-f19-publication-etl.md`, Task 3):
+
+```bash
+DATABASE_URL=postgresql+asyncpg://<corpus_writer member>@<host>/<db> \
+  python -m scraper.publication.cli publish --batch batch.json --actor <curator id>
+```
+
+stdout is one JSON object (ids, decisions and reasons only). Exit codes: `0` published or already
+published, `2` usage error or a structurally invalid batch, `3` batch key reused with different
+content, `4` a superuser or a role that is not a `corpus_writer` member, `1` anything else (nothing
+is written).
+
+**Who applies the DDL.** Annex A (001, 003) is applied by a superuser (the postgres init script in
+PR 2b; the test fixture's admin in tests). `python -m scraper.migrate` never applies it: 001 needs
+`CREATE ROLE` and `CREATE EXTENSION`, which the `NOCREATEROLE` migration owner cannot do.
+
+**Tests.** `tests/test_f19_publication_db.py` (and the migrated `test_f20_trust_policy_db.py`) apply
+Annex A to each per-test database and publish as generated `corpus_writer` members; the pure tests
+are `test_publication_vocabulary.py`, `test_publication_citations.py` (checked against the golden
+`tests/fixtures/corpus/citation-canonical-golden.json`, generated from TypeScript by
+`npm run corpus:citation-golden`) and `test_publication_batch.py`. Run them with
+`CORPUS_TEST_DATABASE_URL=… python -m pytest corpus_service/tests -q` from the repository root.
+
 ## Quick start (no Docker)
 
 ```bash
