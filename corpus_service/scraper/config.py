@@ -16,10 +16,11 @@ import logging
 import os
 import re
 import secrets
+import ssl
 from functools import lru_cache
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -31,6 +32,84 @@ _DEFAULT_DB_PASSWORDS = frozenset(
     {"legal_scraper_pass", "legal", "postgres", "password", "changeme", "change_me", "admin", "secret"}
 )
 _MIN_PROD_DB_PASSWORD_LENGTH = 16
+
+# ---------------------------------------------------------------------------------------------
+# Store TLS (audit F30)
+# ---------------------------------------------------------------------------------------------
+# libpq sslmode values. DATABASE_URL may spell the mode as libpq's `sslmode` or asyncpg's `ssl`;
+# `sslrootcert` names the CA file that signs the server certificate.
+_PG_SSL_MODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
+
+
+def split_postgres_tls(url: str) -> Tuple[str, Dict[str, str]]:
+    """Return (url without TLS query parameters, {"sslmode": ..., "sslrootcert": ...}).
+
+    Raises ValueError for an unknown mode or for `ssl` and `sslmode` that disagree."""
+    parts = urlsplit(url)
+    kept: List[Tuple[str, str]] = []
+    tls: Dict[str, str] = {}
+    modes = set()
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key in ("sslmode", "ssl"):
+            modes.add(value.strip().lower())
+        elif key == "sslrootcert":
+            tls["sslrootcert"] = value
+        else:
+            kept.append((key, value))
+    if len(modes) > 1:
+        raise ValueError(f"DATABASE_URL gives conflicting TLS modes {sorted(modes)}")
+    if modes:
+        mode = modes.pop()
+        if mode not in _PG_SSL_MODES:
+            raise ValueError(f"DATABASE_URL TLS mode {mode!r} is not one of {', '.join(_PG_SSL_MODES)}")
+        tls["sslmode"] = mode
+    return urlunsplit(parts._replace(query=urlencode(kept))), tls
+
+
+def asyncpg_engine_args(url: str) -> Tuple[str, Dict[str, Any]]:
+    """Translate libpq-style TLS parameters into what asyncpg actually accepts.
+
+    asyncpg.connect() has no sslmode/sslrootcert keywords, and SQLAlchemy passes URL query
+    parameters straight to it, so the URL is stripped of them and the mode becomes an explicit
+    `ssl` connect argument: verify-full -> SSLContext that requires a certificate chaining to
+    sslrootcert (or the system store) AND a hostname match; verify-ca -> chain only; require ->
+    encryption without verification; disable -> no TLS; allow/prefer -> asyncpg's negotiation.
+    Production/staging only accept verify-full (Settings.require_verified_store_tls)."""
+    clean_url, tls = split_postgres_tls(url)
+    mode = tls.get("sslmode")
+    if mode is None:  # no mode: asyncpg's default negotiation; never accepted in production
+        return (clean_url if tls else url), {}
+    if mode == "disable":
+        return clean_url, {"ssl": False}
+    if mode in ("allow", "prefer"):
+        return clean_url, {"ssl": mode}
+    if mode == "require":
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    else:
+        ctx = ssl.create_default_context(cafile=tls.get("sslrootcert") or None)
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        ctx.check_hostname = mode == "verify-full"
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return clean_url, {"ssl": ctx}
+
+
+def _redis_url_problem(name: str, url: str) -> Optional[str]:
+    """Why a Redis URL is unacceptable in production/staging, or None."""
+    parts = urlsplit(url)
+    if parts.scheme != "rediss":
+        return f"{name} must use rediss:// (TLS) in production/staging"
+    username = unquote(parts.username or "")
+    if not username or username == "default" or not parts.password:
+        return (
+            f"{name} must authenticate as a named Redis ACL user with a password "
+            "(rediss://<user>:<password>@host:port/db); the default user is disabled"
+        )
+    for key, value in parse_qsl(parts.query):
+        if key == "ssl_cert_reqs" and value.strip().lower() not in ("required", "cert_required"):
+            return f"{name} must not lower ssl_cert_reqs below required in production/staging"
+    return None
 
 
 class Settings(BaseSettings):
@@ -84,6 +163,10 @@ class Settings(BaseSettings):
     )
     CELERY_BROKER_URL: Optional[str] = Field(default=None, description="If None, falls back to REDIS_URL")
     CELERY_RESULT_BACKEND: Optional[str] = Field(default=None, description="If None, falls back to REDIS_URL")
+    REDIS_TLS_CA_FILE: Optional[str] = Field(
+        default=None,
+        description="CA file that signs the Redis server certificate (rediss://). Unset: system trust store.",
+    )
     REDIS_CACHE_TTL_SECONDS: int = Field(default=3600, ge=60)
 
     # ---------------------------------------------------------------------
@@ -256,6 +339,27 @@ class Settings(BaseSettings):
 
         return self
 
+    @model_validator(mode="after")
+    def require_verified_store_tls(self):
+        """Audit F30: in production/staging both stores must be reached over TLS that verifies
+        the server certificate and hostname, and Redis through a named ACL user."""
+        _, tls = split_postgres_tls(self.DATABASE_URL)  # also rejects unknown/conflicting modes
+        if not self.is_prodish():
+            return self
+        if tls.get("sslmode") != "verify-full":
+            raise ValueError(
+                "DATABASE_URL must use TLS with server verification in production/staging: add "
+                "sslmode=verify-full (and sslrootcert=<CA file> for a private CA)"
+            )
+        for name in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
+            url = getattr(self, name)
+            if name != "REDIS_URL" and not url:
+                continue
+            problem = _redis_url_problem(name, url)
+            if problem:
+                raise ValueError(problem)
+        return self
+
     def is_prodish(self) -> bool:
         """
         Fail closed. Development only when ENVIRONMENT or APP_ENV is *explicitly* set to
@@ -328,13 +432,33 @@ class Settings(BaseSettings):
         Convert async URL to sync URL for Alembic, Celery workers, psycopg2.
         Example: postgresql+asyncpg:// -> postgresql+psycopg2://
         Fallback to postgresql:// if driver unspecified.
+        TLS parameters are re-emitted in libpq's spelling (sslmode=..., sslrootcert=...), which
+        psycopg2/libpq enforce natively (audit F30).
         """
-        url = self.DATABASE_URL
+        url, tls = split_postgres_tls(self.DATABASE_URL)
         if "+asyncpg" in url:
-            return url.replace("+asyncpg", "+psycopg2")
-        if "+asyncpg" not in url and "postgresql://" in url:
-            return url.replace("postgresql://", "postgresql+psycopg2://", 1) if "+psycopg2" not in url else url
+            url = url.replace("+asyncpg", "+psycopg2")
+        elif "postgresql://" in url and "+psycopg2" not in url:
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        if tls:
+            parts = urlsplit(url)
+            query = parse_qsl(parts.query, keep_blank_values=True)
+            query += [(k, tls[k]) for k in ("sslmode", "sslrootcert") if k in tls]
+            url = urlunsplit(parts._replace(query=urlencode(query)))
         return url
+
+    def redis_ssl_options(self) -> Optional[Dict[str, Any]]:
+        """TLS options for redis-py / kombu / the Celery Redis result backend (audit F30).
+
+        None for a plaintext redis:// URL (development only; production refuses it). For rediss://
+        the server certificate must chain to REDIS_TLS_CA_FILE (or the system store) and match the
+        hostname. kombu would otherwise default a bare rediss:// broker URL to CERT_NONE."""
+        if urlsplit(self.REDIS_URL).scheme != "rediss":
+            return None
+        opts: Dict[str, Any] = {"ssl_cert_reqs": ssl.CERT_REQUIRED, "ssl_check_hostname": True}
+        if self.REDIS_TLS_CA_FILE:
+            opts["ssl_ca_certs"] = self.REDIS_TLS_CA_FILE
+        return opts
 
     @property
     def celery_broker_url(self) -> str:
