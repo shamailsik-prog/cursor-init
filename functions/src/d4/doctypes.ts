@@ -45,12 +45,28 @@ export function getDocumentType(id: string): DocumentType | null {
 }
 
 /**
- * Whether a document of this type is law-dependent (F06): it is filed in a forum, that is its `courtIds` do not list
- * NON_FORUM. Approving one needs the type's review checklist with evidence. A type that lists NON_FORUM (a notice, a
- * contract, an affidavit, an instrument) is not law-dependent, even if it also lists a court.
+ * A checklist line that asks for legal verification (F06 ruling A): the citation gate ("Gate 33"), statutory text as
+ * at a date ("L17.1", "statute", "statutory"), citations, limitation, the provision invoked, jurisdiction, or sources
+ * cited. Case-insensitive, whole words, no `g` flag (so `test` keeps no state). Over the seed it selects every NON_FORUM
+ * type whose own checklist requires legal verification, exactly these 19: property_suit_possession,
+ * property_injunction_suit, secp_complaint, compromise_application, land_regularization_application,
+ * mutation_application, demarcation_application, record_of_rights_application, cantonment_application,
+ * kda_application, dha_application, legal_opinion, arguments_brief, counter_arguments_brief, case_strategy_memo,
+ * case_compendium, due_diligence_report, contract_review_memo and company_incorporation_checklist
+ * (functions/test/d4.doctypes.test.ts pins the set). `L17.1` does not match `L17.11`, `L17.2` or `L17.4`.
+ */
+export const LEGAL_VERIFICATION_ITEM =
+  /\bgate\s*33\b|\bL17\.1\b|\bcitations?\b|\bstatut(?:e|es|ory)\b|\blimitation\b|\bprovisions?\b|\bjurisdiction\b|\bsources?\s+cited\b/i
+
+/**
+ * Whether a document of this type is law-dependent (F06, ruling A): it is filed in a forum (its `courtIds` do not list
+ * NON_FORUM), or its own seed checklist names a legal-verification item (`LEGAL_VERIFICATION_ITEM`), as a suit for
+ * possession, a statutory application or a legal opinion does even when the seed marks it NON_FORUM. Approving one
+ * needs the type's review checklist with evidence. Every other NON_FORUM type (a notice, a contract, an affidavit, an
+ * instrument) is not law-dependent, even one that also lists a court (`heirship_affidavit`).
  */
 export function isLawDependent(type: DocumentType): boolean {
-  return !type.courtIds.includes("NON_FORUM")
+  return !type.courtIds.includes("NON_FORUM") || type.checklist.some((line) => LEGAL_VERIFICATION_ITEM.test(line))
 }
 
 /**

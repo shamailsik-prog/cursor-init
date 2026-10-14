@@ -8,7 +8,7 @@ import {
   setAuthorityStoreForTests,
   type AuthorityStore,
 } from "../src/d4/authority"
-import { runGate } from "../src/d4/gate"
+import { runGate, unpleadedChecks } from "../src/d4/gate"
 import { GATE_SEVERITY, type TemporalCheck } from "../src/d4/types"
 
 // Fixtures follow P4-13: citations use the year 2099 (read by the extractor, impossible in a real report), statute
@@ -446,7 +446,10 @@ describe("runGate: assessed scope (F06)", () => {
   })
 
   it("a temporal check alone is assessed: its status decides, OK when the text matches", async () => {
-    const out = await runGate({ title: "T", body: "No authority.", temporalChecks: [check(TEXT_A)] }, sectionStore())
+    // Ruling C: the check applies to text the draft pleads, so the body pleads it (gateDraft refuses one it does not).
+    const input = { title: "T", body: `No authority is cited. The deadline is pleaded as: ${TEXT_A}`, temporalChecks: [check(TEXT_A)] }
+    expect(unpleadedChecks(input, input.temporalChecks)).toEqual([])
+    const out = await runGate(input, sectionStore())
     expect(out.scope).toEqual({ citations: 0, temporalChecks: 1, assessed: true })
     expect(out.status).toBe("OK")
   })
@@ -457,6 +460,41 @@ describe("runGate: assessed scope (F06)", () => {
     const out = await runGate({ title: "T", body: "See 2099 SCMR 7.", temporalChecks: [] }, store)
     expect(out.scope).toEqual({ citations: 1, temporalChecks: 0, assessed: true })
     expect(out.status).toBe("OK")
+  })
+})
+
+describe("unpleadedChecks: a temporal check applies only to text the draft pleads (F06 ruling C)", () => {
+  it("a check whose usedText the draft does not plead is returned, so an unrelated true check cannot make uncited prose assessed", () => {
+    const input = { title: "Deed", body: "The vendor sells the property for the consideration stated in the schedule." }
+    expect(unpleadedChecks(input, [check(TEXT_A)])).toEqual([check(TEXT_A)])
+  })
+
+  it("a pleaded check is not returned, across line breaks and runs of whitespace", () => {
+    const body = "The limit is pleaded:\nTest Act s.1 as it stood in 2015:\n  the limit is\tthirty days.\r\nNothing else."
+    expect(unpleadedChecks({ title: "T", body }, [check(TEXT_A)])).toEqual([])
+  })
+
+  it("reads the title with the body, as runGate does", () => {
+    expect(unpleadedChecks({ title: TEXT_A, body: "No statute in the body." }, [check(TEXT_A)])).toEqual([])
+  })
+
+  it("compares after the body rule's normalisation: an em dash and Arabic-Indic digits in the usedText match the hyphen and ASCII digits the stored body holds", () => {
+    const usedText = "Test Act s.1 — the limit is ٣٠ days."
+    const storedBody = "The plaint pleads Test Act s.1 - the limit is 30 days."
+    expect(unpleadedChecks({ title: "T", body: storedBody }, [check(usedText)])).toEqual([])
+  })
+
+  it("returns only the unpleaded checks, in order, and is otherwise exact: a changed word is not pleaded", () => {
+    const body = `The plaint pleads ${TEXT_A}`
+    const changed = TEXT_A.replace("thirty", "forty")
+    expect(unpleadedChecks({ title: "T", body }, [check(changed, "2016-01-01"), check(TEXT_A), check(TEXT_B, "2019-01-01")])).toEqual([
+      check(changed, "2016-01-01"),
+      check(TEXT_B, "2019-01-01"),
+    ])
+  })
+
+  it("a usedText that is only whitespace is never pleaded", () => {
+    expect(unpleadedChecks({ title: "T", body: "Some body text." }, [check(" \n\t ")])).toEqual([check(" \n\t ")])
   })
 })
 

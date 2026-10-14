@@ -14,12 +14,15 @@ import { EMULATORS, mintIdToken, uniq } from "./emu"
  * cites nothing, gates it, and a partner tries to approve it. Before the fix the gate answered OK on that draft and the
  * partner approved it with no override: nothing legal had been checked, yet the result read as a pass. After the fix
  * the gate answers NOT_ASSESSED with the assessed scope (no citation, no temporal check), approval is blocked until the
- * matter's partner gives an explicit override with a reason, and a law-dependent (forum-filed) document type also needs
- * the type's review checklist with evidence for every item before it can be approved.
+ * matter's partner gives an explicit override with a reason, and a law-dependent document type also needs the type's
+ * review checklist with evidence (at least 20 characters) for every item before it can be approved. Law-dependent
+ * means filed in a forum, or a NON_FORUM type whose own checklist names a legal-verification item (a suit for
+ * possession, a legal opinion: re-audit ruling A). A temporal check counts only if the draft pleads its text
+ * (ruling C), so an unrelated true check cannot turn uncited prose into OK.
  *
- * Steps 1 to 5 run on the production authority store (EMPTY_AUTHORITY_STORE): F06 must hold while the store is
- * empty (F05 is a separate finding). Step 6 seeds an in-memory store with one judgment, so a citation is VERIFIED.
- * Fixtures follow P4-13: the year 2099 and no real judgment, statute or party.
+ * Most cases run on the production authority store (EMPTY_AUTHORITY_STORE): F06 must hold while the store is empty
+ * (F05 is a separate finding). The VERIFIED-citation and temporal-check cases seed an in-memory store through the test
+ * seam. Fixtures follow P4-13: the year 2099 and no real judgment, statute or party.
  */
 
 type GateScope = { citations: number; temporalChecks: number; assessed: boolean }
@@ -54,6 +57,20 @@ const DEED_PROSE = "The vendor sells the property to the vendee for the consider
 const CITED_PROSE = "The petitioner relies on 2099 SCMR 7 for the rule that the period runs from knowledge of the order."
 const REASON = "The partner has read the petition; the deadline assertion was checked by hand against the file."
 const NOT_ASSESSED_SCOPE: GateScope = { citations: 0, temporalChecks: 0, assessed: false }
+/**
+ * NON_FORUM types whose own seed checklist names a legal-verification item (re-audit A10): a suit for possession
+ * ("Limitation checked (Module 44)", "Statutory text pleaded as at relevant date (L17.1)", "Citations passed Gate 33")
+ * and a legal opinion ("Sources cited and verified (Gate 33 ...)"). Both are law-dependent.
+ */
+const POSSESSION_SUIT_TYPE = "property_suit_possession"
+const OPINION_TYPE = "legal_opinion"
+const POSSESSION_PROSE = "The plaintiff is entitled to possession of the suit property, and the suit is within the twelve years the law allows."
+const OPINION_PROSE = "Limitation for the appeal is thirty days; see 2099 SCMR 7."
+/** Statute text a fixture store holds for test_act_s1 in PK (P4-13: no real statute). */
+const SECTION_TEXT = "Test Act s.1 as amended in 2018: the limit is sixty days."
+/** Evidence at the floor (20 characters once trimmed) and one character below it (ruling B). */
+const EVIDENCE_20 = "Verified on the file"
+const EVIDENCE_19 = "Checked by partner."
 
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex")
 
@@ -81,7 +98,8 @@ const send = <T>(api: (c: never) => Promise<T>, f: Firm, m: Member, data: Record
 
 const create = (f: Firm, m: Member, documentTypeId: string, body: string) =>
   send(createApi, f, m, { matterId: f.matterId, documentTypeId, title: "Draft for review", body })
-const gate = (f: Firm, m: Member, draftId: string) => send(gateApi, f, m, { draftId, version: 1 })
+const gate = (f: Firm, m: Member, draftId: string, temporalChecks?: unknown) =>
+  send(gateApi, f, m, { draftId, version: 1, ...(temporalChecks === undefined ? {} : { temporalChecks }) })
 const report = (f: Firm, m: Member, draftId: string) => send(reportApi, f, m, { draftId })
 /** The id of the stored result the partner reviewed, as the verification report shows it. */
 const reviewedResultId = async (f: Firm, draftId: string): Promise<string> => (await report(f, f.P, draftId)).gateResult?.resultId ?? "no-result"
@@ -164,6 +182,10 @@ describe.skipIf(!EMULATORS)("F06: an empty legal check is NOT_ASSESSED, never OK
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId, { reviewChecklist: [...full, { item: "Not an item of this type", evidence: "x" }] })), 422, "review_checklist_incomplete")
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId, { reviewChecklist: [...full, full[0]] })), 422, "review_checklist_incomplete")
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId, { reviewChecklist: full.map((e, i) => (i === 0 ? { ...e, evidence: "   \n " } : e)) })), 422, "review_checklist_incomplete")
+    // Ruling B: evidence must be at least 20 characters once trimmed, the override reason's floor; 19 is incomplete.
+    expect([...EVIDENCE_19]).toHaveLength(19)
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, { reviewChecklist: full.map((e, i) => (i === 0 ? { ...e, evidence: EVIDENCE_19 } : e)) })), 422, "review_checklist_incomplete")
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId, { reviewChecklist: full.map((e) => ({ ...e, evidence: "x" })) })), 422, "review_checklist_incomplete")
     // A malformed checklist is 400 before the permission: an associate learns the shape, not the permission.
     expectErr(await apiErrorOf(approve(f, f.A, d.draftId, { reviewChecklist: "all done" })), 400, "invalid_review_checklist")
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId, { reviewChecklist: [{ item: items[0] }] })), 400, "invalid_review_checklist")
@@ -231,6 +253,79 @@ describe.skipIf(!EMULATORS)("F06: an empty legal check is NOT_ASSESSED, never OK
     expect(a.reviewChecklist).toEqual(full)
     expect(await draftDoc(d.draftId)).toMatchObject({ reviewChecklist: full })
     expect(await adminDb().collection("draft_gate_overrides").doc(`${d.draftId}_1`).get().then((s) => s.exists)).toBe(false)
+  })
+
+  it("a NON_FORUM type whose own checklist requires legal verification (a suit for possession) needs the review checklist even after the partner override", async () => {
+    const f = await newFirm()
+    const d = await create(f, f.A, POSSESSION_SUIT_TYPE, POSSESSION_PROSE)
+    const g = await gate(f, f.A, d.draftId)
+    expect(g.status).toBe("NOT_ASSESSED")
+    expect(g.scope).toEqual(NOT_ASSESSED_SCOPE)
+    await override(f, f.P, d.draftId)
+
+    // The partner's override clears the gate, not the review: approval without the checklist is still refused.
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId)), 422, "review_checklist_incomplete")
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+    expect(await approvedEvents(f.firmId, d.draftId)).toHaveLength(0)
+
+    const items = await checklistOf(f, f.P, POSSESSION_SUIT_TYPE)
+    expect(items).toEqual(expect.arrayContaining(["Limitation checked (Module 44)", "Statutory text pleaded as at relevant date (L17.1)", "Citations passed Gate 33"]))
+    // Evidence of exactly 20 characters once trimmed is enough (ruling B).
+    const full = items.map((item) => ({ item, evidence: `  ${EVIDENCE_20}\n` }))
+    const a = await approve(f, f.P, d.draftId, { reviewChecklist: full })
+    expect(a.draft).toMatchObject({ status: "approved", locked: true, approvedBy: f.P.uid })
+    expect(a.draft.gateResult).toMatchObject({ status: "NOT_ASSESSED", overridden: true })
+    expect(a.reviewChecklist).toEqual(items.map((item) => ({ item, evidence: EVIDENCE_20 })))
+    expect(await draftDoc(d.draftId)).toMatchObject({ reviewChecklist: items.map((item) => ({ item, evidence: EVIDENCE_20 })) })
+  })
+
+  it("a legal opinion whose only citation is VERIFIED gates OK and approves without an override, but still needs the review checklist", async () => {
+    const store = new InMemoryAuthorityStore()
+    store.addJudgment("j_7", "2099 SCMR 7", "full")
+    setAuthorityStoreForTests(store)
+    const f = await newFirm()
+    const d = await create(f, f.A, OPINION_TYPE, OPINION_PROSE)
+    const g = await gate(f, f.A, d.draftId)
+    expect(g.status).toBe("OK")
+    expect(g.scope).toEqual({ citations: 1, temporalChecks: 0, assessed: true })
+
+    // One verified citation does not verify the opinion's legal assertions: the review checklist is required.
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId)), 422, "review_checklist_incomplete")
+    expect(await draftDoc(d.draftId)).toMatchObject({ status: "draft", locked: false })
+    const items = await checklistOf(f, f.P, OPINION_TYPE)
+    expect(items).toContain("Sources cited and verified (Gate 33 where authorities are relied on)")
+    const full = completeChecklist(items)
+    const a = await approve(f, f.P, d.draftId, { reviewChecklist: full })
+    expect(a.draft).toMatchObject({ status: "approved", locked: true })
+    expect(a.draft.gateResult).toMatchObject({ status: "OK", overridden: false })
+    expect(a.reviewChecklist).toEqual(full)
+    expect((await adminDb().collection("draft_gate_overrides").doc(`${d.draftId}_1`).get()).exists).toBe(false)
+  })
+
+  it("a temporal check whose text the draft does not plead is refused 422 temporal_check_not_in_draft, so an unrelated true check cannot turn uncited prose OK", async () => {
+    const store = new InMemoryAuthorityStore()
+    store.addSectionVersion("test_act_s1", "PK", "2010-01-01", null, SECTION_TEXT)
+    setAuthorityStoreForTests(store)
+    const f = await newFirm()
+    const check = { sectionId: "test_act_s1", asAtDate: "2020-01-01", jurisdiction: "PK", usedText: SECTION_TEXT }
+
+    // A NON_FORUM draft of uncited prose with a true check on a section it never pleads: refused before any
+    // evaluation, and nothing is stored (no result, no summary, no draft.gated event).
+    const d = await create(f, f.A, NON_FORUM_TYPE, DEED_PROSE)
+    expectErr(await apiErrorOf(gate(f, f.A, d.draftId, [check])), 422, "temporal_check_not_in_draft")
+    expect(await resultDoc(d.draftId)).toBeUndefined()
+    expect(await draftDoc(d.draftId)).toMatchObject({ gateResult: null })
+    expect(await draftDoc(d.draftId)).not.toHaveProperty("lastGatedVersion")
+    expect((await adminDb().collection("events").doc(`${d.draftId}_1_gated_1`).get()).exists).toBe(false)
+    // Without the check the prose is what it is: NOT_ASSESSED, and approval needs the partner's override.
+    expect((await gate(f, f.A, d.draftId)).status).toBe("NOT_ASSESSED")
+    expectErr(await apiErrorOf(approve(f, f.P, d.draftId)), 409, "gate_blocked")
+
+    // A draft that pleads the text (here across a line break, with doubled spaces) is checked, and the match is OK.
+    const pleads = await create(f, f.A, NON_FORUM_TYPE, `${DEED_PROSE}\nThe deed relies on Test Act s.1 as amended in 2018:\nthe limit is  sixty days.`)
+    const ok = await gate(f, f.A, pleads.draftId, [check])
+    expect(ok.status).toBe("OK")
+    expect(ok.scope).toEqual({ citations: 0, temporalChecks: 1, assessed: true })
   })
 
   it("a stored OK result with no findings, written before F06, reads as NOT_ASSESSED and does not approve without an override", async () => {

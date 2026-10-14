@@ -8,6 +8,7 @@
  */
 import { extractCitations, isUnrecognisedRef, normaliseCitation } from "@/services/d4-2/citations"
 import { verdictFromTreatments } from "@/services/d4-2/citationVerdict"
+import { normaliseDraftBody } from "@/services/d4-2/draftCharset"
 import type { AuthorityStore } from "./authority"
 import {
   GATE_SEVERITY,
@@ -58,6 +59,28 @@ async function checkTemporal(check: TemporalCheck, store: AuthorityStore): Promi
   // Exact after NFC on both sides, so the same text typed in a decomposed form still matches (P4-6).
   const same = inForce.text.normalize("NFC") === check.usedText.normalize("NFC")
   return { ...asked, status: same ? "OK" : "TEMPORAL_MISMATCH", inForceText: inForce.text }
+}
+
+/**
+ * Text as the pleading rule compares it (F06 ruling C): the draft body's own normalisation (`normaliseDraftBody`: paste
+ * artefacts removed, CRLF as LF, NFC, ASCII digits and dashes), then every run of whitespace folded to one space.
+ */
+function pleadedForm(text: string): string {
+  return normaliseDraftBody(text).replace(/\s+/gu, " ").trim()
+}
+
+/**
+ * The checks that do not apply to this draft (F06 ruling C): those whose `usedText`, in `pleadedForm`, does not occur in
+ * the title and body as `runGate` reads them (`title + "\n" + body`, in `pleadedForm`). A check the draft does not plead
+ * verifies nothing the draft says, so it must not count as assessed scope: gateDraft refuses it (422
+ * `temporal_check_not_in_draft`). The order of `checks` is kept; a blank usedText is never pleaded.
+ */
+export function unpleadedChecks(input: { title: string; body: string }, checks: readonly TemporalCheck[]): TemporalCheck[] {
+  const text = pleadedForm(`${input.title}\n${input.body}`)
+  return checks.filter((c) => {
+    const used = pleadedForm(c.usedText)
+    return used === "" || !text.includes(used)
+  })
 }
 
 /**

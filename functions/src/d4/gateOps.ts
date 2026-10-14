@@ -23,7 +23,7 @@ import {
   type ReviewChecklistEntry,
 } from "./drafts"
 import { getDocumentType, isLawDependent, reviewChecklistOf } from "./doctypes"
-import { runGate, scopeOf } from "./gate"
+import { runGate, scopeOf, unpleadedChecks } from "./gate"
 import {
   GATE_SEVERITY,
   type CitationFinding,
@@ -174,6 +174,8 @@ export const MAX_REVIEW_CHECKLIST_ENTRIES = 50
 const MAX_CHECKLIST_ITEM = 500
 /** The most evidence one checklist item may carry, in characters once trimmed (F06). */
 export const MAX_CHECKLIST_EVIDENCE = 2_000
+/** The least evidence one checklist item must carry, in characters once trimmed (F06 ruling B): the override reason's floor. */
+export const MIN_CHECKLIST_EVIDENCE = MIN_REASON
 
 /**
  * The approval's review checklist as sent (F06): absent is none (null); otherwise an array of at most 50 entries,
@@ -197,12 +199,13 @@ export function parseReviewChecklist(value: unknown): ReviewChecklistEntry[] | n
 
 /**
  * The review checklist an approval of `documentTypeId` needs and stores (F06), or null when it needs and has none.
- * A law-dependent type (filed in a forum: `isLawDependent`) needs one; for a NON_FORUM type it is optional, but one
- * that is sent is held to the same rule. The rule: the entries name every item of the type's checklist
- * (`reviewChecklistOf`) exactly once, by exact string, in any order, and nothing else, and every evidence is something
- * once trimmed; otherwise 422 `review_checklist_incomplete`. Each evidence then passes the draft charset rule (422
+ * A law-dependent type (`isLawDependent`: filed in a forum, or its own checklist names a legal-verification item,
+ * ruling A) needs one; for any other type it is optional, but one that is sent is held to the same rule. The rule:
+ * the entries name every item of the type's checklist (`reviewChecklistOf`) exactly once, by exact string, in any
+ * order, and nothing else, and every evidence is at least 20 characters once trimmed (ruling B, the override reason's
+ * floor); otherwise 422 `review_checklist_incomplete`. Each evidence then passes the draft charset rule (422
  * `unsupported_characters`, R7) and is stored as the override reason is (paste artefacts removed, CRLF as LF, NFC),
- * trimmed, and checked again on that form (empty: 422 `review_checklist_incomplete`; over 2,000 characters: 400
+ * trimmed, and checked again on that form (under 20 characters: 422 `review_checklist_incomplete`; over 2,000: 400
  * `invalid_review_checklist`). The entries come back in the type's order. A draft whose type is no longer a verified
  * type cannot be checked and is not approved (404 `document_type_not_found`).
  */
@@ -215,13 +218,13 @@ function requireReviewChecklist(documentTypeId: unknown, sent: readonly ReviewCh
   const items = reviewChecklistOf(type)
   const byItem = new Map<string, string>()
   for (const entry of sent) {
-    if (!items.includes(entry.item) || byItem.has(entry.item) || entry.evidence.trim() === "") throw incomplete()
+    if (!items.includes(entry.item) || byItem.has(entry.item) || chars(entry.evidence.trim()) < MIN_CHECKLIST_EVIDENCE) throw incomplete()
     byItem.set(entry.item, entry.evidence)
   }
   if (byItem.size !== items.length) throw incomplete()
   return items.map((item) => {
     const evidence = requireSupportedText(byItem.get(item) as string).trim()
-    if (evidence === "") throw incomplete()
+    if (chars(evidence) < MIN_CHECKLIST_EVIDENCE) throw incomplete()
     if (chars(evidence) > MAX_CHECKLIST_EVIDENCE) throw new HttpError(400, "invalid_review_checklist")
     return { item, evidence }
   })
@@ -589,7 +592,11 @@ async function requireCarriedUnchanged(tx: Transaction, draft: DocumentData, dra
  * usedText (422 `unsupported_characters`, R7; a jurisdiction outside R11's pattern was already 400). The run's checks are the caller's merged with those
  * recorded on the draft's most recent stored result (R10, `mergeChecks`: a check, once recorded, is re-checked on every
  * later run and version; a missing or malformed carried result is 409 `not_gated`; the merged caps are 400
- * `invalid_temporal_checks`, the one 400 decided after the permission, because it needs the draft's recorded checks). The gate runs on the stored version's
+ * `invalid_temporal_checks`, the one 400 decided after the permission, because it needs the draft's recorded checks).
+ * Every check of the merged set must apply to the version (F06 ruling C, `unpleadedChecks`): its usedText, folded as
+ * the body is, must occur in the version's title and body, else 422 `temporal_check_not_in_draft` before any
+ * evaluation, with nothing stored; a carried check the new version no longer pleads is re-supplied on the same key with
+ * the text this version pleads (R10: the caller's usedText wins). The gate runs on the stored version's
  * title and body against the active authority store; it reports and never edits the text. Findings over 900,000 bytes
  * are 422 `gate_result_too_large` (R8). One transaction, which checks the lock, the version, the override and the
  * carried result again (409 `draft_changed` if another run replaced it), sets the version's result with a fresh
@@ -618,6 +625,8 @@ export const gateDraftOp: FirmOperation<GateResultView> = {
     const carried = await carriedChecks(caller, draftId, draft)
     const checks = mergeChecks(carried.checks, fromCaller)
     const text = await loadVersionText(caller, draftId, version, draft)
+    // F06 ruling C: a check applies only to text the version pleads, so an unrelated true check cannot make prose OK.
+    if (unpleadedChecks(text, checks).length > 0) throw new HttpError(422, "temporal_check_not_in_draft")
     const evaluation = normaliseEvaluation(await runGate({ title: text.title, body: text.body, temporalChecks: checks }, activeAuthorityStore()))
     requireStorable(evaluation)
 
