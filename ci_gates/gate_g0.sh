@@ -11,11 +11,11 @@ echo "[1] fee-guard"
 if grep -R -n -E "calculateCourtFee|getFeeRule|insertFeeMemo|courtFeeBasis" --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' --include='*.sql' --include='*.json' --include='*.rules' . 2>/dev/null | grep -v node_modules | grep -v '\.git/' | grep -v '/\.eve/' | grep -v 'ci_gates/' | grep -v 'CORRECTION_LOG.md' | grep -v 'corpus_service/'; then
   echo "FAIL: court-fee identifiers found (E-15)"; fail=1; else echo "PASS"; fi
 
-echo "[2] scraper-guard (full tree; corpus_service scanned with FA-D3C-001 per-file allowlist)"
+echo "[2] scraper-guard (full tree; FA-D3C-001 file:symbol allowlist + stale-entry check)"
 python3 ci_gates/check_scraper_libraries.py || fail=1
 python3 ci_gates/check_fetch_allowlist.py || fail=1
 
-echo "[3] provider-guard (full tree; P1-only; corpus_service FA-D3C-002 per-file allowlist)"
+echo "[3] provider-guard (full tree; P1-only; FA-D3C-002 file:symbol allowlist + stale-entry check)"
 python3 ci_gates/check_provider_imports.py || fail=1
 
 echo "[4] duplicate-route guard"

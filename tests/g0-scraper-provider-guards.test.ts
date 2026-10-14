@@ -13,10 +13,10 @@ function copyGuardTree(targetDir: string) {
     "check_scraper_libraries.py",
     "check_provider_imports.py",
     "g0_guard_common.py",
-    "g0_guard_allowlist.json",
   ]) {
     fs.copyFileSync(path.join(repoRoot, "ci_gates", name), path.join(gates, name));
   }
+  writeAllowlist(targetDir, [], []);
 }
 
 function runGuard(script: string, cwd: string): { status: number; out: string } {
@@ -40,6 +40,21 @@ function mkProbe(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "g0-probe-"));
   copyGuardTree(dir);
   return dir;
+}
+
+function writeAllowlist(
+  dir: string,
+  scraper: string[],
+  provider: string[],
+): void {
+  fs.writeFileSync(
+    path.join(dir, "ci_gates", "g0_guard_allowlist.json"),
+    JSON.stringify(
+      { fa_d3c_001_scraper: scraper, fa_d3c_002_provider: provider },
+      null,
+      2,
+    ),
+  );
 }
 
 describe("G-0 full-tree scraper/provider guards (FA-CI-001)", () => {
@@ -204,5 +219,83 @@ describe("G-0 full-tree scraper/provider guards (FA-CI-001)", () => {
     const provider = runGuard("ci_gates/check_provider_imports.py", repoRoot);
     expect(scraper.status).toBe(0);
     expect(provider.status).toBe(0);
+  });
+
+  it("fails when a second scraper package is added to an allowlisted requirements file", () => {
+    const dir = mkProbe();
+    tmpDirs.push(dir);
+    writeAllowlist(
+      dir,
+      ["corpus_service/requirements.txt:playwright"],
+      [],
+    );
+    const req = path.join(dir, "corpus_service", "requirements.txt");
+    fs.mkdirSync(path.dirname(req), { recursive: true });
+    fs.writeFileSync(req, "playwright\npuppeteer\n");
+    const result = runGuard("ci_gates/check_scraper_libraries.py", dir);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toMatch(/requires puppeteer/);
+  });
+
+  it("fails when a second provider package is added to an allowlisted requirements file", () => {
+    const dir = mkProbe();
+    tmpDirs.push(dir);
+    writeAllowlist(dir, [], ["corpus_service/requirements.txt:openai"]);
+    const req = path.join(dir, "corpus_service", "requirements.txt");
+    fs.mkdirSync(path.dirname(req), { recursive: true });
+    fs.writeFileSync(req, "openai\nanthropic\n");
+    const result = runGuard("ci_gates/check_provider_imports.py", dir);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toMatch(/requires anthropic/);
+  });
+
+  it("fails when embeddings.py allowlists openai but file also imports anthropic", () => {
+    const dir = mkProbe();
+    tmpDirs.push(dir);
+    writeAllowlist(dir, [], ["corpus_service/scraper/tasks/embeddings.py:openai"]);
+    const py = path.join(dir, "corpus_service", "scraper", "tasks", "embeddings.py");
+    fs.mkdirSync(path.dirname(py), { recursive: true });
+    fs.writeFileSync(py, "import openai\nimport anthropic\n");
+    const result = runGuard("ci_gates/check_provider_imports.py", dir);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toMatch(/anthropic/);
+  });
+
+  it("fails on stale scraper allowlist entry with no matching finding", () => {
+    const dir = mkProbe();
+    tmpDirs.push(dir);
+    writeAllowlist(
+      dir,
+      [
+        "corpus_service/requirements.txt:playwright",
+        "corpus_service/requirements.txt:puppeteer",
+      ],
+      [],
+    );
+    const req = path.join(dir, "corpus_service", "requirements.txt");
+    fs.mkdirSync(path.dirname(req), { recursive: true });
+    fs.writeFileSync(req, "playwright\n");
+    const result = runGuard("ci_gates/check_scraper_libraries.py", dir);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toMatch(/stale allowlist entry.*puppeteer/);
+  });
+
+  it("fails on stale provider allowlist entry with no matching finding", () => {
+    const dir = mkProbe();
+    tmpDirs.push(dir);
+    writeAllowlist(
+      dir,
+      [],
+      [
+        "corpus_service/requirements.txt:openai",
+        "corpus_service/requirements.txt:anthropic",
+      ],
+    );
+    const req = path.join(dir, "corpus_service", "requirements.txt");
+    fs.mkdirSync(path.dirname(req), { recursive: true });
+    fs.writeFileSync(req, "openai\n");
+    const result = runGuard("ci_gates/check_provider_imports.py", dir);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toMatch(/stale allowlist entry.*anthropic/);
   });
 });

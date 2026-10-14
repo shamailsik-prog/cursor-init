@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """scraper-guard — no Playwright/Puppeteer in application source (full tree).
 
-Known corpus_service violations are allowlisted per file (FA-D3C-001) until remediated.
-Any new violation under corpus_service/ fails the build.
+FA-D3C-001 violations are allowlisted per file:symbol in g0_guard_allowlist.json.
+Stale allowlist entries (fixed violations still listed) fail the build.
 """
 from __future__ import annotations
 
@@ -14,98 +14,116 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from g0_guard_common import (
+    GuardFinding,
     SOURCE_SUFFIXES,
-    is_allowlisted,
+    apply_allowlist,
     iter_scan_files,
     load_allowlist,
     rel_posix,
 )
 
-# Real dependency / import usage, not bare words in docstrings.
-IMPORT_RE = re.compile(
+PLAYWRIGHT_IMPORT_RE = re.compile(
     r"""
-    (?:from\s+(?:["']playwright[\w./-]*["']|playwright[\w.]*)\s+import|
-       import\s+[^;\n]*\bplaywright\b|
-       require\s*\(\s*["']playwright[\w./-]*["']|
-       import\s*\(\s*["']playwright[\w./-]*["'])
-    |(?:from\s+(?:["']puppeteer[\w./-]*["']|puppeteer[\w.]*)\s+import|
-       import\s+[^;\n]*\bpuppeteer\b|
-       require\s*\(\s*["']puppeteer[\w./-]*["']|
-       import\s*\(\s*["']puppeteer[\w./-]*["'])
+    from\s+(?:["']playwright[\w./-]*["']|playwright[\w.]*)\s+import|
+    import\s+[^;\n]*\bplaywright\b|
+    require\s*\(\s*["']playwright[\w./-]*["']|
+    import\s*\(\s*["']playwright[\w./-]*["']
+    """,
+    re.I | re.VERBOSE,
+)
+PUPPETEER_IMPORT_RE = re.compile(
+    r"""
+    from\s+(?:["']puppeteer[\w./-]*["']|puppeteer[\w.]*)\s+import|
+    import\s+[^;\n]*\bpuppeteer\b|
+    require\s*\(\s*["']puppeteer[\w./-]*["']|
+    import\s*\(\s*["']puppeteer[\w./-]*["']
     """,
     re.I | re.VERBOSE,
 )
 
 DOCKER_PLAYWRIGHT_RE = re.compile(r"\bplaywright\s+install\b", re.I)
-DOCKER_PUPPETEER_RE = re.compile(r"\bpuppeteer\b", re.I)
 
 ROOT_PACKAGE_JSON = "package.json"
 ROOT_PLAYWRIGHT_TEST_DEV = "@playwright/test"
 
+BUCKET = "fa_d3c_001_scraper"
 
-def _check_package_json(path: pathlib.Path) -> list[str]:
+
+def _pkg_symbol(name: str) -> str | None:
+    low = name.lower()
+    if "playwright" in low:
+        return "playwright"
+    if "puppeteer" in low:
+        return "puppeteer"
+    return None
+
+
+def _check_package_json(path: pathlib.Path) -> list[GuardFinding]:
     rel = rel_posix(path)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
-    failed: list[str] = []
+    out: list[GuardFinding] = []
     for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
         for name in data.get(section, {}):
-            low = name.lower()
-            if "playwright" not in low and "puppeteer" not in low:
-                continue
             if rel == ROOT_PACKAGE_JSON and section == "devDependencies" and name == ROOT_PLAYWRIGHT_TEST_DEV:
                 continue
-            failed.append(f"{rel}: {section} lists {name}")
-    return failed
+            sym = _pkg_symbol(name)
+            if sym:
+                out.append(
+                    GuardFinding(rel, sym, f"{rel}: {section} lists {name}"),
+                )
+    return out
 
 
-def _check_requirements_txt(path: pathlib.Path) -> list[str]:
-    failed: list[str] = []
+def _check_requirements_txt(path: pathlib.Path) -> list[GuardFinding]:
+    rel = rel_posix(path)
+    out: list[GuardFinding] = []
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         token = re.split(r"[<>=!~\s]", stripped, maxsplit=1)[0].lower()
         if token in {"playwright", "puppeteer"}:
-            failed.append(f"{rel_posix(path)}: requires {token}")
-    return failed
+            out.append(GuardFinding(rel, token, f"{rel}: requires {token}"))
+    return out
 
 
-def _check_dockerfile(path: pathlib.Path) -> list[str]:
+def _check_dockerfile(path: pathlib.Path) -> list[GuardFinding]:
     rel = rel_posix(path)
     text = path.read_text(encoding="utf-8", errors="ignore")
-    failed: list[str] = []
+    out: list[GuardFinding] = []
     if DOCKER_PLAYWRIGHT_RE.search(text):
-        failed.append(f"{rel}: Playwright install in Dockerfile")
-    if DOCKER_PUPPETEER_RE.search(text) and "puppeteer" in text.lower():
-        # Avoid matching unrelated words; require install-like context or package name
-        if re.search(r"puppeteer\s+install|npm\s+.*puppeteer|pip\s+.*puppeteer", text, re.I):
-            failed.append(f"{rel}: Puppeteer in Dockerfile")
-    return failed
+        out.append(
+            GuardFinding(rel, "playwright_install", f"{rel}: Playwright install in Dockerfile"),
+        )
+    if re.search(r"puppeteer\s+install|npm\s+.*puppeteer|pip\s+.*puppeteer", text, re.I):
+        out.append(GuardFinding(rel, "puppeteer_install", f"{rel}: Puppeteer in Dockerfile"))
+    return out
 
 
-def main() -> int:
-    allow = load_allowlist()
-    failed: list[str] = []
+def _check_source(path: pathlib.Path, text: str) -> list[GuardFinding]:
+    rel = rel_posix(path)
+    out: list[GuardFinding] = []
+    if PLAYWRIGHT_IMPORT_RE.search(text):
+        out.append(GuardFinding(rel, "playwright", f"{rel}: playwright import"))
+    if PUPPETEER_IMPORT_RE.search(text):
+        out.append(GuardFinding(rel, "puppeteer", f"{rel}: puppeteer import"))
+    return out
 
+
+def collect_findings() -> list[GuardFinding]:
+    findings: list[GuardFinding] = []
     for p in iter_scan_files():
-        rel = rel_posix(p)
         if p.name == "package.json":
-            for hit in _check_package_json(p):
-                if not is_allowlisted(rel, "fa_d3c_001_scraper", allow):
-                    failed.append(hit)
+            findings.extend(_check_package_json(p))
             continue
         if p.name == "requirements.txt":
-            for hit in _check_requirements_txt(p):
-                if not is_allowlisted(rel, "fa_d3c_001_scraper", allow):
-                    failed.append(hit)
+            findings.extend(_check_requirements_txt(p))
             continue
         if p.name == "Dockerfile" or p.name.endswith(".Dockerfile"):
-            for hit in _check_dockerfile(p):
-                if not is_allowlisted(rel, "fa_d3c_001_scraper", allow):
-                    failed.append(hit)
+            findings.extend(_check_dockerfile(p))
             continue
         if p.suffix not in SOURCE_SUFFIXES:
             continue
@@ -113,16 +131,22 @@ def main() -> int:
             text = p.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        if IMPORT_RE.search(text):
-            if not is_allowlisted(rel, "fa_d3c_001_scraper", allow):
-                failed.append(f"{rel}: Playwright/Puppeteer import")
+        findings.extend(_check_source(p, text))
+    return findings
 
-    if failed:
+
+def main() -> int:
+    allow = load_allowlist()[BUCKET]
+    findings = collect_findings()
+    failures, stale = apply_allowlist(findings, allow)
+    if stale:
+        failures.extend([f"stale allowlist entry (no matching finding): {key}" for key in stale])
+    if failures:
         print("FAIL: scraper library in application source (N1 / L17.12):")
-        for f in sorted(set(failed)):
+        for f in sorted(set(failures)):
             print(" ", f)
         return 1
-    print("PASS: no Playwright/Puppeteer outside allowlisted FA-D3C-001 files")
+    print("PASS: no unallowlisted Playwright/Puppeteer; FA-D3C-001 allowlist entries verified")
     return 0
 
 

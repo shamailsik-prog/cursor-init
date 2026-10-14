@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Shared path rules for G-0 scraper and provider guards."""
+"""Shared path rules and allowlist handling for G-0 scraper and provider guards."""
 from __future__ import annotations
 
 import json
 import pathlib
+from dataclasses import dataclass
 
 SOURCE_SUFFIXES = {
     ".ts",
@@ -29,6 +30,17 @@ SKIP_DIR_NAMES = {
 ALLOWLIST_PATH = pathlib.Path(__file__).with_name("g0_guard_allowlist.json")
 
 
+@dataclass(frozen=True)
+class GuardFinding:
+    rel: str
+    symbol: str
+    message: str
+
+    @property
+    def allow_key(self) -> str:
+        return f"{self.rel}:{self.symbol}"
+
+
 def rel_posix(p: pathlib.Path) -> str:
     return str(p).replace("\\", "/")
 
@@ -41,7 +53,6 @@ def is_skipped_path(p: pathlib.Path) -> bool:
         return True
     if r == "playwright.config.mts" or r == "playwright.config.cts":
         return True
-    # Root tests/ only — not functions/test/ or other nested test dirs.
     parts = p.parts
     if parts and parts[0] == "tests":
         return True
@@ -57,13 +68,34 @@ def iter_scan_files(root: pathlib.Path = pathlib.Path(".")):
         yield p
 
 
-def load_allowlist() -> dict[str, list[str]]:
+def load_allowlist() -> dict[str, set[str]]:
     data = json.loads(ALLOWLIST_PATH.read_text(encoding="utf-8"))
-    return {
-        "fa_d3c_001_scraper": list(data.get("fa_d3c_001_scraper", [])),
-        "fa_d3c_002_provider": list(data.get("fa_d3c_002_provider", [])),
-    }
+    out: dict[str, set[str]] = {}
+    for bucket in ("fa_d3c_001_scraper", "fa_d3c_002_provider"):
+        entries = data.get(bucket, [])
+        parsed: set[str] = set()
+        for raw in entries:
+            if ":" not in raw:
+                raise ValueError(f"allowlist entry must be path:symbol, got {raw!r}")
+            rel, symbol = raw.split(":", 1)
+            if not rel or not symbol:
+                raise ValueError(f"allowlist entry must be path:symbol, got {raw!r}")
+            parsed.add(f"{rel}:{symbol}")
+        out[bucket] = parsed
+    return out
 
 
-def is_allowlisted(rel: str, bucket: str, allow: dict[str, list[str]]) -> bool:
-    return rel in allow.get(bucket, [])
+def apply_allowlist(
+    findings: list[GuardFinding],
+    allowset: set[str],
+) -> tuple[list[str], list[str]]:
+    """Return violation messages and stale allowlist keys (expected but not found)."""
+    matched: set[str] = set()
+    failures: list[str] = []
+    for f in findings:
+        if f.allow_key in allowset:
+            matched.add(f.allow_key)
+        else:
+            failures.append(f.message)
+    stale = sorted(allowset - matched)
+    return failures, stale
