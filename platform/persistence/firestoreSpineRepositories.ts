@@ -1,6 +1,7 @@
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -329,6 +330,9 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async update(id, patch) {
         return updateById<DocumentRecord>(db, "documents", id, patch)
+      },
+      async delete(id) {
+        await deleteDoc(doc(db, "documents", id))
       },
       async listByFirm(firmId) {
         return listByFirm<DocumentRecord>(db, "documents", firmId)

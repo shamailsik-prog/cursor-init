@@ -9,15 +9,17 @@ import {
 } from "@/platform/persistence/jobMatterBackfill"
 
 describe("jobs carry the document's matterId", () => {
-  it("uploadDocument writes matterId on the OCR job (matter and loose vault)", () => {
+  it("uploadDocument writes matterId on the OCR job (matter and loose vault)", async () => {
     const store = newStore()
-    const inMatter = uploadDocument(store, {
+    const inMatter = await uploadDocument(store, {
       firmId: "firmA", matterId: "m1", bytes: Buffer.from("a"), sourceChannel: "web",
       classification: "privileged", idempotencyKey: "k1",
+      uploadedBy: "partner_a",
     })
-    const loose = uploadDocument(store, {
+    const loose = await uploadDocument(store, {
       firmId: "firmA", matterId: null, bytes: Buffer.from("b"), sourceChannel: "bulk",
       classification: "confidential", idempotencyKey: "k2",
+      uploadedBy: "partner_a",
     })
     expect(store.jobs.find((j) => j.documentId === inMatter.docId)?.matterId).toBe("m1")
     expect(store.jobs.find((j) => j.documentId === loose.docId)?.matterId).toBeNull()

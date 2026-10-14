@@ -218,6 +218,7 @@ export type DocumentRepository = {
   create(row: DocumentRecord): Promise<void>
   get(id: string): Promise<DocumentRecord | null>
   update(id: string, patch: Partial<DocumentRecord>): Promise<DocumentRecord | null>
+  delete(id: string): Promise<void>
   listByFirm(firmId: string): Promise<DocumentRecord[]>
 }
 
@@ -2170,6 +2171,9 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         const next = { ...current, ...patch }
         store.documents.set(id, next)
         return next
+      },
+      async delete(id) {
+        store.documents.delete(id)
       },
       async listByFirm(firmId) {
         return [...store.documents.values()].filter((row) => row.firmId === firmId)

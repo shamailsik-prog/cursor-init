@@ -16,7 +16,11 @@ export default defineConfig({
     // Route handlers fail closed (Firebase auth) unless told otherwise; the
     // unit suite opts into the local-only insecure-dev mode.
     // Legacy chain test files opt into LEGACY_GOVERNANCE_CHAINS (Erratum E-24).
-    setupFiles: ["tests/setup/auth-mode.ts", "tests/setup/legacy-chains.ts"],
+    setupFiles: [
+      "tests/setup/auth-mode.ts",
+      "tests/setup/document-object-store.ts",
+      "tests/setup/legacy-chains.ts",
+    ],
     // These suites call initializeTestEnvironment() and require the Firestore
     // emulator. Skip them under a plain `vitest run`; they execute via
     // `npm run test:rules`, which wraps them with `firebase emulators:exec`.

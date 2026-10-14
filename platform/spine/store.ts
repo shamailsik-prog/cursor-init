@@ -58,6 +58,16 @@ export type DocumentRecord = {
   contentHash: string
   sourceChannel: "web" | "team_portal" | "whatsapp" | "bulk"
   classification: Classification
+  /** Immutable object key in approved regional object storage (Layer 18 documents row). */
+  storagePath: string
+  isImmutable: boolean
+  byteSize: number
+  mimeType: string
+  objectVersion: number
+  /** User id of the uploader (ownership for audit and scope). */
+  uploadedBy: string
+  /** Whether encrypted object bytes are known to be retrievable. */
+  objectBytesStatus: "available" | "missing"
 }
 
 export type Job = {

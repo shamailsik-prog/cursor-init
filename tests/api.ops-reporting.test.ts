@@ -72,13 +72,14 @@ function seedOpsMatter(classification: "internal" | "privileged" = "internal") {
 describe("GET /api/d2/ops-reporting", () => {
   it("returns persisted workflow + court-ops activity rows with filters and pagination", async () => {
     const matterId = seedOpsMatter("internal")
-    const doc = uploadDocument(getRuntimeStore(), {
+    const doc = await uploadDocument(getRuntimeStore(), {
       firmId: "firmA",
       matterId,
       bytes: Buffer.from("%PDF-ops-report%"),
       sourceChannel: "web",
       classification: "internal",
       idempotencyKey: "00a2157a-9f8c-4c4a-847f-772d8cbc2e5e",
+      uploadedBy: "partner_a",
     })
     recordCaseNumber(getRuntimeStore(), matterId, "CP 1234", "SHC")
 
@@ -176,13 +177,14 @@ describe("GET /api/d2/ops-reporting", () => {
 
   it("enforces actor role and clearance boundaries", async () => {
     const matterId = seedOpsMatter("privileged")
-    const doc = uploadDocument(getRuntimeStore(), {
+    const doc = await uploadDocument(getRuntimeStore(), {
       firmId: "firmA",
       matterId,
       bytes: Buffer.from("%PDF-privileged-ops-report%"),
       sourceChannel: "web",
       classification: "privileged",
       idempotencyKey: "9666bfcc-251e-4a1a-938d-50f3d9875777",
+      uploadedBy: "partner_a",
     })
     const privilegedTransition = await postWorkflow(
       {
@@ -237,13 +239,14 @@ describe("GET /api/d2/ops-reporting", () => {
 
   it("provides alert digests plus attestation/escalation governance views and actions", async () => {
     const matterId = seedOpsMatter("internal")
-    const doc = uploadDocument(getRuntimeStore(), {
+    const doc = await uploadDocument(getRuntimeStore(), {
       firmId: "firmA",
       matterId,
       bytes: Buffer.from("%PDF-ops-alert%"),
       sourceChannel: "web",
       classification: "internal",
       idempotencyKey: "6f5de356-4865-4d89-9d32-afd12846f7b8",
+      uploadedBy: "partner_a",
     })
     recordCaseNumber(getRuntimeStore(), matterId, "CP 1234", "SHC")
     const workflowTransition = await postWorkflow(
@@ -2777,13 +2780,14 @@ describe("GET /api/d2/ops-reporting", () => {
 
   it("lists custody handoff external transport receipt acknowledgment and reconciliation rows after governance seed", async () => {
     const matterId = seedOpsMatter("internal")
-    const doc = uploadDocument(getRuntimeStore(), {
+    const doc = await uploadDocument(getRuntimeStore(), {
       firmId: "firmA",
       matterId,
       bytes: Buffer.from("%PDF-external-transport-ack%"),
       sourceChannel: "web",
       classification: "internal",
       idempotencyKey: "a0b2157a-9f8c-4c4a-847f-772d8cbc2e5f",
+      uploadedBy: "partner_a",
     })
     const workflowTransition = await postWorkflow(
       {

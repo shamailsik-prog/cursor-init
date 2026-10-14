@@ -30,6 +30,13 @@ function seedDocument(id: string, matterId: string | null, classification: Class
     contentHash: `hash-${id}`,
     sourceChannel: "web",
     classification,
+    storagePath: `fs://firmA/documents/${id}/v1`,
+    isImmutable: false,
+    byteSize: 0,
+    mimeType: "application/octet-stream",
+    objectVersion: 1,
+    uploadedBy: "partner_a",
+    objectBytesStatus: "available",
   }
   getRuntimeStore().documents.set(id, doc)
 }

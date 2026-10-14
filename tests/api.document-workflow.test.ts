@@ -25,7 +25,7 @@ function get(params: URLSearchParams) {
   return GET(new Request(`http://127.0.0.1/api/d1/document-workflow?${params.toString()}`))
 }
 
-function seedMatterAndDocument() {
+async function seedMatterAndDocument() {
   const store = getRuntimeStore()
   const matter = createMatter(store, {
     firmId: "firmA",
@@ -37,20 +37,21 @@ function seedMatterAndDocument() {
   addMember(store, matter.id, "partner_a", "firmA")
   addMember(store, matter.id, "associate_a", "firmA")
   addMember(store, matter.id, "clerk_a", "firmA")
-  const write = uploadDocument(store, {
+  const write = await uploadDocument(store, {
     firmId: "firmA",
     matterId: matter.id,
     bytes: Buffer.from("%PDF-workflow%"),
     sourceChannel: "web",
     classification: "confidential",
     idempotencyKey: "8f158546-f2f9-4d31-8e96-cf333d4c0cd4",
+      uploadedBy: "partner_a",
   })
   return { matterId: matter.id, docId: write.docId }
 }
 
 describe("POST/GET /api/d1/document-workflow", () => {
   it("supports valid status transitions and blocks invalid transitions", async () => {
-    const { docId } = seedMatterAndDocument()
+    const { docId } = await seedMatterAndDocument()
     const first = await post(
       {
         action: "transition",
@@ -75,7 +76,7 @@ describe("POST/GET /api/d1/document-workflow", () => {
   })
 
   it("assigns reviewer with firm and clearance enforcement", async () => {
-    const { docId } = seedMatterAndDocument()
+    const { docId } = await seedMatterAndDocument()
     const ok = await post(
       {
         action: "assign_reviewer",
@@ -100,7 +101,7 @@ describe("POST/GET /api/d1/document-workflow", () => {
   })
 
   it("records review decision confirmation and declassification rules", async () => {
-    const { docId } = seedMatterAndDocument()
+    const { docId } = await seedMatterAndDocument()
     await post(
       {
         action: "assign_reviewer",
@@ -141,7 +142,7 @@ describe("POST/GET /api/d1/document-workflow", () => {
   })
 
   it("replays idempotent transitions and rejects idempotency key conflicts", async () => {
-    const { docId } = seedMatterAndDocument()
+    const { docId } = await seedMatterAndDocument()
     const key = "fdf26fac-99f6-46e4-8944-f214f6e1db4d"
     const payload = {
       action: "transition",
@@ -163,7 +164,7 @@ describe("POST/GET /api/d1/document-workflow", () => {
   })
 
   it("lists queue and timeline with pagination and matter scoping", async () => {
-    const { matterId, docId } = seedMatterAndDocument()
+    const { matterId, docId } = await seedMatterAndDocument()
     await post(
       {
         action: "transition",
@@ -234,7 +235,7 @@ describe("POST/GET /api/d1/document-workflow", () => {
   })
 
   it("denies cross-firm timeline reads", async () => {
-    const { matterId } = seedMatterAndDocument()
+    const { matterId } = await seedMatterAndDocument()
     const denied = await get(
       new URLSearchParams({
         view: "timeline",

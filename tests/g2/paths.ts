@@ -431,6 +431,9 @@ export const NON_SELECTOR_PARAMS: Record<string, string> = {
   view: "selects the read path; every value is inventoried as its own selector",
   limit: "page size (clamped 1-100)",
   cursor: "page offset into a list already scoped to the caller",
+  docId: "selects one document for object readback; access checked with canReadDocument",
+  includeContent:
+    "when true with docId, returns decrypted original bytes after content-hash verification",
 }
 
 /**
@@ -456,6 +459,7 @@ export const NON_SELECTOR_BODY_FIELDS: Record<string, string> = {
   phone: "phone of the client being registered",
   title: "title of the matter being created",
   contentBase64: "the uploaded bytes (byte-identical upload to firm A's is attacked)",
+  mimeType: "optional MIME type stored on the immutable object; does not select a tenant",
   sourceChannel: "enum: web / team_portal / whatsapp / bulk",
   nextStatus: "enum: workflow status",
   decision: "enum: review decision",
