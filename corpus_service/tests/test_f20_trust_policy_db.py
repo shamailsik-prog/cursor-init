@@ -450,10 +450,10 @@ def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
     master_ids = {row[0] for row in master}
     assert {by_id[ids[k]][4] for k in ("trusted_050", "renamed", "metadata_name", "site_only")} == master_ids
     assert {row[0] for row in embed} == master_ids and {row[1] for row in embed} == {"case_law_master"}
-    assert result == {"promoted": 4, "quarantined": 6, "failed": 0}
+    assert result == {"promoted": 4, "attached": 0, "quarantined": 6, "failed": 0}
 
     # A second pass has nothing left to decide and writes nothing new.
-    assert _promote() == {"promoted": 0, "quarantined": 0, "failed": 0}
+    assert _promote() == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}
     assert run(_outcomes()) == (staging, queue, master, embed)
 
 
@@ -490,7 +490,7 @@ def test_d_citation_free_record_is_quarantined_and_the_batch_continues(corpus_db
         (ids["db_error"], "promotion_error:IntegrityError"),
     ])
     assert {row[1] for row in master} == {"2099 F20 21", "2099 F20 23"}
-    assert result == {"promoted": 2, "quarantined": 2, "failed": 1}
+    assert result == {"promoted": 2, "attached": 0, "quarantined": 2, "failed": 1}
 
     failures = [r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage()]
     assert len(failures) == 1, failures
@@ -611,17 +611,20 @@ def test_h_a_present_identifier_that_misses_never_falls_through_to_a_trusted_lab
     _staging, queue, master, _embed = run(_outcomes())
     assert {row[1] for row in master} == {"2099 F20 46"}, "only the label-only control may be promoted"
     assert sorted(row[1] for row in queue) == ["unknown_source"] * 5
-    assert result == {"promoted": 1, "quarantined": 5, "failed": 0}
+    assert result == {"promoted": 1, "attached": 0, "quarantined": 5, "failed": 0}
 
 
 def test_h_trust_is_decided_before_the_duplicate_check(corpus_db):
-    """LOW-4: a record that may not be promoted is quarantined with its trust reason whether or not
-    its citation is already published; a promotable duplicate is quarantined duplicate_citation
-    (not left pending forever)."""
+    """LOW-4 + round-2 L3: a record that may not be promoted is quarantined with its trust reason
+    whether or not its citation is already published. A promotable duplicate follows FINAL_2's
+    DEDUPLICATION rule ("attach ... to the existing judgment row and skip the rest"): it is linked
+    to the existing case_law_master row (promoted_to_id) and closed, with no second master row, no
+    embedding and no review-queue row."""
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted"), "b": ("f20-blocked", "blocked"), "r": ("f20-review", "review")}))
-    run(_stage({"original": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D1", confidence_score=0.9)}))
-    assert _promote() == {"promoted": 1, "quarantined": 0, "failed": 0}
+    original = run(_stage({"original": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D1", confidence_score=0.9)}))
+    assert _promote() == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
+    d1_master = {row[0]: row for row in run(_outcomes())[0]}[original["original"]][4]
 
     ids = run(_stage({
         "blocked_dup": dict(source_id=src["b"], source_site="f20-blocked", extracted_citation="2099 F20 D1", confidence_score=0.9),
@@ -635,17 +638,23 @@ def test_h_trust_is_decided_before_the_duplicate_check(corpus_db):
     result = _promote()
 
     got = _outcome_by_key(ids)
-    pair = sorted([got.pop("pair_1"), got.pop("pair_2")])
-    assert got == {
+    assert {k: got[k] for k in ("blocked_dup", "review_dup", "low_conf_dup")} == {
         "blocked_dup": "blocked_source",
         "review_dup": "review_source",
         "low_conf_dup": "low_confidence",
-        "trusted_dup": "duplicate_citation",
     }, got
-    assert pair == ["duplicate_citation", "promoted"], pair
-    master = run(_outcomes())[2]
-    assert sorted(row[1] for row in master) == ["2099 F20 D1", "2099 F20 D2"]
-    assert result == {"promoted": 1, "quarantined": 5, "failed": 0}
+    staging, queue, master, embed = run(_outcomes())
+    by_id = {row[0]: row for row in staging}
+    # Attached: closed (promoted flag, promoted_to_id = the existing row), not quarantined.
+    assert by_id[ids["trusted_dup"]][1:5] == (True, False, None, d1_master)
+    pair = [by_id[ids["pair_1"]], by_id[ids["pair_2"]]]
+    assert all(row[1:4] == (True, False, None) for row in pair), pair
+    assert pair[0][4] == pair[1][4], "both copies must point at the one published row"
+    assert sorted(row[1] for row in master) == ["2099 F20 D1", "2099 F20 D2"], "no second master row"
+    assert len(embed) == 2, "an attached copy queues no embedding"
+    assert sorted(row[1] for row in queue) == ["blocked_source", "low_confidence", "review_source"], \
+        "an attached duplicate writes no review-queue row"
+    assert result == {"promoted": 1, "attached": 2, "quarantined": 3, "failed": 0}
 
 
 def test_h_a_record_that_raises_is_quarantined_durably_and_the_batch_continues(corpus_db, monkeypatch, caplog):
@@ -672,7 +681,7 @@ def test_h_a_record_that_raises_is_quarantined_durably_and_the_batch_continues(c
     with caplog.at_level(logging.INFO):
         result = _promote()
 
-    assert result == {"promoted": 4, "quarantined": 0, "failed": 1}
+    assert result == {"promoted": 4, "attached": 0, "quarantined": 0, "failed": 1}
     staging, queue, master, _embed = run(_outcomes())
     by_id = {row[0]: row for row in staging}
     assert by_id[ids["k2"]][1:4] == (False, True, "promotion_error:RuntimeError")
@@ -683,7 +692,7 @@ def test_h_a_record_that_raises_is_quarantined_durably_and_the_batch_continues(c
     assert "2099 F20 P2" not in messages, "log carries row data"
 
     # A second run leaves the quarantined record alone.
-    assert _promote() == {"promoted": 0, "quarantined": 0, "failed": 0}
+    assert _promote() == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}
 
 
 def test_h_if_the_error_quarantine_also_fails_the_batch_still_continues(corpus_db, monkeypatch, caplog):
@@ -715,7 +724,7 @@ def test_h_if_the_error_quarantine_also_fails_the_batch_still_continues(corpus_d
     with caplog.at_level(logging.INFO):
         result = _promote()
 
-    assert result == {"promoted": 2, "quarantined": 0, "failed": 1}
+    assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 1}
     staging = {row[0]: row for row in run(_outcomes())[0]}
     assert staging[ids["k1"]][1:4] == (False, False, None)
     messages = [r.getMessage() for r in caplog.records]
@@ -740,8 +749,9 @@ def _threaded(fn, n):
 
 
 def test_h_concurrent_runs_never_double_promote(corpus_db):
-    """LOW-1 (re-audit attack, adapted to LOW-4): four promotion runs at once over 160 rows. Every
-    citation is staged twice by a trusted source, so a race could publish both copies."""
+    """LOW-1 (re-audit attack, adapted to LOW-4 and round-2 L3): four promotion runs at once over
+    160 rows. Every citation is staged twice by a trusted source, so a race could publish both
+    copies. Exactly one copy is published; the other is attached to it (no review-queue row)."""
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted"), "r": ("f20-review", "review")}))
     rows = {}
@@ -749,7 +759,7 @@ def test_h_concurrent_runs_never_double_promote(corpus_db):
         rows[f"t{i}"] = dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 F20 C{i // 2}", confidence_score=0.9)
     for i in range(40):
         rows[f"r{i}"] = dict(source_id=src["r"], source_site="f20-review", extracted_citation=f"2099 F20 R{i}", confidence_score=0.9)
-    run(_stage(rows))
+    ids = run(_stage(rows))
 
     results, errors = _threaded(_promote, 4)
     assert not errors, errors
@@ -758,13 +768,18 @@ def test_h_concurrent_runs_never_double_promote(corpus_db):
     assert len(citations) == len(set(citations)) == 60, (len(citations), len(set(citations)))
     assert not [s for s in staging if s[1] and s[2]], "a row is both promoted and quarantined"
     assert not [s for s in staging if not s[1] and not s[2]], "a row was left undecided"
+    # Both copies of every citation point at its single master row.
+    master_by_citation = {m[1]: m[0] for m in master}
+    by_id = {s[0]: s for s in staging}
+    wrong_link = [k for k, sid in ids.items() if k.startswith("t")
+                  and by_id[sid][4] != master_by_citation[rows[k]["extracted_citation"]]]
+    assert not wrong_link, wrong_link[:3]
     queued = [q[0] for q in queue]
-    assert len(queued) == len(set(queued)) == 100, "a staging row was quarantined twice"
-    reasons = sorted(q[1] for q in queue)
-    assert reasons == ["duplicate_citation"] * 60 + ["review_source"] * 40, reasons[:3]
+    assert len(queued) == len(set(queued)) == 40, "only the review rows go to the review queue"
+    assert sorted(q[1] for q in queue) == ["review_source"] * 40
     assert len(embed) == 60
-    total = {k: sum(r[k] for r in results) for k in ("promoted", "quarantined", "failed")}
-    assert total == {"promoted": 60, "quarantined": 100, "failed": 0}, (total, results)
+    total = {k: sum(r[k] for r in results) for k in ("promoted", "attached", "quarantined", "failed")}
+    assert total == {"promoted": 60, "attached": 60, "quarantined": 40, "failed": 0}, (total, results)
 
 
 def test_h_for_update_reread_sees_concurrent_quarantine(corpus_db):
@@ -800,7 +815,7 @@ def test_h_for_update_reread_sees_concurrent_quarantine(corpus_db):
     release.set()
     th.join(30)
     pt.join(60)
-    assert out["r"] == {"promoted": 0, "quarantined": 0, "failed": 0}, out
+    assert out["r"] == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}, out
     _staging, queue, master, _ = run(_outcomes())
     assert master == [] and queue == []
 
@@ -848,10 +863,10 @@ def test_h_a_fresh_database_is_current_after_one_migrate(corpus_db):
 
 
 def test_h_a_second_run_waits_for_an_unfinished_publication_of_the_same_citation(corpus_db, monkeypatch):
-    """LOW-1/LOW-4: two runs on *different* staging rows with the same citation, interleaved so the
-    second run checks for a duplicate while the first has inserted but not yet committed the
-    case_law_master row. The second run must wait for the first and then record
-    duplicate_citation - not publish a second copy (refused at commit as a promotion_error)."""
+    """LOW-1/LOW-4 + round-2 L3: two runs on *different* staging rows with the same citation,
+    interleaved so the second run checks for a duplicate while the first has inserted but not yet
+    committed the case_law_master row. The second run must wait for the first and then attach its
+    copy to the first's row - not publish a second copy (refused at commit as a promotion_error)."""
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
     first_id = uuid.UUID("ffffffff-ffff-4fff-bfff-ffffffffffff")
@@ -885,9 +900,12 @@ def test_h_a_second_run_waits_for_an_unfinished_publication_of_the_same_citation
     run_a.join(60)
     run_b.join(60)
 
-    assert out["A"] == {"promoted": 1, "quarantined": 0, "failed": 0}, out
-    assert out["B"] == {"promoted": 0, "quarantined": 1, "failed": 0}, out
-    staging = {row[0]: row for row in run(_outcomes())[0]}
-    assert staging[first_id][1:3] == (True, False)
-    assert staging[second_id][1:4] == (False, True, "duplicate_citation")
-    assert [row[1] for row in run(_outcomes())[2]] == ["2099 F20 RACE"]
+    assert out["A"] == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}, out
+    assert out["B"] == {"promoted": 0, "attached": 1, "quarantined": 0, "failed": 0}, out
+    staging, queue, master, _embed = run(_outcomes())
+    by_id = {row[0]: row for row in staging}
+    assert by_id[first_id][1:3] == (True, False)
+    # B waited for A, then attached its copy to A's row instead of publishing a second one.
+    assert by_id[second_id][1:5] == (True, False, None, by_id[first_id][4])
+    assert [row[1] for row in master] == ["2099 F20 RACE"]
+    assert queue == []

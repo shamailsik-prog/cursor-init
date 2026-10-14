@@ -135,9 +135,10 @@ class ModuleSurfaceTests(unittest.TestCase):
     def test_reasons_are_the_documented_set(self):
         self.assertEqual(
             set(trust.QUARANTINE_REASONS),
-            {"review_source", "low_confidence", "blocked_source", "unknown_source", "citation_missing",
-             "duplicate_citation"},
+            {"review_source", "low_confidence", "blocked_source", "unknown_source", "citation_missing"},
         )
+        # Round-2 L3: a promotable duplicate is attached (FINAL_2 DEDUPLICATION), never queued.
+        self.assertFalse(hasattr(trust, "REASON_DUPLICATE_CITATION"))
 
     def test_a_record_that_raises_gets_a_class_only_reason(self):
         class ExplodingRowError(Exception):

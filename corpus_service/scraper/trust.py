@@ -33,15 +33,15 @@ REASON_LOW_CONFIDENCE: Final = "low_confidence"
 REASON_BLOCKED_SOURCE: Final = "blocked_source"
 REASON_UNKNOWN_SOURCE: Final = "unknown_source"
 REASON_CITATION_MISSING: Final = "citation_missing"  # decided by promotion, before trust (F22)
-REASON_DUPLICATE_CITATION: Final = "duplicate_citation"  # promotable, but the citation is already published
 QUARANTINE_REASONS: Final[Tuple[str, ...]] = (
     REASON_REVIEW_SOURCE,
     REASON_LOW_CONFIDENCE,
     REASON_BLOCKED_SOURCE,
     REASON_UNKNOWN_SOURCE,
     REASON_CITATION_MISSING,
-    REASON_DUPLICATE_CITATION,
 )
+# A promotable record whose citation is already published is not quarantined: it is attached to the
+# existing row and skipped (FINAL_2 DEDUPLICATION; see scraper/tasks/promotion.py).
 # A record whose promotion raised is quarantined as "promotion_error:<ExceptionClass>".
 REASON_PROMOTION_ERROR_PREFIX: Final = "promotion_error:"
 

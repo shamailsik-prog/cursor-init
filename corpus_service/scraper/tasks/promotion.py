@@ -1,4 +1,4 @@
-"""Promote normalised staging records (audit F20, F22; PR #48 re-audit round 1).
+"""Promote normalised staging records (audit F20, F22; PR #48 re-audit rounds 1 and 2).
 
 For each record, in this order:
 1. Resolve its source by the most specific identifier present (source_id FK, the harvester's stamped
@@ -7,8 +7,11 @@ For each record, in this order:
 2. No citation -> quarantined citation_missing (F22).
 3. The trust decision from scraper.trust: only a trusted source with confidence >= 0.5 may be
    promoted; review, blocked, low confidence and an unknown source are quarantined with that reason.
-4. A promotable record whose citation is already published -> quarantined duplicate_citation
-   (checked under a per-citation advisory lock, so concurrent runs cannot both publish it).
+4. A promotable record whose citation is already published is attached to that row and skipped
+   (FINAL_2 DEDUPLICATION: "attach ... to the existing judgment row and skip the rest"):
+   promoted_to_id points at the existing case_law_master row and the record is closed (promoted,
+   promoted_at) with no second master row, no embedding and no review-queue row. Checked under a
+   per-citation advisory lock, so concurrent runs cannot both publish one citation.
 
 Each record is re-read FOR UPDATE and decided in its own transaction, so one bad record cannot stop
 or roll back the rest. A record whose promotion raises is rolled back and then quarantined as
@@ -26,12 +29,7 @@ from sqlalchemy import func, select, text
 from scraper.database import SessionLocal
 from scraper.models import CaseLawMaster, EmbeddingQueue, QuarantineQueue, ScraperSource, ScraperStaging
 from scraper.source_identity import META_SOURCE_ID, META_SOURCE_NAME, as_source_uuid, is_present
-from scraper.trust import (
-    REASON_CITATION_MISSING,
-    REASON_DUPLICATE_CITATION,
-    promotion_error_reason,
-    publication_decision,
-)
+from scraper.trust import REASON_CITATION_MISSING, promotion_error_reason, publication_decision
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +96,7 @@ def _quarantine(db, st: ScraperStaging, src: Optional[ScraperSource], reason: st
 
 
 async def _decide(db, st: ScraperStaging) -> str:
-    """Apply the decision for one record; return "promoted" or "quarantined"."""
+    """Apply the decision for one record; return "promoted", "attached" or "quarantined"."""
     src, resolved_by = await _resolve_source(db, st)
     citation = (st.extracted_citation or "").strip()
     if not citation:
@@ -114,10 +112,17 @@ async def _decide(db, st: ScraperStaging) -> str:
         text("SELECT pg_advisory_xact_lock(:namespace, hashtext(:citation))"),
         {"namespace": _CITATION_LOCK_NAMESPACE, "citation": st.extracted_citation},
     )
-    dup = await db.execute(select(CaseLawMaster.id).where(CaseLawMaster.citation == st.extracted_citation))
-    if dup.first() is not None:
-        _quarantine(db, st, src, REASON_DUPLICATE_CITATION, resolved_by)
-        return "quarantined"
+    existing = (await db.execute(
+        select(CaseLawMaster.id).where(CaseLawMaster.citation == st.extracted_citation).order_by(CaseLawMaster.id)
+    )).scalars().first()
+    if existing is not None:
+        # FINAL_2 DEDUPLICATION: attach to the existing judgment row and skip. case_law_master has
+        # one citation per row and no place for a judgment's other citations, so the attachment
+        # is the link itself; no second row, no embedding, no review-queue row.
+        st.promoted = True
+        st.promoted_at = func.now()
+        st.promoted_to_id = existing
+        return "attached"
     master = CaseLawMaster(
         citation=st.extracted_citation,
         case_title=st.extracted_title,
@@ -156,9 +161,10 @@ async def _quarantine_after_error(db, staging_id, exc: BaseException) -> None:
 
 
 async def promote_staging_records() -> dict:
-    """Decide every normalised, undecided staging record. Returns counts of promoted, quarantined
-    and failed records (a failed record is rolled back, then quarantined as promotion_error)."""
-    counts = {"promoted": 0, "quarantined": 0, "failed": 0}
+    """Decide every normalised, undecided staging record. Returns counts of promoted, attached
+    (a duplicate of an already-published citation), quarantined and failed records (a failed
+    record is rolled back, then quarantined as promotion_error)."""
+    counts = {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}
     async with SessionLocal() as db:
         ids = (
             await db.execute(
@@ -190,7 +196,7 @@ async def promote_staging_records() -> dict:
             if outcome in counts:
                 counts[outcome] += 1
     logger.info(
-        "promotion.finished promoted=%d quarantined=%d failed=%d",
-        counts["promoted"], counts["quarantined"], counts["failed"],
+        "promotion.finished promoted=%d attached=%d quarantined=%d failed=%d",
+        counts["promoted"], counts["attached"], counts["quarantined"], counts["failed"],
     )
     return counts
