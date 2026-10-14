@@ -1,0 +1,143 @@
+"""Audit F20: the corpus trust vocabulary fails closed (pure unit tests, no database).
+
+FINAL_CORPUS_SERVICE_PROMPT_2.md :252-253 fixes the vocabulary as trusted | review | blocked with
+default review, and :894-898 the promotion rule: only a trusted source with confidence >= 0.5 is
+auto-promoted, review is always quarantined, blocked is never harvested. Anything outside the
+vocabulary (None, '', a legacy value, a different case) is unknown and must never publish.
+"""
+
+import sys
+import unittest
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scraper import trust  # noqa: E402
+from scraper.trust import (  # noqa: E402
+    DEFAULT_TRUST_LEVEL,
+    PROMOTION_MIN_CONFIDENCE,
+    TRUST_LEVELS,
+    PublicationDecision,
+    may_harvest,
+    normalise_legacy_trust,
+    publication_decision,
+    trust_check_sql,
+)
+
+
+class VocabularyTests(unittest.TestCase):
+    def test_vocabulary_is_exactly_the_spec_set(self):
+        self.assertEqual(TRUST_LEVELS, ("trusted", "review", "blocked"))
+
+    def test_default_is_review(self):
+        self.assertEqual(DEFAULT_TRUST_LEVEL, "review")
+        self.assertIn(DEFAULT_TRUST_LEVEL, TRUST_LEVELS)
+
+    def test_promotion_threshold(self):
+        self.assertEqual(PROMOTION_MIN_CONFIDENCE, 0.5)
+
+    def test_check_sql_is_built_from_the_vocabulary(self):
+        self.assertEqual(trust_check_sql(), "trust_level IN ('trusted','review','blocked')")
+
+    def test_decision_is_immutable(self):
+        decision = publication_decision("trusted", 0.9)
+        with self.assertRaises(Exception):
+            decision.promote = False  # type: ignore[misc]
+
+
+class PublicationDecisionTests(unittest.TestCase):
+    CASES = [
+        # (trust_raw, confidence, promote, reason)
+        ("trusted", 0.5, True, None),
+        ("trusted", 1.0, True, None),
+        ("trusted", 0.49, False, "low_confidence"),
+        ("trusted", 0.0, False, "low_confidence"),
+        ("trusted", None, False, "low_confidence"),
+        ("review", 0.99, False, "review_source"),
+        ("review", None, False, "review_source"),
+        ("blocked", 0.99, False, "blocked_source"),
+        (None, 0.99, False, "unknown_source"),
+        ("", 0.99, False, "unknown_source"),
+        ("semi_trusted", 0.99, False, "unknown_source"),
+        ("untrusted", 0.99, False, "unknown_source"),
+        ("quarantined", 0.99, False, "unknown_source"),
+        # Matching is exact: case and whitespace are not normalised.
+        ("TRUSTED", 0.99, False, "unknown_source"),
+        ("Trusted", 0.99, False, "unknown_source"),
+        (" trusted", 0.99, False, "unknown_source"),
+        ("trusted ", 0.99, False, "unknown_source"),
+        ("Review", 0.99, False, "unknown_source"),
+    ]
+
+    def test_every_branch_of_the_promotion_rule(self):
+        for trust_raw, confidence, promote, reason in self.CASES:
+            with self.subTest(trust=trust_raw, confidence=confidence):
+                decision = publication_decision(trust_raw, confidence)
+                self.assertIsInstance(decision, PublicationDecision)
+                self.assertEqual(decision.promote, promote)
+                self.assertEqual(decision.reason, reason)
+
+    def test_non_string_trust_is_unknown(self):
+        for raw in (1, True, b"trusted", ["trusted"]):
+            with self.subTest(raw=raw):
+                self.assertEqual(publication_decision(raw, 0.99).reason, "unknown_source")  # type: ignore[arg-type]
+
+    def test_unusable_confidence_never_promotes(self):
+        for confidence in (float("nan"), float("-inf"), "0.9", -0.1, True):
+            with self.subTest(confidence=confidence):
+                decision = publication_decision("trusted", confidence)  # type: ignore[arg-type]
+                self.assertFalse(decision.promote)
+                self.assertEqual(decision.reason, "low_confidence")
+
+    def test_a_promote_decision_carries_no_reason_and_a_quarantine_always_does(self):
+        for trust_raw, confidence, _promote, _reason in self.CASES:
+            decision = publication_decision(trust_raw, confidence)
+            with self.subTest(trust=trust_raw, confidence=confidence):
+                self.assertEqual(decision.reason is None, decision.promote)
+
+
+class MayHarvestTests(unittest.TestCase):
+    def test_trusted_and_review_may_be_harvested(self):
+        self.assertTrue(may_harvest("trusted"))
+        self.assertTrue(may_harvest("review"))
+
+    def test_blocked_and_unknown_may_not(self):
+        for raw in ("blocked", None, "", "x", "semi_trusted", "untrusted", "quarantined", "TRUSTED", " review"):
+            with self.subTest(raw=raw):
+                self.assertFalse(may_harvest(raw))
+
+
+class LegacyMappingTests(unittest.TestCase):
+    def test_legacy_values_become_review(self):
+        for legacy in ("semi_trusted", "untrusted", "quarantined"):
+            with self.subTest(legacy=legacy):
+                self.assertEqual(normalise_legacy_trust(legacy), "review")
+
+    def test_current_values_are_kept(self):
+        for level in TRUST_LEVELS:
+            with self.subTest(level=level):
+                self.assertEqual(normalise_legacy_trust(level), level)
+
+    def test_anything_else_becomes_review(self):
+        for raw in (None, "", "TRUSTED", " trusted", "x", "Blocked"):
+            with self.subTest(raw=raw):
+                self.assertEqual(normalise_legacy_trust(raw), "review")
+
+    def test_result_is_always_in_the_vocabulary(self):
+        for raw in (None, "", "trusted", "review", "blocked", "semi_trusted", "untrusted", "quarantined", "zzz"):
+            with self.subTest(raw=raw):
+                self.assertIn(normalise_legacy_trust(raw), TRUST_LEVELS)
+
+
+class ModuleSurfaceTests(unittest.TestCase):
+    def test_reasons_are_the_documented_set(self):
+        self.assertEqual(
+            set(trust.QUARANTINE_REASONS),
+            {"review_source", "low_confidence", "blocked_source", "unknown_source", "citation_missing"},
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
