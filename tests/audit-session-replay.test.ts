@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync, statSync } from "node:fs"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { bindRouteRepos } from "@/platform/persistence/forFirm"
 import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
@@ -18,8 +20,6 @@ function routeWouldReturnUnknownSessionReference(input: {
 
 describe("tenancy session replay guard", () => {
   it("getForSessionReplay is only referenced from the p5 tenancy route (plus adapters)", () => {
-    const { readdirSync, readFileSync, statSync } = require("node:fs") as typeof import("node:fs")
-    const { join } = require("node:path") as typeof import("node:path")
     const root = process.cwd()
     const hits: string[] = []
     const walk = (dir: string) => {

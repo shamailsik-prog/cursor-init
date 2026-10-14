@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -10,7 +10,6 @@ const MODULAR_ONLY = join(PERSISTENCE_ROOT, "firestoreDbModular.ts")
 const COLLECTION_CALL_PATTERNS: RegExp[] = [/\bcollection\s*\(/, /\.collection\s*\(/]
 
 function listPersistenceSources(): string[] {
-  const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs")
   const out: string[] = []
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {

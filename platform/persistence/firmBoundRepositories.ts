@@ -37,7 +37,7 @@ type BoundListByField<F> = F extends (
 
 type BoundRepo<R> = {
   [K in keyof R]: K extends "get"
-    ? BoundGet<Extract<R[K], (...args: any) => any>>
+    ? BoundGet<Extract<R[K], (...args: never) => unknown>>
     : K extends "update"
       ? BoundUpdate<R[K]>
       : K extends "setLocked"
