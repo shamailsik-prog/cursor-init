@@ -421,7 +421,7 @@ def _env_file_entries(svc):
 
 def _read_env_keys(path):
     keys = []
-    for line in path.read_text().splitlines():
+    for line in _read_text(path, "env_file").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -431,7 +431,7 @@ def _read_env_keys(path):
 
 def _hba_problems(path):
     problems = []
-    for n, raw in enumerate(path.read_text().splitlines(), 1):
+    for n, raw in enumerate(_read_text(path, "pg_hba file").splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
@@ -579,7 +579,7 @@ def _dockerignore_excludes_env(context, dockerfile):
     candidates = [Path(context) / f"{dockerfile}.dockerignore", Path(context) / ".dockerignore"]
     for c in candidates:
         if c.is_file():
-            for line in c.read_text().splitlines():
+            for line in _read_text(c, "build ignore file").splitlines():
                 pat = line.strip()
                 if not pat or pat.startswith("#") or pat.startswith("!"):
                     continue
@@ -597,10 +597,9 @@ def _dockerfile_bases(build):
     if text is None:
         dockerfile = Path(str(build.get("dockerfile") or "Dockerfile"))
         path = dockerfile if dockerfile.is_absolute() else Path(build.get("context", ".")) / dockerfile
-        try:
-            text = path.read_text()
-        except (OSError, UnicodeDecodeError):
-            return []
+        if not path.is_file():
+            return []  # nothing to build from
+        text = _read_text(path, "Dockerfile")
     bases = []
     for line in str(text).replace("\\\n", " ").splitlines():
         tokens = line.split()
@@ -647,6 +646,36 @@ def deployment_files(files):
     return files
 
 
+class UnreadableFile(Exception):
+    """A file of the deployment the policy cannot read or parse. Its message names the file, the
+    error class and the position only: a parser's own message quotes the offending line, and that
+    line can hold a credential (re-audit R3-D1)."""
+
+
+def _read_text(path, what="file"):
+    try:
+        return Path(path).read_text()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise UnreadableFile(f"{what} {Path(path).name} cannot be read ({type(exc).__name__})") from None
+
+
+def _load_compose_file(path):
+    """(text, mapping) of one compose file, or UnreadableFile (never the parser's message)."""
+    text = _read_text(path, "compose file")
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
+        where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+        raise UnreadableFile(f"compose file {Path(path).name} is not valid YAML ({type(exc).__name__}{where}); the "
+                             "parser's message is withheld because it quotes the line") from None
+    doc = {} if doc is None else doc
+    if not isinstance(doc, dict) or not isinstance(doc.get("services") or {}, dict) \
+            or not all(isinstance(s, dict) or s is None for s in (doc.get("services") or {}).values()):
+        raise UnreadableFile(f"compose file {Path(path).name} is not a compose mapping (top level or services)")
+    return text, doc
+
+
 def _raw_closure(files):
     """All YAML documents compose would read, following include: and extends: file references."""
     seen, docs, queue = set(), [], list(files)
@@ -655,10 +684,10 @@ def _raw_closure(files):
         if p in seen or not p.is_file():
             continue
         seen.add(p)
-        text = p.read_text()
-        doc = yaml.safe_load(text) or {}
+        text, doc = _load_compose_file(p)
         docs.append((p, text, doc))
-        for inc in doc.get("include") or []:
+        includes = doc.get("include") or []
+        for inc in includes if isinstance(includes, list) else [includes]:
             paths = inc.get("path") if isinstance(inc, dict) else inc
             for q in (paths if isinstance(paths, list) else [paths]):
                 if q:
@@ -692,7 +721,13 @@ def resolve(files, raw_docs):
         # compose's own message is not passed on: it can quote any value from the files.
         return None, (f"exit status {proc.returncode}; its message is withheld because it can quote values "
                       "from the files - run `docker compose config` on this deployment to read it")
-    return json.loads(proc.stdout), None
+    try:
+        model = json.loads(proc.stdout)
+    except ValueError as exc:  # its message would quote the output, which holds the resolved values
+        return None, f"its output could not be read ({type(exc).__name__})"
+    if not isinstance(model, dict) or not isinstance(model.get("services") or {}, dict):
+        return None, "its output is not a compose model"
+    return model, None
 
 
 # --------------------------------------------------------------------------------------------
@@ -1067,13 +1102,10 @@ def check_deployment(files):
     """Return [(rule, service, message), ...] for one deployment (list of compose files)."""
     files = deployment_files(files)
     project_dir = files[0].parent
-    raw_docs = _raw_closure(files)
     findings = []
     # Every credential value in the files (and, once resolved, in the model): bad() redacts them
     # from any message, whatever rule built it.
     credentials = set()
-    for _path, _text, doc in raw_docs:
-        credentials |= _credential_values(doc.get("services"), doc)
 
     def bad(rule, service, msg):
         assert rule in RULES, rule
@@ -1081,13 +1113,24 @@ def check_deployment(files):
         if (rule, service, msg) not in findings:
             findings.append((rule, service, msg))
 
-    _raw_checks(raw_docs, project_dir, bad)
-    model, err = resolve(files, raw_docs)
-    if model is None:
-        bad("compose-config", "-", f"docker compose config failed: {err}")
-    else:
-        credentials |= _credential_values(model.get("services"), model)
-        _resolved_checks(model, project_dir, bad)
+    # Fail closed, and never through an exception: a traceback carries the parser's or the
+    # failing call's message, which can quote a line of the files (re-audit R3-D1).
+    try:
+        raw_docs = _raw_closure(files)
+        for _path, _text, doc in raw_docs:
+            credentials |= _credential_values(doc.get("services"), doc)
+        _raw_checks(raw_docs, project_dir, bad)
+        model, err = resolve(files, raw_docs)
+        if model is None:
+            bad("compose-config", "-", f"docker compose config failed: {err}")
+        else:
+            credentials |= _credential_values(model.get("services"), model)
+            _resolved_checks(model, project_dir, bad)
+    except UnreadableFile as exc:
+        bad("compose-config", "-", str(exc))
+    except Exception as exc:  # noqa: BLE001 - any failure is a finding; its message is withheld
+        bad("compose-config", "-", f"the policy could not process this deployment ({type(exc).__name__}); the "
+            "details are withheld because they can quote values from the files")
     return findings
 
 
@@ -1101,15 +1144,25 @@ def main(argv):
     it = iter(argv)
     for a in it:
         if a == "-f":
-            current.append(next(it))
+            nxt = next(it, None)
+            if nxt is None:
+                print("usage: check_compose_policy.py FILE [FILE ...] | -f FILE -f FILE ...", file=sys.stderr)
+                return 2
+            current.append(nxt)
         else:
             groups.append([a])
     if current:
         groups.append(current)
+    if not groups:
+        print("usage: check_compose_policy.py FILE [FILE ...] | -f FILE -f FILE ...", file=sys.stderr)
+        return 2
     status = 0
     for files in groups:
         label = "+".join(files)
-        errs = check_deployment(files)
+        try:
+            errs = check_deployment(files)
+        except Exception as exc:  # noqa: BLE001 - never a traceback (see check_deployment)
+            errs = [("compose-config", "-", f"the policy could not process this deployment ({type(exc).__name__})")]
         for rule, service, msg in errs:
             print(f"FAIL {label}: [{rule}] {service}: {msg}")
         if not errs:

@@ -100,7 +100,8 @@ default, and all four differ.
   Redis TLS protocol options, the host's `.env` (`COMPOSE_FILE`), or what the repository's own
   scripts and images do. Its findings name the rule, service, key or variable and never print a
   value from the files (a value it must point at shows as `<redacted>`, a required variable as
-  `${VAR}`), so its output is safe in CI logs. CI runs it on the repository; run it on the
+  `${VAR}`), so its output is safe in CI logs; a file it cannot read or parse is a
+  `compose-config` finding naming the file, error class and line, never a traceback. CI runs it on the repository; run it on the
   deployment host too, after adding an override.
 - **Your own certificates.** Bind the three TLS volumes to host directories holding
   `ca.crt`, `postgres/server.{crt,key}` and `redis/server.{crt,key}` (server certs must name

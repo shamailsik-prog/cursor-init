@@ -356,6 +356,54 @@ class FindingsNeverQuoteValues(unittest.TestCase):
                 self.assertEqual([where for where, t in texts if value.lower() in t], [], f"quotes the planted {name} value")
         self.assertEqual([where for where, t in texts if policy.SENTINEL_RE.search(t)], [], "quotes a sentinel value")
 
+    def test_unparsable_files_fail_closed_without_echoing_them(self):
+        """Re-audit R3-D1: a file the parser rejects used to escape as a traceback whose YAML context
+        quoted the offending line, credential included. It must be a compose-config finding (file,
+        error class, line and column only), with a non-zero exit and nothing echoed."""
+        import secrets
+        v = {n: "Lv" + secrets.token_hex(10) for n in ("scalar", "scalar2", "override", "include", "toplevel", "envfile")}
+        valid = "services:\n  app:\n    build: .\n    environment:\n      SECRET_KEY: ${SECRET_KEY:?x}\n"
+        cases = {
+            # an unquoted credential that breaks the scalar ("mapping values are not allowed here")
+            "broken scalar": {"docker-compose.yml": "services:\n  postgres:\n    image: pgvector/pgvector:pg16\n"
+                              f"    environment:\n      POSTGRES_PASSWORD: {v['scalar']}: {v['scalar2']}\n"},
+            # an override file compose would load, with an unterminated quoted credential
+            "broken override": {"docker-compose.yml": valid,
+                                "docker-compose.override.yml": "services:\n  app:\n    environment:\n"
+                                f"      REDIS_APP_PASSWORD: \"{v['override']}\n"},
+            # an included file with an unclosed flow sequence
+            "broken include": {"docker-compose.yml": "include: [broken.yml]\n" + valid,
+                               "broken.yml": f"services:\n  x:\n    command: [ {v['include']}\n"},
+            # valid YAML that is not a mapping
+            "not a mapping": {"docker-compose.yml": f"- {v['toplevel']}\n"},
+            # an env_file the checker reads, not valid UTF-8
+            "undecodable env_file": {"docker-compose.yml": "services:\n  app:\n    build: .\n    env_file: app.env\n",
+                                     "app.env": None},
+        }
+        for label, files in cases.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as root:
+                for name, text in files.items():
+                    if text is None:
+                        (Path(root) / name).write_bytes(b"APP_PASSWORD=" + v["envfile"].encode() + b"\xff\xfe\n")
+                    else:
+                        (Path(root) / name).write_text(text)
+                (Path(root) / ".dockerignore").write_text(".env\n")
+                compose = str(Path(root) / "docker-compose.yml")
+                proc = subprocess.run([sys.executable, str(HERE / "check_compose_policy.py"), compose],
+                                      capture_output=True, text=True, timeout=120)
+                output = (proc.stdout + proc.stderr).lower()
+                # Every problem is listed by name; the output itself (it may hold the values) never is.
+                problems = [f"echoed the planted {n} value" for n, value in v.items() if value.lower() in output]
+                if proc.returncode == 0:
+                    problems.append("exit status 0")
+                if "traceback" in output:
+                    problems.append("crashed with a traceback")
+                if "[compose-config]" not in proc.stdout:
+                    problems.append("no compose-config finding")
+                self.assertEqual(problems, [])
+                rules = {rule for rule, _s, _m in policy.check(compose)}
+                self.assertIn("compose-config", rules)
+
     def test_no_fixture_or_attack_finding_quotes_a_sentinel(self):
         leaks = []
         for path in insecure_fixtures():
