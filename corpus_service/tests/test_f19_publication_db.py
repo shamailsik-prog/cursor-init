@@ -1,0 +1,463 @@
+"""Audit F19 end to end against real Postgres 16 + pgvector: publication into the Annex A contract.
+
+Everything runs through the application's own code (``scraper.publication``) and the shipped DDL
+(postgres/ddl/001_corpus_contract.sql + 003_corpus_publication.sql, applied by the admin as the
+postgres init script does). Publishing runs as generated login roles that reach ``corpus_writer`` by
+SET ROLE only, as PR 2b provisions the runtime role; reading runs as a ``corpus_reader`` member
+through the promoted-only ``v_*`` views.
+
+The expected values come from the spec (docs/superpowers/specs/2026-10-14-f05-f19-f20-authority-
+corpus-design.md §5) and the plan's decisions, not from the code under test. Every citation is
+synthetic (2099) and every statute is "Test Act 2099"; no real authority is named.
+
+Needs CORPUS_TEST_DATABASE_URL (see conftest.py); every test gets a fresh database.
+"""
+
+import asyncio
+import json
+import re
+
+import pytest
+
+PROVENANCE = {
+    "source_name": "f19-curated-test",
+    "source_url": "https://f19.example.invalid/judgment",
+    "raw_storage_key": None,
+    "fetched_at": "2099-01-02T03:04:05Z",
+    "content_hash": "a" * 64,
+    "extraction_method": "manual",
+    "extractor_version": "f19-test-1",
+}
+ANNEX_A_TABLES = (
+    "source_provenance", "court", "judge", "instrument", "statute", "statute_section", "statute_section_version",
+    "judgment", "citation", "treatment", "corpus_publication", "corpus_publication_item", "corpus_publication_grant",
+    "corpus_metadata",
+)
+COUNT_KEYS = ("items", "promoted", "quarantined", "updated", "unchanged", "rejected")
+
+
+# ---------------------------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------------------------
+def run(coro):
+    return asyncio.run(coro)
+
+
+def sqlstate(exc):
+    for candidate in (getattr(exc, "orig", None), getattr(getattr(exc, "orig", None), "__cause__", None), exc):
+        code = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
+        if code:
+            return code
+    return None
+
+
+def counts(**nonzero):
+    return {key: nonzero.get(key, 0) for key in COUNT_KEYS}
+
+
+def parts(reporter, page, court=None, series=None, note=None):
+    return {"parts": {"reporter": reporter, "year": "2099", "page": str(page), "court": court, "series": series, "note": note}}
+
+
+def judgment_item(item_key="j1", *, citations=None, bench="D.B.", trust=("trusted", 0.9), provenance=None, **fields):
+    item = {
+        "kind": "judgment",
+        "item_key": item_key,
+        "trust": {"level": trust[0], "confidence": trust[1]},
+        "provenance": dict(PROVENANCE if provenance is None else provenance),
+        "citations": citations if citations is not None else [parts("PLD", 12, court="Karachi")],
+        "case_title": f"F19 {item_key} v. Test 2099",
+        "bench_type": bench,
+        "full_text": f"synthetic F19 fixture text {item_key}",
+    }
+    item.update(fields)
+    return item
+
+
+def batch_doc(batch_key, *items, source_kind="curated"):
+    return {"format": "corpus-publication-batch/1", "batch_key": batch_key, "source_kind": source_kind, "items": list(items)}
+
+
+def parse(doc):
+    from scraper.publication.batch import parse_batch_json
+
+    return parse_batch_json(json.dumps(doc).encode("utf-8"))
+
+
+async def _publish(batch, actor):
+    from scraper import database
+    from scraper.publication.annex_a import publish_batch
+
+    async with database.engine.begin() as conn:
+        return await publish_batch(conn, batch, actor)
+
+
+def publish(doc, actor="f19-test-actor"):
+    return run(_publish(parse(doc), actor))
+
+
+async def _publish_then_whoami(batch, actor):
+    """publish_batch, then the role the caller's transaction is left with (D14: restored)."""
+    from sqlalchemy import text
+
+    from scraper import database
+    from scraper.publication.annex_a import publish_batch
+
+    async with database.engine.begin() as conn:
+        result = await publish_batch(conn, batch, actor)
+        who = (await conn.execute(text("SELECT current_user, session_user, current_setting('role')"))).one()
+        return result, tuple(who)
+
+
+async def _fetch_as(db, url, sql, params):
+    from sqlalchemy import text
+
+    engine = db.engine_for(url)
+    try:
+        async with engine.connect() as conn:
+            return (await conn.execute(text(sql), params)).all()
+    finally:
+        await engine.dispose()
+
+
+def admin_fetch(db, sql, **params):
+    return run(_fetch_as(db, db.url, sql, params))
+
+
+def fetch_as(db, user, password, sql, **params):
+    return run(_fetch_as(db, db.url_as(user, password), sql, params))
+
+
+def refused_as(db, user, password, sql, **params):
+    try:
+        fetch_as(db, user, password, sql, **params)
+    except Exception as exc:  # noqa: BLE001 - classified by SQLSTATE
+        return sqlstate(exc)
+    return "SUCCEEDED"
+
+
+def snapshot(db):
+    return {table: admin_fetch(db, f"SELECT * FROM {table} ORDER BY 1") for table in ANNEX_A_TABLES}
+
+
+def prepare(db):
+    """Annex A as postgres init applies it (superuser), then the app's own migrate step."""
+    db.apply_annex_a()
+    proc = db.migrate()
+    assert proc.returncode == 0, f"scraper.migrate failed:\n{proc.stdout}\n{proc.stderr[-4000:]}"
+
+
+def literals(condef):
+    return tuple(re.findall(r"'([^']*)'", condef))
+
+
+# ---------------------------------------------------------------------------------------------
+# the vocabulary and the inventory match the DDL
+# ---------------------------------------------------------------------------------------------
+def test_f19_vocabulary_matches_the_ddl_checks(corpus_db):
+    from scraper.publication import vocabulary as v
+
+    corpus_db.apply_annex_a()
+
+    def check_on(table, column, name=None):
+        rows = admin_fetch(
+            corpus_db,
+            "SELECT c.conname, pg_get_constraintdef(c.oid) FROM pg_constraint c "
+            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) "
+            "WHERE c.conrelid = CAST(:t AS regclass) AND c.contype = 'c' AND a.attname = :col",
+            t=f"public.{table}", col=column,
+        )
+        if name is not None:
+            rows = [r for r in rows if r[0] == name]
+        assert len(rows) == 1, (table, column, rows)
+        return literals(rows[0][1])
+
+    assert check_on("judgment", "bench_type") == v.BENCH_TYPES
+    assert check_on("treatment", "treatment") == v.TREATMENT_KINDS
+    assert check_on("treatment", "treating_bench_type", "treatment_treating_bench_type_check") == v.BENCH_TYPES
+    assert check_on("statute", "jurisdiction", "statute_jurisdiction_annex_a_check") == v.JURISDICTIONS
+    assert check_on("source_provenance", "extraction_method") == v.EXTRACTION_METHODS
+
+
+def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
+    corpus_db.apply_annex_a()  # a fresh database with only 001 + 003 (no migrate)
+    relations = {
+        r[0] for r in admin_fetch(
+            corpus_db,
+            "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v')",
+        )
+    }
+    inventory = [r[0] for r in admin_fetch(corpus_db, "SELECT CAST(r AS text) FROM corpus_contract_relations() AS r")]
+    assert len(inventory) == 29 and len(set(inventory)) == 29
+    assert relations == set(inventory)
+
+
+# ---------------------------------------------------------------------------------------------
+# judgments, citations, provenance and the audit
+# ---------------------------------------------------------------------------------------------
+def test_f19_publish_batch_judgments_citations_and_audit(corpus_db):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    doc = batch_doc("curated/f19-t5-audit", judgment_item("j1", citations=[parts("PLD", 12, court="Karachi")], bench="D.B."))
+    with corpus_db.app_engine_as(writer, writer_pw):
+        result, who = run(_publish_then_whoami(parse(doc), "f19-test-actor"))
+    # The caller's transaction keeps its own role afterwards (SET LOCAL ROLE restored, D14).
+    assert who == (writer, writer, "none")
+
+    assert result.already is False and result.batch_key == "curated/f19-t5-audit"
+    assert re.fullmatch(r"[0-9a-f]{64}", result.input_sha256)
+    assert result.counts == counts(items=1, promoted=2)
+    primary = result.primary("j1")
+    assert (primary.entity_type, primary.decision, primary.review_status) == ("judgment", "promoted", "promoted")
+
+    judgments = admin_fetch(corpus_db, "SELECT id, review_status, bench_type, publication_id, source_id, classification FROM judgment")
+    assert len(judgments) == 1
+    jid, status, bench, pub_id, source_id, classification = judgments[0]
+    assert (jid, status, bench, pub_id) == (primary.entity_id, "promoted", "division", result.publication_id)
+    assert classification == "public"  # D13: never set by the ETL
+
+    citations = admin_fetch(corpus_db, "SELECT citation_text, judgment_id, review_status, reporter, year, volume_or_court, page, source_id, publication_id FROM citation")
+    assert citations == [("PLD 2099 Sindh 12", jid, "promoted", "PLD", 2099, "Sindh", 12, source_id, result.publication_id)]
+
+    provenance = admin_fetch(
+        corpus_db,
+        "SELECT id, source_name, source_url, raw_storage_key, fetched_at, content_hash, extraction_method, "
+        "extractor_version, publication_id FROM source_provenance",
+    )
+    assert len(provenance) == 1
+    assert provenance[0][0] == source_id
+    assert provenance[0][1:4] == ("f19-curated-test", "https://f19.example.invalid/judgment", None)
+    assert provenance[0][4].isoformat() == "2099-01-02T03:04:05+00:00"
+    assert provenance[0][5:] == ("a" * 64, "manual", "f19-test-1", result.publication_id)
+
+    pubs = admin_fetch(
+        corpus_db,
+        "SELECT id, seq, source_kind, actor_id, publisher_session_user, finished_at, item_count, promoted_count, "
+        "quarantined_count, updated_count, unchanged_count, rejected_count FROM corpus_publication",
+    )
+    assert len(pubs) == 1
+    pid, seq, kind, actor, publisher, finished, *stored_counts = pubs[0]
+    assert (pid, seq, kind, actor, publisher) == (result.publication_id, result.seq, "curated", "f19-test-actor", writer)
+    assert finished is not None and stored_counts == [1, 2, 0, 0, 0, 0]
+    items = admin_fetch(
+        corpus_db,
+        "SELECT item_key, entity_type, entity_id, decision, reason, prev_sha256 FROM corpus_publication_item ORDER BY id",
+    )
+    assert [(i[0], i[1], i[3], i[4], i[5]) for i in items] == [
+        ("j1", "judgment", "promoted", None, None), ("j1", "citation", "promoted", None, None)]
+    assert items[0][2] == jid
+    meta = dict(admin_fetch(corpus_db, "SELECT key, value FROM corpus_metadata"))
+    assert meta["publication_contract"] == "1" and meta["publication_seq"] == str(seq)
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z", meta["last_refresh"])
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM corpus_publication_grant") == [(0,)]
+
+    reader, reader_pw = corpus_db.reader_role()
+    seen = fetch_as(
+        corpus_db, reader, reader_pw,
+        "SELECT j.id, j.bench_type, c.citation_text FROM v_judgment j JOIN v_citation c ON c.judgment_id = j.id",
+    )
+    assert seen == [(jid, "division", "PLD 2099 Sindh 12")]
+    for table in ("judgment", "citation", "corpus_publication", "corpus_publication_item", "corpus_publication_grant"):
+        assert refused_as(corpus_db, reader, reader_pw, f"SELECT 1 FROM {table}") == "42501", table
+
+
+def test_f19_publish_batch_is_idempotent_and_refuses_a_reused_key(corpus_db):
+    from scraper.publication.annex_a import PublicationError
+
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    doc = batch_doc(
+        "curated/f19-t5-idem",
+        judgment_item("j1", citations=[parts("PLD", 1, court="SC"), {"text": "2099 SCMR 1"}]),
+        judgment_item("j2", citations=[{"text": "PLD 2099 Atlantis 1"}]),
+    )
+    with corpus_db.app_engine_as(writer, writer_pw):
+        first = publish(doc)
+        before = snapshot(corpus_db)
+        again = publish(doc)
+        assert again.already is True
+        assert (again.publication_id, again.seq, again.counts) == (first.publication_id, first.seq, first.counts)
+        assert [(o.item_key, o.entity_type, o.entity_id, o.decision, o.reason, o.review_status) for o in again.outcomes] == [
+            (o.item_key, o.entity_type, o.entity_id, o.decision, o.reason, o.review_status) for o in first.outcomes]
+        assert snapshot(corpus_db) == before  # nothing written, last_refresh untouched (D30)
+
+        changed = json.loads(json.dumps(doc))
+        changed["items"][0]["full_text"] = "changed synthetic F19 text"
+        with pytest.raises(PublicationError) as refused:
+            publish(changed)
+        assert refused.value.code == "batch_key_reused"
+        assert snapshot(corpus_db) == before
+
+
+def test_f19_citation_conflict_is_rejected(corpus_db):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    with corpus_db.app_engine_as(writer, writer_pw):
+        published = publish(batch_doc(
+            "curated/f19-t5-conflict-1",
+            judgment_item("j1", citations=[{"text": "2099 SCMR 1"}]),
+            judgment_item("j2", citations=[{"text": "2099 SCMR 2"}]),
+        ))
+        before = admin_fetch(corpus_db, "SELECT * FROM judgment ORDER BY id"), admin_fetch(corpus_db, "SELECT * FROM citation ORDER BY id")
+        result = publish(batch_doc(
+            "curated/f19-t5-conflict-2",
+            judgment_item("both", citations=[{"text": "2099 SCMR 1"}, {"text": "2099 SCMR 2"}], full_text="merged?"),
+        ))
+    assert published.counts == counts(items=2, promoted=4)
+    outcome = result.primary("both")
+    assert (outcome.decision, outcome.reason, outcome.entity_id) == ("rejected", "citation_conflict", None)
+    assert result.counts == counts(items=1, rejected=1)
+    after = admin_fetch(corpus_db, "SELECT * FROM judgment ORDER BY id"), admin_fetch(corpus_db, "SELECT * FROM citation ORDER BY id")
+    assert after == before
+
+
+def test_f19_republishing_a_changed_judgment_records_the_previous_hash(corpus_db):
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    item = judgment_item("j", citations=[{"text": "2099 SCMR 7"}])
+    with corpus_db.app_engine_as(writer, writer_pw):
+        k1 = publish(batch_doc("curated/f19-t5-k1", item))
+        changed = {**item, "full_text": "amended synthetic F19 text",
+                   "provenance": {**PROVENANCE, "content_hash": "b" * 64, "fetched_at": "2099-02-02T00:00:00Z"}}
+        k2 = publish(batch_doc("curated/f19-t5-k2", changed))
+        state_k2 = admin_fetch(corpus_db, "SELECT id, source_id, publication_id, updated_at, review_status FROM judgment")
+        # identical content (a re-fetch: only fetched_at differs) -> unchanged
+        k3 = publish(batch_doc("curated/f19-t5-k3", {**changed, "provenance": {**changed["provenance"], "fetched_at": "2099-03-03T00:00:00Z"}}))
+        state_k3 = admin_fetch(corpus_db, "SELECT id, source_id, publication_id, updated_at, review_status FROM judgment")
+        k4 = publish(batch_doc("curated/f19-t5-k4", {**changed, "trust": {"level": "review", "confidence": 0.9}}))
+        state_k4 = admin_fetch(corpus_db, "SELECT id, source_id, publication_id, updated_at, review_status FROM judgment")
+
+    j1, j2, j3, j4 = (r.primary("j") for r in (k1, k2, k3, k4))
+    assert j1.decision == "promoted"
+    assert (j2.decision, j2.prev_sha256, j2.entity_id) == ("updated", j1.content_sha256, j1.entity_id)
+    assert j2.content_sha256 != j1.content_sha256
+    assert len(state_k2) == 1
+    jid, source_k2, pub_k2, updated_k2, status_k2 = state_k2[0]
+    assert (pub_k2, status_k2) == (k2.publication_id, "promoted")
+    provenance = admin_fetch(corpus_db, "SELECT id, content_hash, publication_id FROM source_provenance ORDER BY created_at, id")
+    assert len(provenance) == 2  # the old provenance row remains
+    assert {p[2] for p in provenance} == {k1.publication_id, k2.publication_id}
+    assert source_k2 == next(p[0] for p in provenance if p[2] == k2.publication_id)
+
+    assert (j3.decision, j3.prev_sha256, j3.content_sha256) == ("unchanged", j2.content_sha256, j2.content_sha256)
+    assert state_k3 == state_k2  # no write: same source, publication and updated_at
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM source_provenance") == [(2,)]
+
+    assert (j4.decision, j4.reason, j4.entity_id, j4.review_status) == ("rejected", "promoted_row_protected", jid, "promoted")
+    assert state_k4 == state_k2
+    assert k4.counts == counts(items=1, rejected=1)
+
+
+def _install_fault_trigger(db):
+    db.admin(
+        """CREATE OR REPLACE FUNCTION f19_test_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN
+             IF NEW.case_title = 'F19 fault 2099' THEN
+               RAISE EXCEPTION 'f19 marker %', NEW.case_title USING ERRCODE = '23514';
+             END IF;
+             RETURN NEW;
+           END $$""",
+        "CREATE TRIGGER f19_test_fault BEFORE INSERT OR UPDATE ON judgment FOR EACH ROW EXECUTE FUNCTION f19_test_fault()",
+    )
+
+
+def _remove_fault_trigger(db):
+    db.admin("DROP TRIGGER f19_test_fault ON judgment", "DROP FUNCTION f19_test_fault()")
+
+
+def test_f19_failure_mid_batch_rolls_back_the_whole_publication(corpus_db):
+    from sqlalchemy.exc import IntegrityError
+
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    _install_fault_trigger(corpus_db)
+    doc = batch_doc(
+        "curated/f19-t5-fault",
+        judgment_item("i1", citations=[{"text": "2099 SCMR 31"}]),
+        judgment_item("i2", citations=[{"text": "2099 SCMR 32"}]),
+        judgment_item("i3", citations=[{"text": "2099 SCMR 33"}], case_title="F19 fault 2099"),
+        judgment_item("i4", citations=[{"text": "2099 SCMR 34"}]),
+    )
+    empty = snapshot(corpus_db)
+    with corpus_db.app_engine_as(writer, writer_pw):
+        with pytest.raises(IntegrityError) as failed:
+            publish(doc)
+        assert sqlstate(failed.value) == "23514"
+        assert snapshot(corpus_db) == empty  # no publication row, no items, no contract rows, no grant
+        _remove_fault_trigger(corpus_db)
+        result = publish(doc)  # the batch_key was not consumed
+    assert result.already is False and result.counts == counts(items=4, promoted=8)
+
+
+def test_f19_publication_refuses_superuser_and_non_writer_sessions(corpus_db):
+    from scraper import database
+    from scraper.publication.annex_a import PublicationError, publish_batch
+
+    prepare(corpus_db)
+    batch = parse(batch_doc("curated/f19-t5-refuse", judgment_item("j1")))
+
+    # The fixture's own engine is the admin (a superuser): refused before any write (D2).
+    with pytest.raises(PublicationError) as superuser:
+        run(_publish(batch, "f19-test-actor"))
+    assert superuser.value.code == "superuser_session"
+
+    nobody, nobody_pw = corpus_db.create_role("f19_none")
+    with corpus_db.app_engine_as(nobody, nobody_pw):
+        with pytest.raises(PublicationError) as not_writer:
+            run(_publish(batch, "f19-test-actor"))
+    assert not_writer.value.code == "not_corpus_writer"
+
+    writer, writer_pw = corpus_db.writer_role()
+    with corpus_db.app_engine_as(writer, writer_pw):
+        async def _outside():
+            async with database.engine.connect() as conn:
+                return await publish_batch(conn, batch, "f19-test-actor")
+
+        with pytest.raises(PublicationError) as outside:
+            run(_outside())
+    assert outside.value.code == "transaction_required"
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM corpus_publication") == [(0,)]
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM judgment") == [(0,)]
+
+
+def test_f19_writer_cannot_bypass_the_publication(corpus_db):
+    from sqlalchemy import text
+
+    from scraper import database
+
+    prepare(corpus_db)
+    app, app_pw = corpus_db.runtime_role()
+
+    async def attempt(*statements, set_role=True):
+        try:
+            async with database.engine.begin() as conn:
+                if set_role:
+                    await conn.execute(text("SET LOCAL ROLE corpus_writer"))
+                for sql in statements:
+                    await conn.execute(text(sql))
+        except Exception as exc:  # noqa: BLE001 - classified by SQLSTATE
+            return sqlstate(exc)
+        return "SUCCEEDED"
+
+    provenance = (
+        "INSERT INTO source_provenance (id, source_name, source_url, fetched_at, content_hash, extraction_method) "
+        "VALUES ('00000000-0000-4000-8000-0000000f1901', 'f19', 'https://f19.example.invalid/x', now(), 'h', 'manual')"
+    )
+    promoted = (
+        "INSERT INTO judgment (case_title, bench_type, source_id, review_status) "
+        "VALUES ('F19 bypass 2099', 'division', '00000000-0000-4000-8000-0000000f1901', 'promoted')"
+    )
+    with corpus_db.app_engine_as(app, app_pw):
+        # Without SET ROLE the runtime role holds no Annex A privilege at all (INHERIT FALSE).
+        assert run(attempt("SELECT 1 FROM judgment", set_role=False)) == "42501"
+        assert run(attempt(provenance, set_role=False)) == "42501"
+        # As corpus_writer, outside a publication, promotion is refused by the guard.
+        assert run(attempt(provenance, promoted)) == "SKP02"
+        assert run(attempt("INSERT INTO corpus_publication_grant (xid, publication_id) "
+                           "VALUES (txid_current(), gen_random_uuid())")) == "42501"
+        assert run(attempt("UPDATE corpus_publication SET actor_id = 'x'")) == "42501"
+        assert run(attempt("DELETE FROM judgment")) == "42501"
+        # The runtime role still has its own tables.
+        assert run(attempt("SELECT count(*) FROM scraper_staging", set_role=False)) == "SUCCEEDED"
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM judgment") == [(0,)]
