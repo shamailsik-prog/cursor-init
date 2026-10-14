@@ -17,8 +17,9 @@ import { EMULATORS, mintIdToken, uniq } from "./emu"
  * matter's partner gives an explicit override with a reason, and a law-dependent document type also needs the type's
  * review checklist with evidence (at least 20 characters) for every item before it can be approved. Law-dependent
  * means filed in a forum, or a NON_FORUM type whose own checklist names a legal-verification item (a suit for
- * possession, a legal opinion: re-audit ruling A). A temporal check counts only if the draft pleads its text
- * (ruling C), so an unrelated true check cannot turn uncited prose into OK.
+ * possession, a legal opinion: re-audit ruling A), or a NON_FORUM type in the code-side ruling map (a will, a deed of
+ * immovable property: LAW_DEPENDENT_BY_RULING, f06-followup.e2e.emu.test.ts). A temporal check counts only if the
+ * draft pleads its text (ruling C), so an unrelated true check cannot turn uncited prose into OK.
  *
  * Most cases run on the production authority store (EMPTY_AUTHORITY_STORE): F06 must hold while the store is empty
  * (F05 is a separate finding). The VERIFIED-citation and temporal-check cases seed an in-memory store through the test
@@ -47,12 +48,16 @@ const listDraftsApi = viaApi<Page<Record<string, unknown>>>("listDrafts")
 
 /** A forum-filed type (its courtIds name High Courts, not NON_FORUM): law-dependent. */
 const FORUM_TYPE = "constitutional_petition_199"
-/** A NON_FORUM type (an instrument, not filed in a court). */
-const NON_FORUM_TYPE = "sale_deed"
+/**
+ * A NON_FORUM type that is not law-dependent (an instrument on the general law of contract, not filed in a court). A
+ * sale deed is law-dependent by ruling since the F06 follow-up (registration is compulsory by statute), so it is not
+ * used here.
+ */
+const NON_FORUM_TYPE = "service_agreement"
 /** The audit's failure scenario: a legal assertion about a thirty-day statutory deadline, with no citation. */
 const DEADLINE_PROSE =
   "The petitioner filed the appeal within thirty days of the impugned order, the period the statute allows, so the appeal is within time.\nThe respondents have failed to act."
-const DEED_PROSE = "The vendor sells the property to the vendee for the consideration stated in the schedule, free of encumbrances."
+const AGREEMENT_PROSE = "The service provider shall supply the services described in the schedule for the fee stated there, monthly in arrears."
 /** Cites one judgment, which step 6 seeds as known and never overruled. */
 const CITED_PROSE = "The petitioner relies on 2099 SCMR 7 for the rule that the period runs from knowledge of the order."
 const REASON = "The partner has read the petition; the deadline assertion was checked by hand against the file."
@@ -212,7 +217,7 @@ describe.skipIf(!EMULATORS)("F06: an empty legal check is NOT_ASSESSED, never OK
 
   it("a NON_FORUM draft of uncited prose gates NOT_ASSESSED and approves after a partner override without a checklist", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, NON_FORUM_TYPE, DEED_PROSE)
+    const d = await create(f, f.A, NON_FORUM_TYPE, AGREEMENT_PROSE)
     const g = await gate(f, f.A, d.draftId)
     expect(g.status).toBe("NOT_ASSESSED")
     expect(g.scope).toEqual(NOT_ASSESSED_SCOPE)
@@ -311,7 +316,7 @@ describe.skipIf(!EMULATORS)("F06: an empty legal check is NOT_ASSESSED, never OK
 
     // A NON_FORUM draft of uncited prose with a true check on a section it never pleads: refused before any
     // evaluation, and nothing is stored (no result, no summary, no draft.gated event).
-    const d = await create(f, f.A, NON_FORUM_TYPE, DEED_PROSE)
+    const d = await create(f, f.A, NON_FORUM_TYPE, AGREEMENT_PROSE)
     expectErr(await apiErrorOf(gate(f, f.A, d.draftId, [check])), 422, "temporal_check_not_in_draft")
     expect(await resultDoc(d.draftId)).toBeUndefined()
     expect(await draftDoc(d.draftId)).toMatchObject({ gateResult: null })
@@ -322,7 +327,7 @@ describe.skipIf(!EMULATORS)("F06: an empty legal check is NOT_ASSESSED, never OK
     expectErr(await apiErrorOf(approve(f, f.P, d.draftId)), 409, "gate_blocked")
 
     // A draft that pleads the text (here across a line break, with doubled spaces) is checked, and the match is OK.
-    const pleads = await create(f, f.A, NON_FORUM_TYPE, `${DEED_PROSE}\nThe deed relies on Test Act s.1 as amended in 2018:\nthe limit is  sixty days.`)
+    const pleads = await create(f, f.A, NON_FORUM_TYPE, `${AGREEMENT_PROSE}\nThe agreement relies on Test Act s.1 as amended in 2018:\nthe limit is  sixty days.`)
     const ok = await gate(f, f.A, pleads.draftId, [check])
     expect(ok.status).toBe("OK")
     expect(ok.scope).toEqual({ citations: 0, temporalChecks: 1, assessed: true })
@@ -330,7 +335,7 @@ describe.skipIf(!EMULATORS)("F06: an empty legal check is NOT_ASSESSED, never OK
 
   it("a stored OK result with no findings, written before F06, reads as NOT_ASSESSED and does not approve without an override", async () => {
     const f = await newFirm()
-    const d = await create(f, f.A, NON_FORUM_TYPE, DEED_PROSE)
+    const d = await create(f, f.A, NON_FORUM_TYPE, AGREEMENT_PROSE)
     await gate(f, f.A, d.draftId)
     // A result as the gate stored it before F06: status OK, no findings, no scope; the draft's summary says OK too.
     const legacyId = "11111111-1111-4111-8111-111111111111"

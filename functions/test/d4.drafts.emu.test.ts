@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
-import { getDocumentType, listDocumentTypes } from "../src/d4/doctypes"
+import { getDocumentType, listDocumentTypes, reviewChecklistOf } from "../src/d4/doctypes"
 import { ApiError, apiErrorOf, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
@@ -1430,7 +1430,12 @@ describe.skipIf(!EMULATORS)("listDocumentTypes and getTypeProfile (P4-5, P4-10, 
   it("getTypeProfile returns the whole seed row", async () => {
     const f = await newFirm()
     const profile = await send(profileApi, f, f.C, { typeId: TYPE })
-    expect(profile).toEqual(JSON.parse(JSON.stringify(getDocumentType(TYPE))))
+    // The whole seed row, unchanged, plus what an approval needs (F06): the review checklist and whether it is required.
+    expect(profile).toEqual({
+      ...JSON.parse(JSON.stringify(getDocumentType(TYPE))),
+      reviewChecklistItems: reviewChecklistOf(getDocumentType(TYPE)!),
+      lawDependent: true,
+    })
     expect(profile).toMatchObject({ id: TYPE, name: "Constitutional Petition (Art. 199)", templateId: "template_cp_199_v1", status: "VERIFIED" })
     expect(Array.isArray(profile.checklist)).toBe(true)
     expect(Array.isArray(profile.requiredFields)).toBe(true)
