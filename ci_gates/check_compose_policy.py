@@ -65,7 +65,9 @@ RULES = {
     "app-credential-scope": "an app container can read a store credential it does not use (anywhere in the service "
                             "outside its own two URLs: environment, command, healthcheck, build args, a store's "
                             "secret or config), shares storage with a network-isolated helper that holds store "
-                            "credentials or files, or holds the migration role outside the one-shot migrate service",
+                            "credentials or files directly or through other helpers, a helper holding store "
+                            "credentials mounts the CA volume apps read, or an app holds the migration role "
+                            "outside the one-shot migrate service",
     "app-store-volume": "an app service mounts a data store's volume (only the CA volume, read-only, is shared)",
     "app-host-access": "an app service publishes a host port (other than the api's loopback bind) or gets host "
                        "access: privileged, cap_add, devices, a host or another container's namespace, a bind "
@@ -1096,10 +1098,10 @@ def _resolved_checks(model, project_dir, bad):
                               volume_name, bad)
 
 
-def _holds_store_material(svc, model, store_vars, store_mounts, store_volume_names, volume_name):
-    """Whether a service can read a store credential (a store's secret or config, by name or the
-    same file; one sourced from a store variable; a store sentinel anywhere in its definition; a
-    store credential key in its environment) or a store's files (a volume or bind a store mounts)."""
+def _holds_store_secret(svc, model, store_vars, store_mounts):
+    """Whether a service can read a store credential: a store's secret or config (by name or the
+    same file), one sourced from a store variable, a store sentinel anywhere in its definition, or
+    a store credential key in its environment."""
     for kind_key in ("secrets", "configs"):
         defs = model.get(kind_key) or {}
         for s in svc.get(kind_key) or []:
@@ -1110,8 +1112,11 @@ def _holds_store_material(svc, model, store_vars, store_mounts, store_volume_nam
                 return True
     if _sentinel_vars(json.dumps(svc, sort_keys=True)) & store_vars:
         return True
-    if any(STORE_CRED_KEY.match(k) for k in _env_of(svc)):
-        return True
+    return any(STORE_CRED_KEY.match(k) for k in _env_of(svc))
+
+
+def _holds_store_files(svc, store_mounts, store_volume_names, volume_name):
+    """Whether a service mounts a store's files: a volume or a bind a store mounts (certs does)."""
     for v in svc.get("volumes") or []:
         if v.get("type") == "volume" and v.get("source") and volume_name(v["source"]) in store_volume_names:
             return True
@@ -1131,40 +1136,99 @@ def _volumes_from_services(svc):
     return out
 
 
+def _mount_keys(svc, volume_name):
+    """A service's shared storage: ("volume", docker volume name) and ("bind", host path). A tmpfs
+    or an anonymous volume is private to the container and is not shared storage."""
+    keys = set()
+    for v in svc.get("volumes") or []:
+        if v.get("type") == "volume" and v.get("source"):
+            keys.add(("volume", volume_name(v["source"])))
+        elif v.get("type") == "bind" and v.get("source"):
+            keys.add(("bind", str(v["source"])))
+    return keys
+
+
+def _same_storage(a, b):
+    """Two mount keys reach the same files: one volume, or binds where either path contains the other."""
+    if a[0] != b[0]:
+        return False
+    return a[1] == b[1] if a[0] == "volume" else _inside(a[1], b[1]) or _inside(b[1], a[1])
+
+
 def _helper_checks(services, kinds, model, store_vars, store_mounts, store_volume_names, volume_name, bad):
-    """Network-isolated one-shot helpers (review HIGH on dc265e3): network_mode: none must not let
-    a helper that holds a store credential or a store's files hand them to an app through shared
-    storage. No app may share a named volume or a bind (either way round) with such a helper, nor
-    take its mounts with volumes_from, and such a helper may not take an app's mounts with
-    volumes_from. A store's own volumes stay under app-store-volume, which lets an app have only the
-    CA volume, read-only (certs writes it; the app reads the public certificate). A tmpfs is private
-    to its container and shares nothing."""
+    """Network-isolated one-shot helpers (review HIGH on dc265e3; re-audit R4-D1, R4-D2).
+
+    network_mode: none must not let a helper hand a store credential, or a store's files, to an app
+    through shared storage. A helper is tainted when it holds a store credential (secret taint) or
+    a store's files (certs), and taint flows along shared storage between helpers to a fixed point:
+    a helper that mounts storage a tainted helper mounts (or takes it with volumes_from) is tainted
+    the same way, and so is all of its own storage (R4-D1: a chain of hops launders as well as one).
+    - No app may mount storage of a tainted helper or take a tainted helper's mounts with
+      volumes_from, and a tainted helper may not take others' mounts with volumes_from. A store's own
+      volumes and binds stay under app-store-volume, which lets an app have only the CA volume,
+      read-only.
+    - A secret-tainted helper may not mount the CA volume at all, under any name or through its
+      host directory (R4-D2): apps read that volume, so only a helper that holds no store credential
+      (the shipped certs, which writes it) may touch it.
+    A tmpfs is private to its container and shares nothing."""
     apps = [n for n in services if kinds[n] == "app"]
-    for helper, hsvc in services.items():
-        if kinds[helper] != "isolated" or not _holds_store_material(hsvc, model, store_vars, store_mounts,
-                                                                     store_volume_names, volume_name):
-            continue
-        h_volumes = {volume_name(v["source"]) for v in hsvc.get("volumes") or []
-                     if v.get("type") == "volume" and v.get("source")}
-        h_binds = [v["source"] for v in hsvc.get("volumes") or [] if v.get("type") == "bind" and v.get("source")]
-        if hsvc.get("volumes_from"):
-            bad("app-credential-scope", helper, "holds store credentials or files and takes other containers' "
+    helpers = [n for n in services if kinds[n] == "isolated"]
+    keys = {h: _mount_keys(services[h], volume_name) for h in helpers}
+    for h in helpers:  # volumes_from: the helper shares the other container's storage
+        for other in _volumes_from_services(services[h]):
+            if other in services:
+                keys[h] |= _mount_keys(services[other], volume_name)
+    secret = {h for h in helpers if _holds_store_secret(services[h], model, store_vars, store_mounts)}
+    tainted = secret | {h for h in helpers
+                        if _holds_store_files(services[h], store_mounts, store_volume_names, volume_name)}
+    changed = True
+    while changed:  # fixed point over helper-to-helper shared storage
+        changed = False
+        secret_storage = {k for h in secret for k in keys[h]}
+        tainted_storage = {k for h in tainted for k in keys[h]}
+        for h in helpers:
+            if h not in secret and any(_same_storage(k, t) for k in keys[h] for t in secret_storage):
+                secret.add(h)
+                tainted.add(h)
+                changed = True
+            elif h not in tainted and any(_same_storage(k, t) for k in keys[h] for t in tainted_storage):
+                tainted.add(h)
+                changed = True
+
+    vdefs = model.get("volumes") or {}
+    ca_storage = {("volume", volume_name(k)) for k in APP_SHARED_STORE_VOLUMES}
+    ca_storage |= {("bind", str(((vdefs.get(k) or {}).get("driver_opts") or {}).get("device")))
+                   for k in APP_SHARED_STORE_VOLUMES if ((vdefs.get(k) or {}).get("driver_opts") or {}).get("device")}
+    for h in sorted(secret):
+        if any(_same_storage(k, c) for k in keys[h] for c in ca_storage):
+            bad("app-credential-scope", h, "holds store credentials (directly or through storage shared with "
+                "other one-shots) and mounts the CA volume that apps read; only a one-shot that holds no store "
+                "credential (certs) may touch it")
+    for h in sorted(tainted):
+        if services[h].get("volumes_from"):
+            bad("app-credential-scope", h, "holds store credentials or files and takes other containers' "
                 "mounts (volumes_from), which it could write them into")
-        for app in apps:
-            asvc = services[app]
-            if helper in _volumes_from_services(asvc):
-                bad("app-credential-scope", app, f"takes the mounts of {helper}, which holds store credentials "
-                    "or files (volumes_from)")
-            for v in asvc.get("volumes") or []:
-                vtype, src = v.get("type"), v.get("source")
-                # A store's own volumes and binds are app-store-volume's (only tls-ca:ro passes there).
-                if vtype == "volume" and src and volume_name(src) in h_volumes - store_volume_names:
-                    bad("app-credential-scope", app, f"volume {src} is shared with {helper}, which holds store "
-                        "credentials or files")
-                elif vtype == "bind" and src and any(_inside(src, b) or _inside(b, src) for b in h_binds) \
-                        and not any(_inside(src, b) or _inside(b, src) for b in store_mounts["bind"]):
-                    bad("app-credential-scope", app, f"a bind mount is shared with {helper}, which holds store "
-                        "credentials or files")
+
+    for app in apps:
+        asvc = services[app]
+        for h in sorted(tainted):
+            if h in _volumes_from_services(asvc):
+                bad("app-credential-scope", app, f"takes the mounts of {h}, which holds store credentials or "
+                    "files (volumes_from)")
+        for v in asvc.get("volumes") or []:
+            vtype, src = v.get("type"), v.get("source")
+            if not src or vtype not in ("volume", "bind"):
+                continue
+            key = ("volume", volume_name(src)) if vtype == "volume" else ("bind", str(src))
+            # A store's own volumes and binds are app-store-volume's (only tls-ca:ro passes there).
+            if (vtype == "volume" and key[1] in store_volume_names) or \
+                    (vtype == "bind" and any(_inside(src, b) or _inside(b, src) for b in store_mounts["bind"])):
+                continue
+            holders = sorted(h for h in tainted if any(_same_storage(key, k) for k in keys[h]))
+            if holders:
+                what = f"volume {src}" if vtype == "volume" else "a bind mount"
+                bad("app-credential-scope", app, f"{what} is shared with {holders[0]}, which holds store "
+                    "credentials or files (directly or through storage shared with other one-shots)")
 
 
 def _app_scope_checks(name, svc, env, model, project_dir, store_vars, store_mounts, store_volume_names,

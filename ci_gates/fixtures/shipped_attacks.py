@@ -9,7 +9,8 @@ Cases A01-A32 are the round-2 independent auditor's attack compose mutations, co
 same fixes must also catch. Review findings on dc265e3: D01-D11 replace the build ignore file
 (Docker applies the last matching .dockerignore line), C01-C10 add or reach a network-isolated
 helper that holds a store credential or a store's files, H01-H02 change the hba method.
-Data only: nothing here runs on import.
+Round-4 re-audit of fd5151b: C11* launder through a chain of helpers (R4-D1), C12* let a
+secret-holding helper touch the CA volume apps read (R4-D2). Data only: nothing runs on import.
 
 Edit forms, applied in order to docker-compose.yml:
   ("replace", OLD, NEW)              first occurrence of OLD (it must exist)
@@ -38,6 +39,17 @@ MIGRATE_CMD = '    command: python -m scraper.migrate\n    restart: "no"\n'
 HELPER = ('  pw-copier:\n    image: pgvector/pgvector:pg16\n'
           '    entrypoint: ["/bin/sh", "-c", "cp /run/secrets/postgres_password /out/pw"]\n'
           '{creds}    volumes:\n{mounts}    network_mode: none\n    restart: "no"\n')
+
+
+# Round-4 anchors, as the auditor's helper_attacks.py wrote them.
+AUD_API_VOLS = ("    volumes:\n      - ./live:/app/live\n      - ./blackletter_state:/app/state\n"
+                "      - tls-ca:/run/tls-ca:ro\n    networks: [edge, data]")
+PREFLIGHT_VOLS = "    volumes:\n      - ./docker/preflight/check-secrets.sh:/usr/local/bin/check-secrets.sh:ro\n"
+CERTS_COMMENT = "  # One-shot: issue (or validate operator-supplied) TLS material"
+VOLUMES_BLOCK = "volumes:\n  pgdata:\n  tls-ca:\n  tls-postgres:\n  tls-redis:\n"
+# An isolated helper holding no credential of its own, only the volumes it is given (C11/C12 hops).
+HOP = ('  {name}:\n    image: pgvector/pgvector:pg16\n    network_mode: none\n    restart: "no"\n'
+       '    command: ["true"]\n    volumes:\n{vols}\n')
 
 
 def pg_c(opt):
@@ -343,4 +355,53 @@ CASES = [
      "edits": [], "hba": (HBA_APP_LINE, "hostssl    legal_scraper   +corpus_clients  all       cert")},
     {"id": "H02", "title": "pg_hba.conf: the application line uses md5 over TLS", "expect": ["pg-hba"],
      "edits": [], "hba": (HBA_APP_LINE, "hostssl    legal_scraper   +corpus_clients  all       md5")},
+
+    # ---- re-audit round 4 (delta of fd5151b) --------------------------------------------------------
+    # R4-D1: laundering through a chain of isolated helpers. C11 is the auditor's C_two_hop, verbatim.
+    {"id": "C11", "title": "secrets-preflight -> hopA -> hop2 -> hopB -> api (two hops)",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", PREFLIGHT_VOLS, PREFLIGHT_VOLS + "      - hopA:/out\n"),
+               ("replace", AUD_API_VOLS, AUD_API_VOLS.replace("      - tls-ca:/run/tls-ca:ro\n",
+                                                               "      - tls-ca:/run/tls-ca:ro\n      - hopB:/in\n")),
+               ("replace", CERTS_COMMENT, HOP.format(name="hop2", vols="      - hopA:/a\n      - hopB:/b\n") + CERTS_COMMENT),
+               ("replace", VOLUMES_BLOCK, VOLUMES_BLOCK + "  hopA:\n  hopB:\n")]},
+    {"id": "C11b", "title": "secrets-preflight -> hopA -> hop2 -> hopB -> hop3 -> hopC -> api (three hops)",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", PREFLIGHT_VOLS, PREFLIGHT_VOLS + "      - hopA:/out\n"),
+               ("replace", AUD_API_VOLS, AUD_API_VOLS.replace("      - tls-ca:/run/tls-ca:ro\n",
+                                                               "      - tls-ca:/run/tls-ca:ro\n      - hopC:/in\n")),
+               ("replace", CERTS_COMMENT, HOP.format(name="hop2", vols="      - hopA:/a\n      - hopB:/b\n")
+                + HOP.format(name="hop3", vols="      - hopB:/b\n      - hopC:/c\n") + CERTS_COMMENT),
+               ("replace", VOLUMES_BLOCK, VOLUMES_BLOCK + "  hopA:\n  hopB:\n  hopC:\n")]},
+    {"id": "C11c", "title": "the hop through a bind-mounted repository directory (preflight -> ./handoff -> hop2 -> hopB -> api)",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", PREFLIGHT_VOLS, PREFLIGHT_VOLS + "      - ./handoff:/out\n"),
+               ("replace", AUD_API_VOLS, AUD_API_VOLS.replace("      - tls-ca:/run/tls-ca:ro\n",
+                                                               "      - tls-ca:/run/tls-ca:ro\n      - hopB:/in\n")),
+               ("replace", CERTS_COMMENT, HOP.format(name="hop2", vols="      - ./handoff:/a\n      - hopB:/b\n") + CERTS_COMMENT),
+               ("replace", VOLUMES_BLOCK, VOLUMES_BLOCK + "  hopB:\n")]},
+    # R4-D2: only a helper that holds no store secret (the shipped certs) may write the CA volume
+    # apps read. C12 is the auditor's C_write_tls_ca, verbatim.
+    {"id": "C12", "title": "an isolated helper holding a store secret writes tls-ca (api reads tls-ca:ro)",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", CERTS_COMMENT, "  poison:\n    image: pgvector/pgvector:pg16\n    network_mode: none\n"
+                "    restart: \"no\"\n    command: [\"true\"]\n    secrets: [postgres_password]\n    volumes:\n"
+                "      - tls-ca:/tls/ca\n\n" + CERTS_COMMENT)]},
+    {"id": "C12b", "title": "a helper tainted only through a shared volume (preflight -> hopA) writes tls-ca",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", PREFLIGHT_VOLS, PREFLIGHT_VOLS + "      - hopA:/out\n"),
+               ("replace", CERTS_COMMENT, HOP.format(name="poison2", vols="      - hopA:/a\n      - tls-ca:/tls/ca\n")
+                + CERTS_COMMENT),
+               ("replace", VOLUMES_BLOCK, VOLUMES_BLOCK + "  hopA:\n")]},
+    {"id": "C12c", "title": "a helper holding a store secret mounts tls-ca even read-only (refused: it may not touch it)",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", CERTS_COMMENT, "  poison:\n    image: pgvector/pgvector:pg16\n    network_mode: none\n"
+                "    restart: \"no\"\n    command: [\"true\"]\n    secrets: [postgres_password]\n    volumes:\n"
+                "      - tls-ca:/tls/ca:ro\n\n" + CERTS_COMMENT)]},
+    {"id": "C12d", "title": "a renamed volume that is tls-ca under another key, written by a secret-holding helper",
+     "expect": ["app-credential-scope"],
+     "edits": [("replace", CERTS_COMMENT, "  poison:\n    image: pgvector/pgvector:pg16\n    network_mode: none\n"
+                "    restart: \"no\"\n    command: [\"true\"]\n    secrets: [postgres_password]\n    volumes:\n"
+                "      - ca-alias:/tls/ca\n\n" + CERTS_COMMENT),
+               ("replace", VOLUMES_BLOCK, VOLUMES_BLOCK + "  ca-alias:\n    name: corpus_service_tls-ca\n")]},
 ]

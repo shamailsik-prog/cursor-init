@@ -96,11 +96,15 @@ default, and all four differ.
   (`nopass`, a second password, a password removed again) or that no app connects as, app images
   whose build ignore file lets `.env` in (read the way Docker reads it: the last matching line
   wins, `!` re-includes), and app containers that can reach a store credential, secret or volume
-  they do not use (also through storage shared with a network-isolated one-shot that holds store
-  credentials or files, such as `secrets-preflight` and `certs`), publish a port other than the
-  api's loopback bind, or get host access (`privileged`, `cap_add`, devices, host or shared
-  namespaces, binds from outside the repository). Only a known store image with no network is
-  such a one-shot; a repository build or unknown image is checked as an app or refused.
+  they do not use, publish a port other than the api's loopback bind, or get host access
+  (`privileged`, `cap_add`, devices, host or shared namespaces, binds from outside the
+  repository). Network-isolated one-shots are checked too: one that holds a store credential
+  (`secrets-preflight`) or a store's files (`certs`) taints all of its storage, and the taint
+  passes to every other one-shot that shares any of that storage, hop after hop; no app may mount
+  tainted storage (the CA volume, read-only, is the one exception). A one-shot that holds a store
+  credential, directly or through that chain, may not mount the CA volume at all, so only a
+  one-shot without one (`certs`) writes what apps read there. Only a known store image with no
+  network is such a one-shot; a repository build or unknown image is checked as an app or refused.
   It is a guard over this compose file, not a proof of safety: it does not vet, for example, the
   Redis TLS protocol options, the host's `.env` (`COMPOSE_FILE`), or what the repository's own
   scripts and images do. Its findings name the rule, service, key or variable and never print a
