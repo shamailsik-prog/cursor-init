@@ -189,4 +189,86 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
     // The label that drives provider policy is the matter's current one, not the cached internal.
     expect((await db().collection("committee_outputs").doc(partnerOutputId).get()).get("classification")).toBe("privileged-restricted")
   })
+
+  it("a matter deleted elsewhere leaves this process's cache: the next requests deny its document, its listed OCR jobs, ingest and committee-brain (C3)", async () => {
+    const { matterId, docId } = await seed("deleted")
+    const read = (userId: string) => documentsGet(new Request(`${B}/api/d1/documents?userId=${userId}&docId=${docId}&includeContent=true`))
+    const listed = async (userId: string) => {
+      const res = await documentsGet(new Request(`${B}/api/d1/documents?userId=${userId}&limit=100&cursor=0`))
+      expect(res.status).toBe(200)
+      return res.text()
+    }
+    expect((await read("clerk_a")).status).toBe(200)
+    expect(await listed("partner_a")).toContain(docId)
+
+    // Another process deletes the matter row; this process still holds its copy.
+    await db().collection("matters").doc(matterId).delete()
+    expect(getRuntimeStore().matters.has(matterId)).toBe(true)
+
+    for (const userId of ["clerk_a", "partner_a"]) {
+      expect((await read(userId)).status).toBe(403)
+      // The list (each row carries its OCR job count) leaves the document out.
+      expect(await listed(userId)).not.toContain(docId)
+    }
+    expect(getRuntimeStore().matters.has(matterId)).toBe(false)
+    const ingested = await ingest("partner_a", matterId, "%PDF-f14-after-delete%", "privileged-restricted")
+    expect(ingested.status).toBe(404)
+    const asked = await post(committeePost, `${B}/api/p1/committee-brain`, {
+      actorId: "partner_a",
+      body: "Summarise the plaint for the file.",
+      matterId,
+      documentIds: [docId],
+      classification: "internal",
+      purpose: "summarise",
+    })
+    expect(asked.status).toBe(404)
+  })
+
+  it("a matter moved to another firm elsewhere leaves this firm's cache: its document is refused and unlisted, its ingest refused (C3)", async () => {
+    const { matterId, docId } = await seed("moved")
+    const read = (userId: string) => documentsGet(new Request(`${B}/api/d1/documents?userId=${userId}&docId=${docId}&includeContent=true`))
+    expect((await read("partner_a")).status).toBe(200)
+
+    await db().collection("matters").doc(matterId).update({ firmId: "firmB" })
+    expect(getRuntimeStore().matters.get(matterId)?.firmId).toBe("firmA")
+
+    expect((await read("partner_a")).status).toBe(403)
+    const list = await documentsGet(new Request(`${B}/api/d1/documents?userId=partner_a&limit=100&cursor=0`))
+    expect(await list.text()).not.toContain(docId)
+    expect(getRuntimeStore().matters.has(matterId)).toBe(false)
+    expect((await ingest("partner_a", matterId, "%PDF-f14-after-move%", "privileged-restricted")).status).toBe(404)
+  })
+
+  it("a document row whose matterId is missing or empty is not the loose vault: the clerk's download is 403 and the list leaves it out (C2)", async () => {
+    // Rows no route writes (the API takes a matter id of at least one character, or null): written straight to
+    // Firestore, as a malformed import or another writer could. A loose-vault row with an explicit null is the control.
+    const row = (id: string) => ({
+      id,
+      firmId: "firmA",
+      contentHash: `hash-${id}`,
+      sourceChannel: "web",
+      classification: "internal",
+      storagePath: `fs://firmA/documents/${id}/v1`,
+      isImmutable: true,
+      byteSize: 1,
+      mimeType: "application/pdf",
+      objectVersion: 1,
+      uploadedBy: "partner_a",
+      objectBytesStatus: "available",
+    })
+    await db().collection("documents").doc("f14c2missing").set(row("f14c2missing"))
+    await db().collection("documents").doc("f14c2empty").set({ ...row("f14c2empty"), matterId: "" })
+    await db().collection("documents").doc("f14c2null").set({ ...row("f14c2null"), matterId: null })
+
+    for (const docId of ["f14c2missing", "f14c2empty"]) {
+      const res = await documentsGet(new Request(`${B}/api/d1/documents?userId=clerk_a&docId=${docId}&includeContent=true`))
+      expect(res.status).toBe(403)
+    }
+    const list = await documentsGet(new Request(`${B}/api/d1/documents?userId=clerk_a&limit=100&cursor=0`))
+    expect(list.status).toBe(200)
+    const text = await list.text()
+    expect(text).not.toContain("f14c2missing")
+    expect(text).not.toContain("f14c2empty")
+    expect(text).toContain("f14c2null")
+  })
 })

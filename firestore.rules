@@ -79,8 +79,13 @@ service cloud.firestore {
     // distinct matter (the membership exists() and this matters get()), on top of the two identity calls (users, firms).
     // Rules allow 10 access calls per single-document request and 20 per transaction or batch, so a client transaction
     // or batch over rows of about nine or more distinct matters can be denied; split such work by matter.
-    function clearedForMatterNow(matterId) {
-      return matterId == null || cleared(get(/databases/$(database)/documents/matters/$(matterId)).data.classification);
+    // Copilot C1: the matter must also be the row's firm's (`firmId`, the row's own), so a row naming another firm's
+    // matter is denied even with a (forged or stale) membership of it, as canReadDocument denies it. The two get()s of
+    // one matter are one read, and neither is evaluated for a loose-vault row.
+    function clearedForMatterNow(matterId, firmId) {
+      return matterId == null
+        || (get(/databases/$(database)/documents/matters/$(matterId)).data.firmId == firmId
+          && cleared(get(/databases/$(database)/documents/matters/$(matterId)).data.classification));
     }
 
     match /firms/{firmId} {
@@ -146,7 +151,7 @@ service cloud.firestore {
       allow read: if sameFirm() && cleared(resource.data.classification)
         && (resource.data.matterId != null ? memberReader(resource.data.matterId)
             : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2)   // loose vault (L4.5); intern denied
-        && clearedForMatterNow(resource.data.matterId);
+        && clearedForMatterNow(resource.data.matterId, resource.data.firmId);
       allow create: if authorNew() && atOrAboveMatter(request.resource.data.matterId) && clientSourcedFloor();
       allow update: if sameFirm() && firmIdUnchanged() && monotonic()
         && isAuthor() && cleared(resource.data.classification) && clearedNew()
@@ -156,10 +161,11 @@ service cloud.firestore {
     }
     match /document_versions/{id} {
       // R-2: same scope as documents — matter membership (or the loose-vault rule) plus clearance.
-      // Audit F14 / O-76: and cleared for the matter's current label (versions carry their document's matterId).
+      // Audit F14 / O-76: and cleared for the matter's current label (versions carry their document's matterId), on a
+      // matter of the row's own firm (Copilot C1).
       allow read: if sameFirm() && isMatterStaff() && cleared(resource.data.classification)
         && canAccessScope(resource.data.matterId)
-        && clearedForMatterNow(resource.data.matterId);
+        && clearedForMatterNow(resource.data.matterId, resource.data.firmId);
       allow create: if authorNew() && atOrAboveMatter(request.resource.data.matterId) && clientSourcedFloor();
       allow update, delete: if false; // append-only
     }
@@ -296,14 +302,12 @@ service cloud.firestore {
     // /api/platform/jobs routes (restricted view, firm-level partner-only, never the payload).
     // Audit F14: a matter-bound row also needs clearance for the matter's current label (as drafts),
     // so a matter raised after the job was written binds the job too, and the matter must be the row's
-    // firm's (R1-D6); a loose-vault row is unchanged. The two get()s of one matter are one read.
+    // firm's (R1-D6, now inside clearedForMatterNow as for documents); a loose-vault row is unchanged.
     match /jobs/{id}           { allow read: if sameFirm() && !('engine' in resource.data)
       && role() in ['partner', 'associate', 'clerk']
       && cleared(resource.data.classification)
       && canAccessScope(resource.data.matterId)
-      && clearedForMatterNow(resource.data.matterId)
-      && (resource.data.matterId == null
-        || get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.firmId == resource.data.firmId); allow write: if false; }
+      && clearedForMatterNow(resource.data.matterId, resource.data.firmId); allow write: if false; }
     match /api_keys/{id}       { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /audit_log/{id}      { allow read: if sameFirm() && isPartner(); allow write: if false; }
     // R3 N13: full rows that could not be persisted; written by the server (Admin SDK) only.

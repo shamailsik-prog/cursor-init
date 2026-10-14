@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { newStore } from "@/platform/spine/store"
 import { TB_ACK_RECON_LINEAGE_ISOLATION_GET_URL as LATTICE_U } from "./ops.pr-tb-ack-recon-lattice-urls"
 
 const baseStore = {
@@ -136,15 +137,22 @@ const baseStore = {
     return `${matterId}_${userId}`
   },
 }
+// Every other collection the real store has, empty: the routes now see mat_1 in the repository (audit F14 C3), so the
+// ops-reporting views seed its digest chain into collections this fixture does not list by name.
+for (const [name, value] of Object.entries(newStore())) {
+  if (value instanceof Map && !(name in baseStore)) Object.assign(baseStore, { [name]: new Map() })
+}
 
 vi.mock("@/platform/spine/runtimeStore", () => ({
   getRuntimeStore: () => baseStore,
 }))
 
 vi.mock("@/platform/persistence/runtimeRepositories", () => ({
-  getRuntimeRepositories: vi.fn(async () => ({
+  getRuntimeRepositories: vi.fn(async () => withEmptyRepositories({
     matters: {
-      listByFirm: vi.fn().mockResolvedValue([]),
+      // The persisted matters are the store's (as in memory mode): the routes reconcile their cached matters with this
+      // list (syncFirmMatters, audit F14 C3), and this suite's memberships, documents and packages name mat_1.
+      listByFirm: vi.fn(async (firmId: string) => [...baseStore.matters.values()].filter((row) => row.firmId === firmId)),
       create: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
       update: vi.fn().mockResolvedValue(null),
@@ -6411,6 +6419,28 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       },
   })),
 }))
+
+/**
+ * Every repository this fixture does not name is an empty one, as in a fresh database. The routes now see mat_1 in the
+ * matters repository (audit F14 C3), so the ops-reporting views seed its digest chain through repositories the
+ * fixture never listed; they read nothing back and accept every write.
+ */
+function withEmptyRepositories<T extends object>(named: T): T {
+  const empty = () => ({
+    upsert: vi.fn(),
+    create: vi.fn(),
+    get: vi.fn().mockResolvedValue(null),
+    update: vi.fn().mockResolvedValue(null),
+    listByFirm: vi.fn().mockResolvedValue([]),
+    listByMatter: vi.fn().mockResolvedValue([]),
+  })
+  return new Proxy(named, {
+    get(target, key, receiver) {
+      if (typeof key === "string" && key !== "then" && !Reflect.has(target, key)) Reflect.set(target, key, empty())
+      return Reflect.get(target, key, receiver)
+    },
+  })
+}
 
 describe("Route wiring uses repository adapters", () => {
   it("documents route GET uses repository listByFirm", async () => {

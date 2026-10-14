@@ -8,6 +8,7 @@ import { adminApp, adminDb } from "../src/admin"
 import { jobRuntime } from "../src/p2/dispatch"
 import type { DiagnosticPayload } from "../src/p2/diagnostic"
 import { fanOutEvent } from "../src/p2/fanout"
+import { listJobsTestSeam } from "../src/p2/ops"
 import { jobTestSeam } from "../src/p2/registry"
 import type { JobView } from "../src/p2/view"
 import { apiErrorOf, viaApi, type ApiError } from "./api"
@@ -218,6 +219,35 @@ describe.skipIf(!EMULATORS)("F14: job routes apply the matter's current label an
     expect(queue).toContain(firmLevel)
     expect(queue).not.toContain(onMatter)
     expect((await getJob(f, f.top, onMatter)).classification).toBe("privileged")
+  })
+
+  it("a member removed while a matter list is still scanning sees no row from any later batch (C5)", async () => {
+    const f = await openFirm()
+    for (let i = 0; i < 5; i++) await enqueueOnMatter(f, `documents/${uniq("f14-c5")}`, { behaviour: "succeed" })
+    const all = ids(await listJobs(f, f.top, { matterId: f.matterId, limit: "100" }))
+    expect(all).toHaveLength(5)
+
+    // Scan batches of two rows; the associate's membership is removed once the first batch is judged, before the
+    // second is read (another partner removes them mid-request).
+    let batches = 0
+    listJobsTestSeam.scanBatch = 2
+    listJobsTestSeam.betweenBatches = async () => {
+      batches += 1
+      if (batches === 1) await adminDb().collection("matter_members").doc(`${f.matterId}_${f.associate.uid}`).delete()
+    }
+    let page: Page
+    try {
+      page = await listJobs(f, f.associate, { matterId: f.matterId, limit: "100" })
+    } finally {
+      delete listJobsTestSeam.scanBatch
+      delete listJobsTestSeam.betweenBatches
+    }
+    expect(batches).toBeGreaterThan(1)
+    // Only the first batch, judged while the associate was a member, is listed; no later batch adds a row.
+    expect(ids(page)).toEqual(all.slice(0, 2))
+    expect(page.nextCursor).toBeNull()
+    // The next call is refused at the matter gate.
+    expectErr(await apiErrorOf(listJobs(f, f.associate, { matterId: f.matterId })), 403, "not_member")
   })
 
   it("a matter event fanned out to a subscriber without matterIdOf makes a matter job, judged at the matter's current label; a subscriber that yields no matter makes none (R3-D1)", async () => {

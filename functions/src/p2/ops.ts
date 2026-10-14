@@ -40,8 +40,11 @@ const MAX_NOTE = 2000
 /** Rows read per listJobs scan; a page keeps scanning until it holds `limit` visible rows. */
 const SCAN_BATCH = 100
 
-/** Test seam: a smaller listJobs scan batch, set in a test and deleted after. */
-export const listJobsTestSeam: { scanBatch?: number } = {}
+/**
+ * Test seams, set in a test and deleted after: a smaller listJobs scan batch, and a hook awaited between two scan
+ * batches (after one is judged, before the next is read), where a test changes what the next batch is judged against.
+ */
+export const listJobsTestSeam: { scanBatch?: number; betweenBatches?: () => Promise<void> } = {}
 
 const nowOf = (session: Session): number => session.now ?? Date.now()
 const memberRef = (matterId: string, uid: string) => adminDb().collection("matter_members").doc(`${matterId}_${uid}`)
@@ -153,8 +156,10 @@ function parseAfter(cursor: string | null): { createdAt: Timestamp; id: string }
  * (`createdAt` desc, then id desc). With `matterId`: `job.read` on that matter (403 cross_firm /
  * not_member / clearance), its `full` rows only. Without: the firm queue (`job.queue`, partner),
  * `full` and `restricted` rows. Each batch reads the current label of every matter its rows name
- * (and, for the firm queue, the caller's membership of each), so a row is judged at its effective
- * label (audit F14): one above the caller's clearance, or whose matter is unreadable, is hidden.
+ * and the caller's membership of each, for a matter list as for the firm queue (Copilot C5), so a
+ * row is judged at its effective label and the membership as it stands when its batch is read
+ * (audit F14): one above the caller's clearance, whose matter is unreadable, or whose matter the
+ * caller has left since the call began, is hidden.
  * Rows the caller may not see (and rows that are not engine rows)
  * are skipped: the scan continues in batches until the page holds `limit` visible rows, as
  * listClients does. `nextCursor` names the last *visible* row, and only when a further visible
@@ -191,7 +196,7 @@ export const listJobsOp: FirmOperation<Page<JobView>> = {
     let more = false
     for (;;) {
       const snap = await (after ? base.startAfter(after.createdAt, after.id) : base).limit(batch).get()
-      const current = await mattersNow(caller, filters.matterId, snap.docs.map((d) => d.data()))
+      const current = await mattersNow(caller, snap.docs.map((d) => d.data()))
       for (const d of snap.docs) {
         const job = d.data()
         const matterId = matterOf(caller, job)
@@ -209,6 +214,7 @@ export const listJobsOp: FirmOperation<Page<JobView>> = {
       // Only Timestamp-ordered rows can carry a page on; anything after them is not an engine row.
       if (!(lastAt instanceof Timestamp)) break
       after = { createdAt: lastAt, id: last.id }
+      await listJobsTestSeam.betweenBatches?.()
     }
 
     await audit.allow()
@@ -222,19 +228,12 @@ export const listJobsOp: FirmOperation<Page<JobView>> = {
 
 /**
  * The matters `rows` name, as they stand now (audit F14): each one's current label (`matters`) and the ones the caller
- * is a member of (`members`), read in one `getAll`. A matter list (`listedMatter`) is already gated on the caller's
- * membership of its matter, so only that matter's label is read.
+ * is a member of (`members`), read together in one `getAll` for every scan batch. A matter list reads its matter and
+ * the caller's membership again on each batch too (Copilot C5): the gate at the start of the call is not carried over,
+ * so a member removed while the scan runs sees no row from a later batch.
  */
-async function mattersNow(
-  caller: Caller,
-  listedMatter: string | undefined,
-  rows: DocumentData[]
-): Promise<{ matters: Map<string, MatterNow>; members: Set<string> }> {
+async function mattersNow(caller: Caller, rows: DocumentData[]): Promise<{ matters: Map<string, MatterNow>; members: Set<string> }> {
   const matters = new Map<string, MatterNow>()
-  if (listedMatter !== undefined) {
-    if (rows.length > 0) matters.set(listedMatter, matterNow(await matterRef(listedMatter).get()))
-    return { matters, members: new Set([listedMatter]) }
-  }
   const members = new Set<string>()
   const matterIds = [...new Set(rows.map((r) => matterOf(caller, r)).filter((m): m is string => m !== null))]
   if (matterIds.length === 0) return { matters, members }

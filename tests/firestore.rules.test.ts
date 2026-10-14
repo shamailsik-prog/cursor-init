@@ -997,7 +997,15 @@ describe("Audit F14 — a job row follows its matter's current label, not only t
       await setDoc(doc(db, "documents", "f14docOrphan"), { ...document, matterId: "f14docmMissing" })
       await setDoc(doc(db, "document_versions", "f14docOrphan_1"), { firmId: "firmA", matterId: "f14docmMissing", documentId: "f14docOrphan", version: 1, storagePath: "r2://f14", createdBy: "f14-assoc", classification: "internal" })
       await setDoc(doc(db, "matter_members", "f14docmMissing_f14-clerk"), { firmId: "firmA", matterId: "f14docmMissing", userId: "f14-clerk" })
+      // C1: a firm-A document and its version naming firm B's matter, which the forged membership above makes "member".
+      await setDoc(doc(db, "documents", "f14docCrossFirm"), { ...document, matterId: "f14mOtherFirm" })
+      await setDoc(doc(db, "document_versions", "f14docCrossFirm_1"), { firmId: "firmA", matterId: "f14mOtherFirm", documentId: "f14docCrossFirm", version: 1, storagePath: "r2://f14", createdBy: "f14-assoc", classification: "internal" })
     })
+  })
+
+  it("documents and document_versions naming another firm's matter are denied even with a (forged) membership of that matter (C1)", async () => {
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "documents", "f14docCrossFirm")))
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "document_versions", "f14docCrossFirm_1")))
   })
 
   it("a row naming another firm's matter is denied even with a (forged) membership of that matter (R1-D6)", async () => {

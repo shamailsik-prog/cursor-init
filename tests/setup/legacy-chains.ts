@@ -13,6 +13,7 @@ export const LEGACY_CHAIN_TEST_FILES = [
   "tests/api.ops-reporting.behaviour-fixes.test.ts",
   "tests/api.ops-reporting.dispatch-coverage.test.ts",
   "tests/api.ops-reporting.test.ts",
+  "tests/f14-ops-reporting-listing.test.ts",
   "tests/ops.pr-tb-ack-recon-lattice-dedicated-collection-lineage-isolation.test.ts",
   "tests/persistence.route-wiring.test.ts",
   "tests/persistence.runtime-mode.test.ts",
