@@ -15,11 +15,11 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { type Classification } from "@/platform/p1/types"
-import { type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import {
   applyReviewDecision,
@@ -91,11 +91,16 @@ async function handleGet(request: Request) {
       const user = store.users.get(userId)
       if (!user) throw new PublicError("unknown user")
       await syncFirmMembers(store, repos, user.firmId)
+      await syncFirmMatters(store, repos, user.firmId)
       const matter = store.matters.get(matterId)
       if (!matter) throw new PublicError("unknown matter")
       if (matter.firmId !== user.firmId) throw new PublicError("cross-firm matter denied")
       if (!store.members.has(store.memberKey(matterId, user.id))) {
         throw new PublicError("not a matter member")
+      }
+      // Audit F14 / O-76: the timeline names the matter's documents, so it needs clearance for the matter's current label.
+      if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(matter.classification)) {
+        throw new PublicError("clearance below matter classification")
       }
       const timelineRows = (await repos.workflowEvents.listByFirm(user.firmId))
         .filter((event) => event.matterId === matterId)
@@ -127,6 +132,8 @@ async function handleGet(request: Request) {
     const user = store.users.get(userId)
     if (!user) throw new PublicError("unknown user")
     await syncFirmMembers(store, repos, user.firmId)
+    // Audit F14 / O-76: the queue is judged at each matter's current label (canReadDocument).
+    await syncFirmMatters(store, repos, user.firmId)
     const docs = await repos.documents.listByFirm(user.firmId)
     const rows = await repos.workflow.listByFirm(user.firmId)
     const rowsByDocId = new Map(rows.map((row) => [row.documentId, row]))
@@ -216,6 +223,7 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = transitionWorkflowStatus(store, {
         actorId: parsed.actorId,
@@ -240,6 +248,7 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = assignReviewer(store, {
         actorId: parsed.actorId,
@@ -263,6 +272,7 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = applyReviewDecision(store, {
         actorId: parsed.actorId,

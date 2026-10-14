@@ -170,6 +170,47 @@ export function isSafeRef(ref: unknown): boolean {
   return parts.length === 2 && isSafeDocId(parts[0]) && isSafeDocId(parts[1])
 }
 
+/**
+ * Collections whose rows belong to one matter: they carry the matter's id and are read under its membership and
+ * label (firestore.rules, R-2; platform/spine row types), or are written for it by the server only. Audit F14 R1-D3:
+ * a firm-level job (`matterId` null) is judged against no matter, so a reference it carried to one of these rows would
+ * reach that row with no check of the matter's current label or membership. Such a job may not carry one.
+ */
+export const MATTER_BOUND_COLLECTIONS: ReadonlySet<string> = new Set([
+  "matters",
+  "matter_members",
+  "matter_parties",
+  "matter_events",
+  "documents",
+  "document_versions",
+  "document_workflow",
+  "workflow_events",
+  "drafts",
+  "draft_versions",
+  "draft_gate_results",
+  "draft_gate_overrides",
+  "committee_outputs",
+  "follow_ups",
+  "propositions",
+  "intimation_register",
+  "filing_packet_artifacts",
+])
+
+/** `ref` (a `collection/id` ref) names a row of a matter-bound collection. */
+export function isMatterBoundRef(ref: string): boolean {
+  return MATTER_BOUND_COLLECTIONS.has(ref.split("/")[0])
+}
+
+/**
+ * Job refs (inputRefs at enqueue, outputRefs at commit): an array of at most MAX_REFS safe `collection/id` refs, none of
+ * them into a matter-bound collection when the job is firm-level (`matterId` null; audit F14 R1-D3). A matter job's
+ * refs are read under its matter's current label and membership (the job routes judge the job that way).
+ */
+export function areValidRefs(refs: unknown, matterId: string | null): refs is string[] {
+  if (!Array.isArray(refs) || refs.length > MAX_REFS || !refs.every(isSafeRef)) return false
+  return matterId !== null || !refs.some((ref: string) => isMatterBoundRef(ref))
+}
+
 type Validated = { spec: JobSpec; jobId: string; payloadHash: string; inputRefs: string[]; runKey: string | null }
 
 /** Validates a spec; a failure is a programming error naming the field only, never its value. */
@@ -182,7 +223,7 @@ function validate(spec: JobSpec): Validated {
   const canonical = canonicalJson(spec.payload)
   if (Buffer.byteLength(canonical) > MAX_PAYLOAD_BYTES) throw invalid("payload")
   const inputRefs = spec.inputRefs ?? []
-  if (!Array.isArray(inputRefs) || inputRefs.length > MAX_REFS || !inputRefs.every(isSafeRef)) throw invalid("inputRefs")
+  if (!areValidRefs(inputRefs, spec.matterId)) throw invalid("inputRefs")
   const key = spec.idempotencyKey
   if (typeof key !== "string" || key.length < 1 || key.length > MAX_KEY_LENGTH) throw invalid("idempotencyKey")
   const runKey = spec.runKey ?? null

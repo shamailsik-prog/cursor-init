@@ -1,5 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { adminDb } from "../src/admin"
+import { readFileSync } from "node:fs"
+import path from "node:path"
+import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing"
+import { doc, getDoc, setLogLevel, updateDoc } from "firebase/firestore"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { adminApp, adminDb } from "../src/admin"
 import { jobRuntime } from "../src/p2/dispatch"
 import type { DiagnosticPayload } from "../src/p2/diagnostic"
 import type { JobView } from "../src/p2/view"
@@ -23,9 +27,16 @@ import { FakeClock, diagSpec, enqueueAt, readJob, testDeps } from "./jobs"
  * read now, with the caller's membership read now: a caller below it gets 404 not_found on a single job, finds no row
  * in a list, and is refused retry and cancel with nothing written. A member cleared for the raised label still sees and
  * acts on the job, and every view shows the effective label. Fixtures are synthetic (P4-13): no real party or matter.
+ *
+ * The download door (audit §10: "repeat get/list/download as lower-clearance user"; open item O-76): the job's input
+ * reference names a matter document, which a member reads through the client SDK under firestore.rules. After the raise
+ * that document and its version are refused to a member below the matter's new label and still readable by one
+ * cleared for it, as the job is. The document rows are written in the Next writer's shape (that writer is the Next
+ * documents route, which this suite cannot drive); the raise (by the cleared partner, a monotonic matter update the
+ * rules allow a member partner) and the reads go through the client SDK against the same emulator.
  */
 
-type Member = { uid: string; token: string }
+type Member = { uid: string; token: string; role: string; clearanceLevel: string }
 type Page = { items: JobView[]; nextCursor: string | null }
 type Matter = { matterId: string; classification: string }
 
@@ -78,7 +89,7 @@ async function openFirm(): Promise<Firm> {
     .set({ name: "F14 Firm", plan: "internal", clientPrefix: "SKD", matterPrefix: "NHS", rateLimits: { general: 1000 } })
   const user = async (role: string, clearanceLevel: string): Promise<Member> => {
     const { uid, token } = await mintIdToken({ firmId, role, clearanceLevel })
-    return { uid, token }
+    return { uid, token, role, clearanceLevel }
   }
   const top = await user("partner", "privileged-restricted")
   const clerk = await user("clerk", "confidential")
@@ -204,5 +215,76 @@ describe.skipIf(!EMULATORS)("F14: job routes apply the matter's current label an
     expect(queue).toContain(firmLevel)
     expect(queue).not.toContain(onMatter)
     expect((await getJob(f, f.top, onMatter)).classification).toBe("privileged")
+  })
+
+  describe("the download door: the job's input document through the client SDK (firestore.rules)", () => {
+    let env: RulesTestEnvironment
+
+    beforeAll(async () => {
+      setLogLevel("silent")
+      const [host, port] = (process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080").split(":")
+      // The project the Admin SDK writes to, so the rules read the rows the job routes read.
+      const projectId = adminApp().options.projectId ?? process.env.GCLOUD_PROJECT
+      if (!projectId) throw new Error("no emulator project id (GCLOUD_PROJECT)")
+      env = await initializeTestEnvironment({
+        projectId,
+        firestore: { rules: readFileSync(path.resolve(__dirname, "../../firestore.rules"), "utf8"), host, port: Number(port) },
+      })
+    })
+    afterAll(async () => {
+      await env?.cleanup()
+    })
+
+    /** The member's signed-in client SDK, with the token claims its users/{uid} record holds. */
+    const clientDb = (f: Firm, who: Member) =>
+      env.authenticatedContext(who.uid, { firmId: f.firmId, role: who.role, clearanceLevel: who.clearanceLevel }).firestore()
+
+    it("after the raise, the job's input document and its version are refused to a member below the matter's label and readable by one cleared for it", async () => {
+      const f = await openFirm()
+      const docId = uniq("f14-plaint")
+      const versionId = `${docId}_1`
+      const storagePath = `firms/${f.firmId}/documents/${docId}/v1`
+      // The Next documents writer's shape (platform/spine/store.ts DocumentRecord), at the matter's label.
+      await adminDb().collection("documents").doc(docId).set({
+        id: docId,
+        firmId: f.firmId,
+        matterId: f.matterId,
+        contentHash: "0".repeat(64),
+        sourceChannel: "web",
+        classification: "internal",
+        storagePath,
+        isImmutable: true,
+        byteSize: 24,
+        mimeType: "application/pdf",
+        objectVersion: 1,
+        uploadedBy: f.top.uid,
+        objectBytesStatus: "available",
+      })
+      await adminDb().collection("document_versions").doc(versionId).set({ firmId: f.firmId, matterId: f.matterId, documentId: docId, version: 1, storagePath, createdBy: f.top.uid, classification: "internal" })
+      const jobId = await enqueueOnMatter(f, `documents/${docId}`, { behaviour: "succeed" })
+
+      // Before the raise: the clerk follows the job's reference to the document and its version.
+      expect((await getJob(f, f.clerk, jobId)).inputRefs).toEqual([`documents/${docId}`])
+      for (const who of [f.clerk, f.partner, f.associate, f.top]) {
+        await assertSucceeds(getDoc(doc(clientDb(f, who), "documents", docId)))
+        await assertSucceeds(getDoc(doc(clientDb(f, who), "document_versions", versionId)))
+      }
+
+      // The cleared partner raises the matter through the client SDK (firestore.rules: a member partner's monotonic update).
+      await assertFails(updateDoc(doc(clientDb(f, f.clerk), "matters", f.matterId), { classification: "privileged-restricted" }))
+      await assertSucceeds(updateDoc(doc(clientDb(f, f.top), "matters", f.matterId), { classification: "privileged-restricted" }))
+      expect((await adminDb().collection("matters").doc(f.matterId).get()).get("classification")).toBe("privileged-restricted")
+
+      // After the raise: the job is hidden, and so is what it references, from every member below the new label.
+      expectErr(await apiErrorOf(getJob(f, f.clerk, jobId)), 404, "not_found")
+      for (const who of [f.clerk, f.partner, f.associate]) {
+        await assertFails(getDoc(doc(clientDb(f, who), "documents", docId)))
+        await assertFails(getDoc(doc(clientDb(f, who), "document_versions", versionId)))
+      }
+      // The member cleared for the raised label reads the job, the document and its version.
+      expect((await getJob(f, f.top, jobId)).inputRefs).toEqual([`documents/${docId}`])
+      await assertSucceeds(getDoc(doc(clientDb(f, f.top), "documents", docId)))
+      await assertSucceeds(getDoc(doc(clientDb(f, f.top), "document_versions", versionId)))
+    })
   })
 })

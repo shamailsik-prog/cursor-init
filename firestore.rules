@@ -72,6 +72,12 @@ service cloud.firestore {
         && request.resource.data.get('sourceChannel', 'web') in ['web', 'team_portal', 'whatsapp', 'bulk'];
     }
     function authorNew() { return sameFirmNew() && isAuthor() && clearedNew() && canAccessScope(request.resource.data.matterId); }
+    // Audit F14 / O-76: a matter-bound row is read under its matter's CURRENT label, not only the label it was written
+    // with, so a matter raised after the row was written binds the row too (as drafts and draft_versions). A loose-vault
+    // row (matterId null) names no matter; a matter that cannot be read denies (get() of a missing document fails).
+    function clearedForMatterNow(matterId) {
+      return matterId == null || cleared(get(/databases/$(database)/documents/matters/$(matterId)).data.classification);
+    }
 
     match /firms/{firmId} {
       allow read: if signedIn() && tok().firmId == firmId;
@@ -135,7 +141,8 @@ service cloud.firestore {
     match /documents/{docId} {
       allow read: if sameFirm() && cleared(resource.data.classification)
         && (resource.data.matterId != null ? memberReader(resource.data.matterId)
-            : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2);   // loose vault (L4.5); intern denied
+            : role() in ['clerk', 'partner'] && rank(tok().clearanceLevel) >= 2)   // loose vault (L4.5); intern denied
+        && clearedForMatterNow(resource.data.matterId);
       allow create: if authorNew() && atOrAboveMatter(request.resource.data.matterId) && clientSourcedFloor();
       allow update: if sameFirm() && firmIdUnchanged() && monotonic()
         && isAuthor() && cleared(resource.data.classification) && clearedNew()
@@ -145,8 +152,10 @@ service cloud.firestore {
     }
     match /document_versions/{id} {
       // R-2: same scope as documents — matter membership (or the loose-vault rule) plus clearance.
+      // Audit F14 / O-76: and cleared for the matter's current label (versions carry their document's matterId).
       allow read: if sameFirm() && isMatterStaff() && cleared(resource.data.classification)
-        && canAccessScope(resource.data.matterId);
+        && canAccessScope(resource.data.matterId)
+        && clearedForMatterNow(resource.data.matterId);
       allow create: if authorNew() && atOrAboveMatter(request.resource.data.matterId) && clientSourcedFloor();
       allow update, delete: if false; // append-only
     }
@@ -282,13 +291,15 @@ service cloud.firestore {
     // P3-14: a P2 engine row (it carries `engine`) is never read through the SDK, only through the
     // /api/platform/jobs routes (restricted view, firm-level partner-only, never the payload).
     // Audit F14: a matter-bound row also needs clearance for the matter's current label (as drafts),
-    // so a matter raised after the job was written binds the job too; a loose-vault row is unchanged.
+    // so a matter raised after the job was written binds the job too, and the matter must be the row's
+    // firm's (R1-D6); a loose-vault row is unchanged. The two get()s of one matter are one read.
     match /jobs/{id}           { allow read: if sameFirm() && !('engine' in resource.data)
       && role() in ['partner', 'associate', 'clerk']
       && cleared(resource.data.classification)
       && canAccessScope(resource.data.matterId)
+      && clearedForMatterNow(resource.data.matterId)
       && (resource.data.matterId == null
-        || cleared(get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.classification)); allow write: if false; }
+        || get(/databases/$(database)/documents/matters/$(resource.data.matterId)).data.firmId == resource.data.firmId); allow write: if false; }
     match /api_keys/{id}       { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /audit_log/{id}      { allow read: if sameFirm() && isPartner(); allow write: if false; }
     // R3 N13: full rows that could not be persisted; written by the server (Admin SDK) only.

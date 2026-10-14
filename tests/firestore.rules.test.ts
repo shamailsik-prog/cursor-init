@@ -982,7 +982,44 @@ describe("Audit F14 — a job row follows its matter's current label, not only t
       await setDoc(doc(db, "jobs", "f14jobOrphan"), { ...job, id: "f14jobOrphan", matterId: "f14mMissing" })
       await setDoc(doc(db, "matter_members", "f14mMissing_f14-clerk"), { firmId: "firmA", matterId: "f14mMissing", userId: "f14-clerk" })
       await setDoc(doc(db, "jobs", "f14jobLoose"), { ...job, id: "f14jobLoose", matterId: null, classification: "confidential" })
+      // R1-D6: a row naming another firm's matter, with a membership forged on it (only the Admin SDK can write one).
+      await setDoc(doc(db, "matters", "f14mOtherFirm"), { firmId: "firmB", title: "F14 other firm", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "f14mOtherFirm_f14-clerk"), { firmId: "firmA", matterId: "f14mOtherFirm", userId: "f14-clerk" })
+      await setDoc(doc(db, "jobs", "f14jobCrossFirmMatter"), { ...job, id: "f14jobCrossFirmMatter", matterId: "f14mOtherFirm" })
+      // O-76 (the download door): a matter document and its version, at the matter's label, on a matter of their own.
+      await setDoc(doc(db, "matters", "f14docm"), { firmId: "firmA", title: "F14 documents", classification: "internal" })
+      for (const uid of ["f14-clerk", "f14-assoc"]) {
+        await setDoc(doc(db, "matter_members", `f14docm_${uid}`), { firmId: "firmA", matterId: "f14docm", userId: uid })
+      }
+      const document = { firmId: "firmA", matterId: "f14docm", classification: "internal", storagePath: "r2://f14", contentHash: "f14", isImmutable: true }
+      await setDoc(doc(db, "documents", "f14doc"), document)
+      await setDoc(doc(db, "document_versions", "f14doc_1"), { firmId: "firmA", matterId: "f14docm", documentId: "f14doc", version: 1, storagePath: "r2://f14", createdBy: "f14-assoc", classification: "internal" })
+      await setDoc(doc(db, "documents", "f14docOrphan"), { ...document, matterId: "f14docmMissing" })
+      await setDoc(doc(db, "document_versions", "f14docOrphan_1"), { firmId: "firmA", matterId: "f14docmMissing", documentId: "f14docOrphan", version: 1, storagePath: "r2://f14", createdBy: "f14-assoc", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "f14docmMissing_f14-clerk"), { firmId: "firmA", matterId: "f14docmMissing", userId: "f14-clerk" })
     })
+  })
+
+  it("a row naming another firm's matter is denied even with a (forged) membership of that matter (R1-D6)", async () => {
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14jobCrossFirmMatter")))
+  })
+
+  it("documents and document_versions: a member cleared for the row reads it until the matter is raised above their clearance (O-76)", async () => {
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "documents", "f14doc")))
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "document_versions", "f14doc_1")))
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "matters", "f14docm"), { classification: "privileged" })
+    })
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "documents", "f14doc")))
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "document_versions", "f14doc_1")))
+    // A member cleared for the raised label still reads both.
+    await assertSucceeds(getDoc(doc(await authed("f14-assoc", ASSOC), "documents", "f14doc")))
+    await assertSucceeds(getDoc(doc(await authed("f14-assoc", ASSOC), "document_versions", "f14doc_1")))
+  })
+
+  it("documents and document_versions whose matter cannot be read are denied, even to a member cleared for the row (O-76)", async () => {
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "documents", "f14docOrphan")))
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "document_versions", "f14docOrphan_1")))
   })
 
   it("a member cleared for the row's label reads it until the matter is raised above their clearance; a member cleared for the raised label still reads it", async () => {

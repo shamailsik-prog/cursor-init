@@ -4,7 +4,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing"
-import { collection, doc, getDoc, getDocs, setDoc } from "firebase/firestore"
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from "firebase/firestore"
 import { GET as mattersGet, POST as mattersPost } from "@/app/api/d1/matters/route"
 import { GET as documentsGet, POST as documentsPost } from "@/app/api/d1/documents/route"
 import {
@@ -276,6 +276,45 @@ describe("Runtime persistence mode", () => {
             entry.data()?.action === "status_transition"
         )
       ).toBe(true)
+    })
+  })
+
+  it("document reads use the matter's current label from Firestore: a raise written by another process refuses the clerk's download (F14, O-76)", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      setFirestorePersistenceForTests(ctx.firestore())
+      const matterId = await createMatterViaRoute("F14 matter raised elsewhere", "f14f14f1-4f14-4f14-8f14-f14f14f14f11")
+      const ingestRes = await documentsPost(
+        new Request("http://127.0.0.1/api/d1/documents", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": "f14f14f1-4f14-4f14-8f14-f14f14f14f12" },
+          body: JSON.stringify({
+            action: "ingest",
+            actorId: "partner_a",
+            firmId: "firmA",
+            matterId,
+            contentBase64: Buffer.from("%PDF-f14-runtime-doc%").toString("base64"),
+            sourceChannel: "web",
+            classification: "internal",
+          }),
+        })
+      )
+      expect(ingestRes.status).toBe(200)
+      const docId = ((await ingestRes.json()) as { result: { doc: { id: string } } }).result.doc.id
+      const read = (userId: string) =>
+        documentsGet(new Request(`http://127.0.0.1/api/d1/documents?userId=${userId}&docId=${docId}&includeContent=true`))
+      expect((await read("clerk_a")).status).toBe(200)
+
+      // Another process (Cloud Functions, an operator) raises the matter in Firestore; this process still holds the old label.
+      await updateDoc(doc(ctx.firestore(), "matters", matterId), { classification: "privileged-restricted" })
+      expect(getRuntimeStore().matters.get(matterId)?.classification).toBe("internal")
+
+      expect((await read("clerk_a")).status).toBe(403)
+      const listRes = await documentsGet(
+        new Request(`http://127.0.0.1/api/d1/documents?userId=clerk_a&matterId=${matterId}&limit=10&cursor=0`)
+      )
+      expect(listRes.status).toBe(200)
+      expect(JSON.stringify(await listRes.json())).not.toContain(docId)
+      expect((await read("partner_a")).status).toBe(200)
     })
   })
 

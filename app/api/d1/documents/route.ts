@@ -24,7 +24,7 @@ import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from 
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import {
   assertDocumentObjectIngestAllowed,
   DocumentObjectConfigurationError,
@@ -113,6 +113,8 @@ async function handleGet(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
   await syncFirmMembers(store, repos, user.firmId)
+  // Audit F14 / O-76: the read, the download and the list (with its OCR job counts) are judged at each matter's current label.
+  await syncFirmMatters(store, repos, user.firmId)
 
   if (docId) {
     const doc = (await repos.documents.get(docId)) ?? store.documents.get(docId) ?? null
