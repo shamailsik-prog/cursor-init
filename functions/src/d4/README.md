@@ -156,9 +156,13 @@ It fails closed. Every failure throws `AuthorityUnavailableError(reason)`, which
 - `pending_review`: kept for adapters that cannot list treatments at all; the corpus store reports a pending overruling as a fact instead (above);
 - `inconsistent`: data that breaks the contract;
 - `circuit_open`: the breaker is open;
+- `busy`: every pooled connection was in use for the whole connect timeout; that call alone fails, no breaker opens, and the log line comes at most once per 30 s;
+- `budget`: the gate run spent its authority time (below);
 - `error`: anything else.
 
-Any failure except `pending_review` and `inconsistent` opens a 30 s breaker. A gate over many citations therefore costs one connect timeout, and the store logs `d4.authority_unavailable {reason}` once per opening. Logs carry the reason token only, never a URL, a credential or driver text. Nothing about the corpus is stored with a gate result (ruling 12).
+Any failure except `pending_review`, `inconsistent` and `busy` opens a 30 s breaker. A gate over many citations therefore costs one connect timeout, and the store logs `d4.authority_unavailable {reason}` once per opening. Logs carry the reason token only, never a URL, a credential or driver text. Nothing about the corpus is stored with a gate result (ruling 12).
+
+Each gate run has an authority budget, `AUTHORITY_BUDGET_MS` = 60 s, half the 120 s function timeout (plan D24; #51 fix round 1, D-7). `runGate` adds up the time its store calls take. A call still running when the budget runs out is cut off, and so is every call after it, with `AuthorityUnavailableError("budget")`. Every remaining citation is then UNVERIFIED and every remaining temporal check TEMPORAL_UNAVAILABLE, and the run logs `d4.authority_unavailable {reason: "budget"}` once. A long draft against a slow corpus therefore still returns a recorded, fail-closed result instead of timing out.
 
 ## Events and audit
 

@@ -1,3 +1,4 @@
+import { logger } from "firebase-functions"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { extractCitations, normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
@@ -10,7 +11,8 @@ import {
   setAuthorityStoreForTests,
   type AuthorityStore,
 } from "../src/d4/authority"
-import { runGate, unpleadedChecks } from "../src/d4/gate"
+import { AUTHORITY_BUDGET_MS, runGate, unpleadedChecks } from "../src/d4/gate"
+import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { GATE_SEVERITY, type TemporalCheck } from "../src/d4/types"
 
 // Fixtures follow P4-13: citations use the year 2099 (read by the extractor, impossible in a real report), statute
@@ -676,6 +678,91 @@ describe("runGate: an unavailable authority fails closed (F05)", () => {
     expect(both.temporal.map((t) => [t.status, t.inForceText])).toEqual([["TEMPORAL_UNAVAILABLE", null]])
     const nothing = await runGate({ title: "T", body: "The petitioner prays for relief.", temporalChecks: [] }, down)
     expect(nothing).toEqual({ status: "NOT_ASSESSED", citations: [], temporal: [], scope: { citations: 0, temporalChecks: 0, assessed: false } })
+  })
+})
+
+describe("runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24)", () => {
+  /** A promise that never settles: a store call that hangs (a server that accepts and never answers). */
+  const never = <T>() => new Promise<T>(() => undefined)
+
+  /** knownStore's j_101, plus j_102 and j_103; `hang` names the calls that never answer ("all", or method:arg). */
+  function hangingStore(hang: Set<string>) {
+    const inner = sectionStore()
+    inner.addJudgment("j_101", "PLD 2099 SC 101", "division")
+    inner.addJudgment("j_102", "PLD 2099 SC 102", "division")
+    inner.addJudgment("j_103", "PLD 2099 SC 103", "division")
+    const hangs = (key: string) => hang.has("all") || hang.has(key)
+    const store: AuthorityStore = {
+      findJudgment: (c) => (hangs(`findJudgment:${c}`) ? never() : inner.findJudgment(c)),
+      listTreatments: (id) => (hangs(`listTreatments:${id}`) ? never() : inner.listTreatments(id)),
+      getSectionAsAt: (s, d, j) => (hangs(`getSectionAsAt:${s}`) ? never() : inner.getSectionAsAt(s, d, j)),
+    }
+    return store
+  }
+  const THREE = "See PLD 2099 SC 101, PLD 2099 SC 102 and PLD 2099 SC 103."
+
+  it("AUTHORITY_BUDGET_MS is 60 s, at most half the function timeout", () => {
+    expect(AUTHORITY_BUDGET_MS).toBe(60_000)
+    expect(AUTHORITY_BUDGET_MS).toBeLessThanOrEqual((FUNCTION_TIMEOUT_SECONDS * 1000) / 2)
+  })
+
+  it("a lookup still running when the budget runs out is cut off: the citation is UNVERIFIED, and every later citation and check is UNVERIFIED / TEMPORAL_UNAVAILABLE without a lookup", async () => {
+    const { store, calls } = spyStore(hangingStore(new Set(["listTreatments:j_102"])))
+    const started = Date.now()
+    const out = await runGate({ title: "T", body: `${THREE} ${TEXT_A}`, temporalChecks: [check(TEXT_A)] }, store, { budgetMs: 150 })
+    const took = Date.now() - started
+    expect(took).toBeGreaterThanOrEqual(140)
+    expect(took).toBeLessThan(1500)
+    expect(out.citations).toEqual([
+      { ref: "PLD 2099 SC 101", judgmentId: "j_101", status: "VERIFIED" },
+      { ref: "PLD 2099 SC 102", judgmentId: "j_102", status: "UNVERIFIED" },
+      { ref: "PLD 2099 SC 103", judgmentId: null, status: "UNVERIFIED" },
+    ])
+    expect(out.temporal).toEqual([{ ...check(TEXT_A), status: "TEMPORAL_UNAVAILABLE", inForceText: null }])
+    expect(out.status).toBe("UNVERIFIED")
+    // Once the budget is spent nothing more is asked of the store.
+    expect(calls.findJudgment).toEqual(["PLD 2099 SC 101", "PLD 2099 SC 102"])
+    expect(calls.getSectionAsAt).toEqual([])
+  })
+
+  it("a store that never answers: a run with 25 citations and 3 checks settles at the budget, every finding unproven", async () => {
+    const refs = Array.from({ length: 25 }, (_v, i) => `PLD 2099 SC ${201 + i}`)
+    const checks = [check(TEXT_A), check(TEXT_B, "2019-01-01"), check(TEXT_A, "2016-01-01")]
+    const started = Date.now()
+    const out = await runGate({ title: "T", body: `See ${refs.join(", ")}. ${TEXT_A} ${TEXT_B}`, temporalChecks: checks }, hangingStore(new Set(["all"])), { budgetMs: 200 })
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(out.citations.map((c) => [c.judgmentId, c.status])).toEqual(refs.map(() => [null, "UNVERIFIED"]))
+    expect(out.temporal.map((t) => [t.status, t.inForceText])).toEqual(checks.map(() => ["TEMPORAL_UNAVAILABLE", null]))
+    expect(out.status).toBe("UNVERIFIED")
+  })
+
+  it("the budget is per run: the next run starts with all of it", async () => {
+    const hang = new Set(["all"])
+    const store = hangingStore(hang)
+    const spent = await runGate({ title: "T", body: THREE, temporalChecks: [] }, store, { budgetMs: 100 })
+    expect(spent.citations.map((c) => c.status)).toEqual(["UNVERIFIED", "UNVERIFIED", "UNVERIFIED"])
+    hang.clear()
+    const fresh = await runGate({ title: "T", body: THREE, temporalChecks: [] }, store, { budgetMs: 100 })
+    expect(fresh.citations.map((c) => [c.judgmentId, c.status])).toEqual([["j_101", "VERIFIED"], ["j_102", "VERIFIED"], ["j_103", "VERIFIED"]])
+    // The default budget is far above what an answering store takes.
+    expect((await runGate({ title: "T", body: THREE, temporalChecks: [] }, store)).status).toBe("OK")
+  })
+
+  it("spending the budget logs d4.authority_unavailable {reason: budget} once per run, and a store error still propagates unchanged", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    try {
+      await runGate({ title: "T", body: `${THREE} ${TEXT_A}`, temporalChecks: [check(TEXT_A)] }, hangingStore(new Set(["all"])), { budgetMs: 50 })
+      await runGate({ title: "T", body: THREE, temporalChecks: [] }, hangingStore(new Set(["all"])), { budgetMs: 50 })
+      expect(warn.mock.calls.filter((c) => c[0] === "d4.authority_unavailable")).toEqual([
+        ["d4.authority_unavailable", { reason: "budget" }],
+        ["d4.authority_unavailable", { reason: "budget" }],
+      ])
+    } finally {
+      warn.mockRestore()
+    }
+    const bug = new TypeError("bug in the store")
+    const broken: AuthorityStore = { ...hangingStore(new Set()), findJudgment: async () => Promise.reject(bug) }
+    await expect(runGate({ title: "T", body: THREE, temporalChecks: [] }, broken, { budgetMs: 1000 })).rejects.toBe(bug)
   })
 })
 

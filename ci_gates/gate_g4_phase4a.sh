@@ -144,6 +144,12 @@ GATE_UNIT_TESTS=(
   'runGate: a pending overruling (F05, #51 R1 D-1) a pending overruling alone leaves the found judgment UNVERIFIED, never VERIFIED (ruling 3)'
   'runGate: a pending overruling (F05, #51 R1 D-1) a pending overruling never hides a qualifying one: a larger-bench overruling stays OVERRULED (P4-2)'
   'runGate: a pending overruling (F05, #51 R1 D-1) PENDING_OVERRULING is an overruling whose bench cannot be relied on, and is frozen'
+  # F05 (#51 R1 D-7, plan D24): a gate run's authority lookups share a 60 s budget, then fail closed
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) AUTHORITY_BUDGET_MS is 60 s, at most half the function timeout'
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) a lookup still running when the budget runs out is cut off: the citation is UNVERIFIED, and every later citation and check is UNVERIFIED / TEMPORAL_UNAVAILABLE without a lookup'
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) a store that never answers: a run with 25 citations and 3 checks settles at the budget, every finding unproven'
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) the budget is per run: the next run starts with all of it'
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) spending the budget logs d4.authority_unavailable {reason: budget} once per run, and a store error still propagates unchanged'
 )
 
 # --- functions/test/d4.doctypes.test.ts (the verified document-type catalogue and the court rule; no emulator) ---

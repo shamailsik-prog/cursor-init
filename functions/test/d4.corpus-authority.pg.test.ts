@@ -11,6 +11,8 @@ import { verdictFromTreatments } from "@/services/d4-2/citationVerdict"
 import { AuthorityUnavailableError, PENDING_OVERRULING } from "../src/d4/authority"
 import {
   BREAKER_OPEN_MS,
+  CONNECT_TIMEOUT_MS,
+  POOL_MAX,
   PgAuthorityStore,
   STATEMENT_TIMEOUT_MS,
   annexJurisdiction,
@@ -588,6 +590,33 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     expect(await s.findJudgment(ANY)).toMatchObject({ benchType: "division" })
   })
 
+  it("busy: a call that waits too long for a pooled connection is busy for that call alone, and opens no breaker (#51 R1 D-7)", async () => {
+    const locker = new pg.Client({ connectionString: db.urlAs() })
+    await locker.connect()
+    try {
+      const s = store()
+      await s.getSectionAsAt(S5, "2099-08-01", "FEDERAL") // warm: the state check is cached, so each call is one query
+      await locker.query("BEGIN")
+      await locker.query("LOCK TABLE public.citation IN ACCESS EXCLUSIVE MODE")
+      // POOL_MAX + 1 calls at once: POOL_MAX of them hold every connection, waiting on the lock (they would run into the
+      // statement timeout only after STATEMENT_TIMEOUT_MS); one waits for a connection and gives up first.
+      const started = Date.now()
+      const settled = Array.from({ length: POOL_MAX + 1 }, () => s.findJudgment(ANY).then((r) => r, (e: unknown) => e))
+      const first = await Promise.race(settled)
+      expect(first).toMatchObject(unavailableAs("busy"))
+      expect(Date.now() - started).toBeLessThan(CONNECT_TIMEOUT_MS + 1500)
+      await locker.query("ROLLBACK")
+      // The calls that held a connection finish normally, and the store still reads: busy opened no breaker.
+      const all = await Promise.all(settled)
+      expect(all.filter((r) => r instanceof AuthorityUnavailableError)).toHaveLength(1)
+      expect(all.filter((r) => !(r instanceof AuthorityUnavailableError))).toEqual(Array(POOL_MAX).fill(expect.objectContaining({ benchType: "division" })))
+      expect(await s.findJudgment(ANY)).toMatchObject({ benchType: "division" })
+    } finally {
+      await locker.query("ROLLBACK").catch(() => undefined)
+      await locker.end()
+    }
+  }, 30_000)
+
   it("a programming error inside the adapter is not an unavailable store: it propagates unchanged and opens no breaker (plan D5, #51 R1 D-6)", async () => {
     const s = store()
     expect(await s.findJudgment(ANY)).toMatchObject({ benchType: "division" })
@@ -627,7 +656,8 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
       [err({ code: "EHOSTUNREACH" }), "unreachable"],
       [err({ code: "ECONNRESET" }), "unreachable"],
       [err({ code: "ETIMEDOUT" }), "timeout"],
-      [err({}, "timeout exceeded when trying to connect"), "timeout"],
+      // pg-pool's own message for a wait in its queue: every connection is in use (#51 R1 D-7).
+      [err({}, "timeout exceeded when trying to connect"), "busy"],
       [err({}, "Connection terminated due to connection timeout"), "timeout"],
       [err({}, "timeout expired"), "timeout"],
       [err({}, "Query read timeout"), "timeout"],

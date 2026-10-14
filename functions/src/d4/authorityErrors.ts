@@ -17,6 +17,8 @@ export const AUTHORITY_UNAVAILABLE_REASONS = Object.freeze([
   "pending_review",
   "inconsistent",
   "circuit_open",
+  "busy",
+  "budget",
   "error",
 ] as const)
 export type AuthorityUnavailableReason = (typeof AUTHORITY_UNAVAILABLE_REASONS)[number]

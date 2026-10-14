@@ -17,6 +17,8 @@
  *
  * Every failure except one about the data opens a breaker for BREAKER_OPEN_MS (D9), so a gate over many citations
  * costs one connect timeout, and logs `d4.authority_unavailable {reason}` once per opening (D16), with no driver text.
+ * A call that waits too long for a pooled connection (every connection is in use) is `busy`: it fails that call alone
+ * and opens no breaker, since the corpus itself answers (#51 R1 D-7, plan D24).
  *
  * Dates travel as text (D10): DATE columns are selected as `::text` and compared as YYYY-MM-DD strings, so the process
  * time zone cannot shift a statute's effective date.
@@ -174,7 +176,10 @@ const NODE_REASONS: Readonly<Record<string, AuthorityUnavailableReason>> = {
   ETIMEDOUT: "timeout",
 }
 const TLS_CODES = /^(ERR_TLS_|ERR_SSL_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|UNABLE_TO_(VERIFY|GET)_|CERT_|ERR_OSSL_)/
-const TIMEOUT_MESSAGES = /^(timeout expired|timeout exceeded when trying to connect|Connection terminated due to connection timeout|Query read timeout)$/
+const TIMEOUT_MESSAGES = /^(timeout expired|Connection terminated due to connection timeout|Query read timeout)$/
+// pg-pool's message when a call waited connectionTimeoutMillis in its queue: every connection was in use (D24). A
+// connection that could not be opened in time is "Connection terminated due to connection timeout" instead.
+const POOL_BUSY_MESSAGE = "timeout exceeded when trying to connect"
 const TLS_MESSAGES = /^The server does not support SSL connections$/
 
 /**
@@ -192,14 +197,19 @@ export function classifyPgError(err: unknown): AuthorityUnavailableReason {
     if (TLS_CODES.test(code)) return "tls"
   }
   if (typeof message === "string") {
+    if (message === POOL_BUSY_MESSAGE) return "busy"
     if (TIMEOUT_MESSAGES.test(message)) return "timeout"
     if (TLS_MESSAGES.test(message)) return "tls"
   }
   return "error"
 }
 
-/** Reasons that describe the data, not the connection: they do not open the breaker. */
-const DATA_REASONS: ReadonlySet<AuthorityUnavailableReason> = new Set(["pending_review", "inconsistent", "circuit_open"])
+/**
+ * Reasons that do not open the breaker: they describe the data, not the connection (pending_review, inconsistent), the
+ * breaker itself (circuit_open), or this instance's own load (busy: the corpus answers, every pooled connection is in
+ * use, D24). A busy call fails alone; the next one may get a connection.
+ */
+const NO_BREAKER_REASONS: ReadonlySet<AuthorityUnavailableReason> = new Set(["pending_review", "inconsistent", "circuit_open", "busy"])
 
 export class PgAuthorityStore implements AuthorityStore {
   private readonly pool: pg.Pool
@@ -207,6 +217,7 @@ export class PgAuthorityStore implements AuthorityStore {
   private readonly maxStalenessMs: number
   private stateCheckedAt: number | null = null
   private openUntil = 0
+  private busyLoggedAt = Number.NEGATIVE_INFINITY
 
   /**
    * `deps.now` is the clock (tests move it). `deps.sessionOptions` replaces the session's startup options; it exists
@@ -311,10 +322,14 @@ export class PgAuthorityStore implements AuthorityStore {
       return await fn()
     } catch (e) {
       if (!(e instanceof AuthorityUnavailableError)) throw e
-      if (!DATA_REASONS.has(e.reason)) {
+      if (!NO_BREAKER_REASONS.has(e.reason)) {
         this.openUntil = this.now() + BREAKER_OPEN_MS
         this.stateCheckedAt = null
         logger.warn("d4.authority_unavailable", { reason: e.reason })
+      } else if (e.reason === "busy" && this.now() - this.busyLoggedAt >= BREAKER_OPEN_MS) {
+        // At most once per BREAKER_OPEN_MS, so a saturated pool cannot flood the log.
+        this.busyLoggedAt = this.now()
+        logger.warn("d4.authority_unavailable", { reason: "busy" })
       }
       throw e
     }
