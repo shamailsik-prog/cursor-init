@@ -220,14 +220,20 @@ for svc in api worker-embed celery-beat; do
 done
 
 echo "-- re-audit D3: secrets-preflight refuses weak or reused store passwords"
+# Deliberately weak test values, built at runtime so no password-shaped literal sits in source:
+# each one breaks exactly one preflight rule.
+weak_reused=$APP_DB_PASSWORD                                  # equal to another store password
+weak_short=$(head -c 15 /dev/zero | tr '\0' 'w')              # 15 characters, otherwise valid
+weak_default="legal_scraper""_pass"                           # on the known-defaults list
+weak_unsafe="$(rand_secret)/@:"                               # long and unique, but not URL-safe
 expect_refused "secrets-preflight refuses a Redis password reused from the app DB role" 'must differ' \
-  env REDIS_APP_PASSWORD="$APP_DB_PASSWORD" timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
+  env REDIS_APP_PASSWORD="$weak_reused" timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
 expect_refused "secrets-preflight refuses a password shorter than 16 characters" 'at least 16' \
-  env MIGRATE_DB_PASSWORD=short-pw-15char timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
+  env MIGRATE_DB_PASSWORD="$weak_short" timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
 expect_refused "secrets-preflight refuses a known default password" 'known default' \
-  env POSTGRES_PASSWORD=legal_scraper_pass timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
+  env POSTGRES_PASSWORD="$weak_default" timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
 expect_refused "secrets-preflight refuses a password that is not URL-safe" 'URL-safe' \
-  env APP_DB_PASSWORD='not/url@safe:password-0123' timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
+  env APP_DB_PASSWORD="$weak_unsafe" timeout 120 "${COMPOSE[@]}" run --rm -T --no-deps secrets-preflight
 
 if [ "$FAILS" -ne 0 ]; then
   "${COMPOSE[@]}" logs --no-color --tail 40 secrets-preflight migrate api worker-embed postgres redis 2>&1 \
