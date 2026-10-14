@@ -189,4 +189,11 @@ suite("F03 document object store (S3 / R2 integration)", () => {
     expect(documentObjectS3UsesServerSideEncryptionHeader()).toBe(false)
     process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = prev
   })
+
+  it("CI MinIO endpoint omits ServerSideEncryption (no KMS in docker run)", async () => {
+    const { documentObjectS3UsesServerSideEncryptionHeader } = await import(
+      "@/platform/documents/documentObjectS3"
+    )
+    expect(documentObjectS3UsesServerSideEncryptionHeader()).toBe(false)
+  })
 })

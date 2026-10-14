@@ -50,12 +50,19 @@ export function isDocumentObjectS3Configured(): boolean {
   )
 }
 
-/** Cloudflare R2 rejects x-amz-server-side-encryption (AES256); encryption at rest is automatic. */
+/** Omit SSE on PutObject when the target rejects x-amz-server-side-encryption (R2) or has no KMS (local MinIO). */
 export function documentObjectS3UsesServerSideEncryptionHeader(): boolean {
   const backend = process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND?.trim().toLowerCase()
   if (backend === "r2") return false
   const endpoint = process.env.SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT?.trim().toLowerCase() ?? ""
   if (endpoint.includes("r2.cloudflarestorage.com")) return false
+  if (
+    endpoint.includes("127.0.0.1") ||
+    endpoint.includes("localhost") ||
+    endpoint.includes("minio")
+  ) {
+    return false
+  }
   return true
 }
 
