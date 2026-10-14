@@ -331,3 +331,218 @@ async def try_ddl_as_current(sql):
 def test_c_every_seeded_source_carries_a_value_from_the_vocabulary(corpus_db):
     assert_migrated(corpus_db.migrate(), corpus_db)
     assert run(trust_by_name()) == SEEDED_TRUST
+
+
+async def _make_sources(specs):
+    """specs: {key: (source_name, trust_level)} -> {key: id}."""
+    from scraper.database import SessionLocal
+    from scraper.models import ScraperSource
+
+    async with SessionLocal() as db:
+        objs = {
+            key: ScraperSource(source_name=name, source_url=f"https://f20.example.invalid/{key}", trust_level=trust)
+            for key, (name, trust) in specs.items()
+        }
+        db.add_all(objs.values())
+        await db.commit()
+        return {key: obj.id for key, obj in objs.items()}
+
+
+async def _stage(rows):
+    """rows: {key: dict of ScraperStaging fields} -> {key: id}. Every row is normalised."""
+    from scraper.database import SessionLocal
+    from scraper.models import ScraperStaging
+
+    async with SessionLocal() as db:
+        objs = {}
+        for key, fields in rows.items():
+            fields = {
+                "source_url": f"https://f20.example.invalid/judgment/{key}",
+                "extracted_title": f"F20 Fixture {key} v. Test",
+                "extracted_year": 2099,
+                "raw_text": "synthetic F20 fixture text",
+                "normalised": True,
+                **fields,
+            }
+            objs[key] = ScraperStaging(**fields)
+        db.add_all(objs.values())
+        await db.commit()
+        return {key: obj.id for key, obj in objs.items()}
+
+
+async def _outcomes():
+    staging = await fetch(
+        "SELECT id, promoted, quarantined, quarantine_reason, promoted_to_id FROM scraper_staging ORDER BY id"
+    )
+    queue = await fetch("SELECT staging_id, reason, source_id FROM quarantine_queue ORDER BY staging_id, id")
+    master = await fetch("SELECT id, citation FROM case_law_master ORDER BY id")
+    embed = await fetch("SELECT record_id, table_name FROM embedding_queue ORDER BY record_id")
+    return staging, queue, master, embed
+
+
+def _promote():
+    from scraper.tasks.promotion import promote_staging_records
+
+    return run(promote_staging_records())
+
+
+def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({
+        "trusted": ("f20-trusted", "trusted"),
+        "review": ("f20-review", "review"),
+        "blocked": ("f20-blocked", "blocked"),
+        "deleted": ("f20-deleted", "trusted"),
+        "renamed": ("f20-old-name", "trusted"),
+    }))
+    ids = run(_stage({
+        "trusted_050": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 1", confidence_score=0.5),
+        "trusted_049": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 2", confidence_score=0.49),
+        "review": dict(source_site="f20-review", source_id=src["review"], extracted_citation="2099 F20 3", confidence_score=0.99),
+        "blocked": dict(source_site="f20-blocked", source_id=src["blocked"], extracted_citation="2099 F20 4", confidence_score=0.99),
+        "unknown_site": dict(source_site="f20-no-such-source", extracted_citation="2099 F20 5", confidence_score=0.99),
+        "deleted": dict(source_site="f20-deleted", source_id=src["deleted"], extracted_citation="2099 F20 6", confidence_score=0.99),
+        "renamed": dict(source_site="f20-old-name", source_id=src["renamed"], extracted_citation="2099 F20 7", confidence_score=0.9),
+        # The FK is authoritative: a review source cannot borrow a trusted source's name.
+        "fk_beats_name": dict(source_site="f20-trusted", source_id=src["review"], extracted_citation="2099 F20 8", confidence_score=0.99),
+        # No FK: the harvester's parsing_metadata.source_name comes before the source_site label.
+        "metadata_name": dict(source_site="f20-site-label", parsing_metadata={"source_name": "f20-trusted"}, extracted_citation="2099 F20 9", confidence_score=0.8),
+        # No FK, no metadata: the source_site label, as today's harvesters stage rows.
+        "site_only": dict(source_site="f20-trusted", extracted_citation="2099 F20 10", confidence_score=0.7),
+    }))
+    # After staging: the source is deleted (FK -> NULL), and another renamed.
+    run(execute(
+        "DELETE FROM scraper_sources WHERE id = :d",
+        "UPDATE scraper_sources SET source_name = 'f20-new-name' WHERE id = :r",
+        params={"d": src["deleted"], "r": src["renamed"]},
+    ))
+
+    result = _promote()
+
+    staging, queue, master, embed = run(_outcomes())
+    by_id = {row[0]: row for row in staging}
+    expected = {
+        "trusted_050": ("promoted", None),
+        "trusted_049": ("quarantined", "low_confidence"),
+        "review": ("quarantined", "review_source"),
+        "blocked": ("quarantined", "blocked_source"),
+        "unknown_site": ("quarantined", "unknown_source"),
+        "deleted": ("quarantined", "unknown_source"),
+        "renamed": ("promoted", None),
+        "fk_beats_name": ("quarantined", "review_source"),
+        "metadata_name": ("promoted", None),
+        "site_only": ("promoted", None),
+    }
+    queue_reason = {row[0]: row[1] for row in queue}
+    actual = {}
+    for key in expected:
+        _id, promoted, quarantined, staged_reason, _to = by_id[ids[key]]
+        got = "promoted" if promoted and not quarantined else "quarantined" if quarantined and not promoted else "pending"
+        actual[key] = (got, staged_reason if quarantined else None)
+    wrong = {key: {"got": actual[key], "want": expected[key]} for key in expected if actual[key] != expected[key]}
+    assert not wrong, f"staging outcome differs from the trust rule: {wrong}"
+    # The durable reason is on the review-queue row too, and nothing promoted is queued.
+    assert {key: queue_reason.get(ids[key]) for key in expected} == {key: reason for key, (_s, reason) in expected.items()}
+    promoted_citations = {"2099 F20 1", "2099 F20 7", "2099 F20 9", "2099 F20 10"}
+    assert {row[1] for row in master} == promoted_citations, "only promoted rows may reach case_law_master"
+    assert len(master) == 4
+    master_ids = {row[0] for row in master}
+    assert {by_id[ids[k]][4] for k in ("trusted_050", "renamed", "metadata_name", "site_only")} == master_ids
+    assert {row[0] for row in embed} == master_ids and {row[1] for row in embed} == {"case_law_master"}
+    assert result == {"promoted": 4, "quarantined": 6, "failed": 0}
+
+    # A second pass has nothing left to decide and writes nothing new.
+    assert _promote() == {"promoted": 0, "quarantined": 0, "failed": 0}
+    assert run(_outcomes()) == (staging, queue, master, embed)
+
+
+# ---------------------------------------------------------------------------------------------
+# (d) F22: a citation-free record is quarantined; a bad record does not stop the batch
+# ---------------------------------------------------------------------------------------------
+def test_d_citation_free_record_is_quarantined_and_the_batch_continues(corpus_db, caplog):
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    src = run(_make_sources({"trusted": ("f20-trusted", "trusted")}))
+    ids = run(_stage({
+        "no_citation": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation=None, confidence_score=0.9),
+        "blank_citation": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="   ", confidence_score=0.9),
+        "good": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 21", confidence_score=0.9),
+        # case_law_master refuses year 1800 (ck_case_law_year_sane): a database error on this row.
+        "db_error": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 22", extracted_year=1800, confidence_score=0.9),
+        "good_too": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 23", confidence_score=0.9),
+    }))
+
+    with caplog.at_level(logging.INFO):
+        result = _promote()
+
+    staging, queue, master, _embed = run(_outcomes())
+    by_id = {row[0]: row for row in staging}
+    assert by_id[ids["no_citation"]][1:4] == (False, True, "citation_missing")
+    assert by_id[ids["blank_citation"]][1:4] == (False, True, "citation_missing")
+    assert {row[1] for row in queue} == {"citation_missing"} and len(queue) == 2
+    assert by_id[ids["good"]][1:3] == (True, False)
+    assert by_id[ids["good_too"]][1:3] == (True, False)
+    # The failing row is rolled back on its own and left pending for the next run.
+    assert by_id[ids["db_error"]][1:4] == (False, False, None)
+    assert {row[1] for row in master} == {"2099 F20 21", "2099 F20 23"}
+    assert result == {"promoted": 2, "quarantined": 2, "failed": 1}
+
+    failures = [r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage()]
+    assert len(failures) == 1, failures
+    assert str(ids["db_error"]) in failures[0] and "IntegrityError" in failures[0]
+    assert "ck_case_law_year_sane" not in failures[0] and "1800" not in failures[0], "log carries row data"
+
+
+# ---------------------------------------------------------------------------------------------
+# (e) the dispatcher harvests only trusted and review sources
+# ---------------------------------------------------------------------------------------------
+def install_harvester_spies(monkeypatch):
+    """Replace every harvester module the dispatcher can route to with a spy, so a call is recorded
+    and no network is touched."""
+    calls = []
+    modules = {
+        "pakistanlawsite": "scrape_pakistanlawsite",
+        "nasirlawsite": "scrape_nasirlawsite",
+        "pakistancode": "scrape_pakistancode",
+        "shc": "scrape_shc",
+        "supremecourt": "scrape_supremecourt",
+        "lahorehighcourt": "scrape_lahorehighcourt",
+        "peshawarhighcourt": "scrape_peshawarhighcourt",
+        "balochistanhighcourt": "scrape_balochistanhighcourt",
+        "islamabadhighcourt": "scrape_islamabadhighcourt",
+        "nationalassembly": "scrape_nationalassembly",
+    }
+    for module, func in modules.items():
+        spy = types.ModuleType(f"scraper.tasks.{module}")
+
+        async def _harvest(source, db, _func=func):
+            calls.append((_func, source.source_name))
+
+        setattr(spy, func, _harvest)
+        monkeypatch.setitem(sys.modules, f"scraper.tasks.{module}", spy)
+    return calls
+
+
+def test_e_dispatcher_never_harvests_blocked_or_unknown_sources(corpus_db, monkeypatch):
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    # Unknown values cannot be stored through the schema any more; drop the CHECK to model a
+    # drifted or un-migrated database, which the dispatcher must still refuse on its own.
+    run(execute(
+        f"ALTER TABLE scraper_sources DROP CONSTRAINT {CHECK_NAME}",
+        "UPDATE scraper_sources SET trust_level = 'blocked' WHERE source_name = 'NasirLawSite'",
+        "UPDATE scraper_sources SET trust_level = 'semi_trusted' WHERE source_name = 'PakistanCode'",
+        "UPDATE scraper_sources SET trust_level = 'TRUSTED' WHERE source_name = 'NationalAssembly'",
+        "UPDATE scraper_sources SET trust_level = '' WHERE source_name = 'LahoreHighCourt'",
+        "UPDATE scraper_sources SET trust_level = 'trusted' WHERE source_name = 'PakistanLawSite'",
+        "UPDATE scraper_sources SET trust_level = 'review' WHERE source_name = 'SupremeCourt'",
+    ))
+    calls = install_harvester_spies(monkeypatch)
+    from scraper.tasks.dispatcher import _run_async
+
+    for name in ("NasirLawSite", "PakistanCode", "NationalAssembly", "LahoreHighCourt"):
+        run(_run_async(name))
+    assert calls == [], f"harvested a blocked/unknown source: {calls}"
+
+    # Positive controls: the spies do record a permitted harvest.
+    run(_run_async("PakistanLawSite"))
+    run(_run_async("SupremeCourt"))
+    assert calls == [("scrape_pakistanlawsite", "PakistanLawSite"), ("scrape_supremecourt", "SupremeCourt")]

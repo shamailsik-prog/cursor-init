@@ -3,6 +3,7 @@ import logging, asyncio
 from scraper.database import SessionLocal
 from sqlalchemy import select
 from scraper.models import ScraperSource
+from scraper.trust import may_harvest
 logger = logging.getLogger(__name__)
 
 @shared_task(name="scraper.tasks.dispatcher.run_source_job", bind=True, max_retries=3)
@@ -24,8 +25,10 @@ async def _run_async(source_name: str):
         if not source.is_active:
             logger.info(f"{source_name} inactive, skip")
             return
-        if source.trust_level=="blocked":
-            logger.info(f"{source_name} blocked, skip")
+        # Audit F20: only trusted and review sources are harvested; blocked and any value outside
+        # the vocabulary (an un-migrated or drifted row) fail closed.
+        if not may_harvest(source.trust_level):
+            logger.info("%s trust_level %r is not harvestable, skip", source_name, source.trust_level)
             return
         # route
         if source_name=="PakistanLawSite":
