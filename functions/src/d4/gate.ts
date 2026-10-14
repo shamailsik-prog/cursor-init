@@ -9,7 +9,8 @@
 import { extractCitations, isUnrecognisedRef, normaliseCitation } from "@/services/d4-2/citations"
 import { verdictFromTreatments } from "@/services/d4-2/citationVerdict"
 import { normaliseDraftBody } from "@/services/d4-2/draftCharset"
-import { AuthorityUnavailableError, type AuthorityStore } from "./authority"
+import type { AuthorityStore } from "./authority"
+import { AuthorityUnavailableError } from "./authorityErrors"
 import {
   GATE_SEVERITY,
   type CitationFinding,

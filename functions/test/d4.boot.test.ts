@@ -67,3 +67,91 @@ describe("D4 boot (P4-3, P4-10)", () => {
     }
   })
 })
+
+describe("F05 authority store selection (plan Task 8, D8, D16)", () => {
+  const READER_ENV = ["SIKANDER_CORPUS_READER_URL", "SIKANDER_CORPUS_MAX_STALENESS_HOURS", "SIKANDER_CORPUS_READER_CA"] as const
+  const saved: Record<string, string | undefined> = {}
+  // A loopback URL nothing listens on: selection builds the store, it never connects. The password is a fixture.
+  const LOOPBACK = `postgres://reader:fixture-${Math.random().toString(36).slice(2)}@127.0.0.1:1/corpus`
+
+  beforeEach(async () => {
+    for (const k of READER_ENV) {
+      saved[k] = process.env[k]
+      delete process.env[k]
+    }
+    vi.resetModules()
+  })
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    const authority = await import("../src/d4/authority")
+    authority.setAuthorityStoreForTests(null)
+    await authority.resetCorpusAuthorityStoreForTests()
+    for (const k of READER_ENV) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+  })
+
+  it("with a valid loopback config the active store is a PgAuthorityStore, memoised per config", async () => {
+    const authority = await import("../src/d4/authority")
+    const { PgAuthorityStore } = await import("../src/d4/corpusAuthorityStore")
+    process.env.SIKANDER_CORPUS_READER_URL = LOOPBACK
+    process.env.SIKANDER_CORPUS_MAX_STALENESS_HOURS = "24"
+    const first = authority.activeAuthorityStore()
+    expect(first).toBeInstanceOf(PgAuthorityStore)
+    expect(authority.activeAuthorityStore()).toBe(first)
+    // Another configuration (a rotated password) is another store; the earlier one is ended.
+    const end = vi.spyOn(first as InstanceType<typeof PgAuthorityStore>, "end")
+    process.env.SIKANDER_CORPUS_READER_URL = LOOPBACK.replace("reader:", "reader2:")
+    const second = authority.activeAuthorityStore()
+    expect(second).toBeInstanceOf(PgAuthorityStore)
+    expect(second).not.toBe(first)
+    expect(end).toHaveBeenCalledTimes(1)
+    expect(authority.activeAuthorityStore()).toBe(second)
+  })
+
+  it("an invalid config falls back to the empty store and logs d4.authority_not_configured once per reason", async () => {
+    const { logger } = await import("firebase-functions")
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    const authority = await import("../src/d4/authority")
+    process.env.SIKANDER_CORPUS_READER_URL = LOOPBACK
+    process.env.SIKANDER_CORPUS_MAX_STALENESS_HOURS = "0"
+    for (let i = 0; i < 3; i += 1) expect(authority.activeAuthorityStore()).toBe(authority.EMPTY_AUTHORITY_STORE)
+    delete process.env.SIKANDER_CORPUS_READER_URL
+    for (let i = 0; i < 3; i += 1) expect(authority.activeAuthorityStore()).toBe(authority.EMPTY_AUTHORITY_STORE)
+    expect(warn.mock.calls).toEqual([
+      ["d4.authority_not_configured", { reason: "invalid_staleness" }],
+      ["d4.authority_not_configured", { reason: "missing" }],
+    ])
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("fixture-")
+  })
+
+  it("in production a plaintext URL is the empty store", async () => {
+    const { logger } = await import("firebase-functions")
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+    const authority = await import("../src/d4/authority")
+    process.env.SIKANDER_CORPUS_READER_URL = LOOPBACK
+    process.env.SIKANDER_CORPUS_MAX_STALENESS_HOURS = "24"
+    vi.stubEnv("NODE_ENV", "production")
+    expect(authority.activeAuthorityStore()).toBe(authority.EMPTY_AUTHORITY_STORE)
+    expect(warn.mock.calls).toEqual([["d4.authority_not_configured", { reason: "tls_required" }]])
+  })
+
+  it("a test store wins over the environment", async () => {
+    const authority = await import("../src/d4/authority")
+    process.env.SIKANDER_CORPUS_READER_URL = LOOPBACK
+    process.env.SIKANDER_CORPUS_MAX_STALENESS_HOURS = "24"
+    const mine = new authority.InMemoryAuthorityStore()
+    authority.setAuthorityStoreForTests(mine)
+    expect(authority.activeAuthorityStore()).toBe(mine)
+    authority.setAuthorityStoreForTests(null)
+    expect(authority.activeAuthorityStore()).not.toBe(mine)
+  })
+
+  it("resetCorpusAuthorityStoreForTests refuses in production", async () => {
+    const authority = await import("../src/d4/authority")
+    vi.stubEnv("NODE_ENV", "production")
+    await expect(authority.resetCorpusAuthorityStoreForTests()).rejects.toThrow("resetCorpusAuthorityStoreForTests is test-only")
+  })
+})

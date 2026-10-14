@@ -22,7 +22,8 @@ import { logger } from "firebase-functions"
 import pg from "pg"
 import { normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
-import { AuthorityUnavailableError, type AuthorityStore, type AuthorityUnavailableReason } from "./authority"
+import type { AuthorityStore } from "./authority"
+import { AuthorityUnavailableError, type AuthorityUnavailableReason } from "./authorityErrors"
 import type { CorpusReaderConfig } from "./corpusReaderConfig"
 
 /** A section version is usable only above this confidence (ruling 4: strictly greater than 0.5). */

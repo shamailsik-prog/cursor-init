@@ -14,6 +14,7 @@ import { randomBytes } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import pg from "pg"
+import { resetCorpusAuthorityStoreForTests } from "../src/d4/authority"
 
 /** The Annex A DDL in its load-bearing order (plan D13): 004 re-defines the inventory 003 created. */
 export const ANNEX_A_DDL: readonly string[] = ["001_corpus_contract.sql", "003_corpus_publication.sql", "004_authority_read_views.sql"]
@@ -184,12 +185,7 @@ export function withCorpusReaderEnv(db: Pick<CorpusDb, "readerUrl">, hours = 24)
   }
 }
 
-/**
- * Forget the selected corpus store and its cached state (`resetCorpusAuthorityStoreForTests`, plan Task 8). Until that
- * seam exists this does nothing, so the e2e also loads and runs on the base for its RED run.
- */
+/** Forget the selected corpus store, its pool and its cached state (plan Task 8's seam). */
 export async function resetAuthorityStore(): Promise<void> {
-  const mod = (await import("../src/d4/authority")) as unknown as Record<string, unknown>
-  const reset = mod.resetCorpusAuthorityStoreForTests
-  if (typeof reset === "function") await (reset as () => Promise<void>)()
+  await resetCorpusAuthorityStoreForTests()
 }

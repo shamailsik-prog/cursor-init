@@ -2,12 +2,19 @@
  * The authority port (spec P4-3): what the gate needs to know about the corpus, and nothing else. Calls carry only
  * a canonical citation, a judgment id or a section key, never a matter id or party data (L19.11 #3).
  *
- * Production runs on EMPTY_AUTHORITY_STORE until the corpus connector exists (O-59): no judgment, no history, so
- * every citation is UNVERIFIED and every temporal check UNAVAILABLE, and the partner override carries the load.
- * Tests inject an InMemoryAuthorityStore through setAuthorityStoreForTests.
+ * Which store the gate runs on (audit F05, plan Task 8): a test's store when one is set; otherwise the firm's promoted
+ * Annex A corpus (PgAuthorityStore) when the environment configures a corpus reader (readCorpusReaderConfig, D8);
+ * otherwise EMPTY_AUTHORITY_STORE: no judgment, no history, so every citation is UNVERIFIED and every temporal check
+ * UNAVAILABLE, and the partner override carries the load. An adapter that cannot answer throws
+ * AuthorityUnavailableError, which the gate reads the same way.
  */
+import { logger } from "firebase-functions"
 import { normaliseCitation } from "@/services/d4-2/citations"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
+import { PgAuthorityStore } from "./corpusAuthorityStore"
+import { readCorpusReaderConfig } from "./corpusReaderConfig"
+
+export { AUTHORITY_UNAVAILABLE_REASONS, AuthorityUnavailableError, type AuthorityUnavailableReason } from "./authorityErrors"
 
 /**
  * The port's contract, which every adapter (the O-59 corpus connector included) must meet; the O-59 parity test asserts
@@ -25,42 +32,6 @@ export interface AuthorityStore {
   listTreatments(judgmentId: string): Promise<TreatmentFact[]>
   /** The text of the section in force on `asAtDate` in `jurisdiction`, or "no_history" when the store has none. */
   getSectionAsAt(sectionId: string, asAtDate: string, jurisdiction: string): Promise<{ text: string } | "no_history">
-}
-
-/**
- * Why an adapter could not answer (F05). Every failure of the corpus reader, from the network to data that breaks the
- * Annex A contract, is one of these; the gate reads it as "not proven" (UNVERIFIED / TEMPORAL_UNAVAILABLE), never OK.
- */
-export const AUTHORITY_UNAVAILABLE_REASONS = Object.freeze([
-  "unreachable",
-  "timeout",
-  "auth",
-  "tls",
-  "permission",
-  "schema_missing",
-  "contract_missing",
-  "stale",
-  "wrong_role",
-  "pending_review",
-  "inconsistent",
-  "circuit_open",
-  "error",
-] as const)
-export type AuthorityUnavailableReason = (typeof AUTHORITY_UNAVAILABLE_REASONS)[number]
-
-/**
- * The one error an adapter throws when it cannot answer (F05). The gate catches this class, and only this class: any
- * other error is a bug and still fails the request. The message is the reason token only, never driver text, a host
- * or a credential.
- */
-export class AuthorityUnavailableError extends Error {
-  readonly reason: AuthorityUnavailableReason
-
-  constructor(reason: AuthorityUnavailableReason) {
-    super(`authority_unavailable:${reason}`)
-    this.name = "AuthorityUnavailableError"
-    this.reason = reason
-  }
 }
 
 /** The production adapter until O-59: it knows nothing, so the gate fails closed. */
@@ -133,7 +104,39 @@ export function setAuthorityStoreForTests(s: AuthorityStore | null): void {
   testStore = s
 }
 
-/** The store the gate runs against: a test's, else the empty one. */
+/** The corpus store for the current configuration (one at a time; a new configuration ends the previous pool). */
+let corpus: { key: string; store: PgAuthorityStore } | null = null
+/** The not-configured reasons already logged by this process (D16: once per reason). */
+const notConfiguredLogged = new Set<string>()
+
+/**
+ * The store the gate runs against, in order: a test's; the corpus store when the environment configures a valid
+ * reader (memoised per configuration); else the empty one, logging `d4.authority_not_configured {reason}` once per
+ * reason. The log carries the reason token only, never the URL or a credential.
+ */
 export function activeAuthorityStore(): AuthorityStore {
-  return testStore ?? EMPTY_AUTHORITY_STORE
+  if (testStore) return testStore
+  const configured = readCorpusReaderConfig(process.env)
+  if (configured.ok) {
+    if (corpus?.key !== configured.config.key) {
+      const previous = corpus
+      corpus = { key: configured.config.key, store: new PgAuthorityStore(configured.config) }
+      if (previous) void previous.store.end().catch(() => undefined)
+    }
+    return corpus.store
+  }
+  if (!notConfiguredLogged.has(configured.reason)) {
+    notConfiguredLogged.add(configured.reason)
+    logger.warn("d4.authority_not_configured", { reason: configured.reason })
+  }
+  return EMPTY_AUTHORITY_STORE
+}
+
+/** Test-only: end the corpus store's pool and forget it, its cached state, and the not-configured log. */
+export async function resetCorpusAuthorityStoreForTests(): Promise<void> {
+  if (process.env.NODE_ENV === "production") throw new Error("resetCorpusAuthorityStoreForTests is test-only")
+  const previous = corpus
+  corpus = null
+  notConfiguredLogged.clear()
+  if (previous) await previous.store.end()
 }
