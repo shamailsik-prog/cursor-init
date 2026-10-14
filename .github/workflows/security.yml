@@ -75,8 +75,18 @@ jobs:
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tgz" | sha256sum -c -
           tar -xzf gitleaks.tgz gitleaks
           rm gitleaks.tgz
-      - name: Scan full git history
-        run: ./gitleaks git --config .gitleaks.toml --redact --no-banner --exit-code 1 .
+      # On pull requests, scan only commits on the PR branch (base..head). A full-repo
+      # scan would fail on secrets in other open branches still on the remote.
+      - name: Scan git history
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+            ./gitleaks git --config .gitleaks.toml --redact --no-banner --exit-code 1 --log-opts="${BASE_SHA}..${HEAD_SHA}" .
+          else
+            ./gitleaks git --config .gitleaks.toml --redact --no-banner --exit-code 1 .
+          fi
 
   dependency-audit:
     name: Dependency audit
