@@ -3,8 +3,9 @@
 -- test harnesses; plan D13). Every statement can be re-run.
 --
 -- The draft gate's corpus reader (functions/src/d4/corpusAuthorityStore.ts) logs in as a member of
--- corpus_authority_reader, the NOLOGIN role this file creates, and of nothing else (spec ruling 13 as amended by plan
--- D21, #51 R1 D-3). That role can read these four views and corpus_metadata, and nothing else: 001's corpus_reader
+-- corpus_authority_reader, the NOLOGIN role this file creates, and (for CONNECT only, where PR 2b provisions it) of
+-- corpus_clients, and of nothing else; the adapter enforces that as an allowlist (spec ruling 13 as amended by plan
+-- D21, #51 R1 D-3 and R2). That role can read these four views and corpus_metadata, and nothing else: 001's corpus_reader
 -- can also read v_judgment, v_source_provenance and the other v_* views (FA-DATA-003, its own finding), so the gate
 -- does not use it. 001's grants are not changed here. A row is visible (plan D1) only when:
 --   * its review_status is 'promoted';
@@ -26,8 +27,9 @@
 -- 29, which provisioning refuses (plan D20).
 
 -- 0. The reader role (D21): NOLOGIN, no attribute, a member of nothing. NOINHERIT, like 001's roles, so a membership
---    someone later grants it would not pass on that role's rights. The gate's login is a member of it and of nothing
---    else; the adapter refuses any other membership or any other readable relation (D7).
+--    someone later grants it would not pass on that role's rights. The gate's login is a member of it and (for CONNECT
+--    only) of corpus_clients, and of nothing else. The adapter refuses any other membership, however held, any
+--    elevated attribute on any role the login is a member of, and any other readable relation (D7, an allowlist).
 DO $$ BEGIN CREATE ROLE corpus_authority_reader NOLOGIN NOINHERIT; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER ROLE corpus_authority_reader NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 GRANT USAGE ON SCHEMA public TO corpus_authority_reader;

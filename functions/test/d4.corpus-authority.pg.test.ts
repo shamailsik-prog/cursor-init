@@ -482,6 +482,86 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     await expect(store(config).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
   })
 
+  // #51 R2 R1-1: membership is an allowlist. The login may be a member of corpus_authority_reader and, for CONNECT only,
+  // corpus_clients, and of nothing else, however the membership is held: inherited or SET-only, directly or through
+  // another role, or implicitly (a predefined role, the database's owner). No role it is a member of, itself included,
+  // may hold SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS. Every shape below passed D7 at e392f9d; the
+  // re-audit logged in as the first four and escalated (SET ROLE to a superuser, a quarantined row, COPY FROM a file).
+  /** A NOLOGIN helper role made by `sql` ($HELPER is its name); dropped after the file, with the login roles. */
+  async function helperRole(sql: string[]): Promise<string> {
+    const name = `f05x_h_${randomUUID().slice(0, 8)}`
+    extraRoles.push(name)
+    for (const statement of sql) await db.admin.query(statement.replaceAll("$HELPER", `"${name}"`))
+    return name
+  }
+
+  /** corpus_clients as PR 2b provisions it: a NOLOGIN group that carries CONNECT (and schema USAGE), nothing else. */
+  async function corpusClients(): Promise<void> {
+    const exists = (await db.admin.query("SELECT 1 FROM pg_roles WHERE rolname = 'corpus_clients'")).rowCount === 1
+    if (!exists) {
+      await db.admin.query("CREATE ROLE corpus_clients NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS")
+      extraRoles.push("corpus_clients")
+    }
+    await db.admin.query(`GRANT CONNECT ON DATABASE "${db.name}" TO corpus_clients`)
+    await db.admin.query("GRANT USAGE ON SCHEMA public TO corpus_clients")
+  }
+
+  const HOLDS_ANOTHER_ROLE: Array<{ shape: string; grants: () => Promise<string[]>; undo?: string[] }> = [
+    {
+      shape: "a SET-only member of a NOLOGIN SUPERUSER role that does not own the database",
+      grants: async () => [`GRANT "${await helperRole(["CREATE ROLE $HELPER NOLOGIN SUPERUSER"])}" TO $ROLE WITH INHERIT FALSE, SET TRUE`],
+    },
+    {
+      shape: "a SET-only member of a role that can SELECT judgment",
+      grants: async () => [
+        `GRANT "${await helperRole(["CREATE ROLE $HELPER NOLOGIN", "GRANT SELECT ON public.judgment TO $HELPER"])}" TO $ROLE WITH INHERIT FALSE, SET TRUE`,
+      ],
+    },
+    { shape: "a member of pg_read_server_files", grants: async () => ["GRANT pg_read_server_files TO $ROLE"] },
+    { shape: "a member of pg_execute_server_program", grants: async () => ["GRANT pg_execute_server_program TO $ROLE"] },
+    { shape: "a member of pg_monitor (any predefined role)", grants: async () => ["GRANT pg_monitor TO $ROLE"] },
+    { shape: "CREATEDB", grants: async () => ["ALTER ROLE $ROLE CREATEDB"] },
+    {
+      shape: "a member of a role that holds nothing at all (an allowlist, not a denylist)",
+      grants: async () => [`GRANT "${await helperRole(["CREATE ROLE $HELPER NOLOGIN"])}" TO $ROLE`],
+    },
+    {
+      shape: "a member of corpus_authority_reader after that role was altered to CREATEROLE",
+      grants: async () => ["ALTER ROLE corpus_authority_reader CREATEROLE"],
+      undo: ["ALTER ROLE corpus_authority_reader NOCREATEROLE"],
+    },
+    {
+      shape: "a member of corpus_clients after that role was altered to CREATEDB",
+      grants: async () => {
+        await corpusClients()
+        return ["GRANT corpus_clients TO $ROLE", "ALTER ROLE corpus_clients CREATEDB"]
+      },
+      undo: ["ALTER ROLE corpus_clients NOCREATEDB"],
+    },
+  ]
+
+  it.each(HOLDS_ANOTHER_ROLE)("wrong_role: a reader login that is also $shape (#51 R2 R1-1)", async ({ grants, undo }) => {
+    try {
+      const config = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`, ...(await grants())])
+      await expect(store(config).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+    } finally {
+      for (const statement of undo ?? []) await db.admin.query(statement)
+    }
+  })
+
+  it("the legitimate reader still reads: corpus_authority_reader alone, and with corpus_clients when only that role may CONNECT (#51 R2 R1-1)", async () => {
+    const direct = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`])
+    expect(await store(direct).findJudgment(ANY)).toMatchObject({ benchType: "division" })
+    await corpusClients()
+    const viaClients = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`, "GRANT corpus_clients TO $ROLE"])
+    // As on the compose corpus host (PR 2b): PUBLIC may not connect, corpus_clients may.
+    await withState(`REVOKE CONNECT ON DATABASE "${db.name}" FROM PUBLIC`, `GRANT CONNECT ON DATABASE "${db.name}" TO PUBLIC`, async () => {
+      expect(await store(viaClients).findJudgment(ANY)).toMatchObject({ benchType: "division" })
+      const noClients = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`])
+      await expect(store(noClients).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("permission"))
+    })
+  })
+
   it("wrong_role: a writer membership through an intermediate role, and the plain reader login still reads (control)", async () => {
     const mid = `f05x_mid_${randomUUID().slice(0, 8)}`
     await db.admin.query(`CREATE ROLE "${mid}" NOLOGIN IN ROLE corpus_writer`)

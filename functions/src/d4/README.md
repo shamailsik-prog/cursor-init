@@ -134,11 +134,11 @@ A call carries only a canonical citation, a judgment id or a section key (with a
 
 In production the URL must ask for `verify-full`. Outside production, plaintext is allowed to loopback only. The deployment binding (the secret, the corpus host, the network path) is out of scope here (spec §7).
 
-The login must be a member of `corpus_authority_reader`, the NOLOGIN role 004 creates (ruling 13 as amended by plan D21; #51 fix round 1, D-3). That role can read the four `v_authority_*` views and `corpus_metadata`, and nothing else. It is not 001's `corpus_reader`, which can also read `v_judgment`, `v_source_provenance` and the other `v_*` views (FA-DATA-003). Before its first read, and again every 30 s, the store checks the session and refuses it (`wrong_role`) unless all of these hold:
+The login must be a member of `corpus_authority_reader`, the NOLOGIN role 004 creates, and (for CONNECT only) of `corpus_clients`, and of nothing else (ruling 13 as amended by plan D21; #51 fix rounds 1 and 2). That role can read the four `v_authority_*` views and `corpus_metadata`, and nothing else. It is not 001's `corpus_reader`, which can also read `v_judgment`, `v_source_provenance` and the other `v_*` views (FA-DATA-003). Before its first read, and again every 30 s, the store checks the session and refuses it (`wrong_role`) unless all of these hold:
 
 - it inherits `corpus_authority_reader`;
-- it is not a superuser and holds none of CREATEROLE, BYPASSRLS or REPLICATION;
-- it is not a member, directly or through any role, inherited or SET-only, of `corpus_reader`, `corpus_writer`, `corpus_declassify`, `pg_read_all_data` or `pg_write_all_data`, and it does not own the database;
+- its memberships are an allowlist: `corpus_authority_reader` and, for CONNECT only (PR 2b's pg_hba lets only its members in), `corpus_clients`, and no other role however held, inherited or SET-only, directly or through another role, or implicitly (the database's owner, any predefined role such as `pg_read_server_files`) (#51 fix round 2);
+- no role it is a member of, itself included, is a superuser or holds CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS;
 - it holds no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT, UPDATE or REFERENCES) on any relation in schema `public`;
 - it can SELECT no relation in schema `public` (the table or any column, however granted, including to PUBLIC) other than the four views and `corpus_metadata`;
 - the session is read-only.

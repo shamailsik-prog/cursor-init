@@ -120,5 +120,6 @@ run_probe "runtime role on the upgraded volume" \
   timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -e E2E_BOOTSTRAP_USER="$POSTGRES_USER" -e E2E_ANNEX_A_PAGE="$ANNEX_A_PAGE" \
   api python tests/e2e/probe.py db-runtime
 annex_a_reader_checks "upgraded volume, Annex A reader" "$ANNEX_A_PAGE"
+annex_a_d7_reader_checks "upgraded volume, Annex A reader login" "$ANNEX_A_PAGE"
 
 summary "F30 upgrade e2e"

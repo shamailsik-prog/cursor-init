@@ -391,6 +391,7 @@ expect_out "corpus_reader still reads v_judgment after the resets (its own grant
 expect_out "corpus_authority_reader still reads v_authority_citation and uses schema public after the resets" '^true\|true$' \
   as_superuser_local "select has_table_privilege('corpus_authority_reader', 'public.v_authority_citation', 'SELECT') || '|'
     || has_schema_privilege('corpus_authority_reader', 'public', 'USAGE')"
+annex_a_d7_reader_checks "Annex A reader login after every provisioning reset" "$ANNEX_A_PAGE"
 expect_out "corpus_writer still executes corpus_publication_begin/finish and corpus_declassify declassify after the resets" \
   '^true\|true\|true$' \
   as_superuser_local "select has_function_privilege('corpus_writer', '$BEGIN_FN', 'EXECUTE') || '|'

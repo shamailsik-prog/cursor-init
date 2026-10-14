@@ -1,8 +1,8 @@
 /**
  * The corpus adapter for the draft gate (audit F05; spec §6, PR 3): an AuthorityStore over the firm's promoted Annex A
  * corpus on Postgres. It reads only 004's views (v_authority_citation, v_authority_treatment,
- * v_authority_section_version, v_authority_pending_adverse) and corpus_metadata, as a corpus_authority_reader member
- * (ruling 13 as amended by plan D21),
+ * v_authority_section_version, v_authority_pending_adverse) and corpus_metadata, as a member of corpus_authority_reader
+ * and (for CONNECT only) corpus_clients, and of nothing else (ruling 13 as amended by plan D21; D7),
  * through a small pool. Calls carry only a canonical citation, a judgment id or a section key (L19.11 #3).
  *
  * It fails closed. Anything it cannot answer throws AuthorityUnavailableError, which the gate reads as UNVERIFIED /
@@ -105,12 +105,15 @@ const SECTIONS_SQL = `SELECT version_no, effective_from::text AS effective_from,
  ORDER BY effective_from, version_no`
 // The session first (D7): a role check reads no table, so a writer or superuser login is wrong_role, not a permission
 // error on corpus_metadata. Then the corpus metadata the reader needs (F19 D30, D19).
-// D7 as #51 R1 D-2 and D-3 hardened it: the login reads the four views and corpus_metadata, and can do nothing else.
+// D7 as #51 R1 D-2, D-3 and R2 R1-1 hardened it: the login reads the four views and corpus_metadata, and can do
+// nothing else.
 // - It must inherit corpus_authority_reader (004's role, plan D21).
-// - It must not be a superuser or hold CREATEROLE, BYPASSRLS or REPLICATION.
-// - It must not be a member, directly or through any role, inherited or SET-only, of corpus_reader (001's reader, which
-//   can read v_judgment and the other v_* views), corpus_writer, corpus_declassify, pg_read_all_data or
-//   pg_write_all_data, and it must not own the database (pg_database_owner).
+// - Membership is an allowlist (R2): the login may be a member of corpus_authority_reader and, for CONNECT only (PR 2b's
+//   pg_hba lets only its members in), corpus_clients, and of no other role. pg_has_role(..., 'MEMBER') is transitive
+//   and ignores INHERIT and SET, so a SET-only grant, a chain through another role, the database's owner
+//   (pg_database_owner) and every predefined role (pg_read_server_files, pg_execute_server_program, ...) all count.
+// - No role it is a member of, itself included, may be a superuser or hold CREATEROLE, CREATEDB, REPLICATION or
+//   BYPASSRLS, so a SET ROLE into an allowlisted role that someone altered gains nothing either.
 // - It must hold no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT,
 //   UPDATE or REFERENCES) on any relation in schema public.
 // - It must be able to SELECT (the table or any column) no relation in schema public except READABLE: no Annex A
@@ -118,11 +121,12 @@ const SECTIONS_SQL = `SELECT version_no, effective_from::text AS effective_from,
 // A database without 004 has no corpus_authority_reader: pg_has_role raises 42704, which is schema_missing.
 const READABLE = ["v_authority_citation", "v_authority_treatment", "v_authority_section_version", "v_authority_pending_adverse", "corpus_metadata"]
 const ROLE_SQL = `SELECT pg_has_role('corpus_authority_reader', 'USAGE') AS reader,
-       coalesce((SELECT rolsuper OR rolcreaterole OR rolbypassrls OR rolreplication
-                   FROM pg_catalog.pg_roles WHERE rolname = current_user), true) AS elevated,
-       pg_has_role('corpus_reader', 'MEMBER') OR pg_has_role('corpus_writer', 'MEMBER') OR pg_has_role('corpus_declassify', 'MEMBER')
-         OR pg_has_role('pg_read_all_data', 'MEMBER') OR pg_has_role('pg_write_all_data', 'MEMBER')
-         OR pg_has_role('pg_database_owner', 'MEMBER') AS other_role,
+       EXISTS (SELECT 1 FROM pg_catalog.pg_roles r
+                WHERE pg_has_role(current_user, r.oid, 'MEMBER')
+                  AND (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls)) AS elevated,
+       EXISTS (SELECT 1 FROM pg_catalog.pg_roles r
+                WHERE r.rolname NOT IN (current_user, 'corpus_authority_reader', 'corpus_clients')
+                  AND pg_has_role(current_user, r.oid, 'MEMBER')) AS other_role,
        EXISTS (SELECT 1 FROM pg_catalog.pg_class c
                 WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND (has_table_privilege(c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')

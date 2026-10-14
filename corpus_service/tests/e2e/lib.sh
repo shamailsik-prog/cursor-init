@@ -5,7 +5,7 @@ FAILS=0
 CHECKS=0
 
 # Every secret value the scripts hold; nothing they print may contain one.
-SECRET_VALUE_VARS="POSTGRES_PASSWORD MIGRATE_DB_PASSWORD APP_DB_PASSWORD REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY"
+SECRET_VALUE_VARS="POSTGRES_PASSWORD MIGRATE_DB_PASSWORD APP_DB_PASSWORD REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY F05_READER_PASSWORD"
 
 # redact TEXT: TEXT with every secret value replaced by <redacted>.
 redact() {
@@ -276,6 +276,42 @@ annex_a_reader_checks() {
              where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm', 'f')
                and has_any_column_privilege(r.oid, c.oid, 'SELECT'))
       from pg_roles r where r.rolname = 'corpus_authority_reader'"
+}
+
+# annex_a_d7_reader_checks PREFIX PAGE: the draft gate's reader login made as an operator would on this stack (audit
+# F05, #51 fix round 2, plan D21): a member of corpus_authority_reader and, for CONNECT through pg_hba, corpus_clients,
+# and of nothing else. Over TLS it passes the adapter's own session check (ROLE_SQL, read from
+# functions/src/d4/corpusAuthorityStore.ts by d7_role_sql.py: reader t, elevated f, other_role f, writes f,
+# reads_more f, read-only on) and reads both published judgments. One more membership (pg_read_server_files) fails
+# the same check. The login is dropped at the end. Needs psql_c and as_superuser_local from the calling script.
+annex_a_d7_reader_checks() {
+  local p=$1 page=$2 user=f05_d7_reader sql conn
+  if ! sql=$(python3 "$(dirname "${BASH_SOURCE[0]}")/d7_role_sql.py" 2>&1); then
+    fail "$p: the adapter's ROLE_SQL is readable from corpusAuthorityStore.ts" "$sql"
+    return
+  fi
+  F05_READER_PASSWORD=$(rand_secret)
+  conn="host=postgres port=5432 dbname=legal_scraper user=$user sslmode=verify-full sslrootcert=/ca/ca.crt"
+  if printf '%s\n' '\getenv pw F05_D7_PW' "drop role if exists $user;" "create role $user login password :'pw';" \
+       "grant corpus_authority_reader, corpus_clients to $user;" \
+     | "${COMPOSE[@]}" exec -T -e F05_D7_PW="$F05_READER_PASSWORD" -u postgres postgres \
+         psql -U "$POSTGRES_USER" -d legal_scraper -v ON_ERROR_STOP=1 -qtA >/dev/null 2>&1; then
+    pass "$p: a reader login is created as an operator would (corpus_authority_reader, corpus_clients)"
+  else
+    fail "$p: a reader login is created as an operator would (corpus_authority_reader, corpus_clients)"
+    return
+  fi
+  expect_out "$p: the reader login passes the adapter's session check over TLS (reader, not elevated, no other role, no write, nothing else readable, read-only)" \
+    '^t\|f\|f\|f\|f\|on$' \
+    psql_c "$conn" "$sql" -e PGPASSWORD="$F05_READER_PASSWORD" -e "PGOPTIONS=-c default_transaction_read_only=on"
+  expect_out "$p: the reader login reads both published judgments through v_authority_citation over TLS" '^2$' \
+    psql_c "$conn" "select count(*) from public.v_authority_citation where citation_text in ('2099 SCMR $page', '2099 SCMR $((page + 1))')" \
+    -e PGPASSWORD="$F05_READER_PASSWORD"
+  as_superuser_local "grant pg_read_server_files to $user" >/dev/null 2>&1 || fail "$p: grant pg_read_server_files to the reader"
+  expect_out "$p: one more membership (pg_read_server_files) fails the same check (other_role)" \
+    '^t\|f\|t\|f\|f\|on$' \
+    psql_c "$conn" "$sql" -e PGPASSWORD="$F05_READER_PASSWORD" -e "PGOPTIONS=-c default_transaction_read_only=on"
+  as_superuser_local "drop role $user" >/dev/null 2>&1 || fail "$p: drop the reader login"
 }
 
 # expect_lines LABEL EXPECTED ACTUAL: two newline-separated lists must hold the same lines (sorted).
