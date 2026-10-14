@@ -1,0 +1,454 @@
+{
+  "format": "corpus-publication-batch/1",
+  "batch_key": "curated/f05-e2e-2099",
+  "source_kind": "curated",
+  "items": [
+    {
+      "kind": "judgment",
+      "item_key": "j-verified",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/1",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0101010101010101010101010101010101010101010101010101010101010101",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 101"
+        },
+        {
+          "parts": {
+            "reporter": "PLD",
+            "year": "2099",
+            "page": "12",
+            "court": "Karachi",
+            "series": null,
+            "note": null
+          }
+        }
+      ],
+      "case_title": "F05 j-verified v. The State 2099",
+      "bench_type": "DB",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-verified; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-overruled",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/2",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0202020202020202020202020202020202020202020202020202020202020202",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 202"
+        }
+      ],
+      "case_title": "F05 j-overruled v. The State 2099",
+      "bench_type": "DB",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-overruled; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-larger",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/3",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0303030303030303030303030303030303030303030303030303030303030303",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "parts": {
+            "reporter": "PLD",
+            "year": "2099",
+            "page": "303",
+            "court": "SC",
+            "series": null,
+            "note": null
+          }
+        }
+      ],
+      "case_title": "F05 j-larger v. The State 2099",
+      "bench_type": "Larger Bench",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-larger; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-cap",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/4",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0404040404040404040404040404040404040404040404040404040404040404",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 404"
+        }
+      ],
+      "case_title": "F05 j-cap v. The State 2099",
+      "bench_type": "DB",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-cap; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-pending",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/5",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0505050505050505050505050505050505050505050505050505050505050505",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 505"
+        }
+      ],
+      "case_title": "F05 j-pending v. The State 2099",
+      "bench_type": "DB",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-pending; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-review",
+      "trust": {
+        "level": "review",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/6",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0606060606060606060606060606060606060606060606060606060606060606",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 606"
+        }
+      ],
+      "case_title": "F05 j-review v. The State 2099",
+      "bench_type": "DB",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-review; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-noprov",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/7",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": null,
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 707"
+        }
+      ],
+      "case_title": "F05 j-noprov v. The State 2099",
+      "bench_type": "DB",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-noprov; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-restricted",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/8",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0808080808080808080808080808080808080808080808080808080808080808",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 808"
+        }
+      ],
+      "case_title": "F05 j-restricted v. The State 2099",
+      "bench_type": "Larger Bench",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-restricted; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-verified-2",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/9",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0909090909090909090909090909090909090909090909090909090909090909",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 110"
+        }
+      ],
+      "case_title": "F05 j-verified-2 v. The State 2099",
+      "bench_type": "DB",
+      "decision_date": "2099-02-01",
+      "full_text": "Synthetic F05 fixture judgment j-verified-2; no real authority."
+    },
+    {
+      "kind": "treatment",
+      "item_key": "t-overruled",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/21",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "1515151515151515151515151515151515151515151515151515151515151515",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "treating": {
+        "item_key": "j-larger"
+      },
+      "treated": {
+        "item_key": "j-overruled"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.9
+    },
+    {
+      "kind": "treatment",
+      "item_key": "t-cap",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/22",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "1616161616161616161616161616161616161616161616161616161616161616",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "treating": {
+        "item_key": "j-larger"
+      },
+      "treated": {
+        "item_key": "j-cap"
+      },
+      "treatment": "Overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.9
+    },
+    {
+      "kind": "treatment",
+      "item_key": "t-pending",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/23",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "1717171717171717171717171717171717171717171717171717171717171717",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "treating": {
+        "item_key": "j-larger"
+      },
+      "treated": {
+        "item_key": "j-pending"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.6
+    },
+    {
+      "kind": "treatment",
+      "item_key": "t-restricted",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/24",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "1818181818181818181818181818181818181818181818181818181818181818",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "treating": {
+        "item_key": "j-restricted"
+      },
+      "treated": {
+        "item_key": "j-verified-2"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.9
+    },
+    {
+      "kind": "statute_section_history",
+      "item_key": "h-amended",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/40",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "2828282828282828282828282828282828282828282828282828282828282828",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "statute": {
+        "name": "Test Act 2099",
+        "short_name": "TA 2099",
+        "year_enacted": 2099,
+        "jurisdiction": "Federal",
+        "status": null
+      },
+      "section": {
+        "section_number": "5",
+        "chapter": "I",
+        "current_title": "Test section 5"
+      },
+      "history": "amendment_history",
+      "versions": [
+        {
+          "version_no": 1,
+          "effective_from": "2099-01-01",
+          "effective_to": "2099-07-01",
+          "title": null,
+          "text": "Section 5 as enacted: thirty days.",
+          "version_confidence": 0.9
+        },
+        {
+          "version_no": 2,
+          "effective_from": "2099-07-01",
+          "effective_to": null,
+          "title": null,
+          "text": "Section 5 as amended: sixty days.",
+          "version_confidence": 0.9
+        }
+      ]
+    },
+    {
+      "kind": "statute_section_history",
+      "item_key": "h-current",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-curated-fixture",
+        "source_url": "https://f05.example.invalid/authority/40",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "2828282828282828282828282828282828282828282828282828282828282828",
+        "extraction_method": "manual",
+        "extractor_version": "f05-fixture-1"
+      },
+      "statute": {
+        "name": "Test Act 2099",
+        "short_name": "TA 2099",
+        "year_enacted": 2099,
+        "jurisdiction": "Federal",
+        "status": null
+      },
+      "section": {
+        "section_number": "6",
+        "chapter": "I",
+        "current_title": "Test section 6"
+      },
+      "history": "current_text_only",
+      "versions": [
+        {
+          "version_no": 1,
+          "effective_from": "2099-01-01",
+          "effective_to": null,
+          "title": null,
+          "text": "Section 6 current text.",
+          "version_confidence": 0.5
+        }
+      ]
+    }
+  ]
+}
