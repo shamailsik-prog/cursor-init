@@ -277,6 +277,10 @@ jobs:
         env:
           SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/sikander_ci
         run: npm run test:postgres-ddl
+      - name: FA-DATA-001 probe (runtime bypass check)
+        env:
+          SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/sikander_ci
+        run: npm run probe:fa-data-001
 
   corpus-service:
     name: corpus_service pytest
