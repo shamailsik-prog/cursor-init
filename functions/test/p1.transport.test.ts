@@ -226,6 +226,15 @@ describe("P1 Gateway transport errors (I1: billed failures are charged)", () => 
     expect((during as Error).message).toBe("gateway timeout")
   })
 
+  it("a timeout while the body streams still carries the request-id header (re-audit R3 INFO)", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_9f-03" })
+      res.write('{"choices":[{"message":')
+    }
+    const e = (await failure(gatewayTransport("k", base, { timeoutMs: 100 }).send(request))) as P1TransportError
+    expect([e.code, e.billable, e.responseId, e.requestId]).toEqual(["gateway_timeout", true, undefined, "req_9f-03"])
+  })
+
   it("a 2xx whose body is not JSON is gateway_not_json and billable, with no usage", async () => {
     respond = (_req, res) => res.writeHead(200).end("SECRET not json")
     const e = await failure(gatewayTransport("k", base).send(request))

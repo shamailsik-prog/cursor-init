@@ -652,10 +652,16 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         // The output write's deadline clock too (Codex P1): a clock already past the deadline is ignored.
         let clockReads = 0
         p1OpsTestSeam.wallClock = () => (clockReads += 1) * 60_000
+        // And the pre-call deadline's clock (re-audit R3-D2): a clock already past the allowance is ignored.
+        let preCallReads = 0
+        p1OpsTestSeam.preCallClock = () => {
+          preCallReads += 1
+          return Date.now() + 60_000
+        }
         vi.stubEnv("NODE_ENV", "production")
         const r = (await ask(f)) as Out
         expect(r).toMatchObject({ blocked: false, text: "REPLY" })
-        expect(clockReads).toBe(0)
+        expect([clockReads, preCallReads]).toEqual([0, 0])
         expect(waits).toEqual([])
         expect(p1OpsTestSeam.outputWriteFailures).toHaveLength(3)
         expect(p1OpsTestSeam.lostCommitAnswers).toHaveLength(1)

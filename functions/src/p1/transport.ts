@@ -130,7 +130,7 @@ export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts
       try {
         json = (await res.json()) as GatewayBody
       } catch (err) {
-        throw isAbort(err) ? timedOut() : new P1TransportError("gateway_not_json", { billable: true, requestId })
+        throw new P1TransportError(isAbort(err) ? "gateway_timeout" : "gateway_not_json", { billable: true, requestId })
       }
       const text = json?.choices?.[0]?.message?.content
       const inputTokens = tokenCount(json?.usage?.prompt_tokens)

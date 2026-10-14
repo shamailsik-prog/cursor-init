@@ -7,7 +7,7 @@ import { REGION } from "../health"
 import { errorCode } from "../log"
 import { firmConfigRef, monthRef, pkrRateOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
-import { isRetryableCommitError, leaseMillis, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
+import { NOTHING_STAGED, isRetryableCommitError, leaseMillis, logLearning, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
 import { isMonthKey } from "./month"
 import type { P1Outcome, TaskType } from "./types"
 
@@ -198,7 +198,7 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       tx.set(totalRef, { firmId: p.firmId, monthKey: p.monthKey, reservedMicroUsd: FieldValue.increment(-p.held), updatedAt: now }, { merge: true })
       tx.update(ref, { state: "released", actualMicroUsd: 0, settledAt: now, settledBy: "reconciler" })
       markSettled()
-      return { state: "released" as const, staged: { crossings: [], exceeded: null, learnedOverhead: null }, firmId: p.firmId, monthKey: p.monthKey }
+      return { state: "released" as const, staged: { ...NOTHING_STAGED, crossings: [] }, firmId: p.firmId, monthKey: p.monthKey }
     }
 
     const recorded = recordedCharge(p.attempt)
@@ -286,7 +286,7 @@ export async function reconcileReservations(opts: { now?: () => number } = {}): 
       else logger.warn("p1.reservation_reconciled", { firmId: done.firmId, usageLogId: doc.id })
       for (const c of done.staged.crossings) logger.warn("p1.budget_threshold", { firmId: done.firmId, monthKey: done.monthKey, ...c })
       if (done.staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId: done.firmId, usageLogId: doc.id, monthKey: done.monthKey, ...done.staged.exceeded })
-      if (done.staged.learnedOverhead !== null) logger.warn("p1.overhead_learned", { usageLogId: doc.id, ...done.staged.learnedOverhead })
+      logLearning(doc.id, done.firmId, done.staged)
     } catch (err) {
       const firmId = typeof doc.get("firmId") === "string" ? (doc.get("firmId") as string) : null
       // A store fault a later run may not meet is retried then, and never counted (re-audit R2-D1).

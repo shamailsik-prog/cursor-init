@@ -36,7 +36,8 @@
 #      - the deployable bundle: NODE_ENV pinned to production at build time (no runtime read left)
 #      - audit F07 and F08 end to end (f07-f08-ai-spend.e2e.emu.test.ts): the worst case reserved atomically before
 #        dispatch (spent + reserved within the budget unless a provider bills more input than bytes + overhead, which
-#        is recorded, raised and raises the model's overhead; the firm's concurrent calls bounded), the provider attempt
+#        is recorded, raised and raises the model's overhead up to a clamp, an implausible breach being an anomaly; the
+#        firm's concurrent calls bounded; no paid work after the pre-call allowance), the provider attempt
 #        recorded before dispatch, accounting pending after a failed usage commit, the accounting_indeterminate block
 #        once a lease lapses, and the lease reconciler settling or releasing what a call left (only record faults
 #        quarantine; lapsed records found by index, never starved by live ones; outputs and stored answers settled)
@@ -161,6 +162,11 @@ SPEND_TESTS=(
   "F07 through callP1 a provider that bills template tokens beyond the overhead teaches the model's overhead: later reservations hold it and stay within the budget (Copilot finding on PR #40)"
   'F07 through callP1 an unknown model is refused before dispatch: model_unpriced, nothing sent, nothing reserved (Copilot finding on PR #40: fail closed)'
   "F07 through callP1 a billed failure keeps the provider's ids on its attempt (Codex P2 on PR #40)"
+  # re-audit R3-D1 (the learned overhead is clamped, an implausible breach is an anomaly), R3-D2 (the pre-call deadline)
+  'F07 through callP1 a provider reporting 25,000,000 prompt tokens for a 28-byte body teaches at most the clamp: an uninvolved $50 firm is still admitted, and the anomaly is recorded (re-audit R3-D1)'
+  "F07 through callP1 a provider reporting Number.MAX_SAFE_INTEGER prompt tokens cannot overflow the learned overhead: it stays at the clamp and a firm at the route's maximum budget is still admitted (re-audit R3-D1)"
+  'F07 through callP1 four concurrent breaches end at the largest overhead they show, and never above the clamp (re-audit R3-D1)'
+  'F07 through callP1 a call whose pre-call work ran past its allowance is refused with a retryable error before anything is reserved or sent (re-audit R3-D2)'
   "F07 through callP1 a firm's concurrent calls are bounded: the fifth live reservation is refused concurrency_exhausted by default, and a freed slot admits again"
   "F07 through callP1 the firm's configured maxConcurrentCalls replaces the default, and an invalid value falls back to it"
   'F07 through callP1 a reservation that cannot be written or an attempt that cannot be recorded sends nothing: blocked reservation_failed, and the held amount is released'
@@ -179,6 +185,7 @@ SPEND_TESTS=(
   'F08 through callP1 five hundred live reservations sorting ahead of a lapsed attempt do not starve it: it is settled in the first run'
   'F08 through callP1 a lapsed attempt whose leaseUntil is missing altogether is found by the rotating sweep and settled, and its firm is unblocked'
   # both, through the HTTP router
+  'F07 and F08 through the HTTP router (committeeBrain) a request whose pre-call work ran past the 8 s allowance is refused 503 precall_deadline before anything is reserved or sent, and a same-key retry runs (re-audit R3-D2)'
   'F07 and F08 through the HTTP router (committeeBrain) ten concurrent committeeBrain requests against a budget for two worst cases dispatch two and refuse the rest; spent plus reserved never exceeds it'
   'F07 and F08 through the HTTP router (committeeBrain) a usage-commit failure answers with the text and accounting pending, stores accounting pending, blocks the firm accounting_indeterminate past the lease, and the reconciler restores service'
 )
@@ -265,6 +272,7 @@ COST_TESTS=(
   'estimateTokens is ceil(UTF-8 bytes / 3)'
   "the reservation's input ceiling is the largest UTF-8 length of the body and its four normal forms, plus the request overhead (re-audit R2-D3)"
   'every priced model carries its input overhead, and a model without one is not dispatched (Copilot finding, fail closed)'
+  "a learned overhead counts only up to LEARNED_OVERHEAD_MAX_FACTOR times the model's own overhead (re-audit R3-D1)"
 )
 # Codex P1 on PR #40: the whole committeeBrain request (the call's phases, the handler's own work and a margin) fits the
 # api function's timeout, and the import-time check refuses shares that do not.
@@ -305,6 +313,7 @@ TRANSPORT_ERR_TESTS=(
   'a 2xx without usable content is gateway_no_text and billable, carrying the usage figures that are valid counts'
   "a billable 2xx without usable content still carries the provider's response id and the request-id header (Codex P2)"
   'a billable 2xx whose body is not JSON still carries the request-id header (Codex P2)'
+  'a timeout while the body streams still carries the request-id header (re-audit R3 INFO)'
   'a redirect is refused: gateway_request_failed, not billable, and the redirect target receives nothing'
   'passes redirect: error to fetch'
 )

@@ -10,7 +10,7 @@ import type { CallAudit, Data, FirmOperation, FirmlessOperation } from "../p5/co
 import { requirePermission } from "../p5/permission"
 import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, spentOf } from "./config"
 import { PROVIDER_ID } from "./costTable"
-import { CALL_WORST_CASE_MS, assertOperationTimeBudget, callP1, isAlreadyExists } from "./gateway"
+import { CALL_WORST_CASE_MS, P1PreCallDeadlineError, assertOperationTimeBudget, callP1, isAlreadyExists, type P1Result } from "./gateway"
 import { isMonthKey, monthKeyPkt } from "./month"
 import { TRANSPORT_ERROR, type P1Accounting } from "./types"
 
@@ -50,17 +50,28 @@ const OUTPUT_WRITE_BACKOFF_MS = 100
 export const OUTPUT_WRITE_DEADLINE_MS = 3_000
 
 /**
- * committeeBrain's own work around `callP1`, as a share of the api function's timeout (Codex P1 on PR #40). 16 s:
- * - before the call, 8 s: eight store or Auth round trips at an allowance of 1 s each (the ID token's verification and
- *   the session binding, the rate limit, the Idempotency-Key claim, the `ai.call` permission check, the matter read,
- *   the party-name query and the call's first reads);
- * - after the call, 8 s: the `committee_outputs` write with the route's audit row (OUTPUT_WRITE_DEADLINE_MS, 3 s,
- *   plus 2 s for the one attempt in flight) and the Idempotency-Key completion (3 s: up to four short transactions
- *   with 0.7 s of back-off between them, `settle` in http/idempotency.ts).
- * These are allowances, not cut-offs: the reads have no timeout of their own. The import-time check below keeps
- * the call's phases (CALL_WORST_CASE_MS, 99 s), this share and REQUEST_TIMEOUT_MARGIN_MS within the 120 s timeout.
+ * The time committeeBrain allows before paid work starts (re-audit R3-D2): eight store or Auth round trips at 1 s each
+ * (the ID token's verification and the session binding, the rate limit, the Idempotency-Key claim, the `ai.call`
+ * permission check, the matter read, the party-name query and the call's first reads), measured on the real clock from
+ * when the router received the request (`session.startedAtMs`). It is enforced: once the call's first reads are done,
+ * `callP1` reserves nothing and sends nothing if this has passed, and the request answers 503 `precall_deadline`
+ * (retryable; the Idempotency-Key is released). A read that hangs is still not cut off, but it costs nothing, and no
+ * paid work starts that could outlive the request's timeout.
  */
-export const COMMITTEE_HANDLER_OVERHEAD_MS = 16_000
+export const PRE_CALL_ALLOWANCE_MS = 8_000
+/**
+ * The time committeeBrain allows after the call: the `committee_outputs` write with the route's audit row
+ * (OUTPUT_WRITE_DEADLINE_MS, 3 s, plus 2 s for the one attempt in flight) and the Idempotency-Key completion (3 s: up
+ * to four short transactions with 0.7 s of back-off between them, `settle` in http/idempotency.ts).
+ */
+export const POST_CALL_ALLOWANCE_MS = 8_000
+/**
+ * committeeBrain's own work around `callP1`, as a share of the api function's timeout (Codex P1 on PR #40): the
+ * pre-call allowance (enforced, re-audit R3-D2) and the post-call allowance (the output write is bounded by its
+ * deadline). The import-time check below keeps the call's phases (CALL_WORST_CASE_MS, 99 s), this share (16 s) and
+ * REQUEST_TIMEOUT_MARGIN_MS within the 120 s timeout.
+ */
+export const COMMITTEE_HANDLER_OVERHEAD_MS = PRE_CALL_ALLOWANCE_MS + POST_CALL_ALLOWANCE_MS
 /** Kept free at the end of the request: the response itself, and the clock drift between the shares. */
 export const REQUEST_TIMEOUT_MARGIN_MS = 5_000
 
@@ -77,12 +88,14 @@ assertOperationTimeBudget({
  * and throws it instead of writing. `lostCommitAnswers` is a queue too: each attempt whose write committed takes
  * the next error from it and throws it, as if the commit had landed but its answer was lost (an ambiguous
  * commit). `sleep` replaces the back-off wait. `wallClock` replaces `Date.now` as the output write's deadline clock.
+ * `preCallClock` replaces `Date.now` as the clock the pre-call deadline is checked on (re-audit R3-D2).
  */
 export const p1OpsTestSeam: {
   outputWriteFailures?: Error[]
   lostCommitAnswers?: Error[]
   sleep?: (ms: number) => Promise<void>
   wallClock?: () => number
+  preCallClock?: () => number
 } = {}
 
 function seam(): typeof p1OpsTestSeam {
@@ -232,7 +245,10 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
   kind: "p1",
   action: "ai.call",
   target: "matters",
-  run: async ({ caller, now: routerNow, idempotencyKey }, data, audit) => {
+  run: async ({ caller, now: routerNow, idempotencyKey, startedAtMs }, data, audit) => {
+    // The pre-call deadline (re-audit R3-D2), on the real clock from when the router received the request.
+    const preCallClock = seam().preCallClock ?? Date.now
+    const preCallDeadline = { atMs: (startedAtMs ?? Date.now()) + PRE_CALL_ALLOWANCE_MS, clock: preCallClock }
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     const input = parseCommitteeInput(data)
@@ -255,21 +271,28 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     const clock = () => (routerNow ?? t0) + (Date.now() - t0)
     // The request's stored answer goes on the reservation, so the lease reconciler can mark it settled (Codex P2 on PR #40).
     const idempotencyDoc = isUuidV4(idempotencyKey) ? idempotencyDocId(caller.firmId, idempotencyKey) : null
-    const result = await callP1(
-      {
-        firmId: caller.firmId,
-        actorId: caller.uid,
-        matterId,
-        jobId: null,
-        taskType: "committee",
-        classification,
-        body: input.body,
-        purpose: input.purpose,
-        partyNames,
-        idempotencyDoc,
-      },
-      { now: clock }
-    )
+    let result: P1Result
+    try {
+      result = await callP1(
+        {
+          firmId: caller.firmId,
+          actorId: caller.uid,
+          matterId,
+          jobId: null,
+          taskType: "committee",
+          classification,
+          body: input.body,
+          purpose: input.purpose,
+          partyNames,
+          idempotencyDoc,
+        },
+        { now: clock, preCallDeadline }
+      )
+    } catch (err) {
+      // Nothing was reserved, sent or written: a 503 releases the Idempotency-Key, so the same request may be retried.
+      if (err instanceof P1PreCallDeadlineError) throw new HttpError(503, err.code)
+      throw err
+    }
 
     const blocked = result.outcome !== "ok"
     const reason = result.blockReason ?? (result.outcome === "failed" ? TRANSPORT_ERROR : undefined)

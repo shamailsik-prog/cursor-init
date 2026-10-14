@@ -11,7 +11,8 @@ export const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze({ co
  * tokens; 1,024 is deliberately generous, because what a provider adds unseen is not documented. At the Opus input
  * price it holds 4,096 micro-USD per call. The exact figure is [REQUIRES VERIFICATION] at G-1: measure the Gateway's
  * `prompt_tokens` for a one-byte body (O-57). A provider that bills more than this is still charged in full; the
- * breach is recorded and raises the overhead for later calls of that model (`platform/p1Overhead`, gateway.ts).
+ * breach is recorded and raises the overhead for later calls of that model (`platform/p1Overhead`, gateway.ts), up to
+ * LEARNED_OVERHEAD_MAX_FACTOR times this figure (re-audit R3-D1).
  */
 export const REQUEST_OVERHEAD_TOKENS = 1024
 
@@ -70,6 +71,36 @@ export function modelInputOverhead(model: string): number | null {
   if (!Object.hasOwn(MODEL_PRICES, model)) return null
   const n = MODEL_PRICES[model]!.inputOverheadTokens
   return Number.isSafeInteger(n) && n >= 0 ? n : null
+}
+
+/**
+ * How far a breach may raise a model's request overhead for every firm (re-audit R3-D1): the learned overhead counts
+ * up to this many times the cost table's `inputOverheadTokens` for the model (4 x 1,024 = 4,096 tokens for Opus). The
+ * learned overhead is platform-wide, so one provider report raises every firm's reservations; the clamp bounds that
+ * cross-tenant effect to at most 3,072 extra input tokens (12,288 micro-USD at the Opus input price) per call. A breach
+ * that shows more than the clamp is an anomaly: it is learned only up to the clamp, and recorded and raised as
+ * `ai.usage.anomaly`. The cost table carries no context window per model, so no window check is made.
+ */
+export const LEARNED_OVERHEAD_MAX_FACTOR = 4
+
+/** The most a learned overhead may count for `model`: LEARNED_OVERHEAD_MAX_FACTOR times its table overhead; null for a model the table does not know. */
+export function learnedOverheadCap(model: string): number | null {
+  const table = modelInputOverhead(model)
+  return table === null ? null : table * LEARNED_OVERHEAD_MAX_FACTOR
+}
+
+/**
+ * The request overhead a reservation for `model` holds (Copilot finding on PR #40, re-audit R3-D1): the larger of the
+ * table's figure and the learned one, the learned one counted only up to the clamp (`learnedOverheadCap`). A learned
+ * value that is not a non-negative safe integer counts as nothing learned. Null for a model the table does not know,
+ * which is never dispatched.
+ */
+export function reservationOverheadTokens(model: string, learned: unknown): number | null {
+  const table = modelInputOverhead(model)
+  if (table === null) return null
+  const cap = table * LEARNED_OVERHEAD_MAX_FACTOR
+  const valid = typeof learned === "number" && Number.isSafeInteger(learned) && learned >= 0 ? learned : 0
+  return Math.max(table, Math.min(valid, cap))
 }
 
 /** Token estimate for a side the provider gave no usage for: ceil(UTF-8 bytes / 3), which over-counts English and Urdu (P3-62). */

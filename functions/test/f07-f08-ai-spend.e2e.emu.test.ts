@@ -10,8 +10,9 @@ import { MAX_OUTPUT_TOKENS, costMicroUsd } from "../src/p1/costTable"
 import * as gateway from "../src/p1/gateway"
 import { callP1, ledgerQueue, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
+import { p1OpsTestSeam } from "../src/p1/ops"
 import { P1TransportError, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
-import { viaApi } from "./api"
+import { ApiError, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
 /**
@@ -107,6 +108,19 @@ function concurrently<R>(n: number, call: (i: number) => Promise<R>): { all: Pro
   return { all: Promise.allSettled(calls), done }
 }
 
+/**
+ * callP1 as a client calls it (re-audit R3-D3): a call refused reservation_failed, whose reservation or attempt record
+ * ran out of time under contention, is retried up to five attempts in all, after a jittered back-off of 200 ms doubling;
+ * any other answer is final.
+ */
+async function callP1Retrying(request: P1Request, opts: { now: () => number }): Promise<P1Result> {
+  for (let attempt = 1; ; attempt++) {
+    const r = await callP1(request, opts)
+    if (r.blockReason !== "reservation_failed" || attempt >= 5) return r
+    await new Promise((resolve) => setTimeout(resolve, Math.round(200 * 2 ** (attempt - 1) * (0.5 + Math.random()))))
+  }
+}
+
 const db = () => adminDb()
 const req = (firmId: string, extra: Partial<P1Request> = {}): P1Request => ({
   firmId,
@@ -152,6 +166,7 @@ async function reconcileFor(firmId: string, nowMs: number): Promise<{ settled: s
 
 function resetSeam() {
   for (const k of Object.keys(p1TestSeam)) delete (p1TestSeam as Record<string, unknown>)[k]
+  for (const k of Object.keys(p1OpsTestSeam)) delete (p1OpsTestSeam as Record<string, unknown>)[k]
 }
 
 /**
@@ -265,16 +280,20 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(reservations.map((r) => r.id).sort()).toEqual(ok.map((r) => r.usageLogId).sort())
     })
 
-    it("calls on separate instances (no shared ledger queue) still never over-admit: the transaction alone keeps spent plus reserved within the budget", { timeout: 90_000 }, async () => {
+    it("calls on separate instances (no shared ledger queue) still never over-admit: the transaction alone keeps spent plus reserved within the budget", { timeout: 240_000 }, async () => {
       // Each call's reservation and commit transactions contend directly, as calls on different instances do. Under
       // the emulator's lock timeouts some reservations run out of time; those calls are refused, never admitted.
       const budget = 3 * WORST + Math.floor(WORST / 2)
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: budget, maxConcurrentCalls: 10 })
       seam().unqueued = "all"
       const { sent, release } = heldTransport()
-      const run = concurrently(10, () => callP1(req(firmId), at(T)))
+      // Re-audit R3-D3: a caller refused reservation_failed (its reservation ran out of time under contention) retries,
+      // as a client would, up to five attempts with jittered back-off (callP1Retrying); any other answer is final. Under
+      // host load all ten first attempts can time out, so this keeps "at least one is admitted" a statement about the
+      // system's liveness, not about one lucky round, while the safety bound below is unchanged.
+      const run = concurrently(10, () => callP1Retrying(req(firmId), at(T)))
       try {
-        await waitFor("every call to be dispatched or refused", () => run.done.length + sent.length >= 10, 80_000)
+        await waitFor("every call to be dispatched or refused", () => run.done.length + sent.length >= 10, 220_000)
         expect(sent.length).toBeGreaterThanOrEqual(1)
         expect(sent.length).toBeLessThanOrEqual(3)
         for (const r of run.done) {
@@ -427,6 +446,12 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(await reservationOf(breach.usageLogId)).toMatchObject({ actualMicroUsd: charge, exceededMicroUsd: charge - WORST, exceededInputTokens: 2_000 - OVERHEAD })
       expect(errors.mock.calls.filter((c) => c[0] === "p1.reservation_exceeded")).toHaveLength(1)
       expect((await db().collection("platform").doc("p1Overhead").get()).data()?.models).toMatchObject({ "anthropic_claude-opus-5_5": { inputTokens: 2_000, model: OPUS } })
+      // Re-audit R3-D1: below the clamp the overhead is learned exactly, every raise is logged at ERROR, and it is no anomaly.
+      expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_learned").map((c) => c[1])).toEqual([
+        { usageLogId: breach.usageLogId, model: OPUS, inputTokens: 2_000, exceededInputTokens: 2_000 - OVERHEAD },
+      ])
+      expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_anomaly")).toEqual([])
+      expect((await byFirm("events", first)).filter((e) => e.data.name === "ai.usage.anomaly")).toEqual([])
       // A later call for the model reserves the learned overhead, so its charge fits: a budget of exactly that ceiling holds.
       const learnedCeiling = costMicroUsd(OPUS, bytes + 2_000, MAX_OUTPUT_TOKENS)!
       const later = await seedFirm({ monthlyBudgetMicroUsd: learnedCeiling })
@@ -438,6 +463,115 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(refused.blockReason).toBe("budget_exhausted")
       const month = await monthOf(later)
       expect(spentOf(month) + reservedOf(month)).toBeLessThanOrEqual(learnedCeiling)
+    })
+
+    // Re-audit R3-D1: what one breach may teach every firm is clamped to LEARNED_OVERHEAD_MAX_FACTOR (4) times the cost
+    // table's overhead for the model, 4 x 1,024 = 4,096 tokens; a breach beyond that is an anomaly, recorded and raised.
+    const CLAMP = 4 * OVERHEAD
+    const learnedOf = async (): Promise<unknown> => (await db().collection("platform").doc("p1Overhead").get()).data()?.models?.["anthropic_claude-opus-5_5"]?.inputTokens
+
+    it("a provider reporting 25,000,000 prompt tokens for a 28-byte body teaches at most the clamp: an uninvolved $50 firm is still admitted, and the anomaly is recorded (re-audit R3-D1)", async () => {
+      const bytes = Buffer.byteLength(BODY, "utf8")
+      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      stubTransport({ text: "REPLY", inputTokens: 25_000_000, outputTokens: MAX_OUTPUT_TOKENS })
+      const a = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      const breach = await callP1(req(a), at(T))
+      // The charge is owed and recorded in full on the firm that incurred it, with its excess.
+      const charge = costMicroUsd(OPUS, 25_000_000, MAX_OUTPUT_TOKENS)!
+      expect([breach.outcome, breach.costMicroUsd, spentOf(await monthOf(a))]).toEqual(["ok", charge, charge])
+      // Firm B, never involved, with a $50 budget: before the fix the learned 24,999,972 tokens put its worst case at
+      // 100,081,920 micro-USD and refused it budget_exhausted, this month and the next.
+      stubTransport()
+      const b = await seedFirm({ monthlyBudgetMicroUsd: 50_000_000 })
+      const admitted = await callP1(req(b), at(T))
+      expect([admitted.outcome, admitted.blockReason]).toEqual(["ok", null])
+      expect(await reservationOf(admitted.usageLogId)).toMatchObject({ reservedInputTokens: bytes + CLAMP, reservedMicroUsd: costMicroUsd(OPUS, bytes + CLAMP, MAX_OUTPUT_TOKENS) })
+      const nextMonth = await callP1(req(b), at(Date.parse("2026-11-11T10:00:00.000Z")))
+      expect([nextMonth.outcome, nextMonth.blockReason]).toEqual(["ok", null])
+      // Learned only up to the clamp.
+      expect(await learnedOf()).toBe(CLAMP)
+      expect(await reservationOf(breach.usageLogId)).toMatchObject({ exceededMicroUsd: charge - WORST, exceededInputTokens: 25_000_000 - inputCeiling(BODY), usageAnomaly: true })
+      // Recorded and raised: the exceeded event stays, the anomaly has its own event, and both are logged at ERROR.
+      const events = await byFirm("events", a)
+      expect(events.filter((e) => e.data.name === "ai.reservation.exceeded").map((e) => e.id)).toEqual([`${breach.usageLogId}_reservation_exceeded`])
+      expect(events.filter((e) => e.data.name === "ai.usage.anomaly").map((e) => [e.id, e.data.payload])).toEqual([
+        [
+          `${breach.usageLogId}_usage_anomaly`,
+          { monthKey: MONTH, model: OPUS, inputTokens: 25_000_000, bodyTokens: bytes, overheadTokens: 25_000_000 - bytes, learnedTokens: CLAMP, clampTokens: CLAMP },
+        ],
+      ])
+      expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_anomaly").map((c) => (c[1] as { usageLogId: string }).usageLogId)).toEqual([breach.usageLogId])
+      expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_learned").map((c) => (c[1] as { inputTokens: number }).inputTokens)).toEqual([CLAMP])
+    })
+
+    it("a provider reporting Number.MAX_SAFE_INTEGER prompt tokens cannot overflow the learned overhead: it stays at the clamp and a firm at the route's maximum budget is still admitted (re-audit R3-D1)", async () => {
+      vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      stubTransport({ text: "REPLY", inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: MAX_OUTPUT_TOKENS })
+      const a = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      const breach = await callP1(req(a), at(T))
+      expect(breach.outcome).toBe("ok")
+      // The route's largest budget is 1,000,000 USD: before the fix the learned overhead refused even that firm, and so every firm.
+      stubTransport()
+      const b = await seedFirm({ monthlyBudgetMicroUsd: 1_000_000_000_000 })
+      const admitted = await callP1(req(b), at(T))
+      expect([admitted.outcome, admitted.blockReason]).toEqual(["ok", null])
+      const learned = await learnedOf()
+      expect([learned, Number.isSafeInteger(learned)]).toEqual([CLAMP, true])
+      expect(await reservationOf(breach.usageLogId)).toMatchObject({ usageAnomaly: true })
+      expect((await byFirm("events", a)).filter((e) => e.data.name === "ai.usage.anomaly")).toHaveLength(1)
+    })
+
+    it("four concurrent breaches end at the largest overhead they show, and never above the clamp (re-audit R3-D1)", { timeout: 120_000 }, async () => {
+      vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const bytes = Buffer.byteLength(BODY, "utf8")
+      // Each round holds its four calls at the transport until all four are in flight (or 15 s have passed, so a call
+      // that is slow to dispatch never holds the others for good), then lets their commits race on the learned-overhead
+      // doc. Each call bills the body's bytes plus the overhead given for it, and is retried like a client's when its
+      // reservation runs out of time under load (callP1Retrying).
+      const round = async (overheads: number[]): Promise<P1Result[]> => {
+        const queue = [...overheads]
+        const sent: Sent[] = []
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => (release = resolve))
+        const fallback = setTimeout(() => release(), 15_000)
+        setP1TransportForTests({
+          async send(r) {
+            sent.push({ ...r })
+            const overhead = queue.shift()!
+            if (sent.length >= overheads.length) release()
+            await gate
+            return { text: "REPLY", inputTokens: bytes + overhead, outputTokens: MAX_OUTPUT_TOKENS }
+          },
+        })
+        const firms = await Promise.all(overheads.map(() => seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })))
+        const results = await Promise.all(firms.map((f) => callP1Retrying(req(f), at(T))))
+        clearTimeout(fallback)
+        expect([sent.length, ...results.map((r) => [r.outcome, r.accounting])]).toEqual([overheads.length, ...Array(overheads.length).fill(["ok", "settled"])])
+        return results
+      }
+      // All below the clamp: the largest wins, whatever order the commits land in.
+      await round([1_500, 3_900, 2_000, 3_000])
+      expect(await learnedOf()).toBe(3_900)
+      // One beyond the clamp: it teaches only the clamp, and no smaller raise lands after it.
+      const second = await round([2_000, 9_000, 3_000, 4_000])
+      expect(await learnedOf()).toBe(Math.min(9_000, CLAMP))
+      const anomalies = (await Promise.all(second.map((r) => reservationOf(r.usageLogId)))).filter((r) => r?.usageAnomaly === true)
+      expect(anomalies).toHaveLength(1)
+    })
+
+    it("a call whose pre-call work ran past its allowance is refused with a retryable error before anything is reserved or sent (re-audit R3-D2)", async () => {
+      const firmId = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      const sent = stubTransport()
+      // The deadline the handler gives: already passed on the clock it gives.
+      const late = callP1(req(firmId), { now: () => T, preCallDeadline: { atMs: 1_000, clock: () => 1_001 } })
+      await expect(late).rejects.toMatchObject({ code: "precall_deadline", retryable: true })
+      expect(sent).toHaveLength(0)
+      expect(await byFirm("ai_reservations", firmId)).toEqual([])
+      expect(await byFirm("ai_usage_logs", firmId)).toEqual([])
+      expect(reservedOf(await monthOf(firmId))).toBe(0)
+      // Within the deadline the same call goes ahead.
+      const inTime = await callP1(req(firmId), { now: () => T, preCallDeadline: { atMs: 1_000, clock: () => 1_000 } })
+      expect([inTime.outcome, sent.length]).toEqual(["ok", 1])
     })
 
     it("an unknown model is refused before dispatch: model_unpriced, nothing sent, nothing reserved (Copilot finding on PR #40: fail closed)", async () => {
@@ -828,6 +962,31 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       }
       return { firmId, matterId, members }
     }
+
+    it("a request whose pre-call work ran past the 8 s allowance is refused 503 precall_deadline before anything is reserved or sent, and a same-key retry runs (re-audit R3-D2)", async () => {
+      const f = await newFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
+      const brain = viaApi<Out>("committeeBrain", { now: () => T })
+      const sent = stubTransport()
+      // The pre-call clock reads 8,001 ms past the request's start: its reads were slow.
+      p1OpsTestSeam.preCallClock = () => Date.now() + 8_001
+      const key = randomUUID()
+      const ask = () => brain({ token: f.members[0]!.token, data: { firmId: f.firmId, matterId: f.matterId, body: BODY }, headers: { "idempotency-key": key } } as never)
+      const err = await ask().then(
+        () => null,
+        (e: unknown) => e
+      )
+      expect(err).toBeInstanceOf(ApiError)
+      expect([(err as ApiError).status, (err as ApiError).code]).toEqual([503, "precall_deadline"])
+      // No paid work started: nothing sent, nothing reserved, no usage row, no output row.
+      expect(sent).toHaveLength(0)
+      expect(await byFirm("ai_reservations", f.firmId)).toEqual([])
+      expect(await byFirm("ai_usage_logs", f.firmId)).toEqual([])
+      expect(await byFirm("committee_outputs", f.firmId)).toEqual([])
+      // Retryable: the Idempotency-Key was released, so the same request runs once the reads are quick again.
+      delete p1OpsTestSeam.preCallClock
+      const retried = await ask()
+      expect([retried.blocked, retried.text, retried.accounting, sent.length]).toEqual([false, "REPLY", "settled", 1])
+    })
 
     it("ten concurrent committeeBrain requests against a budget for two worst cases dispatch two and refuse the rest; spent plus reserved never exceeds it", { timeout: 90_000 }, async () => {
       const budget = 2 * WORST + 1_000

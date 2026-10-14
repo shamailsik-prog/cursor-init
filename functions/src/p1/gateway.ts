@@ -25,7 +25,7 @@ import {
   reservedOf,
   spentOf,
 } from "./config"
-import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, bodyTokenCeiling, costMicroUsd, estimateTokens, modelInputOverhead } from "./costTable"
+import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, bodyTokenCeiling, costMicroUsd, estimateTokens, learnedOverheadCap, reservationOverheadTokens } from "./costTable"
 import { monthKeyPkt } from "./month"
 import { OPIK_TIMEOUT_MS, exportTrace } from "./opik"
 import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, plainId, type TransportCode } from "./transport"
@@ -378,7 +378,28 @@ function transportCode(err: unknown): TransportCode | "unknown" {
   return err instanceof P1TransportError && isTransportCode(err.code) ? err.code : "unknown"
 }
 
-export async function callP1(req: P1Request, opts?: { now?: () => number }): Promise<P1Result> {
+/**
+ * The call's pre-call work ran past the deadline its caller gave (re-audit R3-D2): nothing was reserved, sent or
+ * written. `retryable`: the same request may be made again (committeeBrain answers 503 `precall_deadline`).
+ */
+export class P1PreCallDeadlineError extends Error {
+  readonly code = "precall_deadline"
+  readonly retryable = true
+
+  constructor() {
+    super("P1 pre-call deadline passed")
+    this.name = "P1PreCallDeadlineError"
+  }
+}
+
+/**
+ * Options for one call. `now` is the call's clock (month, trace id, lease). `preCallDeadline` (re-audit R3-D2) is the
+ * caller's deadline for the work before the reservation: if `clock()` is past `atMs` once this call's first reads are
+ * done, it throws P1PreCallDeadlineError before anything is reserved or sent.
+ */
+export type CallP1Options = { now?: () => number; preCallDeadline?: { atMs: number; clock: () => number } }
+
+export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Result> {
   // 1. Classification guard (L8473), before any read or write.
   if (!isClassification(req?.classification)) throw new Error("P1 call omitted classification")
   const { firmId, classification, taskType, partyNames } = req
@@ -407,13 +428,12 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
   }
   // The call's worst case (F07, re-audit R1-D1, R2-D3): the input ceiling of the masked body that is sent (one token
   // per UTF-8 byte of its largest normal form, plus the model's request overhead or the larger overhead learned from a
-  // breach), plus the output ceiling sent as max_tokens, at the model's price. This is the first look; the reservation
-  // transaction recomputes it on the overhead it reads. Null for a model with no price or no overhead in the cost
-  // table, which is never dispatched (step 6, fail closed).
+  // breach, counted only up to the clamp: re-audit R3-D1), plus the output ceiling sent as max_tokens, at the model's
+  // price. This is the first look; the reservation transaction recomputes it on the overhead it reads. Null for a model
+  // with no price or no overhead in the cost table, which is never dispatched (step 6, fail closed).
   const bodyTokens = bodyTokenCeiling(outbound.body)
-  const tableOverhead = modelInputOverhead(model)
-  const worstCase =
-    tableOverhead === null ? null : costMicroUsd(model, bodyTokens + Math.max(tableOverhead, learnedOverheadOf(overheadSnap.data(), model)), MAX_OUTPUT_TOKENS)
+  const firstLookOverhead = reservationOverheadTokens(model, learnedOverheadOf(overheadSnap.data(), model))
+  const worstCase = firstLookOverhead === null ? null : costMicroUsd(model, bodyTokens + firstLookOverhead, MAX_OUTPUT_TOKENS)
 
   /** Steps 2 and 5 to 7, in order; the first refusal wins. */
   const refusal = (): BlockReason | null => {
@@ -435,6 +455,13 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
   // 8. Credentials.
   if (blockReason === null && transport === null) blockReason = "no_credentials"
 
+  // 8a. The caller's pre-call deadline (re-audit R3-D2): when the work before this point (the caller's own reads and
+  // this call's first reads) ran past the allowance the caller gives, nothing is reserved or sent, and nothing is
+  // written: the call fails with a retryable error, so no paid work starts that could outlive the request's timeout.
+  if (blockReason === null && opts?.preCallDeadline !== undefined && opts.preCallDeadline.clock() > opts.preCallDeadline.atMs) {
+    throw new P1PreCallDeadlineError()
+  }
+
   // 8b. The reservation (F07): one transaction re-reads the month total and the config, refuses unless the
   // worst case fits and the firm holds fewer live reservations than its maximum (and has no lapsed provider
   // attempt, F08), and holds the worst case. No reservation, no provider call (a failure is reservation_failed).
@@ -446,7 +473,6 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
       monthKey,
       nowMs: Math.floor(now()),
       bodyTokens,
-      tableOverhead: tableOverhead!,
       reservationRef: resRef,
       configRef,
       totalRef,
@@ -603,7 +629,7 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
     monthKey,
     trace: { id: traceId, status },
   }
-  let staged: StageResult = { crossings: [], exceeded: null, learnedOverhead: null }
+  let staged: StageResult = { ...NOTHING_STAGED, crossings: [] }
   let accounting: P1Accounting = "pending"
   try {
     await t.beforeCommit?.()
@@ -616,7 +642,7 @@ export async function callP1(req: P1Request, opts?: { now?: () => number }): Pro
   }
   for (const c of staged.crossings) logger.warn("p1.budget_threshold", { firmId, monthKey, ...c })
   if (staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded })
-  if (staged.learnedOverhead !== null) logger.warn("p1.overhead_learned", { usageLogId: usageRef.id, ...staged.learnedOverhead })
+  logLearning(usageRef.id, firmId, staged)
 
   return {
     outcome,
@@ -639,10 +665,8 @@ type ReserveArgs = {
   monthKey: string
   /** The call's clock when it reserves: the lease runs from it, and a live reservation is one whose lease is later. */
   nowMs: number
-  /** The masked body's token ceiling (`bodyTokenCeiling`). */
+  /** The masked body's token ceiling (`bodyTokenCeiling`); the transaction adds the overhead it reads (`reservationOverheadTokens`). */
   bodyTokens: number
-  /** The cost table's request overhead for the model (`modelInputOverhead`); the transaction takes the larger learned one. */
-  tableOverhead: number
   reservationRef: DocumentReference
   configRef: DocumentReference
   totalRef: DocumentReference
@@ -725,7 +749,8 @@ async function stageReservation(db: Firestore, tx: Transaction, a: ReserveArgs):
   // An earlier attempt of this call committed and lost its answer: its reservation already holds the worst case.
   if (ownSnap!.exists && ownSnap!.get("traceId") === a.fields.traceId) return ownSnap!.get("state") === "reserved" ? "reserved" : "reservation_failed"
   const open = await tx.get(db.collection("ai_reservations").where("firmId", "==", a.firmId).where("state", "in", OPEN_RESERVATION_STATES))
-  const overheadTokens = Math.max(a.tableOverhead, learnedOverheadOf(overheadSnap!.data(), a.fields.model))
+  const overheadTokens = reservationOverheadTokens(a.fields.model, learnedOverheadOf(overheadSnap!.data(), a.fields.model))
+  if (overheadTokens === null) return "model_unpriced"
   const reservedInputTokens = a.bodyTokens + overheadTokens
   const worstCase = costMicroUsd(a.fields.model, reservedInputTokens, MAX_OUTPUT_TOKENS)
   if (worstCase === null) return "model_unpriced"
@@ -933,6 +958,7 @@ async function committedCrossings(db: Firestore, a: CommitArgs): Promise<StageRe
       ),
       exceeded: null,
       learnedOverhead: null,
+      anomaly: null,
     }
   } catch {
     return null
@@ -953,12 +979,44 @@ export type Exceeded = { reservedMicroUsd: number; actualMicroUsd: number; exces
 
 /**
  * A request overhead learned from a settlement whose input tokens went past the reservation's input ceiling (Copilot
- * finding on PR #40): the input tokens billed less the body's ceiling, now the model's overhead in `platform/p1Overhead`.
+ * finding on PR #40): the input tokens billed less the body's ceiling, counted only up to the clamp (re-audit R3-D1),
+ * now the model's overhead in `platform/p1Overhead`.
  */
 export type LearnedOverhead = { model: string; inputTokens: number; exceededInputTokens: number }
 
-/** What one staged decision crossed: its threshold alerts, an excess over its reservation (or null), and an overhead it taught (or null). */
-export type StageResult = { crossings: Crossing[]; exceeded: Exceeded | null; learnedOverhead: LearnedOverhead | null }
+/**
+ * A breach that shows more overhead than the clamp allows (re-audit R3-D1): `overheadTokens` (input billed less the
+ * body's ceiling) is above `clampTokens` (LEARNED_OVERHEAD_MAX_FACTOR times the table's overhead), so it counts only as
+ * `learnedTokens`, the clamp. Recorded on the reservation (`usageAnomaly: true`), as the event `ai.usage.anomaly` and
+ * logged `p1.overhead_anomaly` at ERROR: a provider report that implausible needs a person to look at it.
+ */
+export type UsageAnomaly = {
+  monthKey: string
+  model: string
+  inputTokens: number
+  bodyTokens: number
+  overheadTokens: number
+  learnedTokens: number
+  clampTokens: number
+}
+
+/**
+ * What one staged decision crossed: its threshold alerts, an excess over its reservation (or null), an overhead it
+ * taught (or null), and an anomaly it showed (or null).
+ */
+export type StageResult = { crossings: Crossing[]; exceeded: Exceeded | null; learnedOverhead: LearnedOverhead | null; anomaly: UsageAnomaly | null }
+
+/**
+ * After a commit: every raise of a learned overhead is logged `p1.overhead_learned` at ERROR, so an operator sees each
+ * one, and an anomaly is logged `p1.overhead_anomaly` at ERROR (re-audit R3-D1). Shared by the call and the reconciler.
+ */
+export function logLearning(usageLogId: string, firmId: string, staged: StageResult): void {
+  if (staged.learnedOverhead !== null) logger.error("p1.overhead_learned", { usageLogId, ...staged.learnedOverhead })
+  if (staged.anomaly !== null) logger.error("p1.overhead_anomaly", { firmId, usageLogId, ...staged.anomaly })
+}
+
+/** A stage that crossed nothing, exceeded nothing, taught nothing and showed no anomaly. */
+export const NOTHING_STAGED: Readonly<StageResult> = Object.freeze({ crossings: [], exceeded: null, learnedOverhead: null, anomaly: null })
 
 /** A count, when it is a non-negative integer. */
 function countOf(value: unknown): number | null {
@@ -979,15 +1037,23 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
   const crossed = candidates.filter((_t, i) => !alertSnaps[i]!.exists)
   const exceeded: Exceeded | null = live && r.costMicroUsd > held ? { reservedMicroUsd: held, actualMicroUsd: r.costMicroUsd, excessMicroUsd: r.costMicroUsd - held } : null
   // A breach on the input side (Copilot finding on PR #40): the provider billed more input than the body's ceiling plus
-  // the overhead reserved. The overhead it shows (input billed less the body's ceiling) becomes the model's, when larger
-  // than the one already learned: read here, before any write, and raised in this transaction.
+  // the overhead reserved. The overhead it shows (input billed less the body's ceiling) becomes the model's, counted
+  // only up to the clamp (re-audit R3-D1: the learned overhead is platform-wide, so one report must not be able to
+  // price every firm out), when that is larger than the one already learned: read here, before any write, and raised in
+  // this transaction. More than the clamp is an anomaly, recorded and raised in this transaction too.
   const reservedIn = exceeded === null ? null : countOf(reservationSnap!.get("reservedInputTokens"))
   const bodyIn = exceeded === null ? null : countOf(reservationSnap!.get("reservedBodyTokens"))
   const exceededInputTokens = reservedIn !== null && r.inputTokens > reservedIn ? r.inputTokens - reservedIn : 0
+  const clamp = learnedOverheadCap(r.model)
   let learnedOverhead: LearnedOverhead | null = null
-  if (exceededInputTokens > 0 && bodyIn !== null) {
+  let anomaly: UsageAnomaly | null = null
+  if (exceededInputTokens > 0 && bodyIn !== null && clamp !== null) {
     const shown = r.inputTokens - bodyIn
-    if (shown > learnedOverheadOf((await tx.get(overheadRef())).data(), r.model)) learnedOverhead = { model: r.model, inputTokens: shown, exceededInputTokens }
+    const counted = Math.min(shown, clamp)
+    if (shown > clamp) {
+      anomaly = { monthKey: r.monthKey, model: r.model, inputTokens: r.inputTokens, bodyTokens: bodyIn, overheadTokens: shown, learnedTokens: counted, clampTokens: clamp }
+    }
+    if (counted > learnedOverheadOf((await tx.get(overheadRef())).data(), r.model)) learnedOverhead = { model: r.model, inputTokens: counted, exceededInputTokens }
   }
   if (a.failCommit) throw new Error("p1TestSeam.failCommit")
 
@@ -1022,8 +1088,19 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
       actualMicroUsd: r.costMicroUsd,
       ...(exceeded === null ? {} : { exceededMicroUsd: exceeded.excessMicroUsd }),
       ...(exceededInputTokens > 0 ? { exceededInputTokens } : {}),
+      ...(anomaly === null ? {} : { usageAnomaly: true }),
       settledAt: now,
       settledBy: a.settledBy ?? "gateway",
+    })
+  }
+  if (anomaly !== null) {
+    tx.create(db.collection("events").doc(`${usageRef.id}_usage_anomaly`), {
+      name: "ai.usage.anomaly",
+      firmId: r.firmId,
+      payload: anomaly,
+      classification: "internal",
+      occurredAt: now,
+      idempotencyKey: `${usageRef.id}:usage_anomaly`,
     })
   }
   if (learnedOverhead !== null) {
@@ -1101,5 +1178,5 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
     })
     return crossing
   })
-  return { crossings, exceeded, learnedOverhead }
+  return { crossings, exceeded, learnedOverhead, anomaly }
 }

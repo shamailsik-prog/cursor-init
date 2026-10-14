@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import * as costTable from "../src/p1/costTable"
 import { MAX_OUTPUT_TOKENS, MODEL_PRICES, PROVIDER_ID, REQUEST_OVERHEAD_TOKENS, TASK_MODEL, bodyTokenCeiling, costMicroUsd, estimateTokens, inputTokenCeiling, modelInputOverhead, priceMicroUsd } from "../src/p1/costTable"
 import { CALL_WORST_CASE_MS, assertOperationTimeBudget, ledgerQueue } from "../src/p1/gateway"
 import { COMMITTEE_HANDLER_OVERHEAD_MS, REQUEST_TIMEOUT_MARGIN_MS } from "../src/p1/ops"
@@ -93,6 +94,26 @@ describe("P1 cost table (P3-62)", () => {
     for (const unknown of ["x/unknown", "", "constructor", "__proto__", "toString"]) expect([unknown, modelInputOverhead(unknown)]).toEqual([unknown, null])
     // Every routed model is priced and has an overhead: a task can never route to a model it cannot reserve for.
     for (const model of Object.values(TASK_MODEL)) expect([model, modelInputOverhead(model) !== null, costMicroUsd(model, 0, 0) !== null]).toEqual([model, true, true])
+  })
+
+  it("a learned overhead counts only up to LEARNED_OVERHEAD_MAX_FACTOR times the model's own overhead (re-audit R3-D1)", () => {
+    const t = costTable as unknown as {
+      LEARNED_OVERHEAD_MAX_FACTOR?: number
+      learnedOverheadCap?: (model: string) => number | null
+      reservationOverheadTokens?: (model: string, learned: unknown) => number | null
+    }
+    expect([t.LEARNED_OVERHEAD_MAX_FACTOR, t.learnedOverheadCap?.(OPUS)]).toEqual([4, 4096])
+    const reserve = (learned: unknown) => t.reservationOverheadTokens?.(OPUS, learned)
+    // Nothing learned, or less than the table's figure: the table's 1,024.
+    expect([reserve(0), reserve(500)]).toEqual([1024, 1024])
+    // Between the table's figure and the clamp: exactly what was learned.
+    expect([reserve(2_000), reserve(4_096)]).toEqual([2_000, 4_096])
+    // Beyond the clamp, however far: the clamp, with no overflow.
+    expect([reserve(4_097), reserve(24_999_972), reserve(Number.MAX_SAFE_INTEGER)]).toEqual([4_096, 4_096, 4_096])
+    // Anything that is not a non-negative safe integer counts as nothing learned.
+    expect([reserve(Number.NaN), reserve(-5), reserve(Number.POSITIVE_INFINITY), reserve(2.5), reserve("4000")]).toEqual([1024, 1024, 1024, 1024, 1024])
+    // A model the cost table does not know has no overhead and no clamp: it is never dispatched.
+    expect([t.learnedOverheadCap?.("x/unknown"), t.reservationOverheadTokens?.("x/unknown", 2_000)]).toEqual([null, null])
   })
 })
 
