@@ -25,7 +25,13 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMembers } from "@/platform/persistence/memberSync"
-import { uploadDocument } from "@/services/d1-6/uploadDocument"
+import {
+  assertDocumentObjectIngestAllowed,
+  DocumentObjectConfigurationError,
+  getImmutableDocumentObject,
+} from "@/platform/documents/documentObjectStore"
+import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
+import { rollbackDocumentIngest, uploadDocument } from "@/services/d1-6/uploadDocument"
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
 
@@ -63,6 +69,17 @@ function defaultIngestClassification(matterClassification: unknown): Classificat
     : DEFAULT_INGEST_CLASSIFICATION
 }
 
+async function rollbackFailedIngest(
+  store: SpineStore,
+  repos: SpineRepositories,
+  docId: string,
+  reused: boolean
+): Promise<void> {
+  if (reused) return
+  await rollbackDocumentIngest(store, docId)
+  await repos.documents.delete(docId)
+}
+
 function canViewDocument(
   store: SpineStore,
   userId: string,
@@ -83,6 +100,8 @@ async function handleGet(request: Request) {
   const url = new URL(request.url)
   const userId = getQuery(DOCUMENTS_SURFACE, url, "userId")
   const matterId = getQuery(DOCUMENTS_SURFACE, url, "matterId")
+  const docId = getQuery(DOCUMENTS_SURFACE, url, "docId")
+  const includeContent = getQuery(DOCUMENTS_SURFACE, url, "includeContent")
   const limit = parseLimit(getQuery(DOCUMENTS_SURFACE, url, "limit"))
   const cursor = parseCursor(getQuery(DOCUMENTS_SURFACE, url, "cursor"))
 
@@ -94,6 +113,34 @@ async function handleGet(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
   await syncFirmMembers(store, repos, user.firmId)
+
+  if (docId) {
+    const doc = (await repos.documents.get(docId)) ?? store.documents.get(docId) ?? null
+    if (!doc || doc.firmId !== user.firmId) {
+      return NextResponse.json({ error: "unknown document" }, { status: 404 })
+    }
+    if (!canViewDocument(store, userId, doc)) {
+      return NextResponse.json({ error: "document access denied" }, { status: 403 })
+    }
+    if (includeContent !== "true") {
+      return NextResponse.json({ error: "includeContent=true is required to read object bytes" }, { status: 400 })
+    }
+    if (!doc.storagePath || doc.objectBytesStatus === "missing") {
+      return NextResponse.json({ error: "document bytes unavailable" }, { status: 500 })
+    }
+    try {
+      const bytes = await getImmutableDocumentObject(store, doc.firmId, doc.storagePath, doc.contentHash)
+      return NextResponse.json({
+        doc,
+        contentBase64: bytes.toString("base64"),
+        byteSize: bytes.length,
+        contentHash: doc.contentHash,
+      })
+    } catch {
+      return NextResponse.json({ error: "document bytes unavailable" }, { status: 500 })
+    }
+  }
+
   const firmDocs = await repos.documents.listByFirm(user.firmId)
   const firmJobs = await repos.jobs.listByFirm(user.firmId)
   const ocrJobCounts = new Map<string, number>()
@@ -223,7 +270,15 @@ async function handlePost(request: Request) {
     if (bytes.length === 0) {
       return NextResponse.json({ error: "contentBase64 decodes to empty bytes" }, { status: 400 })
     }
-    const write = uploadDocument(store, {
+    try {
+      assertDocumentObjectIngestAllowed()
+    } catch (err) {
+      if (err instanceof DocumentObjectConfigurationError) {
+        return NextResponse.json({ error: err.message }, { status: 503 })
+      }
+      throw err
+    }
+    const write = await uploadDocument(store, {
       firmId: parsed.firmId,
       matterId,
       bytes,
@@ -231,6 +286,8 @@ async function handlePost(request: Request) {
       classification,
       idempotencyKey: key,
       callerClearance: actor.clearanceLevel,
+      uploadedBy: actor.id,
+      mimeType: parsed.mimeType,
     })
 
     const inMemoryDoc = store.documents.get(write.docId)
@@ -244,13 +301,30 @@ async function handlePost(request: Request) {
         classification: inMemoryDoc.classification,
         sourceChannel: inMemoryDoc.sourceChannel,
         matterId: inMemoryDoc.matterId,
+        storagePath: inMemoryDoc.storagePath,
+        isImmutable: inMemoryDoc.isImmutable,
+        byteSize: inMemoryDoc.byteSize,
+        mimeType: inMemoryDoc.mimeType,
+        objectVersion: inMemoryDoc.objectVersion,
+        uploadedBy: inMemoryDoc.uploadedBy,
+        objectBytesStatus: inMemoryDoc.objectBytesStatus,
       })
     } else {
-      await repos.documents.create(inMemoryDoc)
+      try {
+        await repos.documents.create(inMemoryDoc)
+      } catch (persistErr) {
+        await rollbackFailedIngest(store, repos, write.docId, write.reused)
+        throw persistErr
+      }
     }
     const jobsForDocument = store.jobs.filter((job) => job.documentId === write.docId)
-    for (const job of jobsForDocument) {
-      await repos.jobs.create(job)
+    try {
+      for (const job of jobsForDocument) {
+        await repos.jobs.create(job)
+      }
+    } catch (persistErr) {
+      await rollbackFailedIngest(store, repos, write.docId, write.reused)
+      throw persistErr
     }
     const doc = (await repos.documents.get(write.docId)) ?? inMemoryDoc
     if (!doc) {
@@ -272,8 +346,11 @@ async function handlePost(request: Request) {
         .length,
     }
     claim.complete(payload)
-    return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+    return NextResponse.json({ result: payload, idempotencyKey: key, reused: write.reused })
   } catch (err) {
+    if (err instanceof DocumentObjectConfigurationError) {
+      return NextResponse.json({ error: err.message }, { status: 503 })
+    }
     const message = publicErrorMessage(err, "document ingest failed")
     return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }

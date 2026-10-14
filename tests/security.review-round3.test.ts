@@ -98,6 +98,13 @@ describe("R3 a legacy 'bogus' stored label never breaks a listing", () => {
       contentHash: "h",
       sourceChannel: "web",
       classification: "bogus" as never,
+      storagePath: "fs://firmA/documents/doc_bogus/v1",
+      isImmutable: false,
+      byteSize: 0,
+      mimeType: "application/octet-stream",
+      objectVersion: 1,
+      uploadedBy: "partner_a",
+      objectBytesStatus: "missing",
     })
     const res = await documentsGet(
       new Request("http://127.0.0.1/api/d1/documents?userId=associate_a&limit=10&cursor=0")

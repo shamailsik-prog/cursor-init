@@ -41,7 +41,21 @@ function matter(id: string, classification: Classification = "internal", firmId 
 }
 
 function doc(id: string, matterId: string | null, classification: Classification = "internal", firmId = "firmA"): DocumentRecord {
-  return { id, firmId, matterId, contentHash: id, sourceChannel: "web", classification }
+  return {
+    id,
+    firmId,
+    matterId,
+    contentHash: id,
+    sourceChannel: "web",
+    classification,
+    storagePath: `fs://${firmId}/documents/${id}/v1`,
+    isImmutable: false,
+    byteSize: 0,
+    mimeType: "application/octet-stream",
+    objectVersion: 1,
+    uploadedBy: "partner_a",
+    objectBytesStatus: "available",
+  }
 }
 
 function client(firmId = "firmA", canonicalName = "Muhammad Ali"): Entity {

@@ -29,13 +29,14 @@ async function seedMatter(title: string): Promise<string> {
   })
   addMember(store, matter.id, "partner_a", "firmA")
   addMember(store, matter.id, "associate_a", "firmA")
-  const doc = uploadDocument(store, {
+  const doc = await uploadDocument(store, {
     firmId: "firmA",
     matterId: matter.id,
     bytes: Buffer.from(`%PDF-${title}%`),
     sourceChannel: "web",
     classification: "internal",
     idempotencyKey: crypto.randomUUID(),
+      uploadedBy: "partner_a",
   })
   recordCaseNumber(store, matter.id, "CP 1234", "SHC")
   const transition = await workflowPost(

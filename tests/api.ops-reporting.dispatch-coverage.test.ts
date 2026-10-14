@@ -41,13 +41,14 @@ async function seedMatter(title: string): Promise<string> {
   addMember(store, matter.id, "associate_a", "firmA")
   // Same seed as tests/api.ops-reporting.test.ts: workflow activity so the POST preamble
   // can build the matter's alert digest and governance rows and reach the action handlers.
-  const doc = uploadDocument(store, {
+  const doc = await uploadDocument(store, {
     firmId: "firmA",
     matterId: matter.id,
     bytes: Buffer.from(`%PDF-${title}%`),
     sourceChannel: "web",
     classification: "internal",
     idempotencyKey: crypto.randomUUID(),
+      uploadedBy: "partner_a",
   })
   recordCaseNumber(store, matter.id, "CP 1234", "SHC")
   const transition = await workflowPost(

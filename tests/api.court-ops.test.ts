@@ -27,7 +27,7 @@ function get(params: URLSearchParams) {
   return GET(new Request(`http://127.0.0.1/api/d2/court-ops?${params.toString()}`))
 }
 
-function seedOpsFixtures() {
+async function seedOpsFixtures() {
   const store = getRuntimeStore()
   const matter = createMatter(store, {
     firmId: "firmA",
@@ -41,13 +41,14 @@ function seedOpsFixtures() {
   addMember(store, matter.id, "clerk_a", "firmA")
 
   recordCaseNumber(store, matter.id, "CP 1234", "SHC")
-  const write = uploadDocument(store, {
+  const write = await uploadDocument(store, {
     firmId: "firmA",
     matterId: matter.id,
     bytes: Buffer.from("%PDF-workflow-blocker%"),
     sourceChannel: "web",
     classification: "internal",
     idempotencyKey: "6979997c-bf72-4aaa-a59a-8fe1e8616cc2",
+      uploadedBy: "partner_a",
   })
   transitionWorkflowStatus(store, {
     actorId: "associate_a",
@@ -64,7 +65,7 @@ function seedOpsFixtures() {
 
 describe("GET/POST /api/d2/court-ops", () => {
   it("validates WhatsApp command grammar and command authorization", async () => {
-    seedOpsFixtures()
+    await seedOpsFixtures()
     const bad = await post(
       {
         action: "whatsapp_command",
@@ -97,7 +98,7 @@ describe("GET/POST /api/d2/court-ops", () => {
   })
 
   it("lists queue with pagination including follow-up and workflow blockers", async () => {
-    const { matterId } = seedOpsFixtures()
+    const { matterId } = await seedOpsFixtures()
     const queue = await get(
       new URLSearchParams({
         userId: "associate_a",
@@ -118,7 +119,7 @@ describe("GET/POST /api/d2/court-ops", () => {
   })
 
   it("resolves follow-ups and denies cross-firm resolvers", async () => {
-    seedOpsFixtures()
+    await seedOpsFixtures()
     const follow = getRuntimeStore().followUps.find((row) => row.kind === "case_number_reject")
     expect(follow).toBeTruthy()
     const followUpId = follow?.id ?? ""
@@ -148,7 +149,7 @@ describe("GET/POST /api/d2/court-ops", () => {
   })
 
   it("resolves workflow blockers through status transitions", async () => {
-    const { workflowDocId } = seedOpsFixtures()
+    const { workflowDocId } = await seedOpsFixtures()
     const res = await post(
       {
         action: "resolve_workflow",
@@ -163,7 +164,7 @@ describe("GET/POST /api/d2/court-ops", () => {
   })
 
   it("replays idempotent acknowledge calls and rejects key conflicts", async () => {
-    seedOpsFixtures()
+    await seedOpsFixtures()
     const follow = getRuntimeStore().followUps.find((row) => row.kind === "case_number_reject")
     const followUpId = follow?.id ?? ""
     const key = "2fc9c715-29ce-4504-a9d5-dd4ddfb6d58b"

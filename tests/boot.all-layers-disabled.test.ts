@@ -122,7 +122,7 @@ async function call(
   return { status: response.status, body }
 }
 
-function seedMatterAndDraft() {
+async function seedMatterAndDraft() {
   const store = getRuntimeStore()
   const matter = createMatter(store, {
     firmId: "firmA",
@@ -150,13 +150,14 @@ function seedMatterAndDraft() {
       temporalCitations: [],
     },
   })
-  const doc = uploadDocument(store, {
+  const doc = await uploadDocument(store, {
     firmId: "firmA",
     matterId: matter.id,
     bytes: Buffer.from("%PDF-boot-workflow%"),
     sourceChannel: "web",
     classification: "internal",
     idempotencyKey: crypto.randomUUID(),
+      uploadedBy: "partner_a",
   })
   return { matterId: matter.id, draftId: draft.id, documentId: doc.docId }
 }
@@ -398,7 +399,7 @@ describe("boot with every non-core layer disabled", () => {
   })
 
   it("answers every core route with a valid session and minimal input, no 5xx", { timeout: 120_000 }, async () => {
-    const ctx = seedMatterAndDraft()
+    const ctx = await seedMatterAndDraft()
     for (const c of CORE_CALLS) {
       const init = c.init(ctx)
       const res = await call(c.route, c.method, init)

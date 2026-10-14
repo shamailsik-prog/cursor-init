@@ -18,16 +18,17 @@ const postJson = (h: (r: Request) => Promise<Response>, url: string, body: unkno
     })
   )
 
-function seedLoose() {
+async function seedLoose() {
   const store = getRuntimeStore()
   store.users.set("clerk_low", { id: "clerk_low", firmId: "firmA", role: "clerk", clearanceLevel: "internal" })
-  const write = uploadDocument(store, {
+  const write = await uploadDocument(store, {
     firmId: "firmA",
     matterId: null,
     bytes: Buffer.from("%PDF-loose-vault%"),
     sourceChannel: "bulk",
     classification: "internal",
     idempotencyKey: "loose-1",
+      uploadedBy: "partner_a",
   })
   return { store, docId: write.docId }
 }
@@ -43,7 +44,7 @@ afterEach(() => resetRuntimeStoreForTests())
 
 describe("loose vault in the Next API matches the rules (E-18)", () => {
   it("only clerk/partner with clearance >= confidential see loose-vault documents", async () => {
-    const { docId } = seedLoose()
+    const { docId } = await seedLoose()
     expect(await visibleIds("associate_a")).not.toContain(docId)
     expect(await visibleIds("clerk_low")).not.toContain(docId)
     expect(await visibleIds("clerk_a")).toContain(docId)
@@ -51,7 +52,7 @@ describe("loose vault in the Next API matches the rules (E-18)", () => {
   })
 
   it("associates and low-clearance clerks cannot ingest into the loose vault", async () => {
-    seedLoose()
+    await seedLoose()
     const body = (actorId: string) => ({
       action: "ingest",
       actorId,
@@ -67,7 +68,7 @@ describe("loose vault in the Next API matches the rules (E-18)", () => {
   })
 
   it("document workflow actions on a loose-vault document follow the same rule", async () => {
-    const { docId } = seedLoose()
+    const { docId } = await seedLoose()
     const denied = await postJson(workflowPost, "http://127.0.0.1/api/d1/document-workflow", {
       action: "transition",
       actorId: "associate_a",
