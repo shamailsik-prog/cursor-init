@@ -37,6 +37,7 @@ export default defineConfig({
             "tests/persistence.runtime-mode.test.ts",
             "tests/audit-f01-production-persistence.e2e.test.ts",
             "tests/f03.persistence-rollback.test.ts",
+            "tests/f14-document-clearance.firestore.test.ts",
             "tests/audit-f02-console-functions-auth.e2e.test.ts",
             "tests/audit-f02-functions-http-emulator.e2e.test.ts",
           ]),
