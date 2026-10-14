@@ -1,26 +1,57 @@
 name: Mutation testing
 
 # StrykerJS on the security-critical modules (docs/audits/mutation-report.md).
-# Weekly and on demand only: a full run takes hours, far too slow for per-PR CI
-# (measured locally on 4 cores: see docs/audits/README.md "Mutation testing").
-# Each job fails when its mutation score is below 85 (thresholds.break in
-# stryker.config.mjs and functions/stryker.config.mjs).
+# `next` and `functions`: weekly and on demand only; a full run takes hours, far too slow for
+# per-PR CI (measured locally on 4 cores: see docs/audits/README.md "Mutation testing"). Each
+# fails when its mutation score is below 85 (thresholds.break in stryker.config.mjs and
+# functions/stryker.config.mjs).
+# `documents` (the document vault, about 10 minutes) also runs on every pull request that touches
+# the vault, its tests or its mutation setup (re-audit R1-D3), and fails when any vault file
+# scores below its own floor (perFileBreak in stryker.documents.config.mjs).
 on:
   workflow_dispatch:
   schedule:
     # Sundays 02:17 UTC.
     - cron: "17 2 * * 0"
+  pull_request:
+    paths:
+      - "platform/documents/**"
+      - "services/d1-6/**"
+      - "tests/fa-d16-*"
+      - "tests/f03-*"
+      - "tests/api.documents.test.ts"
+      - "tests/api.document-workflow.test.ts"
+      - "tests/security.dedup-oracle.test.ts"
+      - "tests/security.loose-vault-api.test.ts"
+      - "tests/security.accounts-role.test.ts"
+      - "tests/spine.hardening.test.ts"
+      - "tests/jobs.matter-id.test.ts"
+      - "tests/http.idempotency.test.ts"
+      - "tests/persistence.route-wiring.test.ts"
+      - "tests/helpers/fakeS3.ts"
+      - "tests/setup/**"
+      - "stryker.documents.config.mjs"
+      - "stryker.config.mjs"
+      - "vitest.documents-mutation.config.ts"
+      - "vitest.config.ts"
+      - "scripts/check-mutation-per-file.mjs"
+      - ".github/workflows/mutation.yml"
+      - "package.json"
+      - "package-lock.json"
 
 permissions:
   contents: read
 
 concurrency:
   group: mutation-${{ github.ref }}
-  cancel-in-progress: false
+  # A newer push to a pull request supersedes its older run; scheduled runs always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   next:
     name: Mutation (Next app security modules)
+    # Hours long: schedule and workflow_dispatch only, never on pull requests.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -40,11 +71,14 @@ jobs:
           retention-days: 30
 
   documents:
-    # The document vault (F03, FA-D16-001/002/003). Fails when any file scores below its own
-    # floor (perFileBreak in stryker.documents.config.mjs, checked by scripts/check-mutation-per-file.mjs).
+    # The document vault (F03, FA-D16-001/002/003). Runs on every trigger, pull requests included
+    # (no `if:`, so it is never skipped and reported green without running). The two commands
+    # are spelled out rather than taken from package.json, so editing an npm script cannot turn
+    # the gate into a no-op; the floor check fails on a missing report, a missing file, a file with
+    # no valid mutants, and counts Stryker-disabled mutants as not killed (R1-D3).
     name: Mutation (document vault, per-file floors)
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -52,8 +86,10 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - name: Stryker (npm run mutation:documents)
-        run: npm run mutation:documents
+      - name: Stryker on the vault files (stryker.documents.config.mjs)
+        run: npx stryker run stryker.documents.config.mjs
+      - name: Per-file floors (scripts/check-mutation-per-file.mjs)
+        run: node scripts/check-mutation-per-file.mjs stryker.documents.config.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -63,6 +99,8 @@ jobs:
 
   functions:
     name: Mutation (functions P5 + HTTP, under emulators)
+    # Hours long: schedule and workflow_dispatch only, never on pull requests.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:

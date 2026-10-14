@@ -13,6 +13,7 @@
     "test:unit": "vitest run",
     "test:document-vault-s3": "vitest run tests/fa-d16-001.document-vault-s3.e2e.test.ts",
     "test:document-vault-server": "node scripts/e2e-document-vault-server.mjs",
+    "test:document-vault-firestore": "firebase emulators:exec --only firestore --project demo-fad16-vault \"npx vitest run tests/fa-d16-001.firestore-r2.e2e.test.ts\"",
     "test:r2-live": "R2_LIVE_REQUIRED=1 vitest run tests/fa-d16-001.r2-live.o2.test.ts",
     "functions:build": "npm --prefix functions run build",
     "functions:test": "npm --prefix functions test",

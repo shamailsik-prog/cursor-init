@@ -274,6 +274,26 @@ describe("FA-D16-002: encryption key validation", () => {
     )
   })
 
+  it.each([
+    ["all zeros", "0".repeat(64)],
+    ["all 0xff", "f".repeat(64)],
+    ["all 0xFF, upper case", "F".repeat(64)],
+    ["one repeated byte", "a5".repeat(32)],
+  ])("refuses a weak key: %s (re-audit INFO 8)", async (_label, key) => {
+    await expect(putWithKey(key)).rejects.toThrow(DocumentObjectConfigurationError)
+    await expect(putWithKey(key)).rejects.toThrow(
+      "SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY is one byte repeated (for example all zeros), not a random key; generate one with: openssl rand -hex 32"
+    )
+    expect(() => assertDocumentObjectIngestAllowed()).toThrow(/one byte repeated/)
+    expect(encFiles()).toEqual([])
+  })
+
+  it("accepts a key that differs from a repeated byte in a single position", async () => {
+    await expect(putWithKey(`${"0".repeat(63)}1`)).resolves.toMatchObject({ objectVersion: 1 })
+    rmSync(root, { recursive: true, force: true })
+    await expect(putWithKey(`1${"0".repeat(63)}`)).resolves.toMatchObject({ objectVersion: 1 })
+  })
+
   it("accepts 64 hex characters in either case, with surrounding whitespace trimmed", async () => {
     await expect(putWithKey(KEY_A.toUpperCase())).resolves.toMatchObject({ objectVersion: 1 })
     rmSync(root, { recursive: true, force: true })

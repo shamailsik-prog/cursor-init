@@ -14,6 +14,8 @@ export const DOCUMENT_VAULT_TESTS = [
   "tests/fa-d16-002.upload-document-paths.unit.test.ts",
   "tests/fa-d16-002.vault-edges.unit.test.ts",
   "tests/fa-d16-003.round-trip-cleanup.unit.test.ts",
+  "tests/fa-d16-r1.credential-hygiene.unit.test.ts",
+  "tests/fa-d16-r1.ambiguous-put-settle.unit.test.ts",
   "tests/f03-document-bytes.e2e.test.ts",
   "tests/f03-document-object-store.unit.test.ts",
   "tests/api.documents.test.ts",

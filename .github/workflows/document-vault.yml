@@ -5,7 +5,8 @@ name: Document vault (S3)
 # AWS SigV4 to it, exactly as the R2 backend speaks to Cloudflare R2: upload through the real
 # route, read-after-write from a fresh store instance, download, overwrite refusal, tamper
 # detection and a restore drill into a second bucket (tests/fa-d16-001.document-vault-s3.e2e.test.ts),
-# then the same upload and download through a running Next.js server (scripts/e2e-document-vault-server.mjs).
+# then the same upload and download through a running Next.js server (scripts/e2e-document-vault-server.mjs),
+# and Firestore persistence + the R2 backend under the Firestore emulator (tests/fa-d16-001.firestore-r2.e2e.test.ts).
 # The live R2 test (architecture open item O-2) needs real credentials and does not run here.
 # Third-party actions and the image are pinned (tag in the trailing comment).
 
@@ -25,7 +26,7 @@ jobs:
   document-vault-s3:
     name: Document vault against MinIO (S3 API, SigV4)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       minio:
         # A service container cannot be given a command; Bitnami's image starts the server by
@@ -53,6 +54,17 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      # The Firestore emulator (R1-D4 step) is a Java process; same setup as gate-g0.yml `rules`.
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
       - run: npm ci
       - name: Wait for MinIO
         run: |
@@ -67,3 +79,8 @@ jobs:
       - name: Document vault through the Next.js server (npm run test:document-vault-server)
         if: ${{ !cancelled() }}
         run: npm run test:document-vault-server
+      # Re-audit R1-D4: the production combination, Firestore persistence + the R2 backend
+      # (Firestore emulator, project demo-fad16-vault; this MinIO). Upload, wipe, download.
+      - name: Firestore persistence + R2 backend (npm run test:document-vault-firestore)
+        if: ${{ !cancelled() }}
+        run: npm run test:document-vault-firestore

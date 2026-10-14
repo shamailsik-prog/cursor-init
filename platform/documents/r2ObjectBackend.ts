@@ -36,14 +36,44 @@ export type R2DocumentObjectBackendConfig = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>
   /** Per-request timeout; defaults to 30 s. */
   timeoutMs?: number
+  /** How long an ambiguous PUT is settled by re-reading the key; defaults to 2 × timeoutMs. */
+  settleWindowMs?: number
+  /** First pause between settling reads (doubles each time); defaults to 250 ms. */
+  settleInitialDelayMs?: number
 }
 
 type Method = "PUT" | "GET" | "DELETE"
 
 const DEFAULT_TIMEOUT_MS = 30_000
+const DEFAULT_SETTLE_INITIAL_DELAY_MS = 250
+
+/**
+ * No HTTP response arrived (reset, DNS, timeout): a write's outcome is unknown. Like every error
+ * this backend throws, its message is built from fixed text, the method, the object key and an
+ * error code only, and it carries no `cause`: the underlying error can quote the request.
+ */
+class R2TransportError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "R2TransportError"
+  }
+}
 
 function sha256Hex(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex")
+}
+
+/** A Node error code (ECONNRESET) or the error class (TypeError); never a message. */
+function failureKind(err: unknown): string {
+  const e = err as { name?: unknown; code?: unknown; cause?: { code?: unknown } } | undefined
+  for (const code of [e?.cause?.code, e?.code]) {
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code)) return code
+  }
+  return typeof e?.name === "string" && /^[A-Za-z]+$/.test(e.name) ? e.name : "Error"
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendConfig): DocumentObjectBackend {
@@ -57,6 +87,8 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
   const base = config.endpoint.trim().replace(/\/+$/, "")
   const bucket = encodeURIComponent(config.bucket)
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const settleWindowMs = config.settleWindowMs ?? 2 * timeoutMs
+  const settleInitialDelayMs = config.settleInitialDelayMs ?? DEFAULT_SETTLE_INITIAL_DELAY_MS
   const send = config.fetchImpl ?? ((url: string, init: RequestInit) => fetch(url, init))
 
   function urlFor(key: string): string {
@@ -69,6 +101,10 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
    * runtime a Request's body is re-streamed and sent chunked without Content-Length, which S3
    * servers refuse (411). `cache: "no-store"` keeps Next.js's fetch cache out of every call, so a
    * read is always the bucket's current copy.
+   *
+   * Re-audit R1-D1: signing happens inside the guard. A signing failure (for example a header
+   * value the signer cannot set) quotes the Authorization header in its message, so it is replaced
+   * by a fixed message naming the step; it is not a transport failure, since nothing was sent.
    */
   async function request(
     method: Method,
@@ -78,31 +114,50 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
   ): Promise<Response> {
     const body = payload ? new Uint8Array(payload) : undefined
     const signal = AbortSignal.timeout(timeoutMs)
-    const signed = await client.sign(urlFor(key), {
-      method,
-      headers: { ...headers, "x-amz-content-sha256": sha256Hex(payload ?? Buffer.alloc(0)) },
-      body,
-    })
+    let signed: Request
+    try {
+      signed = await client.sign(urlFor(key), {
+        method,
+        headers: { ...headers, "x-amz-content-sha256": sha256Hex(payload ?? Buffer.alloc(0)) },
+        body,
+      })
+    } catch {
+      throw new Error(`R2 ${method} ${key} failed: request signing failed`)
+    }
     try {
       return await send(signed.url, { method, headers: signed.headers, body, cache: "no-store", signal })
     } catch (err) {
-      if (signal.aborted) throw new Error(`R2 ${method} ${key} timed out after ${timeoutMs} ms`)
-      throw new Error(`R2 ${method} ${key} failed: ${(err as Error).message}`)
+      if (signal.aborted) throw new R2TransportError(`R2 ${method} ${key} timed out after ${timeoutMs} ms`)
+      throw new R2TransportError(`R2 ${method} ${key} failed: no response (${failureKind(err)})`)
+    }
+  }
+
+  /** Consumes a body whose content does not matter; the status already decided the outcome. */
+  async function drain(res: Response): Promise<void> {
+    await res.arrayBuffer().catch(() => undefined)
+  }
+
+  /** Reads a response body; a failure mid-body is reported like a transport failure. */
+  async function bodyOf(method: Method, key: string, res: Response): Promise<Buffer> {
+    try {
+      return Buffer.from(await res.arrayBuffer())
+    } catch (err) {
+      throw new R2TransportError(`R2 ${method} ${key} failed: response body unreadable (${failureKind(err)})`)
     }
   }
 
   /** Status and the S3 error code only: the body may echo request details, never credentials. */
   async function failure(method: Method, key: string, res: Response): Promise<Error> {
-    const text = await res.text()
+    const text = await res.text().catch(() => "")
     const code = /<Code>([A-Za-z0-9.]+)<\/Code>/.exec(text)?.[1]
     return new Error(`R2 ${method} ${key} failed: HTTP ${res.status}${code ? ` ${code}` : ""}`)
   }
 
   async function get(key: string): Promise<Buffer> {
     const res = await request("GET", key, undefined, { "cache-control": "no-cache" })
-    if (res.ok) return Buffer.from(await res.arrayBuffer())
+    if (res.ok) return bodyOf("GET", key, res)
     if (res.status === 404) {
-      await res.arrayBuffer()
+      await drain(res)
       throw new DocumentObjectNotFoundError(key)
     }
     throw await failure("GET", key, res)
@@ -111,18 +166,29 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
   /**
    * A PUT that got no response (connection reset, timeout) may have been refused (S3 servers can
    * answer a failed If-None-Match early and reset the connection before the client reads the
-   * 412) or may have landed before the connection dropped. The stored bytes settle it: the
-   * envelope's nonce is random, so identical bytes can only be this write. If the key cannot be
-   * read, the original failure stands.
+   * 412), may have landed before the connection dropped, or may still land later (re-audit
+   * R1-D2). The stored bytes settle it: the envelope's nonce is random, so identical bytes can
+   * only be this write, and other bytes are another writer's. The key is re-read with doubling
+   * pauses for `settleWindowMs` (2 × the request timeout by default); a read that fails or finds
+   * nothing is retried. If nothing appears, the original failure stands and the key is logged as
+   * a possible orphan (it is not secret; the object is ciphertext no row references).
    */
-  async function settleAmbiguousPut(key: string, payload: Buffer, transportError: unknown): Promise<void> {
-    let stored: Buffer
-    try {
-      stored = await get(key)
-    } catch {
-      throw transportError
+  async function settleAmbiguousPut(key: string, payload: Buffer, transportError: R2TransportError): Promise<void> {
+    const deadline = Date.now() + settleWindowMs
+    let pause = settleInitialDelayMs
+    for (;;) {
+      const stored = await get(key).catch(() => undefined)
+      if (stored) {
+        if (stored.equals(payload)) return
+        throw new DocumentObjectExistsError(key)
+      }
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
+      await sleep(Math.min(pause, remaining))
+      pause *= 2
     }
-    if (!stored.equals(payload)) throw new DocumentObjectExistsError(key)
+    console.error(`[documents] document object possible orphan: ${key}`)
+    throw transportError
   }
 
   return {
@@ -136,15 +202,16 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
           "if-none-match": "*",
         })
       } catch (err) {
-        return settleAmbiguousPut(key, payload, err)
+        if (err instanceof R2TransportError) return settleAmbiguousPut(key, payload, err)
+        throw err
       }
       if (res.ok) {
-        await res.arrayBuffer()
+        await drain(res)
         return
       }
       // 412: the key exists. 409: a concurrent conditional write to the key is in flight.
       if (res.status === 412 || res.status === 409) {
-        await res.arrayBuffer()
+        await drain(res)
         throw new DocumentObjectExistsError(key)
       }
       throw await failure("PUT", key, res)
@@ -153,7 +220,7 @@ export function createR2DocumentObjectBackend(config: R2DocumentObjectBackendCon
     async delete(key) {
       const res = await request("DELETE", key, undefined, {})
       if (res.ok || res.status === 404) {
-        await res.arrayBuffer()
+        await drain(res)
         return
       }
       throw await failure("DELETE", key, res)

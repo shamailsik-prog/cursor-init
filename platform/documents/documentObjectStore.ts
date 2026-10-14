@@ -56,6 +56,7 @@ const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/
 const STORAGE_PATH = /^(fs|r2):\/\/([A-Za-z0-9_-]+)\/documents\/([A-Za-z0-9_-]+)\/v([0-9]+)$/
 const HEX_KEY = /^[0-9a-fA-F]{64}$/
 const BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
+const PRINTABLE_ASCII = /^[\x21-\x7e]+$/
 const KEY_ENV = "SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY"
 const R2_REQUIRED = [
   "SIKANDER_R2_ENDPOINT",
@@ -207,6 +208,17 @@ export function readR2DocumentObjectConfig(env: Env = process.env): R2DocumentOb
       `SIKANDER_DOCUMENT_OBJECT_BACKEND=r2 requires ${missing.join(", ")}`
     )
   }
+  // Re-audit R1-D1: every value ends up in a URL or a signed header. A CR/LF, space or control
+  // character would make the signer fail with the Authorization header quoted in its error, so
+  // refuse it here, naming the variable and never echoing the value.
+  for (const name of [...R2_REQUIRED, "SIKANDER_R2_REGION"]) {
+    const value = setting(env, name)
+    if (value && !PRINTABLE_ASCII.test(value)) {
+      throw new DocumentObjectConfigurationError(
+        `${name} must be printable ASCII with no spaces or control characters`
+      )
+    }
+  }
   const endpoint = normalizedEndpoint(setting(env, "SIKANDER_R2_ENDPOINT"))
   if (isProduction(env) && !endpoint.startsWith("https://")) {
     throw new DocumentObjectConfigurationError("SIKANDER_R2_ENDPOINT must use https when NODE_ENV=production")
@@ -252,7 +264,14 @@ function encryptionKey(env: Env = process.env): Buffer {
   if (!HEX_KEY.test(raw)) {
     throw new DocumentObjectConfigurationError(`${KEY_ENV} must be 64 hex characters (32 bytes)`)
   }
-  return Buffer.from(raw, "hex")
+  const key = Buffer.from(raw, "hex")
+  // Re-audit INFO 8: an all-zero (or any single repeated byte) key is a placeholder, not a secret.
+  if (key.every((byte) => byte === key[0])) {
+    throw new DocumentObjectConfigurationError(
+      `${KEY_ENV} is one byte repeated (for example all zeros), not a random key; generate one with: openssl rand -hex 32`
+    )
+  }
+  return key
 }
 
 /** Called before an upload is accepted: a valid key and a usable backend, or 503. */

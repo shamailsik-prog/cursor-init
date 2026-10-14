@@ -16,8 +16,9 @@ FA-D16-003 (a failed round-trip check left the written object behind).
 
 - **Envelope** (identical for every backend): `[version 0x01][12-byte nonce][AES-256-GCM ciphertext][16-byte tag]`.
   Encryption happens in this process before any byte is sent. R2 never sees plaintext.
-- **Key**: `SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY`, exactly 64 hex characters (32 bytes).
-  Anything else is refused before an upload is accepted.
+- **Key**: `SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY`, exactly 64 hex characters (32 bytes), not one
+  byte repeated (all zeros is a placeholder, not a key). Anything else is refused before an upload
+  is accepted.
 - **storagePath** (stored on the document row): `r2://<firmId>/documents/<docId>/v1` (or
   `fs://…` for the local backends). It never names a bucket, so a restored copy in another bucket
   is read by repointing configuration, not by rewriting rows.
@@ -25,7 +26,11 @@ FA-D16-003 (a failed round-trip check left the written object behind).
   `doc_<random UUID>`, so keys cannot be guessed. A read checks that the storagePath's firm is the
   document's firm.
 - **Write**: a conditional create (`If-None-Match: *` on R2, `O_EXCL` on disk). An existing object
-  is never overwritten or deleted by a later upload.
+  is never overwritten or deleted by a later upload. An R2 PUT that gets no response (reset,
+  timeout) is settled by re-reading the key with doubling pauses for twice the request timeout:
+  this write's exact bytes count as written, another writer's bytes as "already exists". If
+  nothing appears the upload fails and `[documents] document object possible orphan: <key>` is
+  logged at ERROR, so the operator can remove it if it lands later.
 - **Read-after-write**: the object is read back from the backend itself (R2: a signed GET to the
   bucket, never a local copy), decrypted, and its firm-scoped SHA-256 is compared with the upload's.
   If that fails, the object is deleted before the error propagates. If the delete also fails,
@@ -37,7 +42,7 @@ FA-D16-003 (a failed round-trip check left the written object behind).
 
 | `SIKANDER_DOCUMENT_OBJECT_BACKEND` | Allowed when | Needs |
 |---|---|---|
-| `r2` | always | `SIKANDER_R2_ENDPOINT`, `SIKANDER_R2_BUCKET`, `SIKANDER_R2_ACCESS_KEY_ID`, `SIKANDER_R2_SECRET_ACCESS_KEY`; `SIKANDER_R2_REGION` optional (default `auto`); https endpoint when `NODE_ENV=production` |
+| `r2` | always | `SIKANDER_R2_ENDPOINT`, `SIKANDER_R2_BUCKET`, `SIKANDER_R2_ACCESS_KEY_ID`, `SIKANDER_R2_SECRET_ACCESS_KEY`; `SIKANDER_R2_REGION` optional (default `auto`); every value printable ASCII with no spaces or control characters (refused by name, never echoed); https endpoint when `NODE_ENV=production` |
 | `fs` | **not** when `NODE_ENV=production` | `SIKANDER_DOCUMENT_OBJECT_ROOT` |
 | `memory` | test runner only | nothing |
 | unset | refused in production; otherwise `fs` if a root is set, `memory` under the test runner, refused elsewhere | |
@@ -111,6 +116,14 @@ services do not depend on the vault.
 | `tests/fa-d16-001.object-store-config.unit.test.ts` | the fail-closed selection rules above, including the 503 from the upload route |
 | `tests/fa-d16-002.*.unit.test.ts` | tampered and truncated ciphertext, the wrong key, malformed keys, the format version, hash mismatches, storagePath validation, uploadDocument's rollback and dedup paths |
 | `tests/fa-d16-003.round-trip-cleanup.unit.test.ts` | no object survives a failed read-after-write check, including the outer retry in uploadDocument |
+| `tests/fa-d16-001.firestore-r2.e2e.test.ts` (`npm run test:document-vault-firestore`, same CI job, Firestore emulator) | the production combination: Firestore persistence + R2 backend; upload, the row in Firestore with an `r2://` path, a full wipe of process state, a byte-identical download |
+| `tests/fa-d16-r1.*.unit.test.ts` | re-audit round 1: no credential material in any R2 error or log (R1-D1), settling an ambiguous PUT that lands late (R1-D2), the mutation floor cannot pass vacuously (R1-D3) |
 | `tests/fa-d16-001.r2-live.o2.test.ts` (`npm run test:r2-live`) | O-2 against real R2. **Skipped** unless `R2_LIVE_*` are set; not run in CI |
 
-Mutation testing: `npm run mutation:documents` (per-file floors in `stryker.documents.config.mjs`).
+Mutation testing: `npm run mutation:documents` (per-file floors in `stryker.documents.config.mjs`);
+in CI the `documents` job of `.github/workflows/mutation.yml` runs it on every pull request that
+touches the vault, its tests or its mutation setup.
+
+Errors and logs: every R2 error message is built from fixed text, the method, the object key, an
+HTTP status, an S3 error code or a Node error code, and carries no `cause`; the Authorization
+header, the signature and the credential scope never reach an error or a log line.

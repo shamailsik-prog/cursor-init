@@ -50,6 +50,11 @@ export default defineConfig({
       // `npm run test:document-vault-s3` (CI job `document-vault-s3`), which supplies the
       // SIKANDER_TEST_S3_* endpoint and credentials; run without them it fails, never skips.
       ...(process.env.SIKANDER_TEST_S3_ENDPOINT ? [] : ["tests/fa-d16-001.document-vault-s3.e2e.test.ts"]),
+      // Re-audit R1-D4: Firestore persistence + the R2 backend needs both the Firestore emulator and
+      // the S3 server: `npm run test:document-vault-firestore` (same CI job).
+      ...(process.env.SIKANDER_TEST_S3_ENDPOINT && process.env.FIRESTORE_EMULATOR_HOST
+        ? []
+        : ["tests/fa-d16-001.firestore-r2.e2e.test.ts"]),
     ],
   },
   resolve: {

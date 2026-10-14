@@ -35,6 +35,9 @@ function config(overrides: Partial<R2DocumentObjectBackendConfig> = {}): R2Docum
     secretAccessKey: SECRET,
     region: "auto",
     fetchImpl: fake.fetchImpl,
+    // Ambiguous-PUT settling (R1-D2) re-reads for 2 × the timeout by default; keep it short here.
+    settleWindowMs: 60,
+    settleInitialDelayMs: 5,
     ...overrides,
   }
 }
@@ -202,7 +205,7 @@ describe("FA-D16-001: R2 backend status handling", () => {
     }
     const backend = createR2DocumentObjectBackend(config({ fetchImpl: failing }))
     const err = (await backend.get(KEY).catch((e: unknown) => e)) as Error
-    expect(err.message).toBe(`R2 GET ${KEY} failed: fetch failed`)
+    expect(err.message).toBe(`R2 GET ${KEY} failed: no response (TypeError)`)
   })
 
   describe("an ambiguous PUT (no response: connection reset or timeout) is settled by reading the key", () => {
@@ -213,7 +216,7 @@ describe("FA-D16-001: R2 backend status handling", () => {
       fake.intercept((req) => {
         if (req.method !== "PUT") return undefined
         if (storeFirst) fake.objects.set(decodeURIComponent(req.path), req.body)
-        throw new TypeError("fetch failed", { cause: new Error("read ECONNRESET") })
+        throw new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) })
       })
     }
 
@@ -238,7 +241,7 @@ describe("FA-D16-001: R2 backend status handling", () => {
       resetOnPut(false)
       const backend = createR2DocumentObjectBackend(config())
       await expect(backend.putIfAbsent(KEY, Buffer.from("lost"))).rejects.toThrow(
-        `R2 PUT ${KEY} failed: fetch failed`
+        `R2 PUT ${KEY} failed: no response (ECONNRESET)`
       )
     })
 
@@ -247,7 +250,7 @@ describe("FA-D16-001: R2 backend status handling", () => {
       fake.intercept((req) => (req.method === "GET" ? s3ErrorResponse(500, "InternalError") : undefined))
       const backend = createR2DocumentObjectBackend(config())
       await expect(backend.putIfAbsent(KEY, Buffer.from("unknown"))).rejects.toThrow(
-        `R2 PUT ${KEY} failed: fetch failed`
+        `R2 PUT ${KEY} failed: no response (ECONNRESET)`
       )
     })
 

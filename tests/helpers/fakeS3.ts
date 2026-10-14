@@ -22,6 +22,8 @@ export type FakeS3 = {
   fetchImpl: (url: string, init: RequestInit) => Promise<Response>
   objects: Map<string, Buffer>
   requests: RecordedS3Request[]
+  /** Every Response handed back to the caller, in order (to check that bodies are consumed). */
+  responses: Response[]
   /** Next responses override the simulated server, first match wins; return undefined to pass. */
   intercept(fn: (req: RecordedS3Request) => Response | Promise<Response> | undefined): void
 }
@@ -40,9 +42,16 @@ export function sha256Hex(data: Buffer | string): string {
 export function createFakeS3(): FakeS3 {
   const objects = new Map<string, Buffer>()
   const requests: RecordedS3Request[] = []
+  const responses: Response[] = []
   const interceptors: Array<(req: RecordedS3Request) => Response | Promise<Response> | undefined> = []
 
   async function fetchImpl(target: string, init: RequestInit): Promise<Response> {
+    const response = await serve(target, init)
+    responses.push(response)
+    return response
+  }
+
+  async function serve(target: string, init: RequestInit): Promise<Response> {
     const request = new Request(target, init)
     const url = new URL(request.url)
     const body = Buffer.from(await request.arrayBuffer())
@@ -93,6 +102,7 @@ export function createFakeS3(): FakeS3 {
     fetchImpl,
     objects,
     requests,
+    responses,
     intercept(fn) {
       interceptors.push(fn)
     },
